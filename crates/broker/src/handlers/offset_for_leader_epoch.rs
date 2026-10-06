@@ -55,7 +55,7 @@ use krabka_protocol::owned::{
     },
 };
 
-use crate::{broker::Broker, codes, error::BrokerError, partition::Partition};
+use crate::{broker::Broker, codes, partition::Partition};
 
 /// The two-state leader check Kafka's `ReplicaManager.lastOffsetForLeaderEpoch`
 /// applies via `Partition.getLocalLog(currentLeaderEpoch, fetchOnlyFromLeader
@@ -78,19 +78,12 @@ fn not_leader(
     !installed || committed_elsewhere
 }
 
-#[tracing::instrument(
-    name = "handle_offset_for_leader_epoch",
-    level = "info",
-    skip_all,
-    fields(api = "OffsetForLeaderEpoch"),
-    err
-)]
 pub(crate) fn handle(
     broker: &Broker,
-    req: OffsetForLeaderEpochRequest,
+    req: &OffsetForLeaderEpochRequest,
     _version: i16,
     ctx: &crate::handlers::RequestContext<'_>,
-) -> Result<OffsetForLeaderEpochResponse, BrokerError> {
+) -> OffsetForLeaderEpochResponse {
     let partitions = broker.partitions.clone();
     // Test-only: count served OFLE requests so the KIP-320 proactive-validation
     // integration test can prove the consumer's validate pass issued an OFLE
@@ -123,7 +116,7 @@ pub(crate) fn handle(
             Vec::with_capacity(req.topics.len());
         let mut unauthorized_out: Vec<OffsetForLeaderTopicResult> = Vec::new();
 
-        for topic in req.topics {
+        for topic in &req.topics {
             if !cluster_action_allowed
                 && crate::handlers::acl_denied(
                     broker.config.authorizer.as_ref(),
@@ -146,7 +139,7 @@ pub(crate) fn handle(
                     })
                     .collect();
                 unauthorized_out.push(OffsetForLeaderTopicResult {
-                    topic: topic.topic,
+                    topic: topic.topic.clone(),
                     partitions: parts_out,
                     ..Default::default()
                 });
@@ -238,7 +231,7 @@ pub(crate) fn handle(
             }
 
             authorized_out.push(OffsetForLeaderTopicResult {
-                topic: topic.topic,
+                topic: topic.topic.clone(),
                 partitions: parts_out,
                 ..Default::default()
             });
@@ -248,12 +241,11 @@ pub(crate) fn handle(
         // `endOffsetsForAuthorizedPartitions ++ endOffsetsForUnauthorizedPartitions`.
         authorized_out.extend(unauthorized_out);
 
-        let resp = OffsetForLeaderEpochResponse {
+        OffsetForLeaderEpochResponse {
             throttle_time_ms: 0,
             topics: authorized_out,
             ..Default::default()
-        };
-        Ok(resp)
+        }
     }
 }
 
@@ -423,7 +415,7 @@ mod tests {
             let p = principal("follower");
             let peer = peer();
             let ctx = request_context(&p, &peer, "follower-client");
-            let resp = handle(&broker, request(), VERSION, &ctx).expect("handle");
+            let resp = handle(&broker, &request(), VERSION, &ctx);
 
             let expected = OffsetForLeaderEpochResponse {
                 throttle_time_ms: 0,
@@ -624,7 +616,7 @@ mod tests {
         let user = crate::test_support::principal("client");
         let address = crate::test_support::peer();
         let ctx = crate::test_support::request_context(&user, &address, "ofle-client");
-        let decoded = handle(&shared, request.clone(), version, &ctx).expect("handle ofle");
+        let decoded = handle(&shared, request, version, &ctx);
         decoded
             .topics
             .into_iter()

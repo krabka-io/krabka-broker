@@ -4,15 +4,14 @@
 
 use assert2::{assert, check};
 use krabka_ids::LeaderEpoch;
-use krabka_units::prelude::bytes;
 use tempfile::tempdir;
 
 use super::*;
 use crate::{
     io::FileIo,
     log::test_support::{
-        NO_LIMIT, commit_marker, sample_batch, sample_batch_with_epoch, test_log,
-        transaction_fields, transactional_batch,
+        NO_LIMIT, commit_marker, rolling_test_log, sample_batch, sample_batch_with_epoch, test_log,
+        tiny_segments, transaction_fields, transactional_batch,
     },
 };
 
@@ -112,9 +111,8 @@ fn open_truncates_epoch_checkpoint_to_recovered_leo() {
 fn producer_snapshot_survives_local_segment_deletion_and_restart() {
     let dir = tempdir().unwrap();
     let config = LogConfig {
-        segment_size: bytes(1),
         remote_storage_enable: true,
-        ..LogConfig::default()
+        ..tiny_segments()
     };
     let mut log = Log::open(dir.path(), config.clone()).unwrap();
     let mut producer = sample_batch(2);
@@ -150,10 +148,7 @@ fn producer_snapshot_survives_local_segment_deletion_and_restart() {
 #[test]
 fn snapshot_recovery_preserves_open_and_completed_transaction_fields() {
     let dir = tempdir().unwrap();
-    let config = LogConfig {
-        segment_size: bytes(1),
-        ..LogConfig::default()
-    };
+    let config = tiny_segments();
     let mut log = Log::open(dir.path(), config.clone()).unwrap();
     let mut data = transactional_batch(77, 4, &["a", "b"]);
     data.base_sequence = 10;
@@ -187,10 +182,7 @@ fn snapshot_recovery_preserves_open_and_completed_transaction_fields() {
 #[test]
 fn recovery_recreates_missing_producer_snapshot_at_segment_boundary() {
     let dir = tempdir().unwrap();
-    let config = LogConfig {
-        segment_size: bytes(1),
-        ..LogConfig::default()
-    };
+    let config = tiny_segments();
     {
         let mut log = Log::open(dir.path(), config.clone()).unwrap();
         for (base_sequence, timestamp) in [(0, 10), (2, 20), (4, 30)] {
@@ -446,10 +438,7 @@ fn reopen_does_not_treat_non_transactional_producer_data_as_pending() {
 fn reopen_seals_recovered_segments_at_next_base_minus_one() {
     use tempfile::TempDir;
     let dir = TempDir::new().unwrap();
-    let cfg = LogConfig {
-        segment_size: bytes(1), // roll on every append
-        ..LogConfig::default()
-    };
+    let cfg = tiny_segments();
     {
         let mut log = Log::open(dir.path(), cfg.clone()).unwrap();
         // Multi-record batches → segment bases are 0, 2, 4, ... (each
@@ -540,14 +529,7 @@ fn open_resolves_a_checkpoint_against_what_the_log_holds() {
     ] {
         let dir = tempdir().unwrap();
         {
-            let mut log = Log::open(
-                dir.path(),
-                LogConfig {
-                    segment_size: bytes(1),
-                    ..LogConfig::default()
-                },
-            )
-            .unwrap();
+            let mut log = rolling_test_log(dir.path());
             log.append(&mut sample_batch(1)).unwrap();
             log.append(&mut sample_batch(1)).unwrap();
             log.append(&mut sample_batch(1)).unwrap();
@@ -607,10 +589,7 @@ fn producer_batch(producer_id: i64) -> RecordBatch {
 /// segments start at 0, 2 and 4, and each roll leaves a snapshot at the new
 /// base, so there are snapshots at 2 (producer 1) and 4 (producers 1 and 2).
 fn three_producer_log(dir: &Path) -> Log {
-    let config = LogConfig {
-        segment_size: bytes(1),
-        ..LogConfig::default()
-    };
+    let config = tiny_segments();
     let mut log = Log::open(dir, config).unwrap();
     for producer_id in [1, 2, 3] {
         log.append(&mut producer_batch(producer_id)).unwrap();
@@ -740,10 +719,7 @@ fn reopen_removes_stray_snapshots_and_loads_one_at_the_log_end() {
 #[test]
 fn reopen_retains_the_snapshot_batch_and_the_replayed_tail() {
     let dir = tempdir().unwrap();
-    let config = LogConfig {
-        segment_size: bytes(1),
-        ..LogConfig::default()
-    };
+    let config = tiny_segments();
     let mut log = Log::open(dir.path(), config.clone()).unwrap();
     for sequence in 0..6 {
         let mut batch = sample_batch(1);

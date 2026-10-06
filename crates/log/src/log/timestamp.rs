@@ -216,7 +216,7 @@ mod tests {
     use super::*;
     use crate::{
         config::LogConfig,
-        log::test_support::{sample_batch, test_log, ts_batch},
+        log::test_support::{sample_batch, test_log, tiny_segments, ts_batch},
         segment::Segment,
     };
 
@@ -266,10 +266,7 @@ mod tests {
     #[test]
     fn log_offset_for_timestamp_across_segments() {
         let dir = tempdir().unwrap();
-        let config = LogConfig {
-            segment_size: bytes(1), // roll after every batch → each record its own segment
-            ..LogConfig::default()
-        };
+        let config = tiny_segments();
         let mut log = Log::open(dir.path(), config).unwrap();
         // offsets 0..=4 with timestamps 100,200,300,400,500.
         for (_name, i, ts) in [
@@ -303,10 +300,7 @@ mod tests {
     #[test]
     fn reopened_log_scans_sealed_segments_with_unknown_max_timestamp() {
         let dir = tempdir().unwrap();
-        let config = LogConfig {
-            segment_size: bytes(1),
-            ..LogConfig::default()
-        };
+        let config = tiny_segments();
         {
             let mut log = Log::open(dir.path(), config.clone()).unwrap();
             for timestamp in [100, 200, 300] {
@@ -366,10 +360,7 @@ mod tests {
     #[test]
     fn log_max_timestamp_offset_and_ts_returns_pair() {
         let dir = tempdir().unwrap();
-        let config = LogConfig {
-            segment_size: bytes(1),
-            ..LogConfig::default()
-        };
+        let config = tiny_segments();
         let mut log = Log::open(dir.path(), config).unwrap();
         for ts in [100, 300, 200] {
             let mut b = ts_batch(ts);
@@ -441,9 +432,8 @@ mod tests {
         let mut log = Log::open(
             dir.path(),
             LogConfig {
-                segment_size: bytes(1), // every batch its own segment
                 max_decompressed_record: Some(bytes(100)),
-                ..LogConfig::default()
+                ..tiny_segments()
             },
         )
         .unwrap();

@@ -24,7 +24,7 @@ use super::{
 use crate::{
     codes,
     test_support::{
-        DenyAll, peer, principal, start_broker_with_authorizer_no_audit as start_broker,
+        DenyAll, peer, start_broker_with_authorizer_no_audit as start_broker, test_ctx,
     },
 };
 
@@ -37,7 +37,7 @@ fn topic_describe_denied_yields_topic_authorization_failed_rows() {
     let authorizer = crate::authorizer::SimpleAclAuthorizer::new(std::collections::HashSet::new());
     let image = krabka_metadata::MetadataImage::new(uuid::Uuid::nil());
     let principal = crate::test_support::principal("ANONYMOUS");
-    let peer = std::net::SocketAddr::from(([127, 0, 0, 1], 9092));
+    let peer = peer();
 
     let ctx = crate::handlers::RequestContext::new(
         &principal,
@@ -87,9 +87,7 @@ async fn denied_handler_preserves_topic_and_partition_response_fields() {
     let version = krabka_protocol::owned::list_offsets_response::MAX_VERSION;
     let (broker_handle, _dir) = start_broker(Arc::new(DenyAll)).await;
     let broker = broker_handle.broker_arc_for_test();
-    let p = principal("alice");
-    let peer = peer();
-    let ctx = test_context(&p, &peer);
+    test_ctx!(ctx, "alice");
     let req = ListOffsetsRequest {
         replica_id: -1,
         isolation_level: 0,
@@ -201,9 +199,7 @@ async fn denied_topic_rows_are_appended_after_authorized_rows_regardless_of_requ
             ]))))
             .await;
         let broker = broker_handle.broker_arc_for_test();
-        let p = principal("alice");
-        let peer = peer();
-        let ctx = test_context(&p, &peer);
+        test_ctx!(ctx, "alice");
 
         let req = ListOffsetsRequest {
             replica_id: -1,

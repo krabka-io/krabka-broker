@@ -9,15 +9,17 @@
 use std::{net::SocketAddr, sync::Arc};
 
 use assert2::{assert, check};
-use krabka_metadata::{
-    BreakGlassProposalRecord, MetadataImage, MetadataRecord, UnregisterBrokerRecord,
-};
+use krabka_metadata::{BreakGlassProposalRecord, MetadataRecord, UnregisterBrokerRecord};
 use krabka_protocol::owned::unregister_broker_response::{self, UnregisterBrokerResponse};
 use krabka_security::Principal;
 use uuid::Uuid;
 
 use super::*;
-use crate::{break_glass::gate::tests::approval, config::BreakGlassConfig, test_support::DenyAll};
+use crate::{
+    break_glass::gate::tests::{approved_proposal, image_of},
+    config::BreakGlassConfig,
+    test_support::{DenyAll, peer, principal},
+};
 
 fn encode_request(req: &UnregisterBrokerRequest, version: i16) -> Bytes {
     crate::test_support::encode_request(req, version)
@@ -25,10 +27,6 @@ fn encode_request(req: &UnregisterBrokerRequest, version: i16) -> Bytes {
 
 fn decode_response(bytes: &Bytes) -> UnregisterBrokerResponse {
     crate::test_support::decode_response(bytes, unregister_broker_response::MAX_VERSION)
-}
-
-fn principal() -> Principal {
-    crate::test_support::principal("admin")
 }
 
 fn context<'a>(
@@ -58,8 +56,8 @@ async fn handle_denies_cluster_alter_with_message_and_throttle() {
     let (broker_handle, _dir) =
         crate::test_support::start_broker_with_authorizer_no_audit(Arc::new(DenyAll)).await;
     let broker = broker_handle.broker_arc_for_test();
-    let principal = principal();
-    let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
+    let principal = principal("admin");
+    let peer = peer();
     let ctx = context(&principal, &peer);
     let req = UnregisterBrokerRequest {
         broker_id: 1,
@@ -92,8 +90,8 @@ async fn handle_answers_broker_id_not_registered_for_unknown_ids() {
     )
     .await;
     let broker = broker_handle.broker_arc_for_test();
-    let principal = principal();
-    let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
+    let principal = principal("admin");
+    let peer = peer();
     let ctx = context(&principal, &peer);
 
     for broker_id in [-1, 0, 999] {
@@ -125,8 +123,8 @@ async fn handle_unregisters_registered_broker_with_success_shape() {
     )
     .await;
     let broker = broker_handle.broker_arc_for_test();
-    let principal = principal();
-    let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
+    let principal = principal("admin");
+    let peer = peer();
     let ctx = context(&principal, &peer);
     let req = UnregisterBrokerRequest {
         broker_id: 1,
@@ -148,7 +146,6 @@ async fn handle_unregisters_registered_broker_with_success_shape() {
     broker_handle.shutdown().await;
 }
 
-const PROPOSAL: Uuid = Uuid::from_u128(0x0102_0304_0506_0708_090a_0b0c_0d0e_0f10);
 const DOOMED: NodeId = NodeId(7);
 /// The epoch of the registration an unregistration of [`DOOMED`] removes.
 const DOOMED_EPOCH: i64 = 42;
@@ -158,30 +155,6 @@ fn gated_config() -> BreakGlassConfig {
         approvers: ["User:alice", "User:bob"].map(str::to_owned).to_vec(),
         ..BreakGlassConfig::default()
     }
-}
-
-/// A proposal that two people approved, and that has not expired.
-fn approved_proposal(target: &str) -> BreakGlassProposalRecord {
-    BreakGlassProposalRecord {
-        proposal_id: PROPOSAL,
-        action: BreakGlassAction::UnregisterBroker,
-        target: target.to_owned(),
-        proposer: "User:carol".to_owned(),
-        reason: "broker 7 is never coming back".to_owned(),
-        created_at_ms: 1_000,
-        expires_at_ms: 600_000,
-        approvals: vec![approval("User:alice"), approval("User:bob")],
-        consumed_at_ms: 0,
-        withdrawn: false,
-    }
-}
-
-fn image_of(proposals: &[BreakGlassProposalRecord]) -> MetadataImage {
-    let mut image = MetadataImage::new(uuid::Uuid::nil());
-    for proposal in proposals {
-        image.apply(&MetadataRecord::V1BreakGlassProposal(proposal.clone()));
-    }
-    image
 }
 
 const NOW_MS: i64 = 60_000;
@@ -203,7 +176,7 @@ fn an_unregistration_with_no_proposal_appends_nothing() {
 
 #[test]
 fn an_approved_unregistration_appends_the_consume_beside_the_unregister() {
-    let proposal = approved_proposal("7");
+    let proposal = approved_proposal(BreakGlassAction::UnregisterBroker, "7");
     let image = image_of(std::slice::from_ref(&proposal));
 
     let records = unregister_records(&image, &gated_config(), DOOMED, DOOMED_EPOCH, NOW_MS)
@@ -224,7 +197,7 @@ fn an_approved_unregistration_appends_the_consume_beside_the_unregister() {
 
 #[test]
 fn a_proposal_for_another_broker_does_not_cover_this_one() {
-    let image = image_of(&[approved_proposal("8")]);
+    let image = image_of(&[approved_proposal(BreakGlassAction::UnregisterBroker, "8")]);
 
     let denial = unregister_records(&image, &gated_config(), DOOMED, DOOMED_EPOCH, NOW_MS)
         .expect_err("a proposal for broker 8 authorizes nothing about broker 7");
@@ -271,8 +244,8 @@ async fn the_wire_handler_refuses_an_unregistration_that_no_proposal_covers() {
     })
     .await;
     let broker = broker_handle.broker_arc_for_test();
-    let principal = principal();
-    let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
+    let principal = principal("admin");
+    let peer = peer();
     let ctx = context(&principal, &peer);
     let req = UnregisterBrokerRequest {
         broker_id: 1,
@@ -377,8 +350,8 @@ async fn handle_removes_the_broker_from_every_isr_in_the_unregistering_append() 
         .expect("seed the partitions");
     // Broker 2 is heartbeating, so it may take over.
     broker.liveness.record_heartbeat(2).await;
-    let principal = principal();
-    let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
+    let principal = principal("admin");
+    let peer = peer();
     let ctx = context(&principal, &peer);
     let req = UnregisterBrokerRequest {
         broker_id: 1,
@@ -457,7 +430,7 @@ async fn a_request_on_the_controller_listener_is_answered_in_place() {
     .await;
     let broker = broker_handle.broker_arc_for_test();
     crate::test_support::wait_for_controller_leader(&broker).await;
-    let principal = principal();
+    let principal = principal("admin");
     let peer: SocketAddr = "127.0.0.1:9093".parse().unwrap();
     let ctx = crate::handlers::RequestContext::new(
         &principal,
@@ -491,7 +464,10 @@ async fn a_request_on_the_controller_listener_is_answered_in_place() {
 /// record: the approval commits first, and the registration goes last.
 #[test]
 fn the_isr_departures_sit_between_the_consume_and_the_unregister_record() {
-    let consumed = MetadataRecord::V1BreakGlassProposal(approved_proposal("7"));
+    let consumed = MetadataRecord::V1BreakGlassProposal(approved_proposal(
+        BreakGlassAction::UnregisterBroker,
+        "7",
+    ));
     let unregister = MetadataRecord::V1UnregisterBroker(UnregisterBrokerRecord {
         node_id: DOOMED,
         broker_epoch: DOOMED_EPOCH,

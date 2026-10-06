@@ -28,7 +28,6 @@ use krabka_protocol::owned::{
     streams_group_topology_description_update_request::StreamsGroupTopologyDescriptionUpdateRequest,
     streams_group_topology_description_update_response::StreamsGroupTopologyDescriptionUpdateResponse,
 };
-use tokio::sync::oneshot;
 
 use crate::{
     broker::Broker,
@@ -39,6 +38,7 @@ use crate::{
     },
     error::BrokerError,
     handlers::{ErrorResponse as _, RequestContext, group_read_denied},
+    task_util::{AskError, ask},
 };
 
 /// The message of trunk's `UnsupportedVersionException` for a broker with no
@@ -46,13 +46,6 @@ use crate::{
 const NO_PLUGIN_MESSAGE: &str =
     "The broker has no streams group topology description plugin configured.";
 
-#[tracing::instrument(
-    name = "handle_streams_group_topology_description_update",
-    level = "info",
-    skip_all,
-    fields(api = "StreamsGroupTopologyDescriptionUpdate", version),
-    err
-)]
 pub(crate) async fn handle(
     broker: &Broker,
     req: StreamsGroupTopologyDescriptionUpdateRequest,
@@ -121,26 +114,23 @@ async fn answer(
         };
         return (codes::GROUP_ID_NOT_FOUND, Some(message));
     };
-    let (reply, answered) = oneshot::channel();
     let push = DescriptionPush {
         member_id: req.member_id,
         topology_epoch: req.topology_epoch,
         description: req.topology_description,
     };
-    if handle
-        .tx
-        .send(StreamsGroupActorMessage::PushDescription {
+    let asked = ask(&handle.tx, |reply| {
+        StreamsGroupActorMessage::PushDescription {
             push: Box::new(push),
             reply,
-        })
-        .await
-        .is_err()
-    {
-        return (codes::COORDINATOR_LOAD_IN_PROGRESS, None);
+        }
+    })
+    .await;
+    match asked {
+        Ok(answer) => answer,
+        Err(AskError::Closed) => (codes::COORDINATOR_LOAD_IN_PROGRESS, None),
+        Err(AskError::Dropped) => (codes::UNKNOWN_SERVER_ERROR, None),
     }
-    answered
-        .await
-        .unwrap_or((codes::UNKNOWN_SERVER_ERROR, None))
 }
 
 #[cfg(test)]

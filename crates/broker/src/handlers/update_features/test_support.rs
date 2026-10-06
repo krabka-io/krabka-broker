@@ -17,6 +17,7 @@ use super::answer;
 use crate::{
     authorizer::Authorizer,
     broker::{Broker, BrokerHandle},
+    test_support::{peer, principal},
 };
 
 pub(super) const VERSION: i16 = 1;
@@ -58,10 +59,6 @@ pub(super) fn apply_request(updates: Vec<FeatureUpdateKey>) -> UpdateFeaturesReq
     }
 }
 
-pub(super) fn principal() -> Principal {
-    crate::test_support::principal("admin")
-}
-
 pub(super) fn context<'a>(
     principal: &'a Principal,
     peer: &'a SocketAddr,
@@ -90,8 +87,8 @@ pub(super) async fn call(
     version: i16,
 ) -> UpdateFeaturesResponse {
     let broker = broker_handle.broker_arc_for_test();
-    let principal = principal();
-    let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
+    let principal = principal("admin");
+    let peer = peer();
     let ctx = context(&principal, &peer);
     answer(&broker, req, version, &ctx).await
 }

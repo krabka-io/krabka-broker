@@ -306,8 +306,7 @@ async fn include_authorized_operations_fills_the_bitfield_only_on_opt_in() {
             let expected = authorized_operations_bits(
                 authorizer.as_ref(),
                 &broker.controller.current_image(),
-                &alice,
-                &peer(),
+                &crate::test_support::request_context(&alice, &peer(), "test-client"),
                 ResourceType::Group,
                 "g1",
             );

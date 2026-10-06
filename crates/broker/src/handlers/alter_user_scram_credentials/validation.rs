@@ -167,7 +167,7 @@ fn wire_to_mech(wire: MechanismWireByte) -> Option<SaslMechanism> {
 
 #[cfg(test)]
 mod tests {
-    use std::{net::SocketAddr, sync::Arc};
+    use std::sync::Arc;
 
     use assert2::assert;
     use krabka_metadata::{MetadataRecord, ScramCredentialRecord};
@@ -180,13 +180,16 @@ mod tests {
     };
 
     use super::*;
-    use crate::handlers::alter_user_scram_credentials::{
-        answer,
-        test_support::{
-            KAFKA_MAX_SCRAM_ITERATIONS, KAFKA_UNACCEPTABLE_CREDENTIAL,
-            KAFKA_UNSUPPORTED_SASL_MECHANISM, deletion, expected_result, process_deletion,
-            process_upsertion, start_broker, test_context, valid_upsertion,
+    use crate::{
+        handlers::alter_user_scram_credentials::{
+            answer,
+            test_support::{
+                KAFKA_MAX_SCRAM_ITERATIONS, KAFKA_UNACCEPTABLE_CREDENTIAL,
+                KAFKA_UNSUPPORTED_SASL_MECHANISM, deletion, expected_result, process_deletion,
+                process_upsertion, start_broker, test_context, valid_upsertion,
+            },
         },
+        test_support::test_ctx,
     };
 
     #[test]
@@ -372,9 +375,7 @@ mod tests {
             start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
         let broker = broker_handle.broker_arc_for_test();
         crate::test_support::wait_for_controller_leader(&broker).await;
-        let principal = crate::test_support::principal("admin");
-        let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
-        let ctx = test_context(&principal, &peer);
+        test_ctx!(ctx, "admin");
         let req = AlterUserScramCredentialsRequest {
             deletions: vec![deletion("")],
             ..Default::default()
@@ -408,9 +409,7 @@ mod tests {
             start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
         let broker = broker_handle.broker_arc_for_test();
         crate::test_support::wait_for_controller_leader(&broker).await;
-        let principal = crate::test_support::principal("admin");
-        let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
-        let ctx = test_context(&principal, &peer);
+        test_ctx!(ctx, "admin");
         let req = AlterUserScramCredentialsRequest {
             upsertions: vec![valid_upsertion("")],
             ..Default::default()

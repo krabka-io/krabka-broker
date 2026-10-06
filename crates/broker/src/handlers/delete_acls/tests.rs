@@ -29,9 +29,7 @@ use crate::{
         PATTERN_TYPE_PREFIXED, PERMISSION_ALLOW, PERMISSION_ANY, RESOURCE_TYPE_TOPIC, VERSION, acl,
         configured_authorizer, filter, request, test_context,
     },
-    test_support::{
-        DenyAll, peer, principal, start_broker_with_authorizer_no_audit as start_broker,
-    },
+    test_support::{DenyAll, start_broker_with_authorizer_no_audit as start_broker, test_ctx},
 };
 
 async fn seed_acls(handle: &BrokerHandle, entries: Vec<AclEntry>) {
@@ -65,9 +63,7 @@ async fn handle_denies_cluster_alter_for_each_filter() {
     )
     .await;
     let broker = broker_handle.broker_arc_for_test();
-    let p = principal("alice");
-    let peer = peer();
-    let ctx = test_context(&p, &peer);
+    test_ctx!(ctx, "alice");
     let req = request(vec![
         filter(Some("orders"), Some("User:alice")),
         filter(Some("payments"), Some("User:bob")),
@@ -103,9 +99,7 @@ async fn handle_returns_matching_acl_fields_and_deletes_only_matches() {
     )
     .await;
     let broker = broker_handle.broker_arc_for_test();
-    let p = principal("admin");
-    let peer = peer();
-    let ctx = test_context(&p, &peer);
+    test_ctx!(ctx, "admin");
     let req = request(vec![filter(Some("orders"), Some("User:alice"))]);
 
     let resp = handle(&broker, req, VERSION, &ctx).await.expect("handle");
@@ -151,9 +145,7 @@ async fn handle_answers_security_disabled_for_each_filter_when_no_authorizer_is_
     )
     .await;
     let broker = broker_handle.broker_arc_for_test();
-    let p = principal("admin");
-    let peer = peer();
-    let ctx = test_context(&p, &peer);
+    test_ctx!(ctx, "admin");
     let req = request(vec![
         filter(Some("orders"), Some("User:alice")),
         filter(Some("payments"), Some("User:bob")),
@@ -225,9 +217,7 @@ fn sorted(mut acls: Vec<AclEntry>) -> Vec<AclEntry> {
 async fn handle_deletes_exactly_what_kafka_matches() {
     let (broker_handle, _dir) = start_broker(configured_authorizer()).await;
     let broker = broker_handle.broker_arc_for_test();
-    let p = principal("admin");
-    let peer = peer();
-    let ctx = test_context(&p, &peer);
+    test_ctx!(ctx, "admin");
 
     let literal_foo = topic_acl(
         "foo",
@@ -365,9 +355,7 @@ async fn handle_lists_an_acl_under_every_filter_that_matches_it() {
     let other = acl("payments", "User:bob", AclOperation::Read);
     seed_acls(&broker_handle, vec![shared.clone(), other.clone()]).await;
     let broker = broker_handle.broker_arc_for_test();
-    let p = principal("admin");
-    let peer = peer();
-    let ctx = test_context(&p, &peer);
+    test_ctx!(ctx, "admin");
     let req = request(vec![
         topic_filter(PATTERN_TYPE_ANY, Some("orders"), None),
         topic_filter(PATTERN_TYPE_MATCH, Some("orders"), Some("User:alice")),
@@ -403,9 +391,7 @@ async fn handle_refuses_a_filter_with_an_undefined_byte_and_runs_the_rest() {
     let doomed = acl("orders", "User:alice", AclOperation::Read);
     seed_acls(&broker_handle, vec![doomed.clone()]).await;
     let broker = broker_handle.broker_arc_for_test();
-    let p = principal("admin");
-    let peer = peer();
-    let ctx = test_context(&p, &peer);
+    test_ctx!(ctx, "admin");
 
     let cases: [(Edit, Option<&str>); 7] = [
         (
@@ -477,9 +463,7 @@ async fn handle_closes_the_connection_on_an_unknown_element() {
     )
     .await;
     let broker = broker_handle.broker_arc_for_test();
-    let p = principal("admin");
-    let peer = peer();
-    let ctx = test_context(&p, &peer);
+    test_ctx!(ctx, "admin");
     let mut unknown = filter(Some("payments"), None);
     unknown.permission_type = 0;
     let req = request(vec![filter(Some("orders"), Some("User:alice")), unknown]);
@@ -528,9 +512,7 @@ async fn handle_bounds_a_request_to_ten_thousand_removals() {
         let (broker_handle, _dir) = start_broker(configured_authorizer()).await;
         seed_many_acls(&broker_handle, seeded).await;
         let broker = broker_handle.broker_arc_for_test();
-        let p = principal("admin");
-        let peer = peer();
-        let ctx = test_context(&p, &peer);
+        test_ctx!(ctx, "admin");
         let filter_count = filters.len();
 
         let resp = handle(&broker, request(filters), VERSION, &ctx)

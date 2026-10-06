@@ -48,12 +48,10 @@ fn request(group_ids: &[&str]) -> StreamsGroupDescribeRequest {
 pub(super) async fn start_broker(
     streams_enabled: bool,
 ) -> (crate::broker::BrokerHandle, tempfile::TempDir) {
-    let (handle, dir) = crate::test_support::start_broker_with(|cfg| {
+    crate::test_support::start_group_broker_with(|cfg| {
         cfg.streams_group.enable = streams_enabled;
     })
-    .await;
-    handle.wait_until_group_coordinator_ready().await;
-    (handle, dir)
+    .await
 }
 
 /// A broker with streams enabled and `authorizer` installed, for the tests
@@ -62,13 +60,11 @@ pub(super) async fn start_broker(
 pub(super) async fn start_broker_with_authorizer(
     authorizer: Arc<dyn Authorizer>,
 ) -> (crate::broker::BrokerHandle, tempfile::TempDir) {
-    let (handle, dir) = crate::test_support::start_broker_with(|cfg| {
+    crate::test_support::start_group_broker_with(|cfg| {
         cfg.streams_group.enable = true;
         cfg.authorizer = crate::test_support::controller_peer_allowed(authorizer);
     })
-    .await;
-    handle.wait_until_group_coordinator_ready().await;
-    (handle, dir)
+    .await
 }
 
 /// Seed a live streams-group actor with `topology` and no members, the way

@@ -13,14 +13,13 @@
 //! decides between the two per partition and must see one consistent snapshot
 //! of both.
 
-use tokio::sync::oneshot;
-
 use crate::{
     broker::Broker,
     coordinator::unified::{
         actor::GroupActorMessage,
         group::{GroupOffsets, OffsetFetchMember},
     },
+    task_util::ask,
 };
 
 /// Fetches the group's committed offsets, keyed by topic name and partition,
@@ -38,22 +37,15 @@ pub(super) async fn fetch_offsets(
     let Some(handle) = broker.group_coordinator.find(group_id) else {
         return Ok(GroupOffsets::default());
     };
-    let (reply, response) = oneshot::channel();
-    if handle
-        .tx
-        .send(GroupActorMessage::FetchOffsetsForMember {
+    ask(&handle.tx, |reply| {
+        GroupActorMessage::FetchOffsetsForMember {
             member: OffsetFetchMember {
                 member_id: member_id.map(str::to_string),
                 member_epoch,
             },
             reply,
-        })
-        .await
-        .is_err()
-    {
-        return Ok(GroupOffsets::default());
-    }
-    response
-        .await
-        .unwrap_or_else(|_| Ok(GroupOffsets::default()))
+        }
+    })
+    .await
+    .unwrap_or_else(|_| Ok(GroupOffsets::default()))
 }

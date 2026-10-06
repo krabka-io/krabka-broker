@@ -148,6 +148,7 @@ mod tests {
     use uuid::Uuid;
 
     use super::*;
+    use crate::test_support::peer;
 
     fn anon() -> krabka_security::Principal {
         crate::test_support::principal("ANONYMOUS")
@@ -157,7 +158,7 @@ mod tests {
     fn topic_resource_denied_yields_topic_authorization_failed() {
         let authz = crate::authorizer::SimpleAclAuthorizer::new(std::collections::HashSet::new());
         let image = MetadataImage::new(Uuid::nil());
-        let peer = std::net::SocketAddr::from(([127, 0, 0, 1], 9092));
+        let peer = peer();
         let code = super::resource_authz_failure(
             &authz,
             &image,
@@ -198,7 +199,7 @@ mod tests {
             ),
         ];
         let authz = crate::authorizer::SimpleAclAuthorizer::new(std::collections::HashSet::new());
-        let peer = std::net::SocketAddr::from(([127, 0, 0, 1], 9092));
+        let peer = peer();
         for (grant, want) in cases {
             let mut image = MetadataImage::new(Uuid::nil());
             if let Some(operation) = grant {
@@ -281,7 +282,7 @@ mod tests {
     fn broker_resource_denied_yields_cluster_authorization_failed() {
         let authz = crate::authorizer::SimpleAclAuthorizer::new(std::collections::HashSet::new());
         let image = MetadataImage::new(Uuid::nil());
-        let peer = std::net::SocketAddr::from(([127, 0, 0, 1], 9092));
+        let peer = peer();
         let code = super::resource_authz_failure(
             &authz,
             &image,

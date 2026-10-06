@@ -7,7 +7,7 @@
 //! The refusal must be an answer and not a panic in the connection task, and it
 //! must leave no group behind.
 
-use std::{net::SocketAddr, sync::Arc};
+use std::sync::Arc;
 
 use assert2::check;
 use krabka_protocol::krabka::barrier::{
@@ -15,22 +15,19 @@ use krabka_protocol::krabka::barrier::{
     WritableBarrierPartition, WritableBarrierTopic, WriteBarrierMarkersRequest,
     WriteBarrierMarkersResponse,
 };
-use krabka_security::Principal;
 
 use crate::{
     authorizer::AllowAllAuthorizer,
     barrier::handlers::{alter_groups, write_markers},
     codes,
     coordinator::unified::persistence::MAX_STRING_BYTES,
-    test_support::{decode_response, encode_request, request_context, start_broker_with},
+    test_support::{
+        decode_response, encode_request, peer, principal, request_context, start_broker_with,
+    },
 };
 
 /// The only version of both requests.
 const VERSION: i16 = 0;
-
-fn principal() -> Principal {
-    crate::test_support::principal("ANONYMOUS")
-}
 
 fn entry(group: &str, topic: &str, delete: bool) -> AlterableBarrierGroup {
     AlterableBarrierGroup {
@@ -48,7 +45,7 @@ async fn alter_barrier_groups_refuses_a_name_of_32768_bytes_and_creates_nothing(
     let (handle, _dir) =
         start_broker_with(|cfg| cfg.authorizer = Arc::new(AllowAllAuthorizer)).await;
     let broker = handle.broker_arc_for_test();
-    let (principal, peer) = (principal(), SocketAddr::from(([127, 0, 0, 1], 9092)));
+    let (principal, peer) = (principal("ANONYMOUS"), peer());
     let long = "n".repeat(MAX_STRING_BYTES + 1);
     let request = AlterBarrierGroupsRequest {
         groups: vec![
@@ -97,7 +94,7 @@ async fn write_barrier_markers_refuses_a_group_of_32768_bytes_on_every_partition
     let (handle, _dir) =
         start_broker_with(|cfg| cfg.authorizer = Arc::new(AllowAllAuthorizer)).await;
     let broker = handle.broker_arc_for_test();
-    let (principal, peer) = (principal(), SocketAddr::from(([127, 0, 0, 1], 9092)));
+    let (principal, peer) = (principal("ANONYMOUS"), peer());
     // The broker leads no `orders` partition, so a request that passes the
     // name check answers NOT_LEADER_OR_FOLLOWER for it.
     let cases = [

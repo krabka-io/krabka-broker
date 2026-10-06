@@ -93,13 +93,6 @@ pub(crate) fn diskless_wal_placement_error(
         })
 }
 
-#[tracing::instrument(
-    name = "handle_create_topics",
-    level = "info",
-    skip_all,
-    fields(api = "CreateTopics", version),
-    err
-)]
 #[allow(clippy::too_many_lines)]
 pub(crate) async fn handle(
     broker: &Broker,

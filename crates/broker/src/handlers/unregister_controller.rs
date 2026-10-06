@@ -65,13 +65,6 @@ const CLUSTER_ALTER_DENIED_MESSAGE: &str = "Request UnregisterController needs A
 const UNSUPPORTED_METADATA_VERSION_MESSAGE: &str =
     "The current MetadataVersion is too old to support controller unregistration.";
 
-#[tracing::instrument(
-    name = "handle_unregister_controller",
-    level = "info",
-    skip_all,
-    fields(api = "UnregisterController", version, req_bytes = req_bytes.len()),
-    err,
-)]
 pub(crate) async fn handle(
     broker: &Broker,
     version: i16,

@@ -67,26 +67,16 @@ fn describe_acls_response(resources: Vec<DescribeAclsResource>) -> DescribeAclsR
     }
 }
 
-// `async` for symmetry with the other ACL wire handlers (CreateAcls /
-// DeleteAcls awaits `controller.submit_change`; read-only
-// DescribeAcls itself never suspends.
-#[tracing::instrument(
-    name = "handle_describe_acls",
-    level = "info",
-    skip_all,
-    fields(api = "DescribeAcls"),
-    err
-)]
 pub(crate) fn handle(
     broker: &Broker,
-    req: DescribeAclsRequest,
+    req: &DescribeAclsRequest,
     _version: i16,
     ctx: &crate::handlers::RequestContext<'_>,
 ) -> Result<DescribeAclsResponse, crate::error::BrokerError> {
     // Kafka's `DescribeAclsRequest` constructor refuses an `UNKNOWN` element
     // while the request parses, before any authorization, and the broker
     // closes the connection. The error return is that close.
-    let filter = build_filter(&req).map_err(|UnknownElement| {
+    let filter = build_filter(req).map_err(|UnknownElement| {
         ProtocolError::InvalidValue("DescribeAclsRequest contains UNKNOWN elements")
     })?;
 
@@ -166,7 +156,7 @@ mod tests {
     use crate::{
         broker::BrokerHandle,
         handlers::acl_wire::binding_filter::{AxisFilter, PatternTypeFilter},
-        test_support::{DenyAll, peer, principal},
+        test_support::DenyAll,
     };
 
     const VERSION: i16 = 3;
@@ -208,7 +198,7 @@ mod tests {
 
     crate::test_support::context_helper!(client_id = "admin-client");
 
-    use crate::test_support::start_broker_with_authorizer_no_audit as start_broker;
+    use crate::test_support::{start_broker_with_authorizer_no_audit as start_broker, test_ctx};
 
     /// An authorizer an operator actually configured, which lets the `admin`
     /// test principal through as a super user.
@@ -341,13 +331,11 @@ mod tests {
     async fn handle_denies_cluster_describe() {
         let (broker_handle, _dir) = start_broker(Arc::new(DenyAll)).await;
         let broker = broker_handle.broker_arc_for_test();
-        let p = principal("alice");
-        let peer = peer();
-        let ctx = test_context(&p, &peer);
+        test_ctx!(ctx, "alice");
 
         let resp = handle(
             &broker,
-            request(Some("orders"), Some("User:alice"), OPERATION_READ),
+            &request(Some("orders"), Some("User:alice"), OPERATION_READ),
             VERSION,
             &ctx,
         )
@@ -374,13 +362,11 @@ mod tests {
         )
         .await;
         let broker = broker_handle.broker_arc_for_test();
-        let p = principal("admin");
-        let peer = peer();
-        let ctx = test_context(&p, &peer);
+        test_ctx!(ctx, "admin");
 
         let resp = handle(
             &broker,
-            request(Some("orders"), Some("User:alice"), OPERATION_READ),
+            &request(Some("orders"), Some("User:alice"), OPERATION_READ),
             VERSION,
             &ctx,
         )
@@ -404,13 +390,11 @@ mod tests {
     async fn handle_closes_the_connection_on_an_unknown_element() {
         let (broker_handle, _dir) = start_broker(Arc::new(DenyAll)).await;
         let broker = broker_handle.broker_arc_for_test();
-        let p = principal("alice");
-        let peer = peer();
-        let ctx = test_context(&p, &peer);
+        test_ctx!(ctx, "alice");
         let mut req = request(Some("orders"), Some("User:alice"), OPERATION_READ);
         req.operation = 0;
 
-        let result = handle(&broker, req, VERSION, &ctx);
+        let result = handle(&broker, &req, VERSION, &ctx);
 
         assert!(
             let Err(crate::error::BrokerError::Protocol(ProtocolError::InvalidValue(
@@ -435,9 +419,7 @@ mod tests {
         )
         .await;
         let broker = broker_handle.broker_arc_for_test();
-        let p = principal("admin");
-        let peer = peer();
-        let ctx = test_context(&p, &peer);
+        test_ctx!(ctx, "admin");
         let any = DescribeAclsRequest {
             resource_type_filter: 1,
             resource_name_filter: None,
@@ -467,7 +449,7 @@ mod tests {
         for (name, edit) in cases {
             let mut req = any.clone();
             edit(&mut req);
-            let resp = handle(&broker, req, VERSION, &ctx).expect("handle");
+            let resp = handle(&broker, &req, VERSION, &ctx).expect("handle");
             check!(resp == expected, "{name}");
         }
         broker_handle.shutdown().await;
@@ -498,9 +480,7 @@ mod tests {
         )
         .await;
         let broker = broker_handle.broker_arc_for_test();
-        let p = principal("admin");
-        let peer = peer();
-        let ctx = test_context(&p, &peer);
+        test_ctx!(ctx, "admin");
 
         let all: &[(&str, i8)] = &[
             ("*", PATTERN_TYPE_LITERAL),
@@ -568,7 +548,7 @@ mod tests {
                 permission_type: PERMISSION_ANY,
                 ..Default::default()
             };
-            let mut resp = handle(&broker, req, VERSION, &ctx).expect("handle");
+            let mut resp = handle(&broker, &req, VERSION, &ctx).expect("handle");
             resp.resources
                 .sort_by(|a, b| a.resource_name.cmp(&b.resource_name));
 
@@ -610,9 +590,7 @@ mod tests {
         )
         .await;
         let broker = broker_handle.broker_arc_for_test();
-        let p = principal("admin");
-        let peer = peer();
-        let ctx = test_context(&p, &peer);
+        test_ctx!(ctx, "admin");
 
         let cases: [(Option<&str>, Option<&str>, usize); 4] = [
             (None, None, 1),
@@ -631,7 +609,7 @@ mod tests {
                 permission_type: PERMISSION_ANY,
                 ..Default::default()
             };
-            let resp = handle(&broker, req, VERSION, &ctx).expect("handle");
+            let resp = handle(&broker, &req, VERSION, &ctx).expect("handle");
             check!(
                 resp.resources.len() == want,
                 "principal {principal_filter:?} host {host_filter:?}"
@@ -652,13 +630,11 @@ mod tests {
         )
         .await;
         let broker = broker_handle.broker_arc_for_test();
-        let p = principal("admin");
-        let peer = peer();
-        let ctx = test_context(&p, &peer);
+        test_ctx!(ctx, "admin");
 
         let resp = handle(
             &broker,
-            request(Some("orders"), Some("User:alice"), OPERATION_READ),
+            &request(Some("orders"), Some("User:alice"), OPERATION_READ),
             VERSION,
             &ctx,
         )

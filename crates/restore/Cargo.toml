@@ -49,6 +49,7 @@ krabka-verified = { version = "0.7.0", path = "../verified" }
 base64 = { workspace = true }
 bytes = { workspace = true }
 clap = { workspace = true, features = ["derive"] }
+derive_more = { workspace = true }
 # The archive listing is consumed as a stream, so the scan never holds the
 # whole bucket in memory.
 futures-util = { workspace = true }
@@ -60,6 +61,8 @@ regex = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
+# `cli_main!` writes the binary's `main`.
+krabka-macros = { version = "0.7.0", path = "../macros" }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "fs"] }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }

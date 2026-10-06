@@ -5,13 +5,13 @@
 use bytes::Bytes;
 use krabka_ids::{Offset, ProducerId};
 use krabka_protocol::records::{Attributes, RecordBatch};
-use krabka_units::prelude::{bytes, mebibytes};
+use krabka_units::prelude::mebibytes;
 use tempfile::tempdir;
 
 use super::*;
 use crate::{
     config::LogConfig,
-    log::test_support::{abort_marker, commit_marker, compaction_ctx, keyed_batch},
+    log::test_support::{abort_marker, commit_marker, compaction_ctx, keyed_batch, tiny_segments},
     txn_index::AbortedTxn,
 };
 
@@ -30,8 +30,7 @@ fn transactional_keyed(pid: i64, sequence: i32, key: &[u8], value: &[u8]) -> Rec
 fn log_with_a_batch_per_segment(dir: &std::path::Path, batches: Vec<RecordBatch>) -> Log {
     let cfg = LogConfig {
         cleanup_policy: crate::CleanupPolicy::Compact,
-        segment_size: bytes(1),
-        ..Default::default()
+        ..tiny_segments()
     };
     let mut log = Log::open(dir, cfg).unwrap();
     for mut batch in batches {

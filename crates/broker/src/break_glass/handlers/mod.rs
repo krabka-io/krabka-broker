@@ -33,6 +33,7 @@
 
 pub(crate) mod approve;
 pub(crate) mod audit;
+pub(crate) mod batch;
 pub(crate) mod describe;
 pub(crate) mod propose;
 

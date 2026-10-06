@@ -188,13 +188,13 @@ impl Log {
 #[cfg(test)]
 mod tests {
     use assert2::check;
-    use krabka_units::prelude::{ByteSize, bytes, kibibytes, millis, secs};
+    use krabka_units::prelude::{ByteSize, kibibytes, millis, secs};
     use tempfile::tempdir;
 
     use super::*;
     use crate::{
         config::LogConfig,
-        log::test_support::{rolled_log, sample_batch, test_log},
+        log::test_support::{rolled_log, rolling_test_log, sample_batch, test_log, tiny_segments},
     };
 
     /// Retention may take the whole log, but it never leaves the log without a
@@ -302,11 +302,10 @@ mod tests {
             let mut log = Log::open(
                 dir.path(),
                 LogConfig {
-                    segment_size: bytes(1),
                     retention: Some(secs(10)),
                     retention_size,
                     cleanup_policy,
-                    ..LogConfig::default()
+                    ..tiny_segments()
                 },
             )
             .unwrap();
@@ -387,9 +386,8 @@ mod tests {
             let mut log = Log::open(
                 dir.path(),
                 LogConfig {
-                    segment_size: bytes(1),
                     retention: Some(secs(60 * 60)),
-                    ..LogConfig::default()
+                    ..tiny_segments()
                 },
             )
             .unwrap();
@@ -426,9 +424,8 @@ mod tests {
         for (what, high_watermark, expected_start) in rows {
             let dir = tempdir().unwrap();
             let config = LogConfig {
-                segment_size: bytes(1),
                 retention: Some(secs(1)),
-                ..LogConfig::default()
+                ..tiny_segments()
             };
             let mut log = Log::open(dir.path(), config).unwrap();
             for _ in 0..3 {
@@ -454,9 +451,8 @@ mod tests {
         let mut log = Log::open(
             dir.path(),
             LogConfig {
-                segment_size: bytes(1),
                 retention: Some(millis(1)),
-                ..LogConfig::default()
+                ..tiny_segments()
             },
         )
         .unwrap();
@@ -506,14 +502,7 @@ mod tests {
         ];
         for (name, debt_halves, expected_sealed) in cases {
             let dir = tempdir().unwrap();
-            let mut log = Log::open(
-                dir.path(),
-                LogConfig {
-                    segment_size: bytes(1),
-                    ..LogConfig::default()
-                },
-            )
-            .unwrap();
+            let mut log = rolling_test_log(dir.path());
             for _ in 0..5 {
                 log.append(&mut sample_batch(1)).unwrap();
             }

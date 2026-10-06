@@ -54,6 +54,8 @@ serde_json = { workspace = true }
 # the archive to check.
 sha2 = { workspace = true }
 thiserror = { workspace = true }
+# `cli_main!` writes the binary's `main`.
+krabka-macros = { version = "0.7.0", path = "../macros" }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "fs", "time"] }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }

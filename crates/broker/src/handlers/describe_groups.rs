@@ -27,12 +27,10 @@
 //! `i32::MIN` "not present" sentinel.
 
 use bytes::Bytes;
-use krabka_metadata::ResourceType;
 use krabka_protocol::owned::{
     describe_groups_request::DescribeGroupsRequest,
     describe_groups_response::{DescribeGroupsResponse, DescribedGroup, DescribedGroupMember},
 };
-use tokio::sync::oneshot;
 
 use crate::{
     broker::Broker,
@@ -43,7 +41,8 @@ use crate::{
         classic_state::GroupState,
     },
     error::BrokerError,
-    handlers::authorized_operations::authorized_operations_bits,
+    handlers::authorized_operations::fill_group_authorized_operations,
+    task_util::{AskError, ask},
 };
 
 /// The first `DescribeGroups` version whose unknown-group row carries
@@ -53,13 +52,6 @@ const GROUP_ID_NOT_FOUND_MIN_VERSION: i16 = 6;
 /// The first `DescribeGroups` version with `authorized_operations`.
 const AUTHORIZED_OPERATIONS_MIN_VERSION: i16 = 3;
 
-#[tracing::instrument(
-    name = "handle_describe_groups",
-    level = "info",
-    skip_all,
-    fields(api = "DescribeGroups", version),
-    err
-)]
 pub(crate) async fn handle(
     broker: &Broker,
     req: DescribeGroupsRequest,
@@ -99,20 +91,13 @@ pub(crate) async fn handle(
 
     // KIP-430: Kafka fills the bitfield for every coordinator row whose error
     // is NONE, a below-v6 `Dead` row included.
-    if version >= AUTHORIZED_OPERATIONS_MIN_VERSION && req.include_authorized_operations {
-        for row in &mut groups {
-            if row.error_code == codes::NONE {
-                row.authorized_operations = authorized_operations_bits(
-                    broker.config.authorizer.as_ref(),
-                    &image,
-                    ctx.principal,
-                    ctx.peer,
-                    ResourceType::Group,
-                    row.group_id.as_str(),
-                );
-            }
-        }
-    }
+    fill_group_authorized_operations(
+        broker.config.authorizer.as_ref(),
+        &image,
+        ctx,
+        version >= AUTHORIZED_OPERATIONS_MIN_VERSION && req.include_authorized_operations,
+        &mut groups,
+    );
 
     denied.extend(groups);
     Ok(DescribeGroupsResponse {
@@ -139,23 +124,22 @@ async fn describe_one(broker: &Broker, group_id: String, version: i16) -> Descri
         let message = format!("Group {group_id} not found.");
         return dead_row(group_id, version, message);
     };
-    let (tx, rx) = oneshot::channel();
-    if handle
-        .tx
-        .send(GroupActorMessage::ClassicInspect { reply: tx })
-        .await
-        .is_err()
-    {
-        let message = format!("Group {group_id} not found.");
-        return dead_row(group_id, version, message);
-    }
     // `ClassicInspect` replies only while the live group is classic; a
     // KIP-848 consumer group drops the sender.
-    if let Ok(view) = rx.await {
-        described_classic(view)
-    } else {
-        let message = format!("Group {group_id} is not a classic group.");
-        dead_row(group_id, version, message)
+    match ask(&handle.tx, |reply| GroupActorMessage::ClassicInspect {
+        reply,
+    })
+    .await
+    {
+        Ok(view) => described_classic(view),
+        Err(AskError::Closed) => {
+            let message = format!("Group {group_id} not found.");
+            dead_row(group_id, version, message)
+        }
+        Err(AskError::Dropped) => {
+            let message = format!("Group {group_id} is not a classic group.");
+            dead_row(group_id, version, message)
+        }
     }
 }
 
@@ -217,30 +201,18 @@ mod tests {
     use std::sync::Arc;
 
     use assert2::assert;
-    use krabka_metadata::AclOperation;
+    use krabka_metadata::{AclOperation, ResourceType};
 
     use super::*;
     use crate::{
         coordinator::unified::actor::ClassicMemberView,
-        test_support::{DenyAll, peer, principal},
+        handlers::authorized_operations::authorized_operations_bits,
+        test_support::{DenyAll, peer, principal, test_ctx},
     };
 
     const VERSION: i16 = krabka_protocol::owned::describe_groups_response::MAX_VERSION;
 
     crate::test_support::context_helper!(client_id = "admin-client");
-
-    /// Start a broker with `authorizer` and audit off, and wait until its
-    /// group coordinator serves `__consumer_offsets`.
-    async fn start_broker(
-        authorizer: Arc<dyn crate::authorizer::Authorizer>,
-    ) -> (crate::broker::BrokerHandle, tempfile::TempDir) {
-        let (handle, dir) = crate::test_support::start_broker_with_authorizer_no_audit(
-            crate::test_support::controller_peer_allowed(authorizer),
-        )
-        .await;
-        handle.wait_until_group_coordinator_ready().await;
-        (handle, dir)
-    }
 
     fn request(groups: &[&str], include_ops: bool) -> DescribeGroupsRequest {
         DescribeGroupsRequest {
@@ -271,9 +243,7 @@ mod tests {
         version: i16,
         req: &DescribeGroupsRequest,
     ) -> DescribeGroupsResponse {
-        let p = principal("admin");
-        let peer = peer();
-        let ctx = test_context(&p, &peer);
+        test_ctx!(ctx, "admin");
         handle(broker, req.clone(), version, &ctx)
             .await
             .expect("handle")
@@ -284,7 +254,8 @@ mod tests {
     /// never consulted.
     #[tokio::test]
     async fn a_denied_group_is_refused_per_row() {
-        let (broker_handle, _dir) = start_broker(Arc::new(DenyAll)).await;
+        let (broker_handle, _dir) =
+            crate::test_support::start_group_broker_no_audit(Arc::new(DenyAll)).await;
         let broker = broker_handle.broker_arc_for_test();
 
         let resp = drive(&broker, VERSION, &request(&["group-a", "group-b"], false)).await;
@@ -324,8 +295,7 @@ mod tests {
             authorized_operations_bits(
                 &crate::authorizer::AllowAllAuthorizer,
                 &krabka_metadata::MetadataImage::new(uuid::Uuid::nil()),
-                &p,
-                &peer(),
+                &crate::test_support::request_context(&p, &peer(), "test-client"),
                 ResourceType::Group,
                 "x",
             )
@@ -373,8 +343,10 @@ mod tests {
                 ),
             ),
         ];
-        let (broker_handle, _dir) =
-            start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
+        let (broker_handle, _dir) = crate::test_support::start_group_broker_no_audit(Arc::new(
+            crate::authorizer::AllowAllAuthorizer,
+        ))
+        .await;
         let broker = broker_handle.broker_arc_for_test();
         let _ = broker.group_coordinator.get_or_create_consumer("next-gen");
 
@@ -464,8 +436,10 @@ mod tests {
     /// separates this row from `the_authorized_operations_bitfield_is_filled_only_on_opt_in`.
     #[tokio::test]
     async fn a_classic_group_is_projected_without_the_kip430_bitfield() {
-        let (broker_handle, _dir) =
-            start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
+        let (broker_handle, _dir) = crate::test_support::start_group_broker_no_audit(Arc::new(
+            crate::authorizer::AllowAllAuthorizer,
+        ))
+        .await;
         let broker = broker_handle.broker_arc_for_test();
         let _ = broker.group_coordinator.get_or_create_classic("classic-a");
 
@@ -497,7 +471,8 @@ mod tests {
     #[tokio::test]
     async fn the_authorized_operations_bitfield_is_filled_only_on_opt_in() {
         let authorizer = Arc::new(crate::authorizer::AllowAllAuthorizer);
-        let (broker_handle, _dir) = start_broker(Arc::clone(&authorizer) as _).await;
+        let (broker_handle, _dir) =
+            crate::test_support::start_group_broker_no_audit(Arc::clone(&authorizer) as _).await;
         let broker = broker_handle.broker_arc_for_test();
         let _ = broker.group_coordinator.get_or_create_classic("classic-a");
 
@@ -508,8 +483,7 @@ mod tests {
         let expected = authorized_operations_bits(
             authorizer.as_ref(),
             &broker.controller.current_image(),
-            &p,
-            &peer,
+            &crate::test_support::request_context(&p, &peer, "test-client"),
             ResourceType::Group,
             "classic-a",
         );
@@ -595,7 +569,8 @@ mod tests {
         for (acls, include_ops, expected) in rows {
             let authorizer =
                 crate::authorizer::SimpleAclAuthorizer::new(std::collections::HashSet::new());
-            let (broker_handle, _dir) = start_broker(Arc::new(authorizer)).await;
+            let (broker_handle, _dir) =
+                crate::test_support::start_group_broker_no_audit(Arc::new(authorizer)).await;
             let broker = broker_handle.broker_arc_for_test();
             broker
                 .controller

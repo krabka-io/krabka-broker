@@ -9,8 +9,8 @@
 use krabka_metadata::{
     BreakGlassAction, MetadataImage, MetadataRecord, NodeId, UnregisterBrokerRecord,
 };
-use uuid::Uuid;
 
+pub(super) use crate::break_glass::gate::consumed_proposal_id;
 use crate::{
     break_glass::gate::{self, BreakGlassDenial},
     config::BreakGlassConfig,
@@ -84,15 +84,4 @@ pub(super) fn with_leaves(
 /// exactly and no wider proposal covers it.
 pub(super) fn broker_target(node_id: NodeId) -> String {
     node_id.0.to_string()
-}
-
-/// The proposal that a consumed record names.
-///
-/// [`gate::authorize`] only ever answers with a proposal record, so the `None`
-/// arm costs one match rather than a panic.
-pub(super) fn consumed_proposal_id(record: &MetadataRecord) -> Option<Uuid> {
-    match record {
-        MetadataRecord::V1BreakGlassProposal(proposal) => Some(proposal.proposal_id),
-        _ => None,
-    }
 }

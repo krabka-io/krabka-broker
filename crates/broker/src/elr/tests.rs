@@ -7,7 +7,7 @@
 //! through the real `DescribeTopicPartitions` handler, which is the path
 //! `kafka-topics --describe` takes.
 
-use std::{net::SocketAddr, sync::Arc};
+use std::sync::Arc;
 
 use assert2::assert;
 use krabka_metadata::{
@@ -23,14 +23,13 @@ use krabka_protocol::owned::{
     describe_topic_partitions_request::{DescribeTopicPartitionsRequest, TopicRequest},
     describe_topic_partitions_response::DescribeTopicPartitionsResponsePartition,
 };
-use krabka_security::Principal;
 
 use super::{ElrPublisher, TopicElr, state::PartitionElr};
 use crate::{
     broker::Broker,
     codes,
     config_keys::MIN_INSYNC_REPLICAS,
-    test_support::{request_context, start_broker_with_authorizer},
+    test_support::{peer, principal, request_context, start_broker_with_authorizer},
 };
 
 const TOPIC: &str = "orders";
@@ -134,14 +133,6 @@ async fn mark_broker_3_unavailable(broker: &Broker) {
     crate::test_support::end_heartbeat_session(broker, 3).await;
 }
 
-fn principal() -> Principal {
-    crate::test_support::principal("replica")
-}
-
-fn peer() -> SocketAddr {
-    "127.0.0.1:9092".parse().expect("peer address")
-}
-
 /// Register brokers 2 and 3 and make them active on the controller, so that
 /// `AlterPartition` accepts them in an ISR as Kafka's
 /// `ineligibleReplicasForIsr` does for a registered, unfenced broker.
@@ -183,7 +174,7 @@ async fn activate_followers(broker: &Broker) {
 /// Propose `new_isr` for partition 0 through the real `AlterPartition`
 /// handler, and assert the controller accepted it.
 async fn alter_isr(broker: &Arc<Broker>, new_isr: &[i32]) {
-    let principal = principal();
+    let principal = principal("replica");
     let peer = peer();
     let ctx = request_context(&principal, &peer, "broker-client");
     // The controller checks the sender's broker epoch and the row's
@@ -225,7 +216,7 @@ async fn alter_isr(broker: &Arc<Broker>, new_isr: &[i32]) {
 
 /// The partition row `DescribeTopicPartitions` answers with for partition 0.
 async fn describe_partition(broker: &Arc<Broker>) -> DescribeTopicPartitionsResponsePartition {
-    let principal = principal();
+    let principal = principal("replica");
     let peer = peer();
     let ctx = request_context(&principal, &peer, "admin-client");
     let request = DescribeTopicPartitionsRequest {
@@ -322,7 +313,7 @@ async fn register_broker_3(broker: &Arc<Broker>, incarnation: u128) -> BrokerReg
         )],
         ..Default::default()
     };
-    let principal = principal();
+    let principal = principal("replica");
     let peer = peer();
     let ctx = request_context(&principal, &peer, "broker-client");
     crate::handlers::broker_registration::handle(broker, request, REGISTER_VERSION, &ctx)

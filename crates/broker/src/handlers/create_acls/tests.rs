@@ -24,9 +24,7 @@ use crate::{
         OPERATION_READ, OPERATION_WRITE, VERSION, all_acls, configured_authorizer, creation,
         request, test_context,
     },
-    test_support::{
-        DenyAll, peer, principal, start_broker_with_authorizer_no_audit as start_broker,
-    },
+    test_support::{DenyAll, start_broker_with_authorizer_no_audit as start_broker, test_ctx},
 };
 
 /// The row Kafka's `AclApis.handleCreateAcls` sends for a committed
@@ -46,9 +44,7 @@ fn committed() -> AclCreationResult {
 async fn handle_stores_long_resource_names_and_principals() {
     let (broker_handle, _dir) = start_broker(configured_authorizer()).await;
     let broker = broker_handle.broker_arc_for_test();
-    let p = principal("admin");
-    let peer = peer();
-    let ctx = test_context(&p, &peer);
+    test_ctx!(ctx, "admin");
     let long_name = "r".repeat(4096);
     let long_principal = format!("User:{}", "a".repeat(4096));
     let req = request(vec![
@@ -82,9 +78,7 @@ async fn handle_stores_long_resource_names_and_principals() {
 async fn handle_denies_cluster_alter_for_each_creation() {
     let (broker_handle, _dir) = start_broker(Arc::new(DenyAll)).await;
     let broker = broker_handle.broker_arc_for_test();
-    let p = principal("alice");
-    let peer = peer();
-    let ctx = test_context(&p, &peer);
+    test_ctx!(ctx, "alice");
     let req = request(vec![
         creation("topic-a", "User:bob", OPERATION_READ),
         creation("topic-b", "User:carol", OPERATION_WRITE),
@@ -111,9 +105,7 @@ async fn handle_denies_cluster_alter_for_each_creation() {
 async fn handle_submits_valid_creations_and_reports_invalid_creations_in_order() {
     let (broker_handle, _dir) = start_broker(configured_authorizer()).await;
     let broker = broker_handle.broker_arc_for_test();
-    let p = principal("admin");
-    let peer = peer();
-    let ctx = test_context(&p, &peer);
+    test_ctx!(ctx, "admin");
     let mut invalid = creation("", "User:bob", OPERATION_WRITE);
     invalid.resource_name.clear();
     let req = request(vec![
@@ -156,9 +148,7 @@ async fn handle_submits_valid_creations_and_reports_invalid_creations_in_order()
 async fn handle_answers_security_disabled_for_each_creation_when_no_authorizer_is_configured() {
     let (broker_handle, _dir) = start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
     let broker = broker_handle.broker_arc_for_test();
-    let p = principal("admin");
-    let peer = peer();
-    let ctx = test_context(&p, &peer);
+    test_ctx!(ctx, "admin");
     let req = request(vec![
         creation("topic-a", "User:alice", OPERATION_READ),
         creation("topic-b", "User:bob", OPERATION_WRITE),
@@ -198,9 +188,7 @@ async fn start_trunk_broker() -> (crate::broker::BrokerHandle, tempfile::TempDir
 async fn handle_stores_any_host_by_default() {
     let (broker_handle, _dir) = start_broker(configured_authorizer()).await;
     let broker = broker_handle.broker_arc_for_test();
-    let p = principal("admin");
-    let peer = peer();
-    let ctx = test_context(&p, &peer);
+    test_ctx!(ctx, "admin");
     let hosts = ["10.0.0.0/8", "not/a/cidr", ""];
     let creations = hosts
         .iter()
@@ -248,9 +236,7 @@ async fn handle_accepts_cidr_host_at_the_cidr_metadata_version() {
         })])
         .await
         .expect("seed cidr-supporting metadata.version");
-    let p = principal("admin");
-    let peer = peer();
-    let ctx = test_context(&p, &peer);
+    test_ctx!(ctx, "admin");
     let mut cidr_creation = creation("topic-a", "User:alice", OPERATION_READ);
     cidr_creation.host = "10.0.0.0/8".into();
     let req = request(vec![cidr_creation]);
@@ -291,9 +277,7 @@ async fn handle_rejects_cidr_host_below_the_cidr_metadata_version() {
         })])
         .await
         .expect("seed pre-cidr metadata.version");
-    let p = principal("admin");
-    let peer = peer();
-    let ctx = test_context(&p, &peer);
+    test_ctx!(ctx, "admin");
     let mut cidr_creation = creation("topic-a", "User:alice", OPERATION_READ);
     cidr_creation.host = "10.0.0.0/8".into();
     let req = request(vec![cidr_creation]);
@@ -323,9 +307,7 @@ async fn handle_rejects_cidr_host_below_the_cidr_metadata_version() {
 async fn handle_fails_every_creation_when_one_carries_a_filter_only_value() {
     let (broker_handle, _dir) = start_broker(configured_authorizer()).await;
     let broker = broker_handle.broker_arc_for_test();
-    let p = principal("admin");
-    let peer = peer();
-    let ctx = test_context(&p, &peer);
+    test_ctx!(ctx, "admin");
     let mut any_operation = creation("topic-b", "User:bob", OPERATION_READ);
     any_operation.operation = 1;
     let req = request(vec![
@@ -357,9 +339,7 @@ async fn handle_fails_every_creation_when_one_carries_a_filter_only_value() {
 async fn handle_errors_so_the_connection_closes_on_an_unknown_element() {
     let (broker_handle, _dir) = start_broker(Arc::new(DenyAll)).await;
     let broker = broker_handle.broker_arc_for_test();
-    let p = principal("alice");
-    let peer = peer();
-    let ctx = test_context(&p, &peer);
+    test_ctx!(ctx, "alice");
     let mut unknown_permission = creation("topic-a", "User:bob", OPERATION_READ);
     unknown_permission.permission_type = 0;
     let req = request(vec![unknown_permission]);
@@ -377,9 +357,7 @@ async fn handle_errors_so_the_connection_closes_on_an_unknown_element() {
 async fn handle_pins_the_cluster_name_and_accepts_other_principal_types() {
     let (broker_handle, _dir) = start_broker(configured_authorizer()).await;
     let broker = broker_handle.broker_arc_for_test();
-    let p = principal("admin");
-    let peer = peer();
-    let ctx = test_context(&p, &peer);
+    test_ctx!(ctx, "admin");
     let mut wrong_cluster = creation("my-cluster", "User:alice", OPERATION_READ);
     wrong_cluster.resource_type = 4;
     let req = request(vec![
@@ -472,9 +450,7 @@ async fn handle_bounds_a_request_to_ten_thousand_new_acls() {
     for (label, creations, results, stored) in cases {
         let (broker_handle, _dir) = start_broker(configured_authorizer()).await;
         let broker = broker_handle.broker_arc_for_test();
-        let p = principal("admin");
-        let peer = peer();
-        let ctx = test_context(&p, &peer);
+        test_ctx!(ctx, "admin");
 
         let resp = handle(&broker, request(creations), VERSION, &ctx)
             .await
@@ -499,9 +475,7 @@ async fn handle_bounds_a_request_to_ten_thousand_new_acls() {
 async fn handle_rejects_cidr_host_on_a_freshly_bootstrapped_cluster() {
     let (broker_handle, _dir) = start_trunk_broker().await;
     let broker = broker_handle.broker_arc_for_test();
-    let p = principal("admin");
-    let peer = peer();
-    let ctx = test_context(&p, &peer);
+    test_ctx!(ctx, "admin");
     let mut cidr_creation = creation("topic-a", "User:alice", OPERATION_READ);
     cidr_creation.host = "10.0.0.0/8".into();
     let req = request(vec![cidr_creation]);

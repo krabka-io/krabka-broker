@@ -49,8 +49,8 @@
 //! approval that a second trim could spend again. The gate is active only when
 //! `[break_glass]` names an approver set.
 //!
-//! This file is the module root and holds the request loop. The ACL reduction
-//! lives in `authz`, the response constructors in `response`, the offset
+//! This file is the module root and holds the request loop and its ACL
+//! preamble. The response constructors live in `response`, the offset
 //! boundary decisions in `offsets`, and the break-glass gate in `gate`.
 
 use std::collections::HashSet;
@@ -68,7 +68,6 @@ use krabka_units::convert::TimeExt as _;
 use krabka_verified::{DeleteRecordsTrimDecision, FreezeMutationKind};
 use uuid::Uuid;
 
-mod authz;
 mod gate;
 mod low_watermark;
 mod offsets;
@@ -80,13 +79,11 @@ mod test_support;
 mod tests;
 
 use self::{
-    authz::denied_topic_names,
     gate::{authorize_trim, consumed_proposal_id, refuse_trim, spend_approval, trim_target},
     offsets::trim_decision,
     response::{delete_records_response, error_partition_result, partition_result, topic_result},
 };
 use crate::{
-    authorizer::authorize_topics,
     break_glass::handlers::audit::{GatedTransition, audit_transition, require_transition},
     broker::Broker,
     codes,
@@ -94,13 +91,6 @@ use crate::{
     handlers::RequestContext,
 };
 
-#[tracing::instrument(
-    name = "handle_delete_records",
-    level = "info",
-    skip_all,
-    fields(api = "DeleteRecords", version),
-    err
-)]
 pub(crate) async fn handle(
     broker: &Broker,
     req: DeleteRecordsRequest,
@@ -115,16 +105,13 @@ pub(crate) async fn handle(
     // Batch-authorize every topic name for `Delete`. Topics that come
     // back `Deny` short-circuit the trim loop and emit
     // TOPIC_AUTHORIZATION_FAILED on every partition row for that topic.
-    let topic_names: Vec<&str> = req.topics.iter().map(|t| t.name.as_str()).collect();
-    let acl_results = authorize_topics(
+    let denied_topics = crate::handlers::denied_topics(
         broker.config.authorizer.as_ref(),
-        &*image,
-        ctx.principal,
-        ctx.peer,
+        &image,
+        ctx,
         AclOperation::Delete,
-        topic_names.iter().copied(),
+        req.topics.iter().map(|t| t.name.as_str()),
     );
-    let denied_topics = denied_topic_names(&acl_results);
 
     let env = TrimEnv {
         broker,

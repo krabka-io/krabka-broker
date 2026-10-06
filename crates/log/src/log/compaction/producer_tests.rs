@@ -10,14 +10,14 @@
 use bytes::Bytes;
 use krabka_ids::LeaderEpoch;
 use krabka_protocol::records::{Attributes, Record, RecordBatch};
-use krabka_units::prelude::{Time, bytes, mebibytes};
+use krabka_units::prelude::{Time, mebibytes};
 use tempfile::tempdir;
 
 use super::*;
 use crate::{
     CleanupPolicy,
     config::LogConfig,
-    log::test_support::{commit_marker, compaction_ctx, verbatim_from},
+    log::test_support::{commit_marker, compaction_ctx, tiny_segments, verbatim_from},
 };
 
 /// The path a batch takes into the log.
@@ -234,9 +234,8 @@ fn compaction_keeps_the_last_record_of_each_producer_in_the_log() {
                 dir.path(),
                 LogConfig {
                     cleanup_policy: CleanupPolicy::Compact,
-                    segment_size: bytes(1),
                     delete_retention: Time::ZERO,
-                    ..LogConfig::default()
+                    ..tiny_segments()
                 },
             )
             .unwrap();

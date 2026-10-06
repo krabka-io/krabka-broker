@@ -2,7 +2,7 @@
 
 use moxy::{
     ast::ParseError,
-    token::{Ident, TokenStream},
+    token::{Ident, LitStr, TokenStream},
 };
 
 use crate::api_names::{Entry, Section, Suffixed, parse_sections, section};
@@ -20,9 +20,11 @@ enum Adapter {
     /// `decode_group_request`, which also refuses a record string over the
     /// coordinator bound.
     Typed { group: bool },
-    /// Decodes the body into the request type, calls the handler, encodes its
-    /// response struct and wraps the result in a ready future.
-    TypedSync,
+    /// Decodes the body into the request type, calls the handler with a
+    /// reference to it, encodes its response struct and wraps the result in a
+    /// ready future. A `fallible` handler returns a `Result` the adapter
+    /// propagates; any other returns the response itself.
+    TypedSync { fallible: bool },
     /// Hands a telemetry handler the raw body and wraps its result in a ready
     /// future.
     Telemetry,
@@ -35,72 +37,96 @@ enum Adapter {
 struct Kind {
     label: &'static str,
     adapter: Adapter,
+    /// Whether the generated adapter opens the `handle_<snake>` span. A
+    /// section whose handler opens a span of its own sets this false, so the
+    /// request is not traced twice.
+    traced: bool,
     constructor: &'static str,
 }
 
-const KINDS: [Kind; 7] = [
+const KINDS: [Kind; 9] = [
     Kind {
         label: "context",
         adapter: Adapter::Context,
+        traced: true,
         constructor: "context",
     },
     Kind {
         label: "sync_context",
         adapter: Adapter::SyncContext,
+        traced: true,
         constructor: "context",
     },
     Kind {
         label: "typed",
         adapter: Adapter::Typed { group: false },
+        traced: true,
+        constructor: "context",
+    },
+    Kind {
+        label: "typed_own_span",
+        adapter: Adapter::Typed { group: false },
+        traced: false,
         constructor: "context",
     },
     Kind {
         label: "typed_group",
         adapter: Adapter::Typed { group: true },
+        traced: true,
         constructor: "context",
     },
     Kind {
         label: "typed_sync",
-        adapter: Adapter::TypedSync,
+        adapter: Adapter::TypedSync { fallible: true },
+        traced: true,
+        constructor: "context",
+    },
+    Kind {
+        label: "typed_infallible",
+        adapter: Adapter::TypedSync { fallible: false },
+        traced: true,
         constructor: "context",
     },
     Kind {
         label: "auth",
         adapter: Adapter::HandWritten,
+        traced: false,
         constructor: "auth",
     },
     Kind {
         label: "telemetry",
         adapter: Adapter::Telemetry,
+        traced: true,
         constructor: "telemetry",
     },
 ];
 
 /// The adapter function for one generated entry.
-fn adapter(kind: Adapter, adapter: &Ident, handler: &TokenStream, entry: &Entry) -> TokenStream {
+///
+/// Unless the entry's section says the handler opens its own span, the adapter
+/// runs the decode, the handler and the encode inside an `info` span named
+/// `handle_<snake_name>` with `api`, `version` and, for an adapter that hands
+/// the handler the raw body, `req_bytes`. On `Err` it emits the `ERROR` event
+/// `#[tracing::instrument(err)]` would: `error` set to the error's `Display`,
+/// inside the span.
+fn adapter(
+    kind: Adapter,
+    traced: bool,
+    adapter: &Ident,
+    handler: &TokenStream,
+    entry: &Entry,
+) -> TokenStream {
     let request_module = &entry.names.request_module;
     let request_type = &entry.names.request_type;
-    match kind {
-        Adapter::Context => moxy::template! {
-            fn {{ adapter }}<'a>(
-                broker: &'a Broker,
-                version: ApiVersion,
-                body: &'a [u8],
-                ctx: &'a RequestContext<'a>,
-            ) -> BoxFuture<'a, Result<Bytes, BrokerError>> {
-                Box::pin({{ handler }}(broker, version, body, ctx))
-            }
-        },
-        Adapter::SyncContext => moxy::template! {
-            fn {{ adapter }}<'a>(
-                broker: &'a Broker,
-                version: ApiVersion,
-                body: &'a [u8],
-                ctx: &'a RequestContext<'a>,
-            ) -> BoxFuture<'a, Result<Bytes, BrokerError>> {
-                Box::pin(::std::future::ready({{ handler }}(broker, version, body, ctx)))
-            }
-        },
+    let (raw_body, body) = match kind {
+        Adapter::Context => (
+            true,
+            Body::Future(moxy::template! { {{ handler }}(broker, version, body, ctx) }),
+        ),
+        Adapter::SyncContext => (
+            true,
+            Body::Ready(moxy::template! { {{ handler }}(broker, version, body, ctx) }),
+        ),
         Adapter::Typed { group } => {
             let decode = if group {
                 moxy::template! {
@@ -119,55 +145,127 @@ fn adapter(kind: Adapter, adapter: &Ident, handler: &TokenStream, entry: &Entry)
                     }
                 }
             };
-            moxy::template! {
-                fn {{ adapter }}<'a>(
-                    broker: &'a Broker,
-                    version: ApiVersion,
-                    body: &'a [u8],
-                    ctx: &'a RequestContext<'a>,
-                ) -> BoxFuture<'a, Result<Bytes, BrokerError>> {
-                    Box::pin(async move {
+            (
+                false,
+                Body::Future(moxy::template! {
+                    async move {
                         let mut cur = body;
                         let req = {{ decode }};
                         let resp = {{ handler }}(broker, req, version, ctx).await?;
                         crate::handlers::encode_response(&resp, version)
-                    })
-                }
-            }
+                    }
+                }),
+            )
         }
-        Adapter::TypedSync => moxy::template! {
-            fn {{ adapter }}<'a>(
-                broker: &'a Broker,
-                version: ApiVersion,
-                body: &'a [u8],
-                ctx: &'a RequestContext<'a>,
-            ) -> BoxFuture<'a, Result<Bytes, BrokerError>> {
-                Box::pin(::std::future::ready((|| {
-                    use krabka_protocol::Decode as _;
+        Adapter::TypedSync { fallible } => {
+            let call = moxy::template! { {{ handler }}(broker, &req, version, ctx) };
+            let resp = if fallible {
+                moxy::template! { {{ call }}? }
+            } else {
+                call
+            };
+            (
+                false,
+                Body::Ready(moxy::template! {
+                    (|| {
+                        use krabka_protocol::Decode as _;
 
-                    let mut cur = body;
-                    let req = krabka_protocol::owned::{{ request_module }}::{{ request_type }}::decode(
-                        &mut cur, version,
-                    )?;
-                    let resp = {{ handler }}(broker, req, version, ctx)?;
-                    crate::handlers::encode_response(&resp, version)
-                })()))
-            }
-        },
-        Adapter::Telemetry => moxy::template! {
+                        let mut cur = body;
+                        let req = krabka_protocol::owned::{{ request_module }}::{{ request_type }}::decode(
+                            &mut cur, version,
+                        )?;
+                        let resp = {{ resp }};
+                        crate::handlers::encode_response(&resp, version)
+                    })()
+                }),
+            )
+        }
+        Adapter::Telemetry => (
+            true,
+            Body::Ready(moxy::template! {
+                {{ handler }}(broker, version, correlation_id, body, ctx)
+            }),
+        ),
+        Adapter::HandWritten => return TokenStream::new(),
+    };
+    let signature = if matches!(kind, Adapter::Telemetry) {
+        moxy::template! {
             fn {{ adapter }}<'a>(
                 broker: &'a Broker,
                 version: ApiVersion,
                 correlation_id: CorrelationId,
                 body: &'a [u8],
                 ctx: &'a TelemetryContext<'a>,
-            ) -> BoxFuture<'a, Result<Bytes, BrokerError>> {
-                Box::pin(::std::future::ready({{ handler }}(
-                    broker, version, correlation_id, body, ctx,
-                )))
-            }
+            ) -> BoxFuture<'a, Result<Bytes, BrokerError>>
+        }
+    } else {
+        moxy::template! {
+            fn {{ adapter }}<'a>(
+                broker: &'a Broker,
+                version: ApiVersion,
+                body: &'a [u8],
+                ctx: &'a RequestContext<'a>,
+            ) -> BoxFuture<'a, Result<Bytes, BrokerError>>
+        }
+    };
+    let block = if traced {
+        traced_block(entry, raw_body, body)
+    } else {
+        match body {
+            Body::Future(future) => moxy::template! { Box::pin({{ future }}) },
+            Body::Ready(result) => moxy::template! { Box::pin(::std::future::ready({{ result }})) },
+        }
+    };
+    moxy::template! {
+        {{ signature }} {
+            {{ block }}
+        }
+    }
+}
+
+/// What an adapter computes before it boxes the result.
+enum Body {
+    /// A future of the handler's encoded result.
+    Future(TokenStream),
+    /// The handler's encoded result, computed when the adapter is called.
+    Ready(TokenStream),
+}
+
+/// An adapter's block that runs `body` inside the entry's `handle_<snake>`
+/// span and emits an `ERROR` event with the error's `Display` on `Err`.
+fn traced_block(entry: &Entry, raw_body: bool, body: Body) -> TokenStream {
+    let names = &entry.names;
+    let name = LitStr::new(
+        &format!("handle_{}", names.snake.text()),
+        names.snake.span(),
+    );
+    let api = LitStr::new(names.api.text(), names.api.span());
+    let req_bytes = if raw_body {
+        moxy::template! { req_bytes = body.len(), }
+    } else {
+        TokenStream::new()
+    };
+    let span = moxy::template! {
+        ::tracing::info_span!({{ name }}, api = {{ api }}, version, {{ req_bytes }})
+    };
+    match body {
+        Body::Future(future) => moxy::template! {
+            Box::pin(::tracing::Instrument::instrument(
+                async move {
+                    ({{ future }})
+                        .await
+                        .inspect_err(|error| ::tracing::error!(error = %error))
+                },
+                {{ span }},
+            ))
         },
-        Adapter::HandWritten => TokenStream::new(),
+        Body::Ready(result) => moxy::template! {
+            let span = {{ span }};
+            let _entered = span.enter();
+            Box::pin(::std::future::ready(
+                ({{ result }}).inspect_err(|error| ::tracing::error!(error = %error)),
+            ))
+        },
     }
 }
 
@@ -208,7 +306,13 @@ pub(crate) fn expand(tokens: TokenStream) -> Result<TokenStream, ParseError> {
                         let snake = &names.snake;
                         moxy::template! { crate::handlers::{{ snake }}::handle }
                     });
-                    adapters.push(adapter(generated, &adapter_ident, &handler, entry));
+                    adapters.push(adapter(
+                        generated,
+                        kind.traced,
+                        &adapter_ident,
+                        &handler,
+                        entry,
+                    ));
                 }
             }
             registrations.push(Registration {
@@ -239,4 +343,296 @@ pub(crate) fn expand(tokens: TokenStream) -> Result<TokenStream, ParseError> {
             }
         }
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use assert2::{assert, check};
+    use moxy::token::TokenStream;
+
+    use super::expand;
+
+    /// Removes every whitespace character, so token streams compare by their
+    /// tokens alone.
+    fn squeezed(source: &str) -> String {
+        source.chars().filter(|c| !c.is_whitespace()).collect()
+    }
+
+    fn expanded(table: &str) -> Result<String, String> {
+        let table: TokenStream = table.parse().expect("table tokenizes");
+        expand(table)
+            .map(|tokens| squeezed(&tokens.to_string()))
+            .map_err(|error| error.to_string())
+    }
+
+    /// The `register_dispatch_table` the expansion of a one-entry table ends
+    /// with.
+    fn registration(constructor: &str, api: &str, snake: &str) -> String {
+        format!(
+            "fn register_dispatch_table(registry: &mut DispatchRegistry) {{
+                assert2::assert!(
+                    registry.register(DispatchEntry::{constructor}(
+                        ApiKey::{api} as i16,
+                        krabka_protocol::owned::{snake}_request::FLEXIBLE_MIN,
+                        {snake}_adapter,
+                    )),
+                    \"duplicate dispatch registration for {{:?}}\",
+                    ApiKey::{api}
+                );
+            }}"
+        )
+    }
+
+    /// The signature of an adapter that receives a `RequestContext`.
+    fn context_signature(snake: &str) -> String {
+        format!(
+            "fn {snake}_adapter<'a>(
+                broker: &'a Broker,
+                version: ApiVersion,
+                body: &'a [u8],
+                ctx: &'a RequestContext<'a>,
+            ) -> BoxFuture<'a, Result<Bytes, BrokerError>>"
+        )
+    }
+
+    /// The decode of a request through its owned codec.
+    fn decode(snake: &str, request: &str) -> String {
+        format!("krabka_protocol::owned::{snake}_request::{request}::decode(&mut cur, version,)?")
+    }
+
+    /// Every section kind's expansion of a one-entry table: its adapter, with
+    /// or without the `handle_<snake>` span and its `ERROR` event, and its
+    /// registration.
+    #[test]
+    fn each_section_expands_to_its_adapter_and_registration() {
+        let error_event = ".inspect_err(|error| ::tracing::error!(error = %error))";
+        let cases = [
+            (
+                "context: Metadata;",
+                format!(
+                    "{signature} {{
+                        Box::pin(::tracing::Instrument::instrument(
+                            async move {{
+                                (crate::handlers::metadata::handle(broker, version, body, ctx))
+                                    .await{error_event}
+                            }},
+                            ::tracing::info_span!(\"handle_metadata\", api = \"Metadata\", version,
+                                req_bytes = body.len(),),
+                        ))
+                    }}
+                    {registration}",
+                    signature = context_signature("metadata"),
+                    registration = registration("context", "Metadata", "metadata"),
+                ),
+            ),
+            (
+                "sync_context: DescribeConfigs => x::describe;",
+                format!(
+                    "{signature} {{
+                        let span = ::tracing::info_span!(\"handle_describe_configs\",
+                            api = \"DescribeConfigs\", version, req_bytes = body.len(),);
+                        let _entered = span.enter();
+                        Box::pin(::std::future::ready(
+                            (x::describe(broker, version, body, ctx)){error_event},
+                        ))
+                    }}
+                    {registration}",
+                    signature = context_signature("describe_configs"),
+                    registration = registration("context", "DescribeConfigs", "describe_configs"),
+                ),
+            ),
+            (
+                "typed: ListGroups;",
+                format!(
+                    "{signature} {{
+                        Box::pin(::tracing::Instrument::instrument(
+                            async move {{
+                                (async move {{
+                                    let mut cur = body;
+                                    let req = {{
+                                        use krabka_protocol::Decode as _;
+                                        {decode}
+                                    }};
+                                    let resp = crate::handlers::list_groups::handle(
+                                        broker, req, version, ctx).await?;
+                                    crate::handlers::encode_response(&resp, version)
+                                }}).await{error_event}
+                            }},
+                            ::tracing::info_span!(\"handle_list_groups\", api = \"ListGroups\",
+                                version,),
+                        ))
+                    }}
+                    {registration}",
+                    signature = context_signature("list_groups"),
+                    decode = decode("list_groups", "ListGroupsRequest"),
+                    registration = registration("context", "ListGroups", "list_groups"),
+                ),
+            ),
+            (
+                "typed_own_span: UpdateFeatures;",
+                format!(
+                    "{signature} {{
+                        Box::pin(async move {{
+                            let mut cur = body;
+                            let req = {{
+                                use krabka_protocol::Decode as _;
+                                {decode}
+                            }};
+                            let resp = crate::handlers::update_features::handle(
+                                broker, req, version, ctx).await?;
+                            crate::handlers::encode_response(&resp, version)
+                        }})
+                    }}
+                    {registration}",
+                    signature = context_signature("update_features"),
+                    decode = decode("update_features", "UpdateFeaturesRequest"),
+                    registration = registration("context", "UpdateFeatures", "update_features"),
+                ),
+            ),
+            (
+                "typed_group: Heartbeat;",
+                format!(
+                    "{signature} {{
+                        Box::pin(::tracing::Instrument::instrument(
+                            async move {{
+                                (async move {{
+                                    let mut cur = body;
+                                    let req = crate::handlers::decode_group_request::<
+                                        krabka_protocol::owned::heartbeat_request::HeartbeatRequest,
+                                    >(&mut cur, version)?;
+                                    let resp = crate::handlers::heartbeat::handle(
+                                        broker, req, version, ctx).await?;
+                                    crate::handlers::encode_response(&resp, version)
+                                }}).await{error_event}
+                            }},
+                            ::tracing::info_span!(\"handle_heartbeat\", api = \"Heartbeat\",
+                                version,),
+                        ))
+                    }}
+                    {registration}",
+                    signature = context_signature("heartbeat"),
+                    registration = registration("context", "Heartbeat", "heartbeat"),
+                ),
+            ),
+            (
+                "typed_sync: DescribeAcls;",
+                format!(
+                    "{signature} {{
+                        let span = ::tracing::info_span!(\"handle_describe_acls\",
+                            api = \"DescribeAcls\", version,);
+                        let _entered = span.enter();
+                        Box::pin(::std::future::ready(
+                            ((|| {{
+                                use krabka_protocol::Decode as _;
+                                let mut cur = body;
+                                let req = {decode};
+                                let resp = crate::handlers::describe_acls::handle(
+                                    broker, &req, version, ctx)?;
+                                crate::handlers::encode_response(&resp, version)
+                            }})()){error_event},
+                        ))
+                    }}
+                    {registration}",
+                    signature = context_signature("describe_acls"),
+                    decode = decode("describe_acls", "DescribeAclsRequest"),
+                    registration = registration("context", "DescribeAcls", "describe_acls"),
+                ),
+            ),
+            (
+                "typed_infallible: ListConfigResources;",
+                format!(
+                    "{signature} {{
+                        let span = ::tracing::info_span!(\"handle_list_config_resources\",
+                            api = \"ListConfigResources\", version,);
+                        let _entered = span.enter();
+                        Box::pin(::std::future::ready(
+                            ((|| {{
+                                use krabka_protocol::Decode as _;
+                                let mut cur = body;
+                                let req = {decode};
+                                let resp = crate::handlers::list_config_resources::handle(
+                                    broker, &req, version, ctx);
+                                crate::handlers::encode_response(&resp, version)
+                            }})()){error_event},
+                        ))
+                    }}
+                    {registration}",
+                    signature = context_signature("list_config_resources"),
+                    decode = decode("list_config_resources", "ListConfigResourcesRequest"),
+                    registration =
+                        registration("context", "ListConfigResources", "list_config_resources",),
+                ),
+            ),
+            (
+                "auth: CreateDelegationToken;",
+                registration("auth", "CreateDelegationToken", "create_delegation_token"),
+            ),
+            (
+                "telemetry: PushTelemetry;",
+                format!(
+                    "fn push_telemetry_adapter<'a>(
+                        broker: &'a Broker,
+                        version: ApiVersion,
+                        correlation_id: CorrelationId,
+                        body: &'a [u8],
+                        ctx: &'a TelemetryContext<'a>,
+                    ) -> BoxFuture<'a, Result<Bytes, BrokerError>> {{
+                        let span = ::tracing::info_span!(\"handle_push_telemetry\",
+                            api = \"PushTelemetry\", version, req_bytes = body.len(),);
+                        let _entered = span.enter();
+                        Box::pin(::std::future::ready(
+                            (crate::handlers::push_telemetry::handle(
+                                broker, version, correlation_id, body, ctx)){error_event},
+                        ))
+                    }}
+                    {registration}",
+                    registration = registration("telemetry", "PushTelemetry", "push_telemetry"),
+                ),
+            ),
+        ];
+
+        for (table, expected) in cases {
+            check!(expanded(table) == Ok(squeezed(&expected)), "{table}");
+        }
+    }
+
+    #[test]
+    fn an_empty_table_registers_nothing() {
+        assert!(
+            expanded("")
+                == Ok(squeezed(
+                    "fn register_dispatch_table(registry: &mut DispatchRegistry) {}"
+                ))
+        );
+    }
+
+    /// The table refuses what it cannot register, with the error that names
+    /// the mistake.
+    #[test]
+    fn a_malformed_table_is_refused() {
+        let labels = "context, sync_context, typed, typed_own_span, typed_group, typed_sync, \
+                      typed_infallible, auth, telemetry";
+        for (table, expected) in [
+            (
+                "typed_sync_own_span: DescribeAcls;",
+                format!("unknown section `typed_sync_own_span`; expected one of: {labels}"),
+            ),
+            (
+                "typed: ListGroups; context: ListGroups;",
+                "`ListGroups` appears twice in the table".to_owned(),
+            ),
+            (
+                "typed: ListGroups =>;",
+                "expected tokens after `=>`".to_owned(),
+            ),
+            (
+                "auth: CreateDelegationToken => x::handle;",
+                "`auth` entries name no handler: the table registers the hand-written \
+                 `create_delegation_token_adapter`"
+                    .to_owned(),
+            ),
+        ] {
+            check!(expanded(table) == Err(expected), "{table}");
+        }
+    }
 }

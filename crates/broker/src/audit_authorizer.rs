@@ -120,17 +120,12 @@ mod tests {
 
     use assert2::check;
     use krabka_metadata::{AclOperation, ResourceType};
-    use krabka_security::Principal;
 
     use super::*;
     use crate::{
         authorizer::{AuthorizationRequest, AuthorizationResult, Authorizer},
-        test_support::DenyAll,
+        test_support::{DenyAll, principal},
     };
-
-    fn request_principal() -> Principal {
-        crate::test_support::principal("anonymous")
-    }
 
     fn denied_label() -> crate::metrics::AuthorizationDeniedLabel {
         crate::metrics::AuthorizationDeniedLabel {
@@ -145,7 +140,7 @@ mod tests {
         let metrics = crate::metrics::BrokerMetrics::new();
         let authz = AuditingAuthorizer::new(Arc::new(DenyAll), log, metrics.clone());
 
-        let principal = request_principal();
+        let principal = principal("anonymous");
         let host: SocketAddr = "10.0.0.9:5555".parse().unwrap();
         let image = krabka_metadata::MetadataImage::default();
         let result = authz.authorize(
@@ -191,7 +186,7 @@ mod tests {
             metrics.clone(),
         );
 
-        let principal = request_principal();
+        let principal = principal("anonymous");
         let host: SocketAddr = "10.0.0.9:5555".parse().unwrap();
         let image = krabka_metadata::MetadataImage::default();
         let result = authz.authorize(
@@ -282,7 +277,7 @@ mod tests {
         let (log, mut rx) = krabka_audit::AuditLog::new(8);
         let metrics = crate::metrics::BrokerMetrics::new();
         let authz = AuditingAuthorizer::new(Arc::new(DenyAll), log, metrics.clone());
-        let principal = request_principal();
+        let principal = principal("anonymous");
         let host: SocketAddr = "10.0.0.9:5555".parse().unwrap();
         let image = krabka_metadata::MetadataImage::default();
         let request = AuthorizationRequest {

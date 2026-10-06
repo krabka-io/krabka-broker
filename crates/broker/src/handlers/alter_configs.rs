@@ -49,13 +49,6 @@ use crate::{
     },
 };
 
-#[tracing::instrument(
-    name = "handle_alter_configs",
-    level = "info",
-    skip_all,
-    fields(api = "AlterConfigs", version),
-    err
-)]
 pub(crate) async fn handle(
     broker: &Broker,
     req: AlterConfigsRequest,

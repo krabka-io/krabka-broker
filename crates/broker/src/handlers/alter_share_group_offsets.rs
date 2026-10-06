@@ -27,22 +27,16 @@ use krabka_protocol::{
     },
     primitives::uuid::Uuid,
 };
-use tokio::sync::oneshot;
 
 use crate::{
     broker::Broker,
     codes,
     coordinator::unified::{GroupType, share::actor::ShareGroupActorMessage},
     error::BrokerError,
+    handlers::ErrorResponse as _,
+    task_util::{AskError, ask},
 };
 
-#[tracing::instrument(
-    name = "handle_alter_share_group_offsets",
-    level = "info",
-    skip_all,
-    fields(api = "AlterShareGroupOffsets", version),
-    err
-)]
 pub(crate) async fn handle(
     broker: &Broker,
     req: AlterShareGroupOffsetsRequest,
@@ -53,7 +47,10 @@ pub(crate) async fn handle(
     // and below it the RPC is unsupported.
     let image = broker.controller.current_image();
     if !crate::features::share_groups_enabled(&image) {
-        return Ok(top_level(codes::UNSUPPORTED_VERSION));
+        return Ok(AlterShareGroupOffsetsResponse::error(
+            codes::UNSUPPORTED_VERSION,
+            None,
+        ));
     }
 
     let ng_opt = Some(broker.group_coordinator.clone());
@@ -65,7 +62,10 @@ pub(crate) async fn handle(
     // `Alter` grant nor accepts the normal `Read`-only share-consumer grant).
     // On Deny → top-level `error_code = 30`.
     if crate::handlers::group_read_denied(broker.config.authorizer.as_ref(), &image, ctx, &gid) {
-        return Ok(top_level(codes::GROUP_AUTHORIZATION_FAILED));
+        return Ok(AlterShareGroupOffsetsResponse::error(
+            codes::GROUP_AUTHORIZATION_FAILED,
+            None,
+        ));
     }
     // Kafka's `GroupCoordinatorService.alterShareGroupOffsets` refuses the
     // empty group id before any group lookup. This structural check runs
@@ -74,10 +74,13 @@ pub(crate) async fn handle(
     // instead of `INVALID_GROUP_ID`, so the error a client sees would depend
     // on which broker happened to receive the request.
     if gid.is_empty() {
-        return Ok(top_level(codes::INVALID_GROUP_ID));
+        return Ok(AlterShareGroupOffsetsResponse::error(
+            codes::INVALID_GROUP_ID,
+            None,
+        ));
     }
     if let Some(error_code) = crate::handlers::group_coordinator_error(broker, &gid) {
-        return Ok(top_level(error_code));
+        return Ok(AlterShareGroupOffsetsResponse::error(error_code, None));
     }
     // `GroupMetadataManager.getOrMaybeCreateShareGroup` throws
     // `GroupIdNotFoundException` for a group id already locked to another
@@ -87,7 +90,10 @@ pub(crate) async fn handle(
     if let Some(existing_type) = existing_type
         && existing_type != GroupType::Share
     {
-        return Ok(top_level(codes::GROUP_ID_NOT_FOUND));
+        return Ok(AlterShareGroupOffsetsResponse::error(
+            codes::GROUP_ID_NOT_FOUND,
+            None,
+        ));
     }
     let group_already_exists = existing_type.is_some();
 
@@ -205,27 +211,32 @@ pub(crate) async fn handle(
     let ng = ng_opt.as_ref().expect("group coordinator is installed");
     ng.mark_share(&gid);
     let actor = ng.get_or_create_share(&gid);
-    let (tx, rx) = oneshot::channel();
-    if actor
-        .tx
-        .send(ShareGroupActorMessage::ResetOffsets {
-            requests: actor_requests,
-            reply: tx,
-        })
-        .await
-        .is_err()
-    {
-        return Ok(top_level(codes::COORDINATOR_NOT_AVAILABLE));
-    }
-    let actor_result = rx
-        .await
-        .map_err(|_| BrokerError::Share("share-group reset actor stopped".into()))?;
+    let asked = ask(&actor.tx, |reply| ShareGroupActorMessage::ResetOffsets {
+        requests: actor_requests,
+        reply,
+    })
+    .await;
+    let actor_result = match asked {
+        Ok(actor_result) => actor_result,
+        Err(AskError::Closed) => {
+            return Ok(AlterShareGroupOffsetsResponse::error(
+                codes::COORDINATOR_NOT_AVAILABLE,
+                None,
+            ));
+        }
+        Err(AskError::Dropped) => {
+            return Err(BrokerError::Share("share-group reset actor stopped".into()));
+        }
+    };
     let result_codes = match actor_result {
         Ok(result_codes) => result_codes,
-        Err(error_code) => return Ok(top_level(error_code)),
+        Err(error_code) => return Ok(AlterShareGroupOffsetsResponse::error(error_code, None)),
     };
     if result_codes.len() != actor_response_slots.len() {
-        return Ok(top_level(codes::COORDINATOR_NOT_AVAILABLE));
+        return Ok(AlterShareGroupOffsetsResponse::error(
+            codes::COORDINATOR_NOT_AVAILABLE,
+            None,
+        ));
     }
     for ((topic_slot, partition_slot), error_code) in
         actor_response_slots.into_iter().zip(result_codes)
@@ -249,18 +260,9 @@ pub(crate) async fn handle(
     Ok(resp)
 }
 
-fn top_level(error_code: i16) -> AlterShareGroupOffsetsResponse {
-    AlterShareGroupOffsetsResponse {
-        throttle_time_ms: 0,
-        error_code,
-        responses: Vec::new(),
-        ..Default::default()
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use std::{net::SocketAddr, sync::Arc};
+    use std::sync::Arc;
 
     use assert2::assert;
     use krabka_protocol::{
@@ -280,14 +282,13 @@ mod tests {
         },
         primitives::uuid::Uuid,
     };
-    use krabka_security::Principal;
 
-    use super::{handle, top_level};
+    use super::handle;
     use crate::{
         authorizer::{AuthorizationResult, Authorizer},
         codes,
         coordinator::unified::{GroupType, ShareGroupSeed, share::actor::ShareGroupActorMessage},
-        test_support::DenyAll,
+        test_support::{DenyAll, test_ctx},
     };
 
     const UNKNOWN_TOPIC_OR_PARTITION_MESSAGE: &str =
@@ -352,26 +353,6 @@ mod tests {
 
     crate::test_support::context_helper!(client_id = "admin-client");
 
-    async fn start_broker(
-        authorizer: Arc<dyn Authorizer>,
-        share_enabled: bool,
-    ) -> (crate::broker::BrokerHandle, tempfile::TempDir) {
-        let (handle, dir) = crate::test_support::start_broker_with(|cfg| {
-            cfg.authorizer = authorizer;
-        })
-        .await;
-        handle.wait_until_group_coordinator_ready().await;
-        handle.wait_until_share_coordinator_ready().await;
-        if !share_enabled {
-            crate::test_support::finalize_share_version(&handle.broker_arc_for_test(), 0).await;
-        }
-        (handle, dir)
-    }
-
-    fn principal() -> Principal {
-        crate::test_support::principal("alice")
-    }
-
     async fn create_topic(
         broker_handle: &crate::broker::BrokerHandle,
         broker: &crate::broker::Broker,
@@ -396,20 +377,6 @@ mod tests {
         broker_handle
             .wait_until_partition_present(topic_name, 0)
             .await;
-    }
-
-    #[test]
-    fn top_level_preserves_error_fields() {
-        let resp = top_level(codes::UNSUPPORTED_VERSION);
-
-        let expected = AlterShareGroupOffsetsResponse {
-            throttle_time_ms: 0,
-            error_code: codes::UNSUPPORTED_VERSION,
-            error_message: None,
-            responses: Vec::new(),
-            unknown_tagged_fields: UnknownTaggedFields(Vec::new()),
-        };
-        assert!(resp == expected);
     }
 
     #[tokio::test]
@@ -486,11 +453,10 @@ mod tests {
             ),
         ];
         for (case, authorizer, share_enabled, topic_name, partitions, expected) in cases {
-            let (broker_handle, _dir) = start_broker(authorizer, share_enabled).await;
+            let (broker_handle, _dir) =
+                crate::test_support::start_share_broker(authorizer, share_enabled).await;
             let broker = broker_handle.broker_arc_for_test();
-            let principal = principal();
-            let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
-            let ctx = test_context(&principal, &peer);
+            test_ctx!(ctx, "alice");
             let resp = handle(
                 &broker,
                 request("g1", topic_name, &partitions),
@@ -567,11 +533,10 @@ mod tests {
                     Vec::new()
                 },
             });
-            let (broker_handle, _dir) = start_broker(authorizer, true).await;
+            let (broker_handle, _dir) =
+                crate::test_support::start_share_broker(authorizer, true).await;
             let broker = broker_handle.broker_arc_for_test();
-            let principal = principal();
-            let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
-            let ctx = test_context(&principal, &peer);
+            test_ctx!(ctx, "alice");
             if topic_exists {
                 create_topic(&broker_handle, &broker, topic_name, &ctx).await;
                 crate::share_coordinator::handlers::test_support::lead_share_state_partitions(
@@ -640,12 +605,13 @@ mod tests {
     /// refused with `GROUP_ID_NOT_FOUND` (69), before any actor is touched.
     #[tokio::test]
     async fn invalid_and_wrong_type_group_ids_are_refused() {
-        let (broker_handle, _dir) =
-            start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer), true).await;
+        let (broker_handle, _dir) = crate::test_support::start_share_broker(
+            Arc::new(crate::authorizer::AllowAllAuthorizer),
+            true,
+        )
+        .await;
         let broker = broker_handle.broker_arc_for_test();
-        let principal = principal();
-        let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
-        let ctx = test_context(&principal, &peer);
+        test_ctx!(ctx, "alice");
 
         let empty_id_resp = handle(
             &broker,
@@ -683,12 +649,13 @@ mod tests {
     /// change its start offset back.
     #[tokio::test]
     async fn alter_creates_and_persists_a_new_share_group() {
-        let (broker_handle, _dir) =
-            start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer), true).await;
+        let (broker_handle, _dir) = crate::test_support::start_share_broker(
+            Arc::new(crate::authorizer::AllowAllAuthorizer),
+            true,
+        )
+        .await;
         let broker = broker_handle.broker_arc_for_test();
-        let principal = principal();
-        let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
-        let ctx = test_context(&principal, &peer);
+        test_ctx!(ctx, "alice");
         create_topic(&broker_handle, &broker, "new-topic", &ctx).await;
         crate::share_coordinator::handlers::test_support::lead_share_state_partitions(&broker)
             .await;
@@ -778,8 +745,11 @@ mod tests {
 
     #[tokio::test]
     async fn active_group_rejects_the_whole_reset_batch() {
-        let (broker_handle, _dir) =
-            start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer), true).await;
+        let (broker_handle, _dir) = crate::test_support::start_share_broker(
+            Arc::new(crate::authorizer::AllowAllAuthorizer),
+            true,
+        )
+        .await;
         let broker = broker_handle.broker_arc_for_test();
         let coordinator = broker.group_coordinator.clone();
 
@@ -805,9 +775,7 @@ mod tests {
         let resp = rx.await.expect("heartbeat response");
         assert!(resp.error_code == codes::NONE, "{resp:?}");
 
-        let principal = principal();
-        let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
-        let ctx = test_context(&principal, &peer);
+        test_ctx!(ctx, "alice");
         let response = handle(
             &broker,
             request("busy", "missing", &[0]),
@@ -825,12 +793,13 @@ mod tests {
 
     #[tokio::test]
     async fn reset_mutates_only_requested_valid_partitions_and_bumps_group_epoch() {
-        let (broker_handle, _dir) =
-            start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer), true).await;
+        let (broker_handle, _dir) = crate::test_support::start_share_broker(
+            Arc::new(crate::authorizer::AllowAllAuthorizer),
+            true,
+        )
+        .await;
         let broker = broker_handle.broker_arc_for_test();
-        let principal = principal();
-        let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
-        let ctx = test_context(&principal, &peer);
+        test_ctx!(ctx, "alice");
         create_topic(&broker_handle, &broker, "reset-topic", &ctx).await;
         crate::share_coordinator::handlers::test_support::lead_share_state_partitions(&broker)
             .await;

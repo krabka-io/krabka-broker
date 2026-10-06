@@ -34,7 +34,6 @@ use krabka_protocol::owned::{
     list_groups_request::ListGroupsRequest,
     list_groups_response::{ListGroupsResponse, ListedGroup},
 };
-use tokio::sync::oneshot;
 
 use crate::{
     broker::Broker,
@@ -48,6 +47,7 @@ use crate::{
         cluster_describe_denied, coordinator_routing::any_group_partition_loading,
         group_describe_denied,
     },
+    task_util::ask,
 };
 
 /// Wire `group_type` string for classic (pre-KIP-848) groups.
@@ -66,13 +66,6 @@ const SHARE_PROTOCOL_TYPE: &str = "share";
 /// Kafka's `StreamsGroup.PROTOCOL_TYPE`.
 const STREAMS_PROTOCOL_TYPE: &str = "streams";
 
-#[tracing::instrument(
-    name = "handle_list_groups",
-    level = "info",
-    skip_all,
-    fields(api = "ListGroups", version),
-    err
-)]
 pub(crate) async fn handle(
     broker: &Broker,
     req: ListGroupsRequest,
@@ -151,14 +144,7 @@ async fn collect_groups(broker: &Broker) -> Vec<ListedGroup> {
         let Some(handle) = coordinator.find(&gid) else {
             continue;
         };
-        let (tx, rx) = oneshot::channel();
-        if handle
-            .tx
-            .send(GroupActorMessage::Describe { reply: tx })
-            .await
-            .is_ok()
-            && let Ok(view) = rx.await
-        {
+        if let Ok(view) = ask(&handle.tx, |reply| GroupActorMessage::Describe { reply }).await {
             let group = listed(
                 gid,
                 CONSUMER_PROTOCOL_TYPE.into(),
@@ -174,13 +160,10 @@ async fn collect_groups(broker: &Broker) -> Vec<ListedGroup> {
         let Some(handle) = coordinator.find_share(&gid) else {
             continue;
         };
-        let (tx, rx) = oneshot::channel();
-        if handle
-            .tx
-            .send(ShareGroupActorMessage::Describe { reply: tx })
-            .await
-            .is_ok()
-            && let Ok(view) = rx.await
+        if let Ok(view) = ask(&handle.tx, |reply| ShareGroupActorMessage::Describe {
+            reply,
+        })
+        .await
         {
             let group = listed(
                 gid,
@@ -201,13 +184,10 @@ async fn collect_groups(broker: &Broker) -> Vec<ListedGroup> {
             let Some(handle) = coordinator.find_streams(&gid) else {
                 continue;
             };
-            let (tx, rx) = oneshot::channel();
-            if handle
-                .tx
-                .send(StreamsGroupActorMessage::Describe { reply: tx })
-                .await
-                .is_ok()
-                && let Ok(view) = rx.await
+            if let Ok(view) = ask(&handle.tx, |reply| StreamsGroupActorMessage::Describe {
+                reply,
+            })
+            .await
             {
                 let group = listed(
                     gid,
@@ -284,10 +264,7 @@ mod tests {
     use krabka_metadata::{AclOperation, MetadataRecord, ResourceType};
 
     use super::*;
-    use crate::{
-        coordinator::unified::classic_state::GroupState,
-        test_support::{peer, principal},
-    };
+    use crate::{coordinator::unified::classic_state::GroupState, test_support::test_ctx};
 
     const VERSION: i16 = krabka_protocol::owned::list_groups_response::MAX_VERSION;
 
@@ -322,9 +299,7 @@ mod tests {
         let _consumer = coordinator.get_or_create_consumer("consumer-a");
         coordinator.mark_share("share-a");
         let _share = coordinator.get_or_create_share("share-a");
-        let p = principal("admin");
-        let peer = peer();
-        let ctx = test_context(&p, &peer);
+        test_ctx!(ctx, "admin");
 
         let resp = handle(&broker, ListGroupsRequest::default(), VERSION, &ctx)
             .await
@@ -400,9 +375,7 @@ mod tests {
             }
             let _a = broker.group_coordinator.get_or_create_classic("g-a");
             let _b = broker.group_coordinator.get_or_create_classic("g-b");
-            let p = principal(user);
-            let peer = peer();
-            let ctx = test_context(&p, &peer);
+            test_ctx!(ctx, user);
 
             let resp = handle(&broker, ListGroupsRequest::default(), VERSION, &ctx)
                 .await

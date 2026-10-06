@@ -53,11 +53,13 @@ impl ClusterGrants for ControllerPeerGrants {
         let Some(controller) = self.controller.get() else {
             return 0;
         };
+        // The bitfield reads only the principal and peer of the context.
+        let ctx =
+            crate::handlers::RequestContext::new(&self.principal, &self.peer, None, "", false, "");
         crate::handlers::authorized_operations::authorized_operations_bits(
             self.authorizer.as_ref(),
             &controller.current_image(),
-            &self.principal,
-            &self.peer,
+            &ctx,
             ResourceType::Cluster,
             crate::handlers::acl_wire::CLUSTER_RESOURCE_NAME,
         )

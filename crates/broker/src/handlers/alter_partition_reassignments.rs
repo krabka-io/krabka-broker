@@ -49,22 +49,15 @@ mod tests;
 pub(crate) use self::plan::process_one_partition;
 use self::{
     cancel_approval::{ReassignBatch, ReassignEnv, alter_one},
-    response::{mark_submit_failed, whole_request_error},
+    response::whole_request_error,
 };
 use crate::{
     broker::Broker,
     codes::{CLUSTER_AUTHORIZATION_FAILED, COORDINATOR_NOT_AVAILABLE, POLICY_VIOLATION},
     freeze::resolve::resolve_freeze_mutation,
-    handlers::RequestContext,
+    handlers::{RequestContext, stamp_unset},
 };
 
-#[tracing::instrument(
-    name = "handle_alter_partition_reassignments",
-    level = "info",
-    skip_all,
-    fields(api = "AlterPartitionReassignments"),
-    err
-)]
 pub(crate) async fn handle(
     broker: &Broker,
     req: AlterPartitionReassignmentsRequest,
@@ -120,8 +113,8 @@ pub(crate) async fn handle(
                 {
                     let message = format!("submit failed: {error}");
                     tracing::warn!(%error, "alter-reassignment submit failed");
-                    mark_submit_failed(
-                        &mut by_topic,
+                    stamp_unset(
+                        by_topic.values_mut().flatten(),
                         crate::handlers::submit_failure_code(&error, COORDINATOR_NOT_AVAILABLE),
                         &message,
                     );
@@ -130,12 +123,7 @@ pub(crate) async fn handle(
             }
             Err(error) => {
                 let message = format!("privileged action refused: {error}");
-                for rows in by_topic.values_mut() {
-                    for row in rows.iter_mut().filter(|row| row.error_code == 0) {
-                        row.error_code = POLICY_VIOLATION;
-                        row.error_message = Some(message.clone());
-                    }
-                }
+                stamp_unset(by_topic.values_mut().flatten(), POLICY_VIOLATION, &message);
                 submit_failure = Some(message);
             }
         }

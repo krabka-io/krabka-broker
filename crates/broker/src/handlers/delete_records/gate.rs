@@ -13,6 +13,7 @@ use krabka_protocol::owned::delete_records_response::DeleteRecordsPartitionResul
 use uuid::Uuid;
 
 use super::{TrimEnv, response::error_partition_result};
+pub(super) use crate::break_glass::gate::consumed_proposal_id;
 use crate::{
     break_glass::{
         gate::{self, BreakGlassDenial},
@@ -109,17 +110,6 @@ pub(super) fn trim_target(topic: &str, partition: i32) -> String {
     format!("{topic}-{partition}")
 }
 
-/// The proposal that a consumed record names.
-///
-/// [`gate::authorize`] only ever answers with a proposal record, so the `None`
-/// arm costs one match rather than a panic.
-pub(super) fn consumed_proposal_id(record: &MetadataRecord) -> Option<Uuid> {
-    match record {
-        MetadataRecord::V1BreakGlassProposal(proposal) => Some(proposal.proposal_id),
-        _ => None,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use assert2::check;
@@ -127,8 +117,9 @@ mod tests {
 
     use super::authorize_trim;
     use crate::{
+        break_glass::gate::tests::{approved_proposal, image_of},
         config::BreakGlassConfig,
-        handlers::delete_records::test_support::{approved_proposal, gated_config, image_of},
+        handlers::delete_records::test_support::gated_config,
     };
 
     #[test]
@@ -136,19 +127,25 @@ mod tests {
         let cases: [(&'static str, MetadataImage, BreakGlassConfig, bool); 5] = [
             (
                 "an approved proposal on the partition",
-                image_of(&[approved_proposal("orders-3")]),
+                image_of(&[approved_proposal(
+                    BreakGlassAction::DeleteRecords,
+                    "orders-3",
+                )]),
                 gated_config(),
                 true,
             ),
             (
                 "an approved proposal on the whole topic",
-                image_of(&[approved_proposal("orders")]),
+                image_of(&[approved_proposal(BreakGlassAction::DeleteRecords, "orders")]),
                 gated_config(),
                 true,
             ),
             (
                 "a proposal for another partition",
-                image_of(&[approved_proposal("orders-4")]),
+                image_of(&[approved_proposal(
+                    BreakGlassAction::DeleteRecords,
+                    "orders-4",
+                )]),
                 gated_config(),
                 false,
             ),

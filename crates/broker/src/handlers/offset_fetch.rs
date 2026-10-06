@@ -35,13 +35,6 @@ mod unstable;
 use self::{groups::handle_groups, legacy::handle_legacy};
 use crate::{broker::Broker, error::BrokerError};
 
-#[tracing::instrument(
-    name = "handle_offset_fetch",
-    level = "info",
-    skip_all,
-    fields(api = "OffsetFetch", version),
-    err
-)]
 // cargo-mutants: coordinator-backed response projection; integration-tested.
 #[cfg_attr(test, mutants::skip)]
 pub(crate) async fn handle(

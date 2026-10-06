@@ -23,13 +23,6 @@ use crate::{
     handlers::context::TelemetryContext,
 };
 
-#[tracing::instrument(
-    name = "handle_get_telemetry_subscriptions",
-    level = "info",
-    skip_all,
-    fields(api = "GetTelemetrySubscriptions", version, req_bytes = req_bytes.len()),
-    err,
-)]
 pub(crate) fn handle(
     broker: &Broker,
     version: i16,
@@ -88,6 +81,7 @@ mod tests {
             manager::{ComputedSubscription, subscription_id},
         },
         codes,
+        test_support::peer,
     };
 
     crate::test_support::codec_helpers!(
@@ -103,7 +97,7 @@ mod tests {
     async fn get_answers_with_the_instance_id_and_throttles_without_delay() {
         let (broker_handle, _dir) = crate::test_support::start_broker_with(|_cfg| {}).await;
         let broker = broker_handle.broker_arc_for_test();
-        let peer = "127.0.0.1:9092".parse().unwrap();
+        let peer = peer();
         let ctx = TelemetryContext {
             connection_id: "connection-a",
             client_id: "client-a",

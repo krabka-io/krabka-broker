@@ -44,6 +44,20 @@ pub fn test_log() -> (tempfile::TempDir, Log) {
     (dir, log)
 }
 
+/// A config whose one-byte `segment_size` rolls the active segment on every
+/// append after the first, so each batch lands in a segment of its own.
+pub fn tiny_segments() -> LogConfig {
+    LogConfig {
+        segment_size: bytes(1),
+        ..LogConfig::default()
+    }
+}
+
+/// A log under `dir` opened with [`tiny_segments`].
+pub fn rolling_test_log(dir: &std::path::Path) -> Log {
+    Log::open(dir, tiny_segments()).unwrap()
+}
+
 /// A log configured the way Kafka's `message.timestamp.type=LogAppendTime`
 /// configures one, with everything else at its default.
 pub fn log_append_time_log() -> (tempfile::TempDir, Log) {

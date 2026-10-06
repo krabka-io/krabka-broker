@@ -79,6 +79,7 @@ mod tests {
     use assert2::{assert, check};
 
     use super::*;
+    use crate::test_support::peer;
 
     #[test]
     fn api_name_known_and_unknown() {
@@ -142,7 +143,7 @@ mod tests {
         let subscriber = tracing_subscriber::registry().with(
             Cap(captured.clone()).with_filter(tracing_subscriber::filter::LevelFilter::DEBUG),
         );
-        let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
+        let peer = peer();
         tracing::subscriber::with_default(subscriber, || {
             let _span = request_span(0, 9, 42, Some("my-client"), &peer);
         });

@@ -81,13 +81,12 @@ mod tests {
         add_partitions_to_txn_response::AddPartitionsToTxnResponse,
         common::add_partitions_to_txn_response::add_partitions_to_txn_topic_result::AddPartitionsToTxnTopicResult,
     };
-    use krabka_security::Principal;
     use uuid::Uuid;
 
     use super::*;
     use crate::{
         authorizer::{AuthorizationRequest, AuthorizationResult, Authorizer},
-        test_support::peer,
+        test_support::test_ctx,
         txn::{
             handlers::add_partitions_to_txn::{
                 handle,
@@ -105,10 +104,6 @@ mod tests {
     /// travels in the same request.
     const FROZEN_TOPIC: &str = "tenant-a.orders";
     const UNFROZEN_TOPIC: &str = "events";
-
-    fn principal() -> Principal {
-        crate::test_support::principal("ANONYMOUS")
-    }
 
     fn freeze_record(scope: &str, pattern_type: PatternType) -> TopicFreezeRecord {
         TopicFreezeRecord {
@@ -394,9 +389,7 @@ mod tests {
             )
             .await;
             let broker = broker_handle.broker_arc_for_test();
-            let principal = principal();
-            let peer = peer();
-            let ctx = test_context(&principal, &peer);
+            test_ctx!(ctx, "ANONYMOUS");
             let resp = handle(&broker, freeze_case_request(version), version, &ctx)
                 .await
                 .expect("handle");
@@ -441,9 +434,7 @@ mod tests {
             )
             .await;
             let broker = broker_handle.broker_arc_for_test();
-            let principal = principal();
-            let peer = peer();
-            let ctx = test_context(&principal, &peer);
+            test_ctx!(ctx, "ANONYMOUS");
             let resp = handle(&broker, freeze_case_request(version), version, &ctx)
                 .await
                 .expect("handle");

@@ -26,7 +26,7 @@ use crate::{
             ChainHead, ChainStamp, EpochId, MANIFEST_FORMAT_VERSION, MANIFEST_SUFFIX, ManifestSeq,
             ObjectEntry, SegmentManifest, Sha256Digest, manifest_head,
         },
-        verify::TrustedManifestKeys,
+        verify::{ArchiveVerifyReport, TrustedManifestKeys, VerifyRequest, verify_archive},
     },
 };
 
@@ -155,6 +155,13 @@ impl Archive {
 
     pub(super) fn trusted(&self) -> TrustedManifestKeys {
         TrustedManifestKeys::single(KEY_ID.to_string(), self.public_key.clone())
+    }
+
+    /// A default [`verify_archive`] run over this archive, trusting its key.
+    pub(super) async fn verify(&self) -> ArchiveVerifyReport {
+        verify_archive(&self.store, &VerifyRequest::default(), &self.trusted())
+            .await
+            .unwrap()
     }
 
     /// Chain head of the newest manifest, before any tampering.

@@ -88,13 +88,6 @@ use crate::{
 // `await`. The single suspension point is the fenced-broker snapshot the
 // `offline_replicas` projection needs.
 // ACL preamble + pagination + cursor logic
-#[tracing::instrument(
-    name = "handle_describe_topic_partitions",
-    level = "info",
-    skip_all,
-    fields(api = "DescribeTopicPartitions", version),
-    err
-)]
 pub(crate) async fn handle(
     broker: &Broker,
     req: DescribeTopicPartitionsRequest,
@@ -243,8 +236,7 @@ pub(crate) async fn handle(
         let topic_authorized_operations = authorized_operations_bits(
             broker.config.authorizer.as_ref(),
             &image,
-            ctx.principal,
-            ctx.peer,
+            ctx,
             ResourceType::Topic,
             name.as_str(),
         );
@@ -366,8 +358,7 @@ fn unknown_topic_row(
         topic_authorized_operations: authorized_operations_bits(
             broker.config.authorizer.as_ref(),
             image,
-            ctx.principal,
-            ctx.peer,
+            ctx,
             ResourceType::Topic,
             name,
         ),
@@ -429,14 +420,13 @@ mod tests {
     use crate::{
         authorizer::{AuthorizationRequest, Authorizer},
         broker::BrokerHandle,
-        test_support::{peer, principal},
     };
 
     const VERSION: i16 = krabka_protocol::owned::describe_topic_partitions_response::MAX_VERSION;
 
     crate::test_support::context_helper!(client_id = "admin-client");
 
-    use crate::test_support::start_broker_with_authorizer_no_audit as start_broker;
+    use crate::test_support::{start_broker_with_authorizer_no_audit as start_broker, test_ctx};
 
     async fn seed_topic_with_epoch(handle: &BrokerHandle, leader_epoch: i32) {
         handle
@@ -565,9 +555,7 @@ mod tests {
         seed_topic(&broker_handle, "a", 1, 1).await;
         seed_topic(&broker_handle, "b", 2, 1).await;
         let broker = broker_handle.broker_arc_for_test();
-        let p = principal("admin");
-        let peer = peer();
-        let ctx = test_context(&p, &peer);
+        test_ctx!(ctx, "admin");
         // Budget of 1: "a" fills it, "b" is truncated with no row (the
         // partition-budget-at-topic-boundary rule), "c" is denied. Without
         // the fix, "c" would vanish instead of appearing after "b".
@@ -588,8 +576,7 @@ mod tests {
                         topic_authorized_operations: authorized_operations_bits(
                             broker.config.authorizer.as_ref(),
                             &broker.controller.current_image(),
-                            &p,
-                            &peer,
+                            &ctx,
                             ResourceType::Topic,
                             "a",
                         ),
@@ -620,9 +607,7 @@ mod tests {
         seed_topic(&broker_handle, "a", 1, 1).await;
         seed_topic(&broker_handle, "b", 2, 3).await;
         let broker = broker_handle.broker_arc_for_test();
-        let p = principal("admin");
-        let peer = peer();
-        let ctx = test_context(&p, &peer);
+        test_ctx!(ctx, "admin");
         let cursor = Some(RequestCursor {
             topic_name: "a".into(),
             partition_index: 2,
@@ -645,8 +630,7 @@ mod tests {
                         topic_authorized_operations: authorized_operations_bits(
                             broker.config.authorizer.as_ref(),
                             &broker.controller.current_image(),
-                            &p,
-                            &peer,
+                            &ctx,
                             ResourceType::Topic,
                             "b",
                         ),
@@ -672,9 +656,7 @@ mod tests {
         seed_topic(&broker_handle, "a", 1, 1).await;
         seed_topic(&broker_handle, "b", 2, 1).await;
         let broker = broker_handle.broker_arc_for_test();
-        let p = principal("admin");
-        let peer = peer();
-        let ctx = test_context(&p, &peer);
+        test_ctx!(ctx, "admin");
         let req = request(vec!["b", "a", "b", "a"], 2000, None);
 
         let resp = handle(&broker, req, VERSION, &ctx).await.expect("handle");
@@ -719,9 +701,7 @@ mod tests {
                 start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
             seed_topic(&broker_handle, "a", 1, 1).await;
             let broker = broker_handle.broker_arc_for_test();
-            let p = principal("admin");
-            let peer = peer();
-            let ctx = test_context(&p, &peer);
+            test_ctx!(ctx, "admin");
             let req = request(vec!["a"], 2000, cursor);
 
             let resp = handle(&broker, req, VERSION, &ctx).await.expect("handle");
@@ -749,9 +729,7 @@ mod tests {
             start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
         seed_topic(&broker_handle, "a", 1, 2).await;
         let broker = broker_handle.broker_arc_for_test();
-        let p = principal("admin");
-        let peer = peer();
-        let ctx = test_context(&p, &peer);
+        test_ctx!(ctx, "admin");
         let req = request(vec!["a"], 0, None);
 
         let resp = handle(&broker, req, VERSION, &ctx).await.expect("handle");
@@ -791,9 +769,7 @@ mod tests {
                 seed_topic(&broker_handle, "b", 2, 1).await;
             }
             let broker = broker_handle.broker_arc_for_test();
-            let p = principal("admin");
-            let peer = peer();
-            let ctx = test_context(&p, &peer);
+            test_ctx!(ctx, "admin");
             let req = request(vec!["a", "b"], 1, None);
 
             let resp = handle(&broker, req, VERSION, &ctx).await.expect("handle");
@@ -846,9 +822,7 @@ mod tests {
         let (broker_handle, _dir) =
             start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
         let broker = broker_handle.broker_arc_for_test();
-        let p = principal("admin");
-        let peer = peer();
-        let ctx = test_context(&p, &peer);
+        test_ctx!(ctx, "admin");
 
         for (name, error_code, is_internal) in cases {
             let req = request(vec![name], 2000, None);
@@ -857,8 +831,7 @@ mod tests {
             let expected_ops = authorized_operations_bits(
                 broker.config.authorizer.as_ref(),
                 &broker.controller.current_image(),
-                &p,
-                &peer,
+                &ctx,
                 ResourceType::Topic,
                 name,
             );
@@ -939,9 +912,7 @@ mod tests {
             start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
         seed_topic_with_elr(&broker_handle, "0:2:3").await;
         let broker = broker_handle.broker_arc_for_test();
-        let p = principal("admin");
-        let peer = peer();
-        let ctx = test_context(&p, &peer);
+        test_ctx!(ctx, "admin");
         let req = DescribeTopicPartitionsRequest {
             topics: vec![
                 krabka_protocol::owned::describe_topic_partitions_request::TopicRequest {
@@ -986,9 +957,7 @@ mod tests {
             start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
         seed_topic_with_epoch(&broker_handle, 9).await;
         let broker = broker_handle.broker_arc_for_test();
-        let p = principal("admin");
-        let peer = peer();
-        let ctx = test_context(&p, &peer);
+        test_ctx!(ctx, "admin");
         let req = DescribeTopicPartitionsRequest {
             topics: vec![
                 krabka_protocol::owned::describe_topic_partitions_request::TopicRequest {

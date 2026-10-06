@@ -91,7 +91,7 @@ mod tests {
     use super::{IndexType, RemoteStorageError, WormError};
     use crate::{
         s3::test_support::{
-            counting_rsm, rsm, sample_data, sample_metadata, stamped_metadata, worm_rsm,
+            counting_rsm, rsm, sample_metadata, seeded_blocking, stamped_metadata, worm_rsm,
         },
         storage_manager::RemoteStorageManager,
         worm::ChainHead,
@@ -124,47 +124,33 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn fetch_partial_byte_ranges() {
         let store = rsm(None);
-        let src = TempDir::new().unwrap();
         let md = sample_metadata(10);
-        tokio::task::spawn_blocking(move || {
-            store
-                .copy_log_segment_data(&md, &sample_data(src.path(), false))
-                .unwrap();
+        seeded_blocking(store, md, false, move |store, md| {
             // Inclusive [2, 5] -> "2345".
             assert!(store.fetch_log_segment(&md, 2, Some(5)).unwrap() == b"2345");
             // Open-ended from 7 -> "789".
             assert!(store.fetch_log_segment(&md, 7, None).unwrap() == b"789");
         })
-        .await
-        .unwrap();
+        .await;
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn fetch_single_byte_range_start_equals_end() {
         let store = rsm(None);
-        let src = TempDir::new().unwrap();
         let md = sample_metadata(10);
-        tokio::task::spawn_blocking(move || {
-            store
-                .copy_log_segment_data(&md, &sample_data(src.path(), false))
-                .unwrap();
+        seeded_blocking(store, md, false, move |store, md| {
             // Inclusive [3, 3] is a valid single-byte range -> "3" (the guard
             // is `end < start_position`, not `<=`/`==`).
             assert!(store.fetch_log_segment(&md, 3, Some(3)).unwrap() == b"3");
         })
-        .await
-        .unwrap();
+        .await;
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn fetch_each_index_type() {
         let store = rsm(None);
-        let src = TempDir::new().unwrap();
         let md = sample_metadata(11);
-        tokio::task::spawn_blocking(move || {
-            store
-                .copy_log_segment_data(&md, &sample_data(src.path(), true))
-                .unwrap();
+        seeded_blocking(store, md, true, move |store, md| {
             for (index_type, want) in [
                 (IndexType::Offset, b"OFFSET-IDX".as_ref()),
                 (IndexType::Timestamp, b"TIME-IDX".as_ref()),
@@ -178,8 +164,7 @@ mod tests {
                 );
             }
         })
-        .await
-        .unwrap();
+        .await;
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -196,17 +181,12 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn missing_optional_txn_index_is_not_found() {
         let store = rsm(None);
-        let src = TempDir::new().unwrap();
         let md = sample_metadata(12);
-        tokio::task::spawn_blocking(move || {
-            store
-                .copy_log_segment_data(&md, &sample_data(src.path(), false))
-                .unwrap();
+        seeded_blocking(store, md, false, move |store, md| {
             let err = store.fetch_index(&md, IndexType::Transaction).unwrap_err();
             assert!(matches!(err, RemoteStorageError::SegmentNotFound(_)));
         })
-        .await
-        .unwrap();
+        .await;
     }
 
     /// The write-only guard must fire before a key is derived or a request is
@@ -221,7 +201,6 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn write_only_worm_refuses_fetch_without_touching_the_store() {
         let backing: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
-        let src = TempDir::new().unwrap();
         let readable_keys = TempDir::new().unwrap();
         let sealed_keys = TempDir::new().unwrap();
         let readable = worm_rsm(Arc::clone(&backing), &readable_keys, false);
@@ -229,20 +208,21 @@ mod tests {
         let md = stamped_metadata(56, 0, ChainHead::GENESIS);
 
         let readable_md = md.clone();
-        tokio::task::spawn_blocking(move || {
-            readable
-                .copy_log_segment_data(&readable_md, &sample_data(src.path(), false))
-                .unwrap();
-            check!(readable.fetch_log_segment(&readable_md, 0, None).unwrap() == b"0123456789");
-            check!(
-                readable
-                    .fetch_index(&readable_md, IndexType::Offset)
-                    .unwrap()
-                    == b"OFFSET-IDX"
-            );
-        })
-        .await
-        .unwrap();
+        seeded_blocking(
+            readable,
+            readable_md,
+            false,
+            move |readable, readable_md| {
+                check!(readable.fetch_log_segment(&readable_md, 0, None).unwrap() == b"0123456789");
+                check!(
+                    readable
+                        .fetch_index(&readable_md, IndexType::Offset)
+                        .unwrap()
+                        == b"OFFSET-IDX"
+                );
+            },
+        )
+        .await;
 
         let (segment, index) = std::thread::spawn(move || {
             (

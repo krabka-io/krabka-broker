@@ -91,13 +91,6 @@ fn count_new_acls(image: &MetadataImage, to_submit: &[(usize, MetadataRecord)]) 
     new.len()
 }
 
-#[tracing::instrument(
-    name = "handle_create_acls",
-    level = "info",
-    skip_all,
-    fields(api = "CreateAcls"),
-    err
-)]
 pub(crate) async fn handle(
     broker: &Broker,
     req: CreateAclsRequest,

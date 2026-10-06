@@ -281,7 +281,7 @@ fn audit_token_operation(
 
 #[cfg(test)]
 mod tests {
-    use std::{net::SocketAddr, sync::Arc};
+    use std::sync::Arc;
 
     use krabka_protocol::owned::{
         alter_replica_log_dirs_request::{
@@ -298,7 +298,7 @@ mod tests {
     use crate::{
         codes::CLUSTER_AUTHORIZATION_FAILED,
         network::auth::ConnectionAuth,
-        test_support::{DenyAll, codec_helpers, start_broker_with_authorizer},
+        test_support::{DenyAll, codec_helpers, peer, start_broker_with_authorizer},
     };
 
     codec_helpers!(AlterReplicaLogDirsRequest, AlterReplicaLogDirsResponse);
@@ -397,7 +397,7 @@ mod tests {
             let (broker_handle, _dir) = start_broker_with_authorizer(Arc::new(DenyAll)).await;
             let broker = broker_handle.broker_arc_for_test();
             let auth = authed("alice");
-            let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
+            let peer = peer();
             let req = AlterReplicaLogDirsRequest {
                 dirs,
                 ..Default::default()

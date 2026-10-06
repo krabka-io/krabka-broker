@@ -116,6 +116,10 @@ use self::{
 };
 
 // One adapter and one `register_dispatch_table` registration per Kafka api.
+// Every generated adapter but a `typed_own_span` one runs the decode, the
+// handler and the encode in an `info` span `handle_<snake_name>` with `api`,
+// `version` and, for a raw-body section, `req_bytes`, and records an `Err` as
+// an `ERROR` event, as `#[tracing::instrument(err)]` would.
 // The handler is `crate::handlers::<snake_name>::handle` unless the entry names
 // another after `=>`. `auth` entries register the
 // hand-written `<snake_name>_adapter` imported above.
@@ -154,7 +158,6 @@ krabka_macros::dispatch_table! {
         DescribeGroups,
         ListGroups,
         OffsetDelete,
-        DescribeProducers,
         DescribeTransactions,
         ListTransactions,
         ConsumerGroupDescribe,
@@ -170,8 +173,6 @@ krabka_macros::dispatch_table! {
         BrokerHeartbeat,
         StreamsGroupTopologyDescriptionUpdate,
         FindCoordinator,
-        AlterUserScramCredentials,
-        UpdateFeatures,
         ShareFetch,
         ShareAcknowledge,
         CreatePartitions,
@@ -204,12 +205,23 @@ krabka_macros::dispatch_table! {
         WriteShareGroupState => crate::share_coordinator::handlers::write::handle,
         DeleteShareGroupState => crate::share_coordinator::handlers::delete::handle,
         ReadShareGroupStateSummary => crate::share_coordinator::handlers::read_summary::handle;
-    // `typed`, called without awaiting: the result is wrapped in a ready future.
+    // `typed`, for a handler that keeps a `#[tracing::instrument]` of its own
+    // instead of the adapter's span: `AlterUserScramCredentials` and
+    // `UpdateFeatures` record no `Err` as an `ERROR` event.
+    typed_own_span:
+        AlterUserScramCredentials,
+        UpdateFeatures;
+    // `handle(broker, &request, version, ctx)`, called without awaiting: the
+    // result is wrapped in a ready future.
     typed_sync:
+        DescribeAcls,
+        DescribeProducers;
+    // The same, for a handler that cannot fail and returns its response
+    // struct itself.
+    typed_infallible:
         OffsetForLeaderEpoch,
         ListConfigResources,
         DescribeConfigs,
-        DescribeAcls,
         ListPartitionReassignments,
         DescribeClientQuotas,
         DescribeUserScramCredentials;

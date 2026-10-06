@@ -97,13 +97,6 @@ const CLUSTER_AUTHORIZED_OPERATIONS_VERSIONS: std::ops::RangeInclusive<i16> = 8.
 /// The first version that carries `topic_authorized_operations` (KIP-430).
 const FIRST_TOPIC_AUTHORIZED_OPERATIONS_VERSION: i16 = 8;
 
-#[tracing::instrument(
-    name = "handle_metadata",
-    level = "info",
-    skip_all,
-    fields(api = "Metadata", version),
-    err
-)]
 pub(crate) async fn handle(
     broker: &Broker,
     req: MetadataRequest,
@@ -168,8 +161,7 @@ pub(crate) async fn handle(
             authorized_operations_bits(
                 broker.config.authorizer.as_ref(),
                 &image,
-                ctx.principal,
-                ctx.peer,
+                ctx,
                 ResourceType::Cluster,
                 CLUSTER_RESOURCE_NAME,
             )
@@ -441,8 +433,7 @@ fn build_topic_rows(
             row.topic_authorized_operations = authorized_operations_bits(
                 authorizer,
                 image,
-                ctx.principal,
-                ctx.peer,
+                ctx,
                 ResourceType::Topic,
                 row.name.as_deref().unwrap_or_default(),
             );

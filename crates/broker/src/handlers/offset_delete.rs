@@ -51,18 +51,10 @@ use self::{
     tombstone::append_tombstones,
 };
 use crate::{
-    authorizer::authorize_topics, broker::Broker, codes,
-    coordinator::unified::actor::GroupActorMessage, error::BrokerError,
+    broker::Broker, codes, coordinator::unified::actor::GroupActorMessage, error::BrokerError,
     handlers::ErrorCodeResponse as _,
 };
 
-#[tracing::instrument(
-    name = "handle_offset_delete",
-    level = "info",
-    skip_all,
-    fields(api = "OffsetDelete", version),
-    err
-)]
 pub(crate) async fn handle(
     broker: &Broker,
     req: OffsetDeleteRequest,
@@ -122,17 +114,13 @@ pub(crate) async fn handle(
     };
 
     // Per-topic `Read` ACL — per-partition `TOPIC_AUTHORIZATION_FAILED` on Deny.
-    let topic_decisions = {
-        let topic_names: Vec<&str> = req.topics.iter().map(|t| t.name.as_str()).collect();
-        authorize_topics(
-            broker.config.authorizer.as_ref(),
-            &*image,
-            ctx.principal,
-            ctx.peer,
-            AclOperation::Read,
-            topic_names,
-        )
-    };
+    let topic_decisions = crate::handlers::topic_decisions(
+        broker.config.authorizer.as_ref(),
+        &image,
+        ctx,
+        AclOperation::Read,
+        req.topics.iter().map(|t| t.name.as_str()),
+    );
 
     let topic_partition_counts: std::collections::HashMap<&str, i32> = req
         .topics

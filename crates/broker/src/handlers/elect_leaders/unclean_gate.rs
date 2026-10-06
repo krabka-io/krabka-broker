@@ -9,9 +9,9 @@
 use krabka_audit::PrivilegedPhase;
 use krabka_metadata::{BreakGlassAction, MetadataImage, MetadataRecord};
 use krabka_protocol::owned::elect_leaders_response::PartitionResult;
-use uuid::Uuid;
 
 use super::env::ElectionEnv;
+pub(super) use crate::break_glass::gate::consumed_proposal_id;
 use crate::{
     break_glass::{
         gate::{self, BreakGlassDenial},
@@ -54,17 +54,6 @@ pub(super) fn authorize_unclean(
 /// `gate::authorize` resolves from this spelling.
 pub(super) fn unclean_target(topic: &str, partition: i32) -> String {
     format!("{topic}-{partition}")
-}
-
-/// The proposal that a consumed record names.
-///
-/// [`gate::authorize`] only ever answers with a proposal record, so the `None`
-/// arm costs one match rather than a panic.
-pub(super) fn consumed_proposal_id(record: &MetadataRecord) -> Option<Uuid> {
-    match record {
-        MetadataRecord::V1BreakGlassProposal(proposal) => Some(proposal.proposal_id),
-        _ => None,
-    }
 }
 
 /// Refuse one partition: count it, audit it, and build its error row.

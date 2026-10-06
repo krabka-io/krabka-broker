@@ -101,7 +101,7 @@ mod tests {
     use bytes::Bytes;
     use krabka_ids::{Offset, ProducerId};
     use krabka_protocol::records::Record;
-    use krabka_units::prelude::{bytes, mebibytes};
+    use krabka_units::prelude::mebibytes;
     use tempfile::tempdir;
 
     use super::*;
@@ -112,7 +112,7 @@ mod tests {
             test_support::{
                 PartitionState, abort_marker, barrier_marker, barrier_marker_from_producer,
                 commit_marker, compaction_ctx, keyed_batch, partition_state, sample_batch,
-                test_log, transactional_batch,
+                test_log, tiny_segments, transactional_batch,
             },
         },
         producer_snapshot::ProducerSnapshotEntry,
@@ -393,8 +393,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let cfg = LogConfig {
             cleanup_policy: crate::CleanupPolicy::Compact,
-            segment_size: bytes(1), // one batch per segment: every append rolls
-            ..Default::default()
+            ..tiny_segments()
         };
         let mut log = Log::open(dir.path(), cfg).unwrap();
         log.append(&mut keyed_batch(0, &[(0, b"k1", b"v0")]))

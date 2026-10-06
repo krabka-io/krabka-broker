@@ -77,23 +77,6 @@ pub(super) fn success_response(
     }
 }
 
-/// A `ShareFetchResponse` that carries a top-level error and no
-/// per-partition row. The error is a feature-gate, authorization, session, or
-/// membership failure.
-///
-/// This is Kafka's `ShareFetchRequest.getErrorResponse`, which builds
-/// `ShareFetchResponse.of(error, throttleTimeMs, empty, List.of(), 0)`. So the
-/// acquisition lock timeout is 0 and not the configured one.
-pub(super) fn error_response(error_code: i16) -> ShareFetchResponse {
-    ShareFetchResponse {
-        throttle_time_ms: 0,
-        error_code,
-        error_message: None,
-        acquisition_lock_timeout_ms: 0,
-        ..Default::default()
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use assert2::assert;
@@ -103,22 +86,6 @@ mod tests {
     };
 
     use super::*;
-
-    #[test]
-    fn error_response_preserves_top_level_fields() {
-        let resp = error_response(codes::UNSUPPORTED_VERSION);
-
-        let expected = ShareFetchResponse {
-            throttle_time_ms: 0,
-            error_code: codes::UNSUPPORTED_VERSION,
-            error_message: None,
-            acquisition_lock_timeout_ms: 0,
-            responses: Vec::new(),
-            node_endpoints: Vec::new(),
-            unknown_tagged_fields: UnknownTaggedFields(Vec::new()),
-        };
-        assert!(resp == expected);
-    }
 
     #[test]
     fn partition_response_helpers_preserve_routing_fields() {

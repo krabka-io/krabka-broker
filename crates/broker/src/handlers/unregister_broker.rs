@@ -96,13 +96,6 @@ mod wire;
 #[cfg(test)]
 mod tests;
 
-#[tracing::instrument(
-    name = "handle_unregister_broker",
-    level = "info",
-    skip_all,
-    fields(api = "UnregisterBroker", version, req_bytes = req_bytes.len()),
-    err,
-)]
 pub(crate) async fn handle(
     broker: &Broker,
     version: i16,

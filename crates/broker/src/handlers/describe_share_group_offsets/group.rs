@@ -157,7 +157,7 @@ fn allowed_topics(
 
 #[cfg(test)]
 mod tests {
-    use std::{net::SocketAddr, sync::Arc};
+    use std::sync::Arc;
 
     use assert2::assert;
     use krabka_log::Offset;
@@ -176,9 +176,8 @@ mod tests {
         coordinator::unified::share::persistence::{
             ShareGroupMetadataValue, ShareGroupStatePartitionMetadataValue, TopicPartitionsInfo,
         },
-        handlers::describe_share_group_offsets::test_support::{
-            image_with_topic, register_topic, start_broker,
-        },
+        handlers::describe_share_group_offsets::test_support::{image_with_topic, register_topic},
+        test_support::peer,
     };
 
     /// Denies topic `Describe` on one named topic, and allows every other
@@ -271,7 +270,8 @@ mod tests {
         }));
 
         let (broker_handle, _dir) =
-            start_broker(Arc::new(DenyDescribeOnTopic("secret")), true).await;
+            crate::test_support::start_share_broker(Arc::new(DenyDescribeOnTopic("secret")), true)
+                .await;
         let broker = broker_handle.broker_arc_for_test();
         let persister = broker
             .group_coordinator
@@ -310,7 +310,7 @@ mod tests {
             );
 
         let principal = crate::test_support::principal("alice");
-        let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
+        let peer = peer();
         let ctx = crate::test_support::request_context(&principal, &peer, "admin-client");
 
         let result = describe_group(
@@ -378,7 +378,8 @@ mod tests {
         ];
 
         for case in cases {
-            let (broker_handle, _dir) = start_broker(case.authorizer, true).await;
+            let (broker_handle, _dir) =
+                crate::test_support::start_share_broker(case.authorizer, true).await;
             let broker = broker_handle.broker_arc_for_test();
             let persister = broker
                 .group_coordinator
@@ -398,7 +399,7 @@ mod tests {
             }
 
             let principal = crate::test_support::principal("alice");
-            let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
+            let peer = peer();
             let ctx = crate::test_support::request_context(&principal, &peer, "admin-client");
 
             let result = describe_group(
@@ -446,7 +447,8 @@ mod tests {
         ];
 
         for case in cases {
-            let (broker_handle, _dir) = start_broker(case.authorizer, true).await;
+            let (broker_handle, _dir) =
+                crate::test_support::start_share_broker(case.authorizer, true).await;
             let broker = broker_handle.broker_arc_for_test();
             let persister = broker
                 .group_coordinator
@@ -500,7 +502,7 @@ mod tests {
                 );
 
             let principal = crate::test_support::principal("alice");
-            let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
+            let peer = peer();
             let ctx = crate::test_support::request_context(&principal, &peer, "admin-client");
 
             let result = describe_group(
@@ -531,13 +533,16 @@ mod tests {
     /// failing this assertion.
     #[tokio::test]
     async fn empty_topic_list_never_reaches_the_coordinator() {
-        let (broker_handle, _dir) =
-            start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer), true).await;
+        let (broker_handle, _dir) = crate::test_support::start_share_broker(
+            Arc::new(crate::authorizer::AllowAllAuthorizer),
+            true,
+        )
+        .await;
         let broker = broker_handle.broker_arc_for_test();
         let image = image_with_topic("orders", uuid::Uuid::from_u128(1));
 
         let principal = crate::test_support::principal("alice");
-        let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
+        let peer = peer();
         let ctx = crate::test_support::request_context(&principal, &peer, "admin-client");
 
         let result = describe_group(

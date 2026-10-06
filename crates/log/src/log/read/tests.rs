@@ -9,7 +9,7 @@ use tempfile::tempdir;
 use super::*;
 use crate::{
     config::LogConfig,
-    log::test_support::{NO_LIMIT, sample_batch, test_batch_at, test_log},
+    log::test_support::{NO_LIMIT, sample_batch, test_batch_at, test_log, tiny_segments},
 };
 
 #[test]
@@ -392,10 +392,7 @@ fn read_at_log_end_returns_empty() {
 fn read_raw_after_reopen_does_not_skip_first_sealed_segment() {
     use tempfile::TempDir;
     let dir = TempDir::new().unwrap();
-    let cfg = LogConfig {
-        segment_size: bytes(1), // roll on every append → one segment per batch
-        ..LogConfig::default()
-    };
+    let cfg = tiny_segments();
     {
         let mut log = Log::open(dir.path(), cfg.clone()).unwrap();
         log.append(&mut sample_batch(1)).unwrap(); // offset 0 → sealed seg base 0
@@ -421,10 +418,7 @@ fn read_raw_after_reopen_does_not_skip_first_sealed_segment() {
 fn read_raw_multi_segment_budget_and_limit() {
     use tempfile::TempDir;
     let dir = TempDir::new().unwrap();
-    let cfg = LogConfig {
-        segment_size: bytes(1),
-        ..LogConfig::default()
-    };
+    let cfg = tiny_segments();
     let mut log = Log::open(dir.path(), cfg).unwrap();
     log.append(&mut sample_batch(1)).unwrap();
     log.append(&mut sample_batch(1)).unwrap();

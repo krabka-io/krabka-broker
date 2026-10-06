@@ -4,7 +4,7 @@
 //! preamble, the response shape for a row the metadata image does not know,
 //! and the metadata a successful alter leaves behind.
 
-use std::{net::SocketAddr, sync::Arc};
+use std::sync::Arc;
 
 use assert2::{assert, check};
 use krabka_metadata::{
@@ -19,7 +19,7 @@ use super::*;
 use crate::{
     codes::{POLICY_VIOLATION, UNKNOWN_TOPIC_OR_PARTITION},
     handlers::alter_partition_reassignments::test_support::{request, test_context},
-    test_support::{DenyAll, start_broker_with_authorizer as start_broker},
+    test_support::{DenyAll, start_broker_with_authorizer as start_broker, test_ctx},
 };
 
 async fn seed_reassignable_partition(broker: &Broker) {
@@ -126,9 +126,7 @@ async fn a_cancel_publishes_the_eligible_leader_state_the_revert_implies() {
     crate::test_support::wait_for_controller_leader(&broker).await;
     crate::test_support::finalize_elr_version_on(&broker).await;
     seed_cancellable_partition(&broker).await;
-    let principal = crate::test_support::principal("admin");
-    let peer: SocketAddr = "127.0.0.1:9092".parse().expect("peer address");
-    let ctx = test_context(&principal, &peer);
+    test_ctx!(ctx, "admin");
 
     let resp = handle(&broker, request(true, "orders", 7, None), version, &ctx)
         .await
@@ -154,9 +152,7 @@ async fn handle_preserves_unknown_partition_response_shape() {
     let version = 1;
     let (broker_handle, _dir) = start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
     let broker = broker_handle.broker_arc_for_test();
-    let principal = crate::test_support::principal("admin");
-    let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
-    let ctx = test_context(&principal, &peer);
+    test_ctx!(ctx, "admin");
 
     let resp = handle(
         &broker,
@@ -201,9 +197,7 @@ async fn handle_denies_cluster_alter_with_top_level_cluster_authorization_failed
         for allow_rf_change in [false, true] {
             let (broker_handle, _dir) = start_broker(Arc::new(DenyAll)).await;
             let broker = broker_handle.broker_arc_for_test();
-            let principal = crate::test_support::principal("admin");
-            let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
-            let ctx = test_context(&principal, &peer);
+            test_ctx!(ctx, "admin");
 
             let resp = handle(
                 &broker,
@@ -247,9 +241,7 @@ async fn handle_submits_successful_reassignment_records() {
     let broker = broker_handle.broker_arc_for_test();
     crate::test_support::wait_for_controller_leader(&broker).await;
     seed_reassignable_partition(&broker).await;
-    let principal = crate::test_support::principal("admin");
-    let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
-    let ctx = test_context(&principal, &peer);
+    test_ctx!(ctx, "admin");
 
     let resp = handle(
         &broker,
@@ -314,9 +306,7 @@ async fn handle_refuses_a_frozen_reassignment_without_mutating_the_partition() {
         .partition("orders", 7)
         .expect("seeded partition")
         .clone();
-    let principal = crate::test_support::principal("admin");
-    let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
-    let ctx = test_context(&principal, &peer);
+    test_ctx!(ctx, "admin");
 
     let response = handle(
         &broker,

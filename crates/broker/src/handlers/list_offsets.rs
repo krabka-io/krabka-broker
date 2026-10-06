@@ -112,13 +112,6 @@ fn duplicate_partitions(
     duplicates
 }
 
-#[tracing::instrument(
-    name = "handle_list_offsets",
-    level = "info",
-    skip_all,
-    fields(api = "ListOffsets", version, req_bytes = req_bytes.len()),
-    err,
-)]
 pub(crate) async fn handle(
     broker: &Broker,
     version: i16,

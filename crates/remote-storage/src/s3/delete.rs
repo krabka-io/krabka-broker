@@ -58,7 +58,8 @@ mod tests {
     use super::{IndexType, ObjectOps, RemoteStorageError, S3RemoteStorage, WormError};
     use crate::{
         s3::test_support::{
-            counting_rsm, rsm, sample_data, sample_metadata, stamped_metadata, worm_rsm,
+            counting_rsm, rsm, sample_data, sample_metadata, seeded_blocking, stamped_metadata,
+            worm_rsm,
         },
         storage_manager::RemoteStorageManager,
         worm::ChainHead,
@@ -78,12 +79,8 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn delete_issues_one_request_per_current_key() {
         let (store, counter) = counting_rsm();
-        let src = TempDir::new().unwrap();
         let md = sample_metadata(14);
-        tokio::task::spawn_blocking(move || {
-            store
-                .copy_log_segment_data(&md, &sample_data(src.path(), true))
-                .unwrap();
+        seeded_blocking(store, md, true, move |store, md| {
             let expected = {
                 let mut keys = vec![
                     store.log_key(&md).to_string(),
@@ -107,19 +104,14 @@ mod tests {
             check!(counter.attempts(StoreOp::Delete) - before == 6);
             check!(all_keys(&store) == Vec::<String>::new());
         })
-        .await
-        .unwrap();
+        .await;
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn delete_is_idempotent() {
         let store = rsm(None);
-        let src = TempDir::new().unwrap();
         let md = sample_metadata(13);
-        tokio::task::spawn_blocking(move || {
-            store
-                .copy_log_segment_data(&md, &sample_data(src.path(), true))
-                .unwrap();
+        seeded_blocking(store, md, true, move |store, md| {
             store.delete_log_segment_data(&md).unwrap();
             store.delete_log_segment_data(&md).unwrap();
             assert!(matches!(
@@ -127,8 +119,7 @@ mod tests {
                 RemoteStorageError::SegmentNotFound(_)
             ));
         })
-        .await
-        .unwrap();
+        .await;
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -137,30 +128,22 @@ mod tests {
         let src = TempDir::new().unwrap();
         let a = sample_metadata(20);
         let b = sample_metadata(21);
-        tokio::task::spawn_blocking(move || {
-            store
-                .copy_log_segment_data(&a, &sample_data(src.path(), false))
-                .unwrap();
+        seeded_blocking(store, a, false, move |store, a| {
             store
                 .copy_log_segment_data(&b, &sample_data(src.path(), false))
                 .unwrap();
             store.delete_log_segment_data(&a).unwrap();
             assert!(store.fetch_log_segment(&b, 0, None).unwrap() == b"0123456789");
         })
-        .await
-        .unwrap();
+        .await;
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn worm_delete_is_refused() {
-        let src = TempDir::new().unwrap();
         let keys = TempDir::new().unwrap();
         let store = worm_rsm(Arc::new(InMemory::new()), &keys, false);
         let md = stamped_metadata(55, 0, ChainHead::GENESIS);
-        tokio::task::spawn_blocking(move || {
-            store
-                .copy_log_segment_data(&md, &sample_data(src.path(), true))
-                .unwrap();
+        seeded_blocking(store, md, true, move |store, md| {
             let before = all_keys(&store);
 
             assert!(let Err(err) = store.delete_log_segment_data(&md));
@@ -173,7 +156,6 @@ mod tests {
             check!(all_keys(&store) == before);
             check!(before.len() == 7, "six objects plus the manifest");
         })
-        .await
-        .unwrap();
+        .await;
     }
 }

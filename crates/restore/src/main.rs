@@ -5,13 +5,4 @@
 //! unknown subcommand to `krabka-<name>` on `PATH`, the way git resolves
 //! `git foo` to `git-foo`, so the binary carries that name.
 
-#[tokio::main(flavor = "multi_thread")]
-async fn main() {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
-        )
-        .init();
-    std::process::exit(krabka_restore::run_from_args(std::env::args_os()).await);
-}
+krabka_macros::cli_main!(krabka_restore, flavor = "multi_thread");

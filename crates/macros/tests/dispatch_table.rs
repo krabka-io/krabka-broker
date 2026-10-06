@@ -7,6 +7,7 @@ use std::{
     collections::BTreeMap,
     future::Future,
     pin::Pin,
+    sync::{Arc, Mutex},
     task::{Context, Poll, Waker},
 };
 
@@ -40,6 +41,13 @@ enum BrokerError {
     Encode,
 }
 
+/// What the adapter's `ERROR` event records as `error`.
+impl std::fmt::Display for BrokerError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "broker error: {self:?}")
+    }
+}
+
 impl From<krabka_protocol::DecodeError> for BrokerError {
     fn from(_: krabka_protocol::DecodeError) -> Self {
         Self::Decode
@@ -56,6 +64,8 @@ enum ApiKey {
     ListGroups = 16,
     Heartbeat = 12,
     ListConfigResources = 74,
+    UpdateFeatures = 57,
+    DescribeAcls = 29,
 }
 
 type ContextHandler = for<'a> fn(
@@ -168,6 +178,14 @@ mod krabka_protocol {
         }
         pub mod list_config_resources_request {
             pub use crate::krabka_protocol::Text as ListConfigResourcesRequest;
+            pub const FLEXIBLE_MIN: i16 = 0;
+        }
+        pub mod describe_acls_request {
+            pub use crate::krabka_protocol::Text as DescribeAclsRequest;
+            pub const FLEXIBLE_MIN: i16 = 2;
+        }
+        pub mod update_features_request {
+            pub use crate::krabka_protocol::Text as UpdateFeaturesRequest;
             pub const FLEXIBLE_MIN: i16 = 0;
         }
         pub mod add_partitions_to_txn_request {
@@ -289,7 +307,7 @@ mod handlers {
 
         pub fn handle(
             broker: &Broker,
-            request: ListConfigResourcesRequest,
+            request: &ListConfigResourcesRequest,
             version: ApiVersion,
             ctx: &RequestContext<'_>,
         ) -> Result<String, BrokerError> {
@@ -301,6 +319,50 @@ mod handlers {
                 &ctx.client_id,
                 &text,
             ])
+        }
+    }
+
+    pub mod describe_acls {
+        use crate::{
+            ApiVersion, Broker, RequestContext,
+            krabka_protocol::owned::describe_acls_request::DescribeAclsRequest,
+        };
+
+        /// Answers every request, so an empty body reaches the encoder.
+        pub fn handle(
+            broker: &Broker,
+            request: &DescribeAclsRequest,
+            version: ApiVersion,
+            ctx: &RequestContext<'_>,
+        ) -> String {
+            let DescribeAclsRequest(text) = request;
+            format!(
+                "describe_acls {} {version} {} {text}",
+                broker.name, ctx.client_id
+            )
+        }
+    }
+
+    pub mod update_features {
+        use crate::{
+            ApiVersion, Broker, BrokerError, RequestContext,
+            krabka_protocol::owned::update_features_request::UpdateFeaturesRequest,
+        };
+
+        pub fn handle(
+            broker: &Broker,
+            request: UpdateFeaturesRequest,
+            version: ApiVersion,
+            ctx: &RequestContext<'_>,
+        ) -> std::future::Ready<Result<String, BrokerError>> {
+            let UpdateFeaturesRequest(text) = request;
+            std::future::ready(super::typed_reply(&[
+                &"update_features",
+                &broker.name,
+                &version,
+                &ctx.client_id,
+                &text,
+            ]))
         }
     }
 
@@ -411,8 +473,10 @@ krabka_macros::dispatch_table! {
     context: Metadata, AddPartitionsToTxn => crate::txn::add_partitions_to_txn::handle;
     sync_context: DescribeConfigs;
     typed: ListGroups;
+    typed_own_span: UpdateFeatures;
     typed_group: Heartbeat;
     typed_sync: ListConfigResources;
+    typed_infallible: DescribeAcls;
     auth: CreateDelegationToken;
     telemetry: PushTelemetry;
 }
@@ -523,6 +587,20 @@ fn every_section_registers_an_adapter_that_reaches_its_handler() {
             Err(BrokerError::EmptyBody),
         ),
         (
+            ApiKey::DescribeAcls,
+            "context",
+            2,
+            ok("describe_acls b1 5 c1 v5:body @v5"),
+            ok("describe_acls b1 5 c1 v5: @v5"),
+        ),
+        (
+            ApiKey::UpdateFeatures,
+            "context",
+            0,
+            ok("update_features b1 5 c1 v5:body @v5"),
+            Err(BrokerError::EmptyBody),
+        ),
+        (
             ApiKey::CreateDelegationToken,
             "auth",
             2,
@@ -559,6 +637,7 @@ fn a_typed_adapter_maps_a_decode_failure_to_a_broker_error() {
         ApiKey::ListGroups,
         ApiKey::Heartbeat,
         ApiKey::ListConfigResources,
+        ApiKey::DescribeAcls,
     ] {
         let entry = registry.0[&(api as i16)];
         assert!(call(entry, &[0xff]) == Err(BrokerError::Decode), "{api:?}");
@@ -591,6 +670,7 @@ fn a_typed_adapter_returns_the_encoders_error() {
         ApiKey::ListGroups,
         ApiKey::Heartbeat,
         ApiKey::ListConfigResources,
+        ApiKey::DescribeAcls,
     ] {
         let entry = registry.0[&(api as i16)];
         assert!(call(entry, b"nope") == Err(BrokerError::Encode), "{api:?}");
@@ -603,4 +683,195 @@ fn registering_the_table_twice_panics() {
     let mut registry = DispatchRegistry::default();
     register_dispatch_table(&mut registry);
     register_dispatch_table(&mut registry);
+}
+
+/// One span opened or event emitted while an adapter ran.
+#[derive(Debug, PartialEq, Eq)]
+enum Traced {
+    Span {
+        name: &'static str,
+        level: tracing::Level,
+        fields: BTreeMap<&'static str, String>,
+    },
+    Event {
+        level: tracing::Level,
+        /// The span the event was emitted in.
+        span: Option<&'static str>,
+        fields: BTreeMap<&'static str, String>,
+    },
+}
+
+/// Collects each recorded field's `Debug` rendering, or a `str` as is.
+#[derive(Default)]
+struct Fields(BTreeMap<&'static str, String>);
+
+impl tracing::field::Visit for Fields {
+    fn record_str(&mut self, field: &tracing::field::Field, value: &str) {
+        self.0.insert(field.name(), value.to_owned());
+    }
+
+    fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+        self.0.insert(field.name(), format!("{value:?}"));
+    }
+}
+
+/// A layer that records every span it sees open and every event.
+#[derive(Clone, Default)]
+struct Capture(Arc<Mutex<Vec<Traced>>>);
+
+impl<S> tracing_subscriber::Layer<S> for Capture
+where
+    S: tracing::Subscriber + for<'l> tracing_subscriber::registry::LookupSpan<'l>,
+{
+    fn on_new_span(
+        &self,
+        attrs: &tracing::span::Attributes<'_>,
+        _: &tracing::span::Id,
+        _: tracing_subscriber::layer::Context<'_, S>,
+    ) {
+        let mut fields = Fields::default();
+        attrs.record(&mut fields);
+        self.0.lock().expect("capture lock").push(Traced::Span {
+            name: attrs.metadata().name(),
+            level: *attrs.metadata().level(),
+            fields: fields.0,
+        });
+    }
+
+    fn on_event(&self, event: &tracing::Event<'_>, ctx: tracing_subscriber::layer::Context<'_, S>) {
+        let mut fields = Fields::default();
+        event.record(&mut fields);
+        self.0.lock().expect("capture lock").push(Traced::Event {
+            level: *event.metadata().level(),
+            span: ctx.event_span(event).map(|span| span.name()),
+            fields: fields.0,
+        });
+    }
+}
+
+/// Calls `api`'s adapter on `body` and returns what it traced.
+fn trace(registry: &DispatchRegistry, api: ApiKey, body: &[u8]) -> Vec<Traced> {
+    use tracing_subscriber::layer::SubscriberExt as _;
+
+    let capture = Capture::default();
+    let subscriber = tracing_subscriber::registry().with(capture.clone());
+    let entry = registry.0[&(api as i16)];
+    tracing::subscriber::with_default(subscriber, || drop(call(entry, body)));
+    std::mem::take(&mut *capture.0.lock().expect("capture lock"))
+}
+
+#[test]
+fn a_generated_adapter_runs_its_handler_in_a_handle_span_and_records_its_error() {
+    let mut registry = DispatchRegistry::default();
+    register_dispatch_table(&mut registry);
+
+    let span = |name, api: &str, req_bytes: Option<usize>| {
+        let mut fields = BTreeMap::from([("api", api.to_owned()), ("version", "5".to_owned())]);
+        if let Some(req_bytes) = req_bytes {
+            fields.insert("req_bytes", req_bytes.to_string());
+        }
+        Traced::Span {
+            name,
+            level: tracing::Level::INFO,
+            fields,
+        }
+    };
+    let error = |name, error: BrokerError| Traced::Event {
+        level: tracing::Level::ERROR,
+        span: Some(name),
+        fields: BTreeMap::from([("error", error.to_string())]),
+    };
+    // Each case: the api, its span name and `api` field, whether the adapter
+    // hands the handler the raw body, and a body the handler or the codec
+    // refuses with the error the event records.
+    let cases = [
+        (
+            ApiKey::Metadata,
+            "handle_metadata",
+            "Metadata",
+            true,
+            &b""[..],
+            BrokerError::EmptyBody,
+        ),
+        (
+            ApiKey::AddPartitionsToTxn,
+            "handle_add_partitions_to_txn",
+            "AddPartitionsToTxn",
+            true,
+            b"",
+            BrokerError::EmptyBody,
+        ),
+        (
+            ApiKey::DescribeConfigs,
+            "handle_describe_configs",
+            "DescribeConfigs",
+            true,
+            b"",
+            BrokerError::EmptyBody,
+        ),
+        (
+            ApiKey::ListGroups,
+            "handle_list_groups",
+            "ListGroups",
+            false,
+            b"nope",
+            BrokerError::Encode,
+        ),
+        (
+            ApiKey::Heartbeat,
+            "handle_heartbeat",
+            "Heartbeat",
+            false,
+            b"longer-than-eight",
+            BrokerError::RecordString,
+        ),
+        (
+            ApiKey::ListConfigResources,
+            "handle_list_config_resources",
+            "ListConfigResources",
+            false,
+            &[0xff],
+            BrokerError::Decode,
+        ),
+        (
+            ApiKey::DescribeAcls,
+            "handle_describe_acls",
+            "DescribeAcls",
+            false,
+            b"nope",
+            BrokerError::Encode,
+        ),
+        (
+            ApiKey::PushTelemetry,
+            "handle_push_telemetry",
+            "PushTelemetry",
+            true,
+            b"",
+            BrokerError::EmptyBody,
+        ),
+    ];
+
+    for (api, name, api_field, raw, refused, refusal) in cases {
+        let ok = trace(&registry, api, b"body");
+        let expected_ok = vec![span(name, api_field, raw.then_some(4))];
+        assert!(ok == expected_ok, "{api:?}");
+
+        let err = trace(&registry, api, refused);
+        let expected_err = vec![
+            span(name, api_field, raw.then_some(refused.len())),
+            error(name, refusal),
+        ];
+        assert!(err == expected_err, "{api:?}");
+    }
+}
+
+#[test]
+fn an_own_span_or_hand_written_adapter_opens_no_span_and_records_no_error() {
+    let mut registry = DispatchRegistry::default();
+    register_dispatch_table(&mut registry);
+
+    for api in [ApiKey::UpdateFeatures, ApiKey::CreateDelegationToken] {
+        let traced = [b"body".as_slice(), b""].map(|body| trace(&registry, api, body));
+        assert!(traced == [vec![], vec![]], "{api:?}");
+    }
 }

@@ -116,9 +116,32 @@ pub(crate) fn s3_http_client(cfg: &S3Config) -> Result<reqwest::Client, ObjectSt
     if cfg.endpoint.is_some() {
         client = client.no_proxy();
     }
-    client
-        .build()
-        .map_err(|error| ObjectStoreError::Backend(error.to_string()))
+    client.build().map_err(backend)
+}
+
+/// An [`ObjectStoreError::Backend`] carrying `error`'s message.
+pub(crate) fn backend(error: impl std::fmt::Display) -> ObjectStoreError {
+    ObjectStoreError::Backend(error.to_string())
+}
+
+/// Sends `request` and returns the response body.
+///
+/// A non-success status is an error naming `operation`, the status and the
+/// body.
+pub(crate) async fn read_ok_body(
+    request: reqwest::RequestBuilder,
+    operation: &str,
+) -> Result<bytes::Bytes, ObjectStoreError> {
+    let response = request.send().await.map_err(backend)?;
+    let status = response.status();
+    let body = response.bytes().await.map_err(backend)?;
+    if !status.is_success() {
+        return Err(ObjectStoreError::Backend(format!(
+            "{operation} returned {status}: {}",
+            String::from_utf8_lossy(&body)
+        )));
+    }
+    Ok(body)
 }
 
 /// Sends a SigV4-signed `GET` for `url` and decodes the XML response body.
@@ -133,27 +156,15 @@ pub(crate) async fn signed_s3_get_xml<T: DeserializeOwned>(
 ) -> Result<T, ObjectStoreError> {
     let mut signed = http::Request::get(url.as_str())
         .body(HttpRequestBody::empty())
-        .map_err(|error| ObjectStoreError::Backend(error.to_string()))?;
+        .map_err(backend)?;
     AwsAuthorizer::new(credential, "s3", &cfg.region)
         .try_authorize(&mut signed, None)
-        .map_err(|error| ObjectStoreError::Backend(error.to_string()))?;
-    let response = client
-        .get(url)
-        .headers(signed.into_parts().0.headers)
-        .send()
-        .await
-        .map_err(|error| ObjectStoreError::Backend(error.to_string()))?;
-    let status = response.status();
-    let body = response
-        .bytes()
-        .await
-        .map_err(|error| ObjectStoreError::Backend(error.to_string()))?;
-    if !status.is_success() {
-        return Err(ObjectStoreError::Backend(format!(
-            "{operation} returned {status}: {}",
-            String::from_utf8_lossy(&body)
-        )));
-    }
+        .map_err(backend)?;
+    let body = read_ok_body(
+        client.get(url).headers(signed.into_parts().0.headers),
+        operation,
+    )
+    .await?;
     quick_xml::de::from_reader(body.as_ref())
         .map_err(|error| ObjectStoreError::Backend(format!("{operation}: {error}")))
 }
@@ -315,5 +326,20 @@ mod tests {
         server.await.unwrap();
 
         check!(error.to_string().contains("403 Forbidden: denied"));
+    }
+
+    #[tokio::test]
+    async fn a_request_that_never_reaches_the_store_is_a_backend_error() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!("http://{}", listener.local_addr().unwrap());
+        drop(listener);
+
+        let client = s3_http_client(&config(endpoint.clone())).unwrap();
+        let error = read_ok_body(client.get(endpoint), "ListMultipartUploads")
+            .await
+            .unwrap_err();
+
+        assert2::assert!(let ObjectStoreError::Backend(message) = error);
+        check!(message.contains("error sending request"), "{message}");
     }
 }

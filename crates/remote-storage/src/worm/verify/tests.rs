@@ -41,13 +41,7 @@ async fn backup_capture_namespace_is_not_a_classic_partition() {
         .await
         .unwrap();
 
-    let report = verify_archive(
-        &archive.store,
-        &VerifyRequest::default(),
-        &archive.trusted(),
-    )
-    .await
-    .unwrap();
+    let report = archive.verify().await;
     check!(report.ok());
     check!(report.partitions.len() == 1);
     check!(report.global_orphan_objects.is_empty());
@@ -65,13 +59,7 @@ async fn an_object_outside_partition_and_capture_directories_is_a_global_orphan(
         .await
         .unwrap();
 
-    let report = verify_archive(
-        &archive.store,
-        &VerifyRequest::default(),
-        &archive.trusted(),
-    )
-    .await
-    .unwrap();
+    let report = archive.verify().await;
     check!(!report.ok());
     check!(report.global_orphan_objects == vec!["archive/unclaimed.bin"]);
 }
@@ -402,13 +390,7 @@ async fn deep_verify_grades_every_tamper() {
 #[tokio::test]
 async fn verify_reports_a_clean_archive_in_full() {
     let archive = Archive::build(&[3]).await;
-    let report = verify_archive(
-        &archive.store,
-        &VerifyRequest::default(),
-        &archive.trusted(),
-    )
-    .await
-    .unwrap();
+    let report = archive.verify().await;
 
     let last = &archive.segments[2].manifest.body;
     let expected = ArchiveVerifyReport {

@@ -31,9 +31,7 @@ use crate::{
     broker::BrokerHandle,
     codes,
     coordinator::unified::actor::GroupActorMessage,
-    test_support::{
-        DenyAll, peer, principal, request_context, start_broker_with_authorizer_no_audit,
-    },
+    test_support::{DenyAll, peer, principal, request_context},
 };
 
 /// An id that no topic in these tests has.
@@ -90,17 +88,6 @@ struct Case {
 /// The actual or the expected outcome of one [`Case`]: the response, and the
 /// `(topic, partition)` keys that the group holds committed offsets for.
 type Outcome = (i16, TopicRef, OffsetCommitResponse, Vec<(String, i32)>);
-
-/// Start a broker under `authorizer` whose group coordinator serves
-/// `__consumer_offsets`, which no broker creates at startup.
-async fn start(authorizer: Arc<dyn Authorizer>) -> (BrokerHandle, tempfile::TempDir) {
-    let (broker, dir) = start_broker_with_authorizer_no_audit(
-        crate::test_support::controller_peer_allowed(authorizer),
-    )
-    .await;
-    broker.wait_until_group_coordinator_ready().await;
-    (broker, dir)
-}
 
 async fn create_known_topic(broker: &BrokerHandle) -> WireUuid {
     let client = krabka_client_core::Client::builder()
@@ -238,7 +225,7 @@ async fn drive(
 }
 
 async fn run_table(authorizer: Arc<dyn Authorizer>, cases: &[Case]) {
-    let (broker, _dir) = start(authorizer).await;
+    let (broker, _dir) = crate::test_support::start_group_broker_no_audit(authorizer).await;
     // A table that names no existing topic can run under an authorizer that
     // refuses `CreateTopics`.
     let needs_known = cases
@@ -363,7 +350,8 @@ async fn group_authorization_answers_before_topic_resolution() {
 async fn refused_rows_precede_the_committed_row() {
     const VERSION: i16 = 10;
     const GROUP: &str = "resolution-mixed";
-    let (broker, _dir) = start(Arc::new(AllowAllAuthorizer)).await;
+    let (broker, _dir) =
+        crate::test_support::start_group_broker_no_audit(Arc::new(AllowAllAuthorizer)).await;
     let known_id = create_known_topic(&broker).await;
     let row = |topic_id| OffsetCommitRequestTopic {
         topic_id,
@@ -425,7 +413,8 @@ async fn refused_rows_precede_the_committed_row() {
 #[tokio::test]
 async fn unknown_partition_answers_on_its_own_row() {
     const MISSING_PARTITION: i32 = 7;
-    let (broker, _dir) = start(Arc::new(AllowAllAuthorizer)).await;
+    let (broker, _dir) =
+        crate::test_support::start_group_broker_no_audit(Arc::new(AllowAllAuthorizer)).await;
     let known_id = create_known_topic(&broker).await;
     let shared = broker.broker_arc_for_test();
     let user = principal("consumer");

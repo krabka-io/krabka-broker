@@ -4,7 +4,7 @@
 //! openraft-leader check, and the `submit_change` of an accepted ISR proposal
 //! are exercised together, which is why they are kept out of the module root.
 
-use std::{net::SocketAddr, sync::Arc};
+use std::sync::Arc;
 
 use assert2::assert;
 use krabka_protocol::owned::{
@@ -16,7 +16,7 @@ use super::{
     test_support::{request_with_topics, seed_partition, wire_topic_id},
     *,
 };
-use crate::test_support::{DenyAll, start_broker_with_authorizer as start_broker};
+use crate::test_support::{DenyAll, start_broker_with_authorizer as start_broker, test_ctx};
 
 crate::test_support::context_helper!(client_id = "broker-client");
 
@@ -25,9 +25,7 @@ async fn handle_denies_cluster_action_for_whole_request() {
     let version = alter_partition_response::MAX_VERSION;
     let (broker_handle, _dir) = start_broker(Arc::new(DenyAll)).await;
     let broker = broker_handle.broker_arc_for_test();
-    let principal = crate::test_support::principal("replica");
-    let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
-    let ctx = test_context(&principal, &peer);
+    test_ctx!(ctx, "replica");
     let req = request_with_topics(&broker, Vec::new());
 
     let resp = super::handle(&broker, req, version, &ctx)
@@ -50,9 +48,7 @@ async fn leader_accepts_empty_alter_partition_request() {
     let (broker_handle, _dir) = start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
     let broker = broker_handle.broker_arc_for_test();
     crate::test_support::wait_for_controller_leader(&broker).await;
-    let principal = crate::test_support::principal("replica");
-    let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
-    let ctx = test_context(&principal, &peer);
+    test_ctx!(ctx, "replica");
     let req = request_with_topics(&broker, Vec::new());
 
     let resp = super::handle(&broker, req, version, &ctx)
@@ -76,9 +72,7 @@ async fn handle_returns_topic_partition_response_and_commits_isr_change() {
     let broker = broker_handle.broker_arc_for_test();
     crate::test_support::wait_for_controller_leader(&broker).await;
     seed_partition(&broker).await;
-    let principal = crate::test_support::principal("replica");
-    let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
-    let ctx = test_context(&principal, &peer);
+    test_ctx!(ctx, "replica");
     let req = request_with_topics(
         &broker,
         vec![ReqTopicData {
@@ -156,9 +150,7 @@ async fn topic_row_error_follows_version_and_topic_id() {
     let broker = broker_handle.broker_arc_for_test();
     crate::test_support::wait_for_controller_leader(&broker).await;
     seed_partition(&broker).await;
-    let principal = crate::test_support::principal("replica");
-    let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
-    let ctx = test_context(&principal, &peer);
+    test_ctx!(ctx, "replica");
 
     let mut actual = Vec::with_capacity(cases.len());
     let mut expected = Vec::with_capacity(cases.len());
@@ -253,9 +245,7 @@ async fn a_stale_sender_broker_epoch_refuses_the_whole_request() {
     let broker = broker_handle.broker_arc_for_test();
     crate::test_support::wait_for_controller_leader(&broker).await;
     seed_partition(&broker).await;
-    let principal = crate::test_support::principal("replica");
-    let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
-    let ctx = test_context(&principal, &peer);
+    test_ctx!(ctx, "replica");
     let current = request_with_topics(&broker, Vec::new()).broker_epoch;
 
     for (broker_id, broker_epoch) in [(1, current + 1), (1, -1), (99, current)] {

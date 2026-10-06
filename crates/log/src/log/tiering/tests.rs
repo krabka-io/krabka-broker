@@ -9,7 +9,9 @@ use tempfile::tempdir;
 use super::*;
 use crate::{
     config::LogConfig,
-    log::test_support::{rolled_log, sample_batch, sample_batch_with_epoch, test_log},
+    log::test_support::{
+        rolled_log, rolling_test_log, sample_batch, sample_batch_with_epoch, test_log,
+    },
 };
 
 /// An epoch covers `[start_offset, next.start_offset)`, so one ending
@@ -55,14 +57,7 @@ fn an_epoch_ending_where_the_range_begins_does_not_overlap_it() {
 #[test]
 fn tiered_local_delete_removes_only_deleted_segment_stamp_indexes() {
     let dir = tempdir().unwrap();
-    let mut log = Log::open(
-        dir.path(),
-        LogConfig {
-            segment_size: bytes(1),
-            ..LogConfig::default()
-        },
-    )
-    .unwrap();
+    let mut log = rolling_test_log(dir.path());
     log.set_stamp_source(std::sync::Arc::new(
         crate::stamp_source::MonotonicStampSource::new(10, 1),
     ))

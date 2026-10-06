@@ -27,14 +27,13 @@
 //! `KafkaRaftClient.hasValidClusterId` returns true for a null cluster id. The
 //! add and remove paths already read it that way.
 
+use std::ops::ControlFlow;
+
 use bytes::Bytes;
 use krabka_metadata::{Voter, VoterEndpoint};
-use krabka_protocol::{
-    Decode,
-    owned::{
-        update_raft_voter_request::UpdateRaftVoterRequest,
-        update_raft_voter_response::UpdateRaftVoterResponse,
-    },
+use krabka_protocol::owned::{
+    update_raft_voter_request::UpdateRaftVoterRequest,
+    update_raft_voter_response::UpdateRaftVoterResponse,
 };
 use krabka_raft::{reconfig::UpdateVoter, voter_requests};
 
@@ -42,44 +41,34 @@ use crate::{
     broker::Broker,
     codes,
     error::BrokerError,
-    handlers::{ErrorCodeResponse as _, cluster_action_denied},
+    handlers::{
+        ErrorCodeResponse as _, cluster_action_denied,
+        raft_voter::{Admitted, Refusals, prelude},
+    },
 };
 
-#[tracing::instrument(
-    name = "handle_update_raft_voter",
-    level = "info",
-    skip_all,
-    fields(api = "UpdateRaftVoter", version, req_bytes = req_bytes.len()),
-    err,
-)]
 pub(crate) async fn handle(
     broker: &Broker,
     version: i16,
     req_bytes: &[u8],
     ctx: &crate::handlers::RequestContext<'_>,
 ) -> Result<Bytes, BrokerError> {
-    let mut cur: &[u8] = req_bytes;
-    let req = UpdateRaftVoterRequest::decode(&mut cur, version)?;
-
-    let image = broker.controller.current_image();
-
-    if cluster_action_denied(broker.config.authorizer.as_ref(), &image, ctx) {
-        return refuse(version, codes::CLUSTER_AUTHORIZATION_FAILED);
-    }
-
-    // Broker-only observer forward to the active controller quorum (#392)
-    if let Some(forwarded) = broker
-        .controller
-        .forward_raw(82, version, Bytes::copy_from_slice(req_bytes))
-        .await
+    let Admitted { req, image, quorum } = match prelude::<UpdateRaftVoterRequest, _>(
+        broker,
+        version,
+        req_bytes,
+        ctx,
+        82,
+        cluster_action_denied,
+        Refusals {
+            denied: UpdateRaftVoterResponse::error(codes::CLUSTER_AUTHORIZATION_FAILED),
+            not_leader: UpdateRaftVoterResponse::error(voter_requests::NOT_LEADER_OR_FOLLOWER),
+        },
+    )
+    .await?
     {
-        return forwarded.map_err(BrokerError::from);
-    }
-
-    // The request checks, their order and their codes are the controller
-    // listener's own (`krabka_raft::voter_requests`).
-    let Some(quorum) = broker.controller.quorum_snapshot() else {
-        return refuse(version, voter_requests::NOT_LEADER_OR_FOLLOWER);
+        ControlFlow::Break(answer) => return Ok(answer),
+        ControlFlow::Continue(admitted) => admitted,
     };
     let error_code = if let Some(code) =
         voter_requests::update_voter_refusal(&req, &image.cluster_id().to_string(), &quorum)
@@ -127,17 +116,13 @@ pub(crate) async fn handle(
     )
 }
 
-/// Encodes a response that carries nothing but `error_code`.
-fn refuse(version: i16, error_code: i16) -> Result<Bytes, BrokerError> {
-    crate::handlers::encode_response(&UpdateRaftVoterResponse::error(error_code), version)
-}
-
 #[cfg(test)]
 mod tests {
-    use std::{net::SocketAddr, sync::Arc};
+    use std::sync::Arc;
 
     use assert2::assert;
     use krabka_protocol::{
+        Decode as _,
         owned::update_raft_voter_request::{KRaftVersionFeature, Listener},
         primitives::uuid::Uuid as ProtoUuid,
     };
@@ -175,7 +160,7 @@ mod tests {
     );
 
     use super::*;
-    use crate::test_support::start_broker_with_authorizer as start_broker;
+    use crate::test_support::{start_broker_with_authorizer as start_broker, test_ctx};
 
     /// Decode and encode round-trip at the min and max versions.
     #[test]
@@ -202,9 +187,7 @@ mod tests {
         let version = 0;
         let (broker_handle, _dir) = start_broker(Arc::new(DenyAll)).await;
         let broker = broker_handle.broker_arc_for_test();
-        let principal = crate::test_support::principal("alice");
-        let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
-        let ctx = test_context(&principal, &peer);
+        test_ctx!(ctx, "alice");
         let req_bytes = encode_request(&request(2), version);
 
         let resp = super::handle(&broker, version, &req_bytes, &ctx)
@@ -222,9 +205,7 @@ mod tests {
         let (broker_handle, _dir) =
             start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
         let broker = broker_handle.broker_arc_for_test();
-        let principal = crate::test_support::principal("admin");
-        let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
-        let ctx = test_context(&principal, &peer);
+        test_ctx!(ctx, "admin");
         let mut request = request(-7);
         request.cluster_id = Some(broker.controller.current_image().cluster_id().to_string());
         request.current_leader_epoch =
@@ -249,9 +230,7 @@ mod tests {
         let (broker_handle, _dir) =
             start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
         let broker = broker_handle.broker_arc_for_test();
-        let principal = crate::test_support::principal("admin");
-        let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
-        let ctx = test_context(&principal, &peer);
+        test_ctx!(ctx, "admin");
         let cluster_id = broker.controller.current_image().cluster_id().to_string();
         let epoch = i32::try_from(broker.controller.quorum_state().current_term)
             .expect("the test quorum's term fits an i32");
@@ -333,9 +312,7 @@ mod tests {
         let (broker_handle, _dir) =
             start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
         let broker = broker_handle.broker_arc_for_test();
-        let principal = crate::test_support::principal("admin");
-        let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
-        let ctx = test_context(&principal, &peer);
+        test_ctx!(ctx, "admin");
         let mut named = request(2);
         // Kafka's `UpdateVoterHandler` checks the voter's kraft.version range
         // against the cluster's before it looks the voter up, so the range
@@ -418,9 +395,7 @@ mod tests {
         for (api_name, api, grant, want_cluster_authorization_failed) in cases {
             let (broker_handle, _dir) = start_broker(Arc::new(GrantOnly(grant))).await;
             let broker = broker_handle.broker_arc_for_test();
-            let principal = crate::test_support::principal("alice");
-            let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
-            let ctx = test_context(&principal, &peer);
+            test_ctx!(ctx, "alice");
 
             let error_code = match api {
                 Api::Update => {
@@ -486,9 +461,7 @@ mod tests {
         let (broker_handle, _dir) =
             start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
         let broker = broker_handle.broker_arc_for_test();
-        let principal = crate::test_support::principal("admin");
-        let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
-        let ctx = test_context(&principal, &peer);
+        test_ctx!(ctx, "admin");
         let mut request = request(2);
         // The range covers the cluster's kraft.version, so Kafka's handler
         // reaches the voter lookup.

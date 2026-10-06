@@ -4,8 +4,6 @@
 //! they carry — live here with `manifest_head`, which computes the head one
 //! manifest body produces from the head that preceded it.
 
-use std::fmt;
-
 use derive_more::{Display, From, Into};
 use krabka_audit::chain::{GENESIS_HEAD, chain_hash};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -61,19 +59,14 @@ pub struct EpochId(pub Uuid);
 /// Head of a partition's manifest hash chain.
 ///
 /// Serialises as a lowercase hex string.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, derive_more::Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, derive_more::Debug, Display)]
+#[display("{}", hex::encode(_0))]
 #[debug("ChainHead({})", hex::encode(_0))]
 pub struct ChainHead(pub [u8; 32]);
 
 impl ChainHead {
     /// The head before a chain writes its first manifest.
     pub const GENESIS: Self = Self(GENESIS_HEAD);
-}
-
-impl fmt::Display for ChainHead {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&hex::encode(self.0))
-    }
 }
 
 impl Serialize for ChainHead {

@@ -5,108 +5,39 @@
 //! per proposal, so the consumed proposals and the leader changes gather here
 //! and reach the metadata log as a single raft append.
 
-use std::collections::HashSet;
+use std::ops::{Deref, DerefMut};
 
-use krabka_audit::{AuditError, PrivilegedPhase};
-use krabka_metadata::{BreakGlassAction, MetadataRecord};
-use uuid::Uuid;
+use krabka_metadata::BreakGlassAction;
 
-use super::unclean_gate::consumed_proposal_id;
-use crate::{
-    break_glass::handlers::audit::{GatedTransition, audit_transition, require_transition},
-    broker::Broker,
-    handlers::RequestContext,
-};
+use crate::break_glass::handlers::batch::GatedBatch;
 
 /// What one `ElectLeaders` request accumulates across its partitions.
 ///
-/// `records` is the single raft append that carries every consumed proposal
-/// beside every leader change the request makes. That one append is why a
-/// proposal lives in the metadata log at all: the approval and the transition
-/// it authorizes commit together, so a crash between them cannot spend one
-/// approval twice.
-#[derive(Default)]
-pub(super) struct ElectionBatch {
-    /// The consumed proposals first, then the partition records.
-    pub(super) records: Vec<MetadataRecord>,
-    /// The proposals this request already spent. One approved proposal on a
-    /// bare topic name covers every partition of that topic, so a request that
-    /// elects ten of them reads one proposal ten times and spends it once.
-    pub(super) spent: HashSet<Uuid>,
-    /// The transitions waiting on the append, to audit once it commits.
-    pub(super) applied: Vec<(String, Option<Uuid>)>,
+/// The [`GatedBatch`] it derefs to is the single raft append that carries
+/// every consumed proposal beside every leader change the request makes, and
+/// the unclean elections whose `Applied` events wait on that append.
+pub(super) struct ElectionBatch(GatedBatch);
+
+impl Default for ElectionBatch {
+    fn default() -> Self {
+        Self(GatedBatch::new(
+            BreakGlassAction::UncleanElectLeaders,
+            "unclean leader election admitted",
+            "unclean leader election committed",
+        ))
+    }
 }
 
-impl ElectionBatch {
-    /// Take a consumed proposal into the append, and answer the proposal it
-    /// names.
-    ///
-    /// The record goes in ahead of every partition record, and only the first
-    /// time this request sees the proposal.
-    pub(super) fn spend(&mut self, consumed: Option<MetadataRecord>) -> Option<Uuid> {
-        let consumed = consumed?;
-        let proposal_id = consumed_proposal_id(&consumed)?;
-        if self.spent.insert(proposal_id) {
-            self.records.insert(0, consumed);
-        }
-        Some(proposal_id)
-    }
+impl Deref for ElectionBatch {
+    type Target = GatedBatch;
 
-    /// Durably admit every queued unclean election before the raft append.
-    pub(super) async fn require_audit(
-        &self,
-        broker: &Broker,
-        ctx: &RequestContext<'_>,
-    ) -> Result<(), AuditError> {
-        for (target, proposal_id) in &self.applied {
-            require_transition(
-                &broker.audit_log,
-                &broker.config.break_glass,
-                ctx,
-                &GatedTransition {
-                    action: BreakGlassAction::UncleanElectLeaders,
-                    target,
-                    phase: PrivilegedPhase::Applied,
-                    proposal_id: *proposal_id,
-                    reason: "unclean leader election admitted",
-                },
-            )
-            .await?;
-        }
-        Ok(())
+    fn deref(&self) -> &GatedBatch {
+        &self.0
     }
+}
 
-    /// Audit every transition this append carried.
-    ///
-    /// `failure` is the submit error when the append did not commit, and the
-    /// event then records a refusal with that text rather than an application
-    /// that never happened.
-    pub(super) fn audit_applied(
-        &self,
-        broker: &Broker,
-        ctx: &RequestContext<'_>,
-        failure: Option<&str>,
-    ) {
-        for (target, proposal_id) in &self.applied {
-            let (phase, reason) = match failure {
-                None => (
-                    PrivilegedPhase::Applied,
-                    "unclean leader election committed",
-                ),
-                Some(error) => (PrivilegedPhase::Refused, error),
-            };
-            audit_transition(
-                &broker.audit_log,
-                &broker.config.break_glass,
-                ctx,
-                &GatedTransition {
-                    action: BreakGlassAction::UncleanElectLeaders,
-                    target,
-                    phase,
-                    proposal_id: *proposal_id,
-                    reason,
-                },
-            );
-        }
+impl DerefMut for ElectionBatch {
+    fn deref_mut(&mut self) -> &mut GatedBatch {
+        &mut self.0
     }
 }

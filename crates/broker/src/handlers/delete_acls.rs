@@ -84,13 +84,6 @@ fn match_filter<'a>(
     Some(matched)
 }
 
-#[tracing::instrument(
-    name = "handle_delete_acls",
-    level = "info",
-    skip_all,
-    fields(api = "DeleteAcls"),
-    err
-)]
 pub(crate) async fn handle(
     broker: &Broker,
     req: DeleteAclsRequest,

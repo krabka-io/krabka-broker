@@ -49,13 +49,6 @@ use crate::{
 /// `COORDINATOR_LOAD_IN_PROGRESS`.
 const INIT_LOAD_WAIT: std::time::Duration = std::time::Duration::from_secs(1);
 
-#[tracing::instrument(
-    name = "handle_init_producer_id",
-    level = "info",
-    skip_all,
-    fields(api = "InitProducerId", version),
-    err
-)]
 pub(crate) async fn handle(
     broker: &Broker,
     req: InitProducerIdRequest,

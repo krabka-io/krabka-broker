@@ -24,7 +24,6 @@ use krabka_protocol::owned::{
 };
 
 use crate::{
-    authorizer::{AuthorizationResult, authorize_topics},
     broker::Broker,
     codes,
     error::BrokerError,
@@ -87,13 +86,6 @@ pub(crate) fn transaction_state_row(tid: &str, entry: Option<&TxnEntry>) -> Tran
     }
 }
 
-#[tracing::instrument(
-    name = "handle_describe_transactions",
-    level = "info",
-    skip_all,
-    fields(api = "DescribeTransactions", version),
-    err
-)]
 pub(crate) async fn handle(
     broker: &Broker,
     req: DescribeTransactionsRequest,
@@ -164,20 +156,14 @@ pub(crate) async fn handle(
         // Kafka's `handleDescribeTransactionsRequest` removes every topic the
         // principal may not `Describe`, even though the tid itself is
         // authorized. Batch-check the row's topics in one pass.
-        let topic_decisions: std::collections::HashMap<String, AuthorizationResult> =
-            authorize_topics(
-                broker.config.authorizer.as_ref(),
-                &*image,
-                ctx.principal,
-                ctx.peer,
-                AclOperation::Describe,
-                row.topics.iter().map(|t| t.topic.as_str()),
-            )
-            .into_iter()
-            .map(|(topic, decision)| (topic.to_owned(), decision))
-            .collect();
-        row.topics
-            .retain(|t| topic_decisions.get(&t.topic).copied() == Some(AuthorizationResult::Allow));
+        let allowed = crate::handlers::allowed_topics(
+            broker.config.authorizer.as_ref(),
+            &image,
+            ctx,
+            AclOperation::Describe,
+            row.topics.iter().map(|t| t.topic.as_str()),
+        );
+        row.topics.retain(|t| allowed.contains(&t.topic));
 
         rows.push(row);
     }
@@ -197,7 +183,9 @@ mod tests {
 
     use super::*;
     use crate::{
-        test_support::{peer, principal, start_broker_with_authorizer_no_audit as start_broker},
+        test_support::{
+            peer, principal, start_broker_with_authorizer_no_audit as start_broker, test_ctx,
+        },
         txn::state::TopicPartition,
     };
 
@@ -254,9 +242,7 @@ mod tests {
             start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
         let broker = broker_handle.broker_arc_for_test();
         let coordinator = &broker.txn_coordinator;
-        let principal = principal("admin");
-        let peer = peer();
-        let context = test_context(&principal, &peer);
+        test_ctx!(context, "admin");
 
         // Two ids this broker coordinates, and one it does not.
         let (ongoing_id, dead_id) = ("tx-ongoing", "tx-dead");

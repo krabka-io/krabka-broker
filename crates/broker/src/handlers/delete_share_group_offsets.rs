@@ -31,19 +31,14 @@ use crate::{
         share::actor::{DeleteTopic, DeleteTopicOutcome, ShareGroupActorMessage},
     },
     error::BrokerError,
+    handlers::ErrorResponse as _,
+    task_util::{AskError, ask},
 };
 
 /// Kafka's message for `TOPIC_AUTHORIZATION_FAILED`, which
 /// `handleDeleteShareGroupOffsetsRequest` puts on every denied topic row.
 const TOPIC_AUTHORIZATION_FAILED_MESSAGE: &str = "Topic authorization failed.";
 
-#[tracing::instrument(
-    name = "handle_delete_share_group_offsets",
-    level = "info",
-    skip_all,
-    fields(api = "DeleteShareGroupOffsets", version),
-    err
-)]
 pub(crate) async fn handle(
     broker: &Broker,
     req: DeleteShareGroupOffsetsRequest,
@@ -156,21 +151,20 @@ pub(crate) async fn handle(
         .map(|r| (r.topic_name.clone(), r.topic_id))
         .collect();
 
-    let (tx, rx) = tokio::sync::oneshot::channel();
-    if actor
-        .tx
-        .send(ShareGroupActorMessage::DeleteOffsets {
-            requests: actor_requests,
-            reply: tx,
-        })
-        .await
-        .is_err()
-    {
-        return Ok(top_level(codes::COORDINATOR_NOT_AVAILABLE, None));
-    }
-    let actor_result = rx
-        .await
-        .map_err(|_| BrokerError::Share("share-group delete actor stopped".into()))?;
+    let asked = ask(&actor.tx, |reply| ShareGroupActorMessage::DeleteOffsets {
+        requests: actor_requests,
+        reply,
+    })
+    .await;
+    let actor_result = match asked {
+        Ok(actor_result) => actor_result,
+        Err(AskError::Closed) => return Ok(top_level(codes::COORDINATOR_NOT_AVAILABLE, None)),
+        Err(AskError::Dropped) => {
+            return Err(BrokerError::Share(
+                "share-group delete actor stopped".into(),
+            ));
+        }
+    };
     let outcomes = match actor_result {
         Ok(outcomes) => outcomes,
         Err(error_code) => return Ok(top_level(error_code, None)),
@@ -265,18 +259,15 @@ fn kafka_message(error_code: i16) -> Option<&'static str> {
 /// A top-level error response. Kafka's `getErrorResponse` sets the message
 /// to `message`, or to the error's default message.
 fn top_level(error_code: i16, message: Option<String>) -> DeleteShareGroupOffsetsResponse {
-    DeleteShareGroupOffsetsResponse {
-        throttle_time_ms: 0,
+    DeleteShareGroupOffsetsResponse::error(
         error_code,
-        error_message: message.or_else(|| kafka_message(error_code).map(str::to_owned)),
-        responses: Vec::new(),
-        ..Default::default()
-    }
+        message.or_else(|| kafka_message(error_code).map(str::to_owned)),
+    )
 }
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::HashSet, net::SocketAddr, sync::Arc};
+    use std::{collections::HashSet, sync::Arc};
 
     use assert2::assert;
     use krabka_metadata::{AclOperation, ResourceType};
@@ -294,7 +285,6 @@ mod tests {
         },
         primitives::uuid::Uuid,
     };
-    use krabka_security::Principal;
 
     use super::{TOPIC_AUTHORIZATION_FAILED_MESSAGE, handle, top_level};
     use crate::{
@@ -307,7 +297,7 @@ mod tests {
                 persistence::{ShareGroupStatePartitionMetadataValue, TopicPartitionsInfo},
             },
         },
-        test_support::DenyAll,
+        test_support::{DenyAll, test_ctx},
     };
 
     /// Denies `Read` on the named topics and allows everything else, so group
@@ -348,26 +338,6 @@ mod tests {
     }
 
     crate::test_support::context_helper!(client_id = "admin-client");
-
-    async fn start_broker(
-        authorizer: Arc<dyn Authorizer>,
-        share_enabled: bool,
-    ) -> (crate::broker::BrokerHandle, tempfile::TempDir) {
-        let (handle, dir) = crate::test_support::start_broker_with(|cfg| {
-            cfg.authorizer = authorizer;
-        })
-        .await;
-        handle.wait_until_group_coordinator_ready().await;
-        handle.wait_until_share_coordinator_ready().await;
-        if !share_enabled {
-            crate::test_support::finalize_share_version(&handle.broker_arc_for_test(), 0).await;
-        }
-        (handle, dir)
-    }
-
-    fn principal() -> Principal {
-        crate::test_support::principal("alice")
-    }
 
     async fn create_topics(
         broker_handle: &crate::broker::BrokerHandle,
@@ -459,11 +429,10 @@ mod tests {
             ),
         ];
         for (case, authorizer, share_enabled, topics, expected) in cases {
-            let (broker_handle, _dir) = start_broker(authorizer, share_enabled).await;
+            let (broker_handle, _dir) =
+                crate::test_support::start_share_broker(authorizer, share_enabled).await;
             let broker = broker_handle.broker_arc_for_test();
-            let principal = principal();
-            let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
-            let ctx = test_context(&principal, &peer);
+            test_ctx!(ctx, "alice");
             let resp = handle(&broker, request("g1", &topics), version, &ctx)
                 .await
                 .expect("handle");
@@ -480,12 +449,13 @@ mod tests {
     /// Kafka's message.
     #[tokio::test]
     async fn handle_refuses_what_kafka_refuses() {
-        let (broker_handle, _dir) =
-            start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer), true).await;
+        let (broker_handle, _dir) = crate::test_support::start_share_broker(
+            Arc::new(crate::authorizer::AllowAllAuthorizer),
+            true,
+        )
+        .await;
         let broker = broker_handle.broker_arc_for_test();
-        let principal = principal();
-        let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
-        let ctx = test_context(&principal, &peer);
+        test_ctx!(ctx, "alice");
         create_topics(&broker_handle, &broker, &["t"], &ctx).await;
         let coordinator = &broker.group_coordinator;
         let _classic = coordinator.get_or_create_classic("classic");
@@ -554,12 +524,13 @@ mod tests {
 
     #[tokio::test]
     async fn delete_fences_only_requested_state_and_retry_is_exact() {
-        let (broker_handle, _dir) =
-            start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer), true).await;
+        let (broker_handle, _dir) = crate::test_support::start_share_broker(
+            Arc::new(crate::authorizer::AllowAllAuthorizer),
+            true,
+        )
+        .await;
         let broker = broker_handle.broker_arc_for_test();
-        let principal = principal();
-        let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
-        let ctx = test_context(&principal, &peer);
+        test_ctx!(ctx, "alice");
         create_topics(
             &broker_handle,
             &broker,
@@ -689,12 +660,13 @@ mod tests {
 
         for (case, denied_names) in cases {
             let denied: HashSet<&'static str> = denied_names.iter().copied().collect();
-            let (broker_handle, _dir) =
-                start_broker(Arc::new(DenyReadOnTopics(denied.clone())), true).await;
+            let (broker_handle, _dir) = crate::test_support::start_share_broker(
+                Arc::new(DenyReadOnTopics(denied.clone())),
+                true,
+            )
+            .await;
             let broker = broker_handle.broker_arc_for_test();
-            let principal = principal();
-            let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
-            let ctx = test_context(&principal, &peer);
+            test_ctx!(ctx, "alice");
             create_topics(
                 &broker_handle,
                 &broker,

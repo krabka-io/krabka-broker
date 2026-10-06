@@ -8,8 +8,6 @@
 //! builds are one contract: the parser is the only thing that constructs the
 //! type, and every rejection an operator can see is written here.
 
-use std::fmt;
-
 use base64::Engine as _;
 use krabka_ids::{Offset, ProducerId};
 use krabka_metadata::NodeId;
@@ -20,18 +18,13 @@ use uuid::Uuid;
 const MAX_TOPIC_NAME_LEN: usize = 249;
 
 /// A topic partition an operator names in a bound.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, derive_more::Display)]
+#[display("{topic}-{partition}")]
 pub struct PartitionRef {
     /// Topic name.
     pub topic: String,
     /// Partition index.
     pub partition: i32,
-}
-
-impl fmt::Display for PartitionRef {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}-{}", self.topic, self.partition)
-    }
 }
 
 /// One `--to-offset` bound: the last offset the restore keeps in a partition.

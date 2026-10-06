@@ -41,7 +41,7 @@ use crate::{
     broker::{Broker, BrokerHandle},
     codes,
     error::BrokerError,
-    test_support::{decode_response, encode_request},
+    test_support::{decode_response, encode_request, peer},
 };
 
 /// The longest string a coordinator record carries.
@@ -142,7 +142,7 @@ impl Env {
             broker,
             _dir: dir,
             principal: crate::test_support::principal("ANONYMOUS"),
-            peer: SocketAddr::from(([127, 0, 0, 1], 9092)),
+            peer: peer(),
         }
     }
 

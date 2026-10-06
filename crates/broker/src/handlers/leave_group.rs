@@ -14,7 +14,6 @@ use krabka_protocol::owned::{
     leave_group_request::LeaveGroupRequest,
     leave_group_response::{LeaveGroupResponse, MemberResponse},
 };
-use tokio::sync::oneshot;
 
 use crate::{
     broker::Broker,
@@ -22,18 +21,12 @@ use crate::{
     coordinator::unified::actor::{GroupActorMessage, LeaveResult},
     error::BrokerError,
     handlers::{ErrorCodeResponse as _, group_read_denied},
+    task_util::{AskError, ask},
 };
 
 #[cfg(test)]
 mod tests;
 
-#[tracing::instrument(
-    name = "handle_leave_group",
-    level = "info",
-    skip_all,
-    fields(api = "LeaveGroup", version),
-    err
-)]
 pub(crate) async fn handle(
     broker: &Broker,
     req: LeaveGroupRequest,
@@ -68,19 +61,18 @@ pub(crate) async fn handle(
     let result = match coordinator.find(&req.group_id) {
         None => unknown_group_result(&req, version),
         Some(handle) => {
-            let (tx, rx) = oneshot::channel();
-            let message = GroupActorMessage::ClassicLeave {
+            let asked = ask(&handle.tx, |reply| GroupActorMessage::ClassicLeave {
                 req: req.clone(),
                 version,
-                reply: tx,
-            };
-            if handle.tx.send(message).await.is_err() {
-                LeaveResult {
+                reply,
+            })
+            .await;
+            match asked {
+                Err(AskError::Closed) => LeaveResult {
                     error_code: codes::COORDINATOR_LOAD_IN_PROGRESS,
                     members: Vec::new(),
-                }
-            } else {
-                match rx.await.unwrap_or_default() {
+                },
+                asked => match asked.unwrap_or_default() {
                     // The actor answers a group of a kind the classic leave
                     // cannot reach with `UNKNOWN_MEMBER_ID`, which Kafka
                     // shapes exactly as a missing group.
@@ -91,7 +83,7 @@ pub(crate) async fn handle(
                         unknown_group_result(&req, version)
                     }
                     result => result,
-                }
+                },
             }
         }
     };

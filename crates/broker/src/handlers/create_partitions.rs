@@ -49,13 +49,6 @@ use crate::{
     site_placement::PlacementRng,
 };
 
-#[tracing::instrument(
-    name = "handle_create_partitions",
-    level = "info",
-    skip_all,
-    fields(api = "CreatePartitions", version),
-    err
-)]
 pub(crate) async fn handle(
     broker: &Broker,
     req: CreatePartitionsRequest,

@@ -6,7 +6,6 @@ use krabka_protocol::owned::{
     consumer_group_heartbeat_request::ConsumerGroupHeartbeatRequest,
     consumer_group_heartbeat_response::ConsumerGroupHeartbeatResponse,
 };
-use tokio::sync::oneshot;
 
 use crate::{
     broker::Broker,
@@ -17,15 +16,9 @@ use crate::{
     },
     error::BrokerError,
     handlers::{ErrorResponse as _, group_read_denied, group_version_disabled},
+    task_util::{AskError, ask},
 };
 
-#[tracing::instrument(
-    name = "handle_consumer_group_heartbeat",
-    level = "info",
-    skip_all,
-    fields(api = "ConsumerGroupHeartbeat", version),
-    err
-)]
 pub(crate) async fn handle(
     broker: &Broker,
     req: ConsumerGroupHeartbeatRequest,
@@ -125,25 +118,19 @@ pub(crate) async fn handle(
     // arm (replying `GROUP_ID_NOT_FOUND`), which is where the per-group kind
     // lock now lives.
     let handle = coordinator.get_or_create_group(&req.group_id, GroupKindTag::Consumer);
-    let (tx, rx) = oneshot::channel();
-    if handle
-        .tx
-        .send(GroupActorMessage::Heartbeat {
-            request: req,
-            client_id: ctx.client_id.unwrap_or_default().to_owned(),
-            client_host: ctx.client_host(),
-            regex_resolver,
-            reply: tx,
-        })
-        .await
-        .is_err()
-    {
-        return Ok(reply(codes::COORDINATOR_LOAD_IN_PROGRESS, None));
-    }
-    let resp = rx.await.unwrap_or_else(|_| {
-        ConsumerGroupHeartbeatResponse::error(codes::UNKNOWN_SERVER_ERROR, None)
-    });
-    Ok(resp)
+    let asked = ask(&handle.tx, |reply| GroupActorMessage::Heartbeat {
+        request: req,
+        client_id: ctx.client_id.unwrap_or_default().to_owned(),
+        client_host: ctx.client_host(),
+        regex_resolver,
+        reply,
+    })
+    .await;
+    Ok(match asked {
+        Ok(resp) => resp,
+        Err(AskError::Closed) => reply(codes::COORDINATOR_LOAD_IN_PROGRESS, None),
+        Err(AskError::Dropped) => reply(codes::UNKNOWN_SERVER_ERROR, None),
+    })
 }
 
 /// The early refusal: `code` carrying `message`.
@@ -264,19 +251,6 @@ mod tests {
 
     crate::test_support::context_helper!(client_id = "consumer-group-heartbeat-test");
 
-    /// Start a broker with `authorizer` and wait until its group coordinator
-    /// serves `__consumer_offsets`.
-    async fn start_broker(
-        authorizer: Arc<dyn crate::authorizer::Authorizer>,
-    ) -> (crate::broker::BrokerHandle, tempfile::TempDir) {
-        let (handle, dir) = crate::test_support::start_broker_with_authorizer(
-            crate::test_support::controller_peer_allowed(authorizer),
-        )
-        .await;
-        handle.wait_until_group_coordinator_ready().await;
-        (handle, dir)
-    }
-
     fn image_with_group_version(level: i16) -> MetadataImage {
         let mut image = MetadataImage::new(uuid::Uuid::nil());
         image.apply(&MetadataRecord::V1FeatureLevel(FeatureLevelRecord {
@@ -284,10 +258,6 @@ mod tests {
             level,
         }));
         image
-    }
-
-    fn anonymous_principal() -> krabka_security::Principal {
-        crate::test_support::principal("ANONYMOUS")
     }
 
     #[test]
@@ -480,6 +450,7 @@ mod tests {
     }
 
     use super::*;
+    use crate::test_support::{peer, principal, test_ctx};
 
     #[test]
     fn group_read_denied_yields_group_authorization_failed() {
@@ -491,7 +462,7 @@ mod tests {
             crate::authorizer::SimpleAclAuthorizer::new(std::collections::HashSet::new());
         let image = krabka_metadata::MetadataImage::new(uuid::Uuid::nil());
         let principal = crate::test_support::principal("ANONYMOUS");
-        let peer = std::net::SocketAddr::from(([127, 0, 0, 1], 9092));
+        let peer = peer();
 
         let ctx = crate::test_support::request_context(&principal, &peer, "consumer-client");
 
@@ -514,8 +485,8 @@ mod tests {
     #[test]
     fn group_read_denied_allows_allow_all_authorizer() {
         let image = krabka_metadata::MetadataImage::new(uuid::Uuid::nil());
-        let principal = anonymous_principal();
-        let peer = std::net::SocketAddr::from(([127, 0, 0, 1], 9092));
+        let principal = principal("ANONYMOUS");
+        let peer = peer();
         let ctx = crate::test_support::request_context(&principal, &peer, "consumer-client");
 
         assert!(!group_read_denied(
@@ -545,12 +516,11 @@ mod tests {
     async fn handle_group_read_denied_preserves_error_response() {
         let authorizer =
             crate::authorizer::SimpleAclAuthorizer::new(std::collections::HashSet::new());
-        let (broker_handle, _dir) = start_broker(Arc::new(authorizer)).await;
+        let (broker_handle, _dir) =
+            crate::test_support::start_group_broker(Arc::new(authorizer)).await;
         let broker = broker_handle.broker_arc_for_test();
         finalize_group_version(&broker).await;
-        let principal = anonymous_principal();
-        let peer = std::net::SocketAddr::from(([127, 0, 0, 1], 9092));
-        let ctx = test_context(&principal, &peer);
+        test_ctx!(ctx, "ANONYMOUS");
         let req = request("denied-group");
 
         let resp = handle(&broker, req, VERSION, &ctx)
@@ -574,7 +544,8 @@ mod tests {
     async fn handle_protocol_gate_precedes_group_acl() {
         let authorizer =
             crate::authorizer::SimpleAclAuthorizer::new(std::collections::HashSet::new());
-        let (broker_handle, _dir) = start_broker(Arc::new(authorizer)).await;
+        let (broker_handle, _dir) =
+            crate::test_support::start_group_broker(Arc::new(authorizer)).await;
         let broker = broker_handle.broker_arc_for_test();
         // `start_broker`'s bootstrap seeds every feature at its release
         // default for a modern metadata.version, which finalizes
@@ -588,9 +559,7 @@ mod tests {
             })])
             .await
             .expect("disable group.version");
-        let principal = anonymous_principal();
-        let peer = std::net::SocketAddr::from(([127, 0, 0, 1], 9092));
-        let ctx = test_context(&principal, &peer);
+        test_ctx!(ctx, "ANONYMOUS");
         let req = request("denied-group");
 
         let resp = handle(&broker, req, VERSION, &ctx)
@@ -604,12 +573,14 @@ mod tests {
 
     #[tokio::test]
     async fn handle_persists_request_client_identity() {
-        let (broker_handle, _dir) =
-            start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
+        let (broker_handle, _dir) = crate::test_support::start_group_broker(Arc::new(
+            crate::authorizer::AllowAllAuthorizer,
+        ))
+        .await;
         let broker = broker_handle.broker_arc_for_test();
         finalize_group_version(&broker).await;
-        let principal = anonymous_principal();
-        let peer = std::net::SocketAddr::from(([127, 0, 0, 1], 9092));
+        let principal = principal("ANONYMOUS");
+        let peer = peer();
         let ctx = test_context(&principal, &peer);
 
         let resp = handle(&broker, request("identity-group"), VERSION, &ctx)
@@ -620,13 +591,9 @@ mod tests {
         let actor = broker
             .group_coordinator
             .get_or_create_group("identity-group", GroupKindTag::Consumer);
-        let (tx, rx) = tokio::sync::oneshot::channel();
-        actor
-            .tx
-            .send(GroupActorMessage::Describe { reply: tx })
+        let view = crate::task_util::ask(&actor.tx, |reply| GroupActorMessage::Describe { reply })
             .await
-            .expect("describe consumer group");
-        let view = rx.await.expect("consumer group view");
+            .expect("consumer group view");
 
         assert!(view.members.len() == 1);
         assert!(view.members[0].client_id == "consumer-group-heartbeat-test");
@@ -651,13 +618,9 @@ mod tests {
             .expect("ConsumerGroupHeartbeat identity refresh");
         assert!(resp.error_code == 0);
 
-        let (tx, rx) = tokio::sync::oneshot::channel();
-        actor
-            .tx
-            .send(GroupActorMessage::Describe { reply: tx })
+        let view = crate::task_util::ask(&actor.tx, |reply| GroupActorMessage::Describe { reply })
             .await
-            .expect("describe refreshed consumer group");
-        let view = rx.await.expect("refreshed consumer group view");
+            .expect("refreshed consumer group view");
         assert!(view.members[0].client_id == "consumer-client-b");
         assert!(view.members[0].client_host == "/127.0.0.2");
 
@@ -671,17 +634,17 @@ mod tests {
     /// and compares the whole response; `None` expects an accepted join.
     #[tokio::test]
     async fn handle_creates_consumer_group_only_on_join_as_kafka_does() {
-        let (broker_handle, _dir) =
-            start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
+        let (broker_handle, _dir) = crate::test_support::start_group_broker(Arc::new(
+            crate::authorizer::AllowAllAuthorizer,
+        ))
+        .await;
         let broker = broker_handle.broker_arc_for_test();
         finalize_group_version(&broker).await;
         let coordinator = &broker.group_coordinator;
         coordinator.mark_share("share");
         coordinator.mark_streams("streams");
         let _share_actor = coordinator.get_or_create_share("share-actor");
-        let principal = anonymous_principal();
-        let peer = std::net::SocketAddr::from(([127, 0, 0, 1], 9092));
-        let ctx = test_context(&principal, &peer);
+        test_ctx!(ctx, "ANONYMOUS");
         let not_found = |message: &str| {
             Some(ConsumerGroupHeartbeatResponse {
                 error_code: codes::GROUP_ID_NOT_FOUND,
@@ -806,13 +769,13 @@ mod tests {
             for name in &granted {
                 image.apply(&describe_acl(name));
             }
-            let (broker_handle, _dir) = start_broker(Arc::new(
+            let (broker_handle, _dir) = crate::test_support::start_group_broker(Arc::new(
                 crate::authorizer::SimpleAclAuthorizer::new(std::collections::HashSet::new()),
             ))
             .await;
             let broker = broker_handle.broker_arc_for_test();
             let principal = alice();
-            let peer = std::net::SocketAddr::from(([127, 0, 0, 1], 9092));
+            let peer = peer();
             let ctx = crate::test_support::request_context(&principal, &peer, "c");
             let req = ConsumerGroupHeartbeatRequest {
                 group_id: "g".into(),
@@ -841,7 +804,7 @@ mod tests {
     #[tokio::test]
     async fn handle_subscribed_name_describe_denied_refuses_whole_heartbeat_no_member_created() {
         // Deliberately no Describe grant for "topic-a".
-        let (broker_handle, _dir) = start_broker(Arc::new(
+        let (broker_handle, _dir) = crate::test_support::start_group_broker(Arc::new(
             crate::authorizer::SimpleAclAuthorizer::new(std::collections::HashSet::new()),
         ))
         .await;
@@ -853,7 +816,7 @@ mod tests {
             .await
             .expect("grant group Read");
         let principal = alice();
-        let peer = std::net::SocketAddr::from(([127, 0, 0, 1], 9092));
+        let peer = peer();
         let ctx = crate::test_support::request_context(&principal, &peer, "c");
         let req = ConsumerGroupHeartbeatRequest {
             group_id: "g".into(),
@@ -874,13 +837,9 @@ mod tests {
         let actor = broker
             .group_coordinator
             .get_or_create_group("g", GroupKindTag::Consumer);
-        let (tx, rx) = tokio::sync::oneshot::channel();
-        actor
-            .tx
-            .send(GroupActorMessage::Describe { reply: tx })
+        let view = crate::task_util::ask(&actor.tx, |reply| GroupActorMessage::Describe { reply })
             .await
-            .expect("describe consumer group");
-        let view = rx.await.expect("consumer group view");
+            .expect("consumer group view");
         assert!(view.members.is_empty(), "{view:?}");
 
         broker_handle.shutdown().await;
@@ -894,7 +853,7 @@ mod tests {
     /// through the whole handler → actor → reconciler path.
     #[tokio::test]
     async fn handle_regex_subscription_assigns_only_describe_authorized_topics() {
-        let (broker_handle, _dir) = start_broker(Arc::new(
+        let (broker_handle, _dir) = crate::test_support::start_group_broker(Arc::new(
             crate::authorizer::SimpleAclAuthorizer::new(std::collections::HashSet::new()),
         ))
         .await;
@@ -912,7 +871,7 @@ mod tests {
             .await
             .expect("grant ACLs and create topics");
         let principal = alice();
-        let peer = std::net::SocketAddr::from(([127, 0, 0, 1], 9092));
+        let peer = peer();
         let ctx = crate::test_support::request_context(&principal, &peer, "c");
         let req = ConsumerGroupHeartbeatRequest {
             group_id: "g".into(),
@@ -965,7 +924,7 @@ mod tests {
         /// join or when the pattern changes, as the Java client does.
         async fn heartbeat(&mut self, regex: Option<&str>) {
             let principal = alice();
-            let peer = std::net::SocketAddr::from(([127, 0, 0, 1], 9092));
+            let peer = peer();
             let ctx = crate::test_support::request_context(&principal, &peer, "c");
             let joining = self.member_epoch == 0;
             let req = ConsumerGroupHeartbeatRequest {
@@ -1015,7 +974,7 @@ mod tests {
     async fn broker_with_described_topics(
         topics: &[(&str, uuid::Uuid)],
     ) -> (crate::broker::BrokerHandle, tempfile::TempDir) {
-        let (broker_handle, dir) = start_broker(Arc::new(
+        let (broker_handle, dir) = crate::test_support::start_group_broker(Arc::new(
             crate::authorizer::SimpleAclAuthorizer::new(std::collections::HashSet::new()),
         ))
         .await;
