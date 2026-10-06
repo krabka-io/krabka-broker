@@ -12,6 +12,7 @@ use stateright::{Checker, Model, Property};
 use super::replay_policy::{
     ReplayMutation, ReplayRecordKind, replay_epoch_is_admissible, replay_mutation,
 };
+use crate::model_check::run_bfs;
 
 const MAX_DEPTH: usize = 16;
 const MAX_STATES: usize = 2_000_000;
@@ -315,20 +316,7 @@ impl Model for ReplayModel {
 
 #[test]
 fn coordinator_replay_log_orders_are_safe() {
-    let checker = ReplayModel
-        .checker()
-        .target_max_depth(MAX_DEPTH)
-        .target_state_count(MAX_STATES)
-        .spawn_bfs()
-        .join();
-    eprintln!(
-        "coordinator_replay unique_states={} generated={} max_depth={}",
-        checker.unique_state_count(),
-        checker.state_count(),
-        checker.max_depth()
-    );
-    assert2::assert!(checker.max_depth() < MAX_DEPTH, "depth cap hit");
-    assert2::assert!(checker.state_count() < MAX_STATES, "state cap hit");
+    let checker = run_bfs(ReplayModel, "coordinator_replay", MAX_DEPTH, MAX_STATES);
     // Pin: a changed count is a changed model, not a retuning knob.
     assert2::assert!(
         checker.unique_state_count() == PINNED_UNIQUE_STATES,

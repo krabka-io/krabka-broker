@@ -28,10 +28,13 @@ use super::{
     assignment::reconcile,
     seed::{apply_seed, snapshot_seed},
 };
-use crate::coordinator::unified::{
-    actor::MetadataProvider,
-    reconciler::ReconcileInput,
-    share::state::{ShareGroupState, ShareMemberState},
+use crate::{
+    coordinator::unified::{
+        actor::MetadataProvider,
+        reconciler::ReconcileInput,
+        share::state::{ShareGroupState, ShareMemberState},
+    },
+    model_check::run_bfs,
 };
 
 const TOPIC: Uuid = Uuid([42; 16]);
@@ -508,20 +511,7 @@ impl Model for ShareModel {
 
 #[test]
 fn share_group_membership_model() {
-    let checker = ShareModel
-        .checker()
-        .target_max_depth(MAX_DEPTH)
-        .target_state_count(MAX_STATES)
-        .spawn_bfs()
-        .join();
-    eprintln!(
-        "[share_group_membership] unique={} generated={} depth={}",
-        checker.unique_state_count(),
-        checker.state_count(),
-        checker.max_depth()
-    );
-    assert2::assert!(checker.max_depth() < MAX_DEPTH, "depth cap hit");
-    assert2::assert!(checker.state_count() < MAX_STATES, "state cap hit");
+    let checker = run_bfs(ShareModel, "share_group_membership", MAX_DEPTH, MAX_STATES);
     // Pin: a changed count is a changed model, not a retuning knob.
     assert2::assert!(
         checker.unique_state_count() == PINNED_UNIQUE_STATES,

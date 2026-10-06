@@ -56,7 +56,10 @@ use super::{
     state::{TxnEntry, TxnState},
     version::TxnVersion,
 };
-use crate::handlers::fetch::{FetchWatermarks, compute_visibility_window};
+use crate::{
+    handlers::fetch::{FetchWatermarks, compute_visibility_window},
+    model_check::run_bfs,
+};
 
 const TARGET_STATE_COUNT: usize = 20_000_000;
 const MAX_UNIQUE_STATES: usize = 2_000_000;
@@ -508,23 +511,7 @@ impl Model for EosModel {
 }
 
 fn run(model: EosModel, label: &str, pinned_unique_states: usize) {
-    let checker = model
-        .checker()
-        .target_max_depth(MAX_DEPTH)
-        .target_state_count(TARGET_STATE_COUNT)
-        .spawn_bfs()
-        .join();
-    eprintln!(
-        "[{label}] unique={} generated={} depth={}",
-        checker.unique_state_count(),
-        checker.state_count(),
-        checker.max_depth()
-    );
-    assert2::assert!(checker.max_depth() < MAX_DEPTH, "[{label}] depth cap hit");
-    assert2::assert!(
-        checker.state_count() < TARGET_STATE_COUNT,
-        "[{label}] truncated"
-    );
+    let checker = run_bfs(model, label, MAX_DEPTH, TARGET_STATE_COUNT);
     assert2::assert!(
         checker.unique_state_count() < MAX_UNIQUE_STATES,
         "[{label}] unique bound exceeded ({})",

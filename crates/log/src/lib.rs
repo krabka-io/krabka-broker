@@ -101,6 +101,9 @@ mod io;
 mod leader_epoch_checkpoint;
 mod log;
 mod log_start_offset_checkpoint;
+/// Shared breadth-first runner for the exhaustive Stateright models.
+#[cfg(test)]
+mod model_check;
 pub mod name;
 mod producer_snapshot;
 mod record_limit;

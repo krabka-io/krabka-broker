@@ -38,6 +38,8 @@
 
 use stateright::{Checker, Model, Property};
 
+use crate::model_check::run_bfs;
+
 const MAX_OFFSET: i64 = 2;
 const APPENDERS: usize = 2;
 const MAX_DEPTH: usize = 24;
@@ -340,20 +342,12 @@ fn surviving_wal_frontier(s: &CrashState) -> i64 {
 }
 
 fn run() {
-    let checker = CrashModel
-        .checker()
-        .target_max_depth(MAX_DEPTH)
-        .target_state_count(TARGET_STATE_COUNT)
-        .spawn_bfs()
-        .join();
-    eprintln!(
-        "[diskless_crash_model] unique={} generated={} depth={}",
-        checker.unique_state_count(),
-        checker.state_count(),
-        checker.max_depth()
+    let checker = run_bfs(
+        CrashModel,
+        "diskless_crash_model",
+        MAX_DEPTH,
+        TARGET_STATE_COUNT,
     );
-    assert2::assert!(checker.max_depth() < MAX_DEPTH, "depth cap hit");
-    assert2::assert!(checker.state_count() < TARGET_STATE_COUNT, "truncated");
     // Pin: a changed count is a changed model, not a retuning knob.
     assert2::assert!(
         checker.unique_state_count() == PINNED_UNIQUE_STATES,

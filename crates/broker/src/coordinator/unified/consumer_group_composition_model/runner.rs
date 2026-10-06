@@ -3,9 +3,10 @@
 //! The bounds sit next to the assertions that prove a run was exhaustive,
 //! because a truncated search proves nothing and the two must move together.
 
-use stateright::{Checker, Model};
+use stateright::Checker;
 
 use super::config::CgcModel;
+use crate::model_check::run_bfs;
 
 const MAX_STATES: usize = 2_000_000;
 const MAX_DEPTH: usize = 80;
@@ -21,20 +22,7 @@ pub(super) const PINNED_UNIQUE_STATES_BASIC: usize = 5_734;
 pub(super) const PINNED_UNIQUE_STATES_WIDE: usize = 28_774;
 
 pub(super) fn run(model: CgcModel, label: &str, pinned_unique_states: usize) {
-    let checker = model
-        .checker()
-        .target_max_depth(MAX_DEPTH)
-        .target_state_count(MAX_STATES)
-        .spawn_bfs()
-        .join();
-    eprintln!(
-        "[{label}] unique={} generated={} depth={}",
-        checker.unique_state_count(),
-        checker.state_count(),
-        checker.max_depth()
-    );
-    assert2::assert!(checker.max_depth() < MAX_DEPTH, "[{label}] depth cap hit");
-    assert2::assert!(checker.state_count() < MAX_STATES, "[{label}] truncated");
+    let checker = run_bfs(model, label, MAX_DEPTH, MAX_STATES);
     // Pin: a changed count is a changed model, not a retuning knob.
     assert2::assert!(
         checker.unique_state_count() == pinned_unique_states,
