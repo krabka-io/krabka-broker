@@ -1,31 +1,10 @@
 //! Fixtures shared by the `DescribeShareGroupOffsets` test modules.
 //!
-//! Starting a broker with a chosen authorizer and share-group setting, and
-//! building a metadata image that knows one topic, are each needed by more
-//! than one of the test modules under this handler, so they live in one file
-//! instead of once per module.
-
-use std::sync::Arc;
+//! Building a metadata image that knows one topic, and registering a topic
+//! on a live broker, are each needed by more than one of the test modules
+//! under this handler, so they live in one file instead of once per module.
 
 use krabka_metadata::{MetadataImage, MetadataRecord, TopicRecord};
-
-use crate::authorizer::Authorizer;
-
-pub(super) async fn start_broker(
-    authorizer: Arc<dyn Authorizer>,
-    share_enabled: bool,
-) -> (crate::broker::BrokerHandle, tempfile::TempDir) {
-    let (handle, dir) = crate::test_support::start_broker_with(|cfg| {
-        cfg.authorizer = authorizer;
-    })
-    .await;
-    handle.wait_until_group_coordinator_ready().await;
-    handle.wait_until_share_coordinator_ready().await;
-    if !share_enabled {
-        crate::test_support::finalize_share_version(&handle.broker_arc_for_test(), 0).await;
-    }
-    (handle, dir)
-}
 
 pub(super) fn image_with_topic(name: &str, topic_id: uuid::Uuid) -> MetadataImage {
     let mut image = MetadataImage::new(uuid::Uuid::nil());

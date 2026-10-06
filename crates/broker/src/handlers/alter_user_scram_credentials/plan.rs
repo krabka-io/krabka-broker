@@ -187,7 +187,7 @@ fn stage_upsertion(
 
 #[cfg(test)]
 mod tests {
-    use std::{net::SocketAddr, sync::Arc};
+    use std::sync::Arc;
 
     use assert2::assert;
     use krabka_metadata::ScramCredentialRecord;
@@ -207,6 +207,7 @@ mod tests {
                 valid_upsertion, valid_upsertion_for_mechanism,
             },
         },
+        test_support::test_ctx,
     };
 
     #[tokio::test]
@@ -249,9 +250,7 @@ mod tests {
             start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
         let broker = broker_handle.broker_arc_for_test();
         crate::test_support::wait_for_controller_leader(&broker).await;
-        let principal = crate::test_support::principal("admin");
-        let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
-        let ctx = test_context(&principal, &peer);
+        test_ctx!(ctx, "admin");
         let req = AlterUserScramCredentialsRequest {
             upsertions: vec![
                 valid_upsertion_for_mechanism("alice", 1, SaslMechanism::ScramSha256),
@@ -313,9 +312,7 @@ mod tests {
                     .is_some()
             })
             .await;
-        let principal = crate::test_support::principal("admin");
-        let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
-        let ctx = test_context(&principal, &peer);
+        test_ctx!(ctx, "admin");
         let req = AlterUserScramCredentialsRequest {
             deletions: vec![ScramCredentialDeletion {
                 name: "alice".into(),
@@ -362,9 +359,7 @@ mod tests {
             start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
         let broker = broker_handle.broker_arc_for_test();
         crate::test_support::wait_for_controller_leader(&broker).await;
-        let principal = crate::test_support::principal("admin");
-        let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
-        let ctx = test_context(&principal, &peer);
+        test_ctx!(ctx, "admin");
         let req = AlterUserScramCredentialsRequest {
             deletions: vec![ScramCredentialDeletion {
                 name: "alice".into(),

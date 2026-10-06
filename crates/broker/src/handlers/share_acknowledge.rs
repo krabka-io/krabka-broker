@@ -322,7 +322,6 @@ async fn process_topics(context: &AcknowledgeContext<'_>) -> Vec<ShareAcknowledg
 
 #[cfg(test)]
 mod tests {
-    use std::net::SocketAddr;
 
     use assert2::assert;
     use krabka_protocol::{
@@ -334,10 +333,12 @@ mod tests {
         },
         primitives::uuid::Uuid as ProtoUuid,
     };
-    use krabka_security::Principal;
 
     use super::*;
-    use crate::authorizer::{AuthorizationRequest, AuthorizationResult};
+    use crate::{
+        authorizer::{AuthorizationRequest, AuthorizationResult},
+        test_support::{peer, principal, test_ctx},
+    };
 
     crate::test_support::context_helper!(client_id = "client-a");
 
@@ -361,26 +362,16 @@ mod tests {
         }
     }
 
-    async fn start_broker(share_enabled: bool) -> (crate::broker::BrokerHandle, tempfile::TempDir) {
-        let (handle, dir) = crate::test_support::start_broker_with(|_cfg| {}).await;
-        if !share_enabled {
-            crate::test_support::finalize_share_version(&handle.broker_arc_for_test(), 0).await;
-        }
-        (handle, dir)
-    }
-
-    fn principal() -> Principal {
-        crate::test_support::principal("alice")
-    }
-
     #[tokio::test]
     async fn handle_disabled_feature_returns_top_level_unsupported_version() {
         let version = share_acknowledge_response::MAX_VERSION;
-        let (broker_handle, _dir) = start_broker(false).await;
+        let (broker_handle, _dir) = crate::test_support::start_share_broker(
+            std::sync::Arc::new(crate::authorizer::AllowAllAuthorizer),
+            false,
+        )
+        .await;
         let broker = broker_handle.broker_arc_for_test();
-        let principal = principal();
-        let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
-        let ctx = test_context(&principal, &peer);
+        test_ctx!(ctx, "alice");
 
         let resp = handle(&broker, request(ProtoUuid([7; 16]), &[0]), version, &ctx)
             .await
@@ -469,8 +460,8 @@ mod tests {
         topic_id: ProtoUuid,
     ) -> ShareAcknowledgeResponse {
         let shared = broker.broker_arc_for_test();
-        let principal = principal();
-        let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
+        let principal = principal("alice");
+        let peer = peer();
         let ctx = crate::test_support::request_context(&principal, &peer, "client-a");
         let id = uuid::Uuid::from_bytes(topic_id.0);
         shared
@@ -555,7 +546,11 @@ mod tests {
 
     #[tokio::test]
     async fn partition_row_error_follows_topic_id() {
-        let (broker_handle, _dir) = start_broker(true).await;
+        let (broker_handle, _dir) = crate::test_support::start_share_broker(
+            std::sync::Arc::new(crate::authorizer::AllowAllAuthorizer),
+            true,
+        )
+        .await;
         let known = create_topic(&broker_handle, "ack-resolution").await;
         crate::test_support::initialize_share_state(
             &broker_handle,

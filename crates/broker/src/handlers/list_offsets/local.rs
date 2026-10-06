@@ -103,7 +103,7 @@ mod tests {
             },
             test_support::{decode_response, encode_request, test_context},
         },
-        test_support::{peer, principal, start_broker_with_authorizer_no_audit as start_broker},
+        test_support::{start_broker_with_authorizer_no_audit as start_broker, test_ctx},
     };
 
     // Activation time of a batch that has long since come due.
@@ -251,9 +251,7 @@ mod tests {
             DeliveryPolicy::Scheduled,
         )
         .await;
-        let admin = principal("admin");
-        let peer = peer();
-        let ctx = test_context(&admin, &peer);
+        test_ctx!(ctx, "admin");
 
         // Both topics hold the same records, so every sentinel but LATEST
         // answers the same on both. KFC-1 moves where a seek to end lands and
@@ -314,9 +312,7 @@ mod tests {
         partition
             .install_leader_change(broker.config.node_id.get(), 0)
             .await;
-        let admin = principal("admin");
-        let peer = peer();
-        let ctx = test_context(&admin, &peer);
+        test_ctx!(ctx, "admin");
 
         check!(list_partition(&broker, TOPIC, LATEST_TIMESTAMP, &ctx).await == latest_row(2));
 

@@ -127,6 +127,7 @@ mod tests {
     use assert2::assert;
 
     use super::*;
+    use crate::test_support::peer;
 
     const SHARE_KEY: &str = "share-group:AAAAAAAAAAAAAAAAAAAAAA:0";
 
@@ -145,7 +146,7 @@ mod tests {
     fn key_admission_follows_get_coordinator() {
         let authz = deny_authorizer();
         let image = krabka_metadata::MetadataImage::new(uuid::Uuid::nil());
-        let peer = std::net::SocketAddr::from(([127, 0, 0, 1], 9092));
+        let peer = peer();
         let rows = [
             (6, KEY_TYPE_GROUP, "g", FindCoordinatorAdmission::DenyGroup),
             (

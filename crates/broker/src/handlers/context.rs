@@ -227,6 +227,7 @@ mod tests {
     use krabka_security::{AuthMethod, Principal};
 
     use super::*;
+    use crate::test_support::peer;
 
     fn principal() -> Principal {
         Principal {
@@ -239,7 +240,7 @@ mod tests {
     #[test]
     fn request_context_new_preserves_connection_fields() {
         let principal = principal();
-        let peer = SocketAddr::from(([127, 0, 0, 1], 9092));
+        let peer = peer();
 
         let ctx = RequestContext::new(
             &principal,
@@ -269,7 +270,7 @@ mod tests {
     #[test]
     fn request_context_keeps_a_null_client_id_apart_from_an_empty_one() {
         let principal = principal();
-        let peer = SocketAddr::from(([127, 0, 0, 1], 9092));
+        let peer = peer();
 
         let client_ids = [None, Some(""), Some("client-a")].map(|client_id| {
             RequestContext::new(&principal, &peer, client_id, "connection-a", false, "").client_id
@@ -302,7 +303,7 @@ mod tests {
 
     #[test]
     fn telemetry_context_new_preserves_client_identity_fields() {
-        let peer = SocketAddr::from(([127, 0, 0, 1], 9092));
+        let peer = peer();
 
         let ctx = TelemetryContext::new("connection-a", &peer, "client-a", "krabka-test", "1.2.3");
 

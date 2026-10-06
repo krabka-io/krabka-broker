@@ -183,7 +183,9 @@ mod tests {
 
     use super::*;
     use crate::{
-        test_support::{peer, principal, start_broker_with_authorizer_no_audit as start_broker},
+        test_support::{
+            peer, principal, start_broker_with_authorizer_no_audit as start_broker, test_ctx,
+        },
         txn::state::TopicPartition,
     };
 
@@ -240,9 +242,7 @@ mod tests {
             start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
         let broker = broker_handle.broker_arc_for_test();
         let coordinator = &broker.txn_coordinator;
-        let principal = principal("admin");
-        let peer = peer();
-        let context = test_context(&principal, &peer);
+        test_ctx!(context, "admin");
 
         // Two ids this broker coordinates, and one it does not.
         let (ongoing_id, dead_id) = ("tx-ongoing", "tx-dead");

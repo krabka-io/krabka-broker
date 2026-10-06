@@ -52,7 +52,7 @@ fn the_freeze_path_names_the_author_the_way_the_break_glass_path_does() {
     let dir = TempDir::new().expect("tempdir");
     let (config, _) = config_with_alice(&dir);
     let image = image(&[]);
-    let principal = principal();
+    let principal = principal(ALICE_NAME);
     let peer = peer();
     let ctx = context(&principal, &peer);
     let env = FreezeEnv {
@@ -89,7 +89,7 @@ fn an_unsigned_freeze_is_accepted_by_default_and_refused_under_require_signature
     let dir = TempDir::new().expect("tempdir");
     let (base, _) = config_with_alice(&dir);
     let image = image(&[]);
-    let principal = principal();
+    let principal = principal(ALICE_NAME);
     let peer = peer();
     let ctx = context(&principal, &peer);
 
@@ -134,7 +134,7 @@ fn an_unsigned_thaw_is_refused_whatever_require_signature_says() {
     let dir = TempDir::new().expect("tempdir");
     let (base, _) = config_with_alice(&dir);
     let image = image(&[("orders", PatternType::Literal)]);
-    let principal = principal();
+    let principal = principal(ALICE_NAME);
     let peer = peer();
     let ctx = context(&principal, &peer);
 
@@ -173,7 +173,7 @@ fn a_signed_freeze_verifies_and_a_tampered_one_answers_one_code() {
     let dir = TempDir::new().expect("tempdir");
     let (config, alice) = config_with_alice(&dir);
     let image = image(&[]);
-    let principal = principal();
+    let principal = principal(ALICE_NAME);
     let peer = peer();
     let ctx = context(&principal, &peer);
     let env = FreezeEnv {

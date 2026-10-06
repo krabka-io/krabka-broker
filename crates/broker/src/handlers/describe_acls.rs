@@ -156,7 +156,7 @@ mod tests {
     use crate::{
         broker::BrokerHandle,
         handlers::acl_wire::binding_filter::{AxisFilter, PatternTypeFilter},
-        test_support::{DenyAll, peer, principal},
+        test_support::DenyAll,
     };
 
     const VERSION: i16 = 3;
@@ -198,7 +198,7 @@ mod tests {
 
     crate::test_support::context_helper!(client_id = "admin-client");
 
-    use crate::test_support::start_broker_with_authorizer_no_audit as start_broker;
+    use crate::test_support::{start_broker_with_authorizer_no_audit as start_broker, test_ctx};
 
     /// An authorizer an operator actually configured, which lets the `admin`
     /// test principal through as a super user.
@@ -331,9 +331,7 @@ mod tests {
     async fn handle_denies_cluster_describe() {
         let (broker_handle, _dir) = start_broker(Arc::new(DenyAll)).await;
         let broker = broker_handle.broker_arc_for_test();
-        let p = principal("alice");
-        let peer = peer();
-        let ctx = test_context(&p, &peer);
+        test_ctx!(ctx, "alice");
 
         let resp = handle(
             &broker,
@@ -364,9 +362,7 @@ mod tests {
         )
         .await;
         let broker = broker_handle.broker_arc_for_test();
-        let p = principal("admin");
-        let peer = peer();
-        let ctx = test_context(&p, &peer);
+        test_ctx!(ctx, "admin");
 
         let resp = handle(
             &broker,
@@ -394,9 +390,7 @@ mod tests {
     async fn handle_closes_the_connection_on_an_unknown_element() {
         let (broker_handle, _dir) = start_broker(Arc::new(DenyAll)).await;
         let broker = broker_handle.broker_arc_for_test();
-        let p = principal("alice");
-        let peer = peer();
-        let ctx = test_context(&p, &peer);
+        test_ctx!(ctx, "alice");
         let mut req = request(Some("orders"), Some("User:alice"), OPERATION_READ);
         req.operation = 0;
 
@@ -425,9 +419,7 @@ mod tests {
         )
         .await;
         let broker = broker_handle.broker_arc_for_test();
-        let p = principal("admin");
-        let peer = peer();
-        let ctx = test_context(&p, &peer);
+        test_ctx!(ctx, "admin");
         let any = DescribeAclsRequest {
             resource_type_filter: 1,
             resource_name_filter: None,
@@ -488,9 +480,7 @@ mod tests {
         )
         .await;
         let broker = broker_handle.broker_arc_for_test();
-        let p = principal("admin");
-        let peer = peer();
-        let ctx = test_context(&p, &peer);
+        test_ctx!(ctx, "admin");
 
         let all: &[(&str, i8)] = &[
             ("*", PATTERN_TYPE_LITERAL),
@@ -600,9 +590,7 @@ mod tests {
         )
         .await;
         let broker = broker_handle.broker_arc_for_test();
-        let p = principal("admin");
-        let peer = peer();
-        let ctx = test_context(&p, &peer);
+        test_ctx!(ctx, "admin");
 
         let cases: [(Option<&str>, Option<&str>, usize); 4] = [
             (None, None, 1),
@@ -642,9 +630,7 @@ mod tests {
         )
         .await;
         let broker = broker_handle.broker_arc_for_test();
-        let p = principal("admin");
-        let peer = peer();
-        let ctx = test_context(&p, &peer);
+        test_ctx!(ctx, "admin");
 
         let resp = handle(
             &broker,

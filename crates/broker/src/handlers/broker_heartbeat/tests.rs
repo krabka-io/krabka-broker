@@ -13,7 +13,10 @@ use krabka_protocol::{
 };
 
 use super::*;
-use crate::{codes, test_support::start_broker_with_authorizer as start_broker};
+use crate::{
+    codes,
+    test_support::{peer, start_broker_with_authorizer as start_broker, test_ctx},
+};
 
 fn request(
     broker_epoch: i64,
@@ -48,7 +51,7 @@ async fn every_heartbeat_needs_cluster_action() {
         start_broker(Arc::new(crate::test_support::GrantsInPrincipalName)).await;
     let broker = broker_handle.broker_arc_for_test();
     crate::test_support::wait_for_controller_leader(&broker).await;
-    let peer = std::net::SocketAddr::from(([127, 0, 0, 1], 9092));
+    let peer = peer();
     let version = krabka_protocol::owned::broker_heartbeat_request::MAX_VERSION;
     let broker_epoch = broker
         .controller
@@ -82,9 +85,7 @@ async fn handle_leader_success_preserves_response_shape() {
     let (broker_handle, _dir) = start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
     let broker = broker_handle.broker_arc_for_test();
     crate::test_support::wait_for_controller_leader(&broker).await;
-    let principal = crate::test_support::principal("ANONYMOUS");
-    let peer = std::net::SocketAddr::from(([127, 0, 0, 1], 9092));
-    let ctx = test_context(&principal, &peer);
+    test_ctx!(ctx, "ANONYMOUS");
     let version = krabka_protocol::owned::broker_heartbeat_request::MAX_VERSION;
     let image = broker.controller.current_image();
     let broker_epoch = image
@@ -205,9 +206,7 @@ impl Cluster {
     }
 
     async fn heartbeat(&self, broker_id: i32, epoch: i64, offset: i64, shut_down: bool) -> Answer {
-        let principal = crate::test_support::principal("ANONYMOUS");
-        let peer = std::net::SocketAddr::from(([127, 0, 0, 1], 9092));
-        let ctx = test_context(&principal, &peer);
+        test_ctx!(ctx, "ANONYMOUS");
         let version = krabka_protocol::owned::broker_heartbeat_request::MAX_VERSION;
         let req = BrokerHeartbeatRequest {
             broker_id,

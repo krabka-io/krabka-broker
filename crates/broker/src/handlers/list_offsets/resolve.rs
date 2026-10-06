@@ -576,7 +576,7 @@ mod tests {
                 list_one_at_epoch, test_context,
             },
         },
-        test_support::{peer, principal},
+        test_support::test_ctx,
     };
 
     #[test]
@@ -1015,9 +1015,7 @@ mod tests {
         version: i16,
     ) -> ListOffsetsPartitionResponse {
         let broker_arc = broker.broker_arc_for_test();
-        let admin = principal("admin");
-        let peer = peer();
-        let ctx = test_context(&admin, &peer);
+        test_ctx!(ctx, "admin");
         let req = encode_request(
             &krabka_protocol::owned::list_offsets_request::ListOffsetsRequest {
                 replica_id: -1,

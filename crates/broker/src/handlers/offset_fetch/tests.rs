@@ -29,18 +29,8 @@ use crate::{
         actor::{GroupActorMessage, GroupKindTag},
         classic_state::OffsetEntry,
     },
-    test_support::{peer, principal, start_broker_with_authorizer_no_audit},
+    test_support::{peer, principal},
 };
-
-/// Start a broker under `authorizer` whose group coordinator serves
-/// `__consumer_offsets`, which no broker creates at startup.
-async fn start_broker(
-    authorizer: Arc<dyn crate::authorizer::Authorizer>,
-) -> (crate::broker::BrokerHandle, tempfile::TempDir) {
-    let (broker, dir) = start_broker_with_authorizer_no_audit(authorizer).await;
-    broker.wait_until_group_coordinator_ready().await;
-    (broker, dir)
-}
 
 // Seed a committed offset for (group, topic, partition) directly on the
 // group actor via UpdateCommitted.
@@ -88,7 +78,10 @@ async fn seed_committed_offset(
 #[tokio::test]
 async fn named_topic_fetch_returns_committed_offset() {
     const VERSION: i16 = 7; // legacy single-group path (< 8)
-    let (broker_handle, _dir) = start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
+    let (broker_handle, _dir) = crate::test_support::start_group_broker_no_audit(Arc::new(
+        crate::authorizer::AllowAllAuthorizer,
+    ))
+    .await;
     let broker = broker_handle.broker_arc_for_test();
     seed_committed_offset(&broker, "grp", "orders", 0, 42).await;
 
@@ -214,7 +207,10 @@ async fn fetch(
 async fn require_stable_reports_unstable_offsets_on_the_legacy_shape() {
     const VERSION: i16 = 7; // lowest version carrying require_stable
     const PRODUCER_ID: i64 = 91;
-    let (broker_handle, _dir) = start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
+    let (broker_handle, _dir) = crate::test_support::start_group_broker_no_audit(Arc::new(
+        crate::authorizer::AllowAllAuthorizer,
+    ))
+    .await;
     let broker = broker_handle.broker_arc_for_test();
     seed_committed_offset(&broker, "grp", "orders", 0, 42).await;
     seed_committed_offset(&broker, "grp", "orders", 1, 11).await;
@@ -309,7 +305,10 @@ async fn require_stable_reports_unstable_offsets_on_the_legacy_shape() {
 async fn require_stable_reports_unstable_offsets_on_the_groups_shape() {
     const VERSION: i16 = 9; // groups[] shape, still keyed by topic name
     const PRODUCER_ID: i64 = 91;
-    let (broker_handle, _dir) = start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
+    let (broker_handle, _dir) = crate::test_support::start_group_broker_no_audit(Arc::new(
+        crate::authorizer::AllowAllAuthorizer,
+    ))
+    .await;
     let broker = broker_handle.broker_arc_for_test();
     seed_committed_offset(&broker, "grp", "orders", 0, 42).await;
     seed_committed_offset(&broker, "grp", "orders", 1, 11).await;
@@ -423,7 +422,10 @@ async fn require_stable_reports_unstable_offsets_on_the_groups_shape() {
 async fn a_mark_for_records_below_an_applied_marker_does_not_strand_the_partition() {
     const VERSION: i16 = 7;
     const PRODUCER_ID: i64 = 91;
-    let (broker_handle, _dir) = start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
+    let (broker_handle, _dir) = crate::test_support::start_group_broker_no_audit(Arc::new(
+        crate::authorizer::AllowAllAuthorizer,
+    ))
+    .await;
     let broker = broker_handle.broker_arc_for_test();
     seed_committed_offset(&broker, "grp", "orders", 0, 42).await;
 
@@ -671,7 +673,7 @@ async fn run_topic_reference_table(
     authorizer: Arc<dyn crate::authorizer::Authorizer>,
     cases: Vec<(i16, TopicRef, OffsetFetchResponsePartitions)>,
 ) {
-    let (broker_handle, _dir) = start_broker(authorizer).await;
+    let (broker_handle, _dir) = crate::test_support::start_group_broker_no_audit(authorizer).await;
     let known_id = seed_topic_reference_group(&broker_handle).await;
     let broker = broker_handle.broker_arc_for_test();
     let mut actual = Vec::with_capacity(cases.len());
@@ -741,7 +743,10 @@ async fn unresolved_id_answers_before_topic_authorization() {
 #[tokio::test]
 async fn refused_topics_follow_the_answered_topics() {
     const VERSION: i16 = 10;
-    let (broker_handle, _dir) = start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
+    let (broker_handle, _dir) = crate::test_support::start_group_broker_no_audit(Arc::new(
+        crate::authorizer::AllowAllAuthorizer,
+    ))
+    .await;
     let known_id = seed_topic_reference_group(&broker_handle).await;
     let broker = broker_handle.broker_arc_for_test();
     let (zero_request, zero_response) = topic_reference_rows(
@@ -900,7 +905,8 @@ async fn run_response_table(
 /// it with `TOPIC_AUTHORIZATION_FAILED`.
 #[tokio::test]
 async fn topics_are_authorized_with_describe_and_fetch_all_hides_refused_topics() {
-    let (broker_handle, _dir) = start_broker(Arc::new(DescribeKnownTopic)).await;
+    let (broker_handle, _dir) =
+        crate::test_support::start_group_broker_no_audit(Arc::new(DescribeKnownTopic)).await;
     seed_topic_reference_group(&broker_handle).await;
     let broker = broker_handle.broker_arc_for_test();
     seed_committed_offset(&broker, "grp", UNKNOWN_NAME, 0, 9).await;
@@ -952,7 +958,10 @@ async fn topics_are_authorized_with_describe_and_fetch_all_hides_refused_topics(
 /// topics come in name order.
 #[tokio::test]
 async fn fetch_all_leaves_out_topics_without_an_id_at_v10() {
-    let (broker_handle, _dir) = start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
+    let (broker_handle, _dir) = crate::test_support::start_group_broker_no_audit(Arc::new(
+        crate::authorizer::AllowAllAuthorizer,
+    ))
+    .await;
     let known_id = seed_topic_reference_group(&broker_handle).await;
     let broker = broker_handle.broker_arc_for_test();
     seed_committed_offset(&broker, "grp", UNKNOWN_NAME, 0, 9).await;
@@ -1122,8 +1131,10 @@ async fn offset_fetch_creates_no_group_and_checks_the_member_epoch() {
     ];
 
     for row in rows {
-        let (broker_handle, _dir) =
-            start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
+        let (broker_handle, _dir) = crate::test_support::start_group_broker_no_audit(Arc::new(
+            crate::authorizer::AllowAllAuthorizer,
+        ))
+        .await;
         let broker = broker_handle.broker_arc_for_test();
         let epoch = join_consumer_group(&broker, "grp", "m1").await;
         seed_committed_offset(&broker, "grp", "orders", 0, 42).await;
@@ -1165,7 +1176,10 @@ async fn offset_fetch_creates_no_group_and_checks_the_member_epoch() {
 /// The legacy single-group shape (v0-v7) creates no group for an unknown id.
 #[tokio::test]
 async fn legacy_offset_fetch_creates_no_group() {
-    let (broker_handle, _dir) = start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
+    let (broker_handle, _dir) = crate::test_support::start_group_broker_no_audit(Arc::new(
+        crate::authorizer::AllowAllAuthorizer,
+    ))
+    .await;
     let broker = broker_handle.broker_arc_for_test();
     let request = OffsetFetchRequest {
         group_id: "typo".into(),

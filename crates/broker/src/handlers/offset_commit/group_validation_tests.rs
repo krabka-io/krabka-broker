@@ -33,10 +33,7 @@ use crate::{
             TargetAssignmentMemberValue,
         },
     },
-    test_support::{
-        dispatch_context, encode_request, peer, principal, request_context,
-        start_broker_with_authorizer_no_audit,
-    },
+    test_support::{dispatch_context, encode_request, peer, principal, request_context},
 };
 
 const TOPIC: &str = "group-validation";
@@ -128,14 +125,6 @@ fn seed(broker: &Broker, group_id: &str, group: Group) {
                 .get_or_create_group(group_id, GroupKindTag::Consumer);
         }
     }
-}
-
-/// Start a broker under `authorizer` whose group coordinator serves
-/// `__consumer_offsets`, which no broker creates at startup.
-async fn start(authorizer: Arc<dyn Authorizer>) -> (BrokerHandle, tempfile::TempDir) {
-    let (broker, dir) = start_broker_with_authorizer_no_audit(authorizer).await;
-    broker.wait_until_group_coordinator_ready().await;
-    (broker, dir)
 }
 
 /// Runs one row in a group of its own, and returns the response and whether
@@ -234,7 +223,8 @@ async fn commit_is_fenced_by_kafka_group_rule() {
             error_code: codes::NONE,
         },
     ];
-    let (broker, _dir) = start(Arc::new(AllowAllAuthorizer)).await;
+    let (broker, _dir) =
+        crate::test_support::start_group_broker_no_audit(Arc::new(AllowAllAuthorizer)).await;
     create_topic(&broker.broker_arc_for_test()).await;
     broker.wait_until_partition_present(TOPIC, 0).await;
 
@@ -291,7 +281,8 @@ impl Authorizer for DenyOneTopic {
 /// with no allowed topic never reaches the coordinator.
 #[tokio::test]
 async fn topic_read_is_checked_before_the_group() {
-    let (broker, _dir) = start(Arc::new(DenyOneTopic)).await;
+    let (broker, _dir) =
+        crate::test_support::start_group_broker_no_audit(Arc::new(DenyOneTopic)).await;
     let shared = broker.broker_arc_for_test();
     create_topic(&shared).await;
     broker.wait_until_partition_present(TOPIC, 0).await;
@@ -377,7 +368,8 @@ async fn topic_read_is_checked_before_the_group() {
 #[tokio::test]
 async fn oversized_metadata_is_refused_through_the_handler() {
     const GROUP_ID: &str = "oversized-metadata";
-    let (broker, _dir) = start(Arc::new(AllowAllAuthorizer)).await;
+    let (broker, _dir) =
+        crate::test_support::start_group_broker_no_audit(Arc::new(AllowAllAuthorizer)).await;
     let shared = broker.broker_arc_for_test();
     create_topic(&shared).await;
     broker.wait_until_partition_present(TOPIC, 0).await;
@@ -580,7 +572,8 @@ async fn consumer_group_commit_follows_kip_1251() {
             error_code: codes::NONE,
         },
     ];
-    let (broker, _dir) = start(Arc::new(AllowAllAuthorizer)).await;
+    let (broker, _dir) =
+        crate::test_support::start_group_broker_no_audit(Arc::new(AllowAllAuthorizer)).await;
     let shared = broker.broker_arc_for_test();
     create_topic_with_partitions(&shared, KIP_1251_TOPIC_PARTITIONS).await;
     for partition in 0..KIP_1251_TOPIC_PARTITIONS {

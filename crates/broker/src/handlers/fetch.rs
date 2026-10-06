@@ -475,7 +475,7 @@ fn serve_empty_rather_than_null_records(resp: &mut FetchResponse) {
 
 #[cfg(test)]
 mod tests {
-    use std::{net::SocketAddr, sync::Mutex};
+    use std::sync::Mutex;
 
     use assert2::assert;
     use bytes::{Bytes, BytesMut};
@@ -527,6 +527,7 @@ mod tests {
         authorizer::{AuthorizationRequest, AuthorizationResult, Authorizer},
         broker::Broker,
         handlers::RequestContext,
+        test_support::peer,
         wal::quorum::{
             engine::WalShardEngine,
             registry::ShardId,
@@ -616,7 +617,7 @@ mod tests {
         let (broker_handle, topic_id) = broker_with_routable_wal_shard(dir.path()).await;
         let broker = broker_handle.broker_arc_for_test();
         let principal = wal_peer_principal();
-        let peer = SocketAddr::from(([127, 0, 0, 1], 9092));
+        let peer = peer();
         let listener = broker.config.inter_broker_listener_name.clone();
         let context = RequestContext::new(&principal, &peer, "wal-fetch", "test", false, &listener);
 
@@ -675,7 +676,7 @@ mod tests {
         let (broker_handle, topic_id) = broker_with_routable_wal_shard(dir.path()).await;
         let broker = broker_handle.broker_arc_for_test();
         let principal = wal_peer_principal();
-        let peer = SocketAddr::from(([127, 0, 0, 1], 9092));
+        let peer = peer();
         let listener = broker.config.inter_broker_listener_name.clone();
         let context = RequestContext::new(&principal, &peer, "wal-fetch", "test", false, &listener);
         let request = fetch_request(
@@ -742,7 +743,7 @@ mod tests {
             .encode(&mut encoded, KIP_595_FETCH_VERSION)
             .expect("encode WAL fetch");
         let principal = crate::test_support::sasl_principal("broker-2");
-        let peer = SocketAddr::from(([127, 0, 0, 1], 9092));
+        let peer = peer();
         let context = RequestContext::new(&principal, &peer, "wal-fetch", "test", false, "");
 
         let (response, _) = super::handle(&broker, KIP_595_FETCH_VERSION, 1, &encoded, &context)
@@ -764,7 +765,7 @@ mod tests {
         let (broker_handle, topic_id) = broker_with_routable_wal_shard(dir.path()).await;
         let broker = broker_handle.broker_arc_for_test();
         let principal = wal_peer_principal();
-        let peer = SocketAddr::from(([127, 0, 0, 1], 9092));
+        let peer = peer();
         let context =
             RequestContext::new(&principal, &peer, "wal-fetch", "test", false, "EXTERNAL");
         let request = fetch_request(

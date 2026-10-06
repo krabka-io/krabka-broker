@@ -209,9 +209,9 @@ mod tests {
     use assert2::assert;
     use krabka_metadata::MetadataImage;
     use krabka_protocol::{Decode, UnknownTaggedFields, owned::share_group_heartbeat_response};
-    use krabka_security::Principal;
 
     use super::*;
+    use crate::test_support::peer;
 
     #[test]
     fn group_read_denied_yields_group_authorization_failed() {
@@ -223,7 +223,7 @@ mod tests {
             crate::authorizer::SimpleAclAuthorizer::new(std::collections::HashSet::new());
         let image = krabka_metadata::MetadataImage::new(uuid::Uuid::nil());
         let principal = crate::test_support::principal("ANONYMOUS");
-        let peer = std::net::SocketAddr::from(([127, 0, 0, 1], 9092));
+        let peer = peer();
 
         let ctx = crate::test_support::request_context(&principal, &peer, "share-client");
 
@@ -256,12 +256,8 @@ mod tests {
         handlers::group_heartbeat_test_support::{
             alice, describe_acl, group_read_acl, topic_with_partitions,
         },
-        test_support::start_broker_with_authorizer as start_broker,
+        test_support::{principal, start_broker_with_authorizer as start_broker, test_ctx},
     };
-
-    fn anonymous_principal() -> Principal {
-        crate::test_support::principal("ANONYMOUS")
-    }
 
     fn request(group_id: &str, subscribed: Vec<&str>) -> ShareGroupHeartbeatRequest {
         ShareGroupHeartbeatRequest {
@@ -281,9 +277,7 @@ mod tests {
         let broker_handle = Broker::start(cfg).await.expect("start broker");
         let broker = broker_handle.broker_arc_for_test();
         crate::test_support::finalize_share_version(&broker, 0).await;
-        let principal = anonymous_principal();
-        let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
-        let ctx = test_context(&principal, &peer);
+        test_ctx!(ctx, "ANONYMOUS");
         let req = request("g1", vec!["t1"]);
 
         let resp = handle(&broker, req, version, &ctx).await.expect("handle");
@@ -317,9 +311,7 @@ mod tests {
         .await;
         let broker = broker_handle.broker_arc_for_test();
         crate::test_support::finalize_share_version(&broker, 0).await;
-        let principal = anonymous_principal();
-        let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
-        let ctx = test_context(&principal, &peer);
+        test_ctx!(ctx, "ANONYMOUS");
         let req = request("denied-group", vec!["t1"]);
 
         let resp = handle(
@@ -345,9 +337,7 @@ mod tests {
         })
         .await;
         let broker = broker_handle.broker_arc_for_test();
-        let principal = anonymous_principal();
-        let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
-        let ctx = test_context(&principal, &peer);
+        test_ctx!(ctx, "ANONYMOUS");
         let req = request("denied-group", vec!["t1"]);
 
         let resp = handle(
@@ -387,7 +377,7 @@ mod tests {
             .await
             .expect("grant group Read");
         let principal = alice();
-        let peer = std::net::SocketAddr::from(([127, 0, 0, 1], 9092));
+        let peer = peer();
         let ctx = crate::test_support::request_context(&principal, &peer, "c");
         // No Describe grant for "topic-b" -- if the malformed-request check
         // did not run first, this would answer `TOPIC_AUTHORIZATION_FAILED`.
@@ -424,9 +414,7 @@ mod tests {
         })
         .await;
         let broker = broker_handle.broker_arc_for_test();
-        let principal = anonymous_principal();
-        let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
-        let ctx = test_context(&principal, &peer);
+        test_ctx!(ctx, "ANONYMOUS");
         let valid = ShareGroupHeartbeatRequest {
             group_id: "g".into(),
             member_id: "member-1".into(),
@@ -572,7 +560,7 @@ mod tests {
             .await;
             let broker = broker_handle.broker_arc_for_test();
             let principal = alice();
-            let peer = std::net::SocketAddr::from(([127, 0, 0, 1], 9092));
+            let peer = peer();
             let ctx = crate::test_support::request_context(&principal, &peer, "c");
             let req = ShareGroupHeartbeatRequest {
                 group_id: "g".into(),
@@ -614,7 +602,7 @@ mod tests {
             .await
             .expect("grant group Read and Describe(topic-a)");
         let principal = alice();
-        let peer = std::net::SocketAddr::from(([127, 0, 0, 1], 9092));
+        let peer = peer();
         let ctx = crate::test_support::request_context(&principal, &peer, "c");
         let req = request("g", vec!["topic-a", "topic-b"]);
 
@@ -665,7 +653,7 @@ mod tests {
             .await
             .expect("grant ACLs and create topic");
         let principal = alice();
-        let peer = std::net::SocketAddr::from(([127, 0, 0, 1], 9092));
+        let peer = peer();
         let ctx = crate::test_support::request_context(&principal, &peer, "c");
         let req = request("g", vec!["topic-a"]);
 
@@ -699,8 +687,8 @@ mod tests {
         .await;
         broker_handle.wait_until_group_coordinator_ready().await;
         let broker = broker_handle.broker_arc_for_test();
-        let principal = anonymous_principal();
-        let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
+        let principal = principal("ANONYMOUS");
+        let peer = peer();
         let ctx = test_context(&principal, &peer);
         let req = ShareGroupHeartbeatRequest {
             group_id: "identity-group".into(),
@@ -772,9 +760,7 @@ mod tests {
         let _classic = coordinator.get_or_create_classic("classic");
         let _consumer = coordinator.get_or_create_group("consumer", GroupKindTag::Consumer);
         coordinator.mark_streams("streams");
-        let principal = anonymous_principal();
-        let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
-        let ctx = test_context(&principal, &peer);
+        test_ctx!(ctx, "ANONYMOUS");
         let not_found = |message: &str| {
             Some(ShareGroupHeartbeatResponse {
                 error_code: codes::GROUP_ID_NOT_FOUND,

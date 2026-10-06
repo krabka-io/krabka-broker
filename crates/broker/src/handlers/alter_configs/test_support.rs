@@ -5,7 +5,7 @@
 //! resource shapes and the same seeded images, so the fixtures live in one
 //! module rather than being duplicated per test file.
 
-use std::{net::SocketAddr, sync::Arc};
+use std::sync::Arc;
 
 use krabka_metadata::MetadataRecord;
 use krabka_protocol::owned::{
@@ -14,7 +14,10 @@ use krabka_protocol::owned::{
 };
 
 use super::{RESOURCE_TYPE_BROKER, RESOURCE_TYPE_TOPIC, handle};
-use crate::{authorizer::Authorizer, test_support::start_broker_with_authorizer as start_broker};
+use crate::{
+    authorizer::Authorizer,
+    test_support::{start_broker_with_authorizer as start_broker, test_ctx},
+};
 
 crate::test_support::context_helper!(client_id = "admin-client");
 
@@ -199,9 +202,7 @@ pub(super) async fn drive_many(
     let version = 2;
     let (broker_handle, _dir) = start_broker(authorizer).await;
     let broker = broker_handle.broker_arc_for_test();
-    let principal = crate::test_support::principal("admin");
-    let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
-    let ctx = test_context(&principal, &peer);
+    test_ctx!(ctx, "admin");
     let req = AlterConfigsRequest {
         resources,
         validate_only: false,

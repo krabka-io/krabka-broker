@@ -264,10 +264,7 @@ mod tests {
     use krabka_metadata::{AclOperation, MetadataRecord, ResourceType};
 
     use super::*;
-    use crate::{
-        coordinator::unified::classic_state::GroupState,
-        test_support::{peer, principal},
-    };
+    use crate::{coordinator::unified::classic_state::GroupState, test_support::test_ctx};
 
     const VERSION: i16 = krabka_protocol::owned::list_groups_response::MAX_VERSION;
 
@@ -302,9 +299,7 @@ mod tests {
         let _consumer = coordinator.get_or_create_consumer("consumer-a");
         coordinator.mark_share("share-a");
         let _share = coordinator.get_or_create_share("share-a");
-        let p = principal("admin");
-        let peer = peer();
-        let ctx = test_context(&p, &peer);
+        test_ctx!(ctx, "admin");
 
         let resp = handle(&broker, ListGroupsRequest::default(), VERSION, &ctx)
             .await
@@ -380,9 +375,7 @@ mod tests {
             }
             let _a = broker.group_coordinator.get_or_create_classic("g-a");
             let _b = broker.group_coordinator.get_or_create_classic("g-b");
-            let p = principal(user);
-            let peer = peer();
-            let ctx = test_context(&p, &peer);
+            test_ctx!(ctx, user);
 
             let resp = handle(&broker, ListGroupsRequest::default(), VERSION, &ctx)
                 .await

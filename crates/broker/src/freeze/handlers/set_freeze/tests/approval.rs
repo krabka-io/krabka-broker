@@ -14,7 +14,8 @@ use uuid::Uuid;
 
 use super::{
     super::checks::{FreezeEnv, check_approval, consumed_proposal_id, record_of},
-    ALICE, PROPOSAL, config_with_alice, context, freeze_request, image, peer, principal,
+    ALICE, ALICE_NAME, PROPOSAL, config_with_alice, context, freeze_request, image, peer,
+    principal,
 };
 use crate::{
     codes,
@@ -26,7 +27,7 @@ fn a_thaw_with_no_proposal_needs_a_break_glass_approval() {
     let dir = TempDir::new().expect("tempdir");
     let (config, _) = config_with_alice(&dir);
     let image = image(&[("orders", PatternType::Literal)]);
-    let principal = principal();
+    let principal = principal(ALICE_NAME);
     let peer = peer();
     let ctx = context(&principal, &peer);
     let env = FreezeEnv {
@@ -54,7 +55,7 @@ fn a_freeze_needs_no_proposal() {
     let dir = TempDir::new().expect("tempdir");
     let (config, _) = config_with_alice(&dir);
     let image = image(&[]);
-    let principal = principal();
+    let principal = principal(ALICE_NAME);
     let peer = peer();
     let ctx = context(&principal, &peer);
     let env = FreezeEnv {
@@ -88,7 +89,7 @@ fn a_thaw_spends_the_approved_proposal_that_covers_its_scope() {
     image.apply(&MetadataRecord::V1BreakGlassProposal(approved_thaw(
         "literal:orders",
     )));
-    let principal = principal();
+    let principal = principal(ALICE_NAME);
     let peer = peer();
     let ctx = context(&principal, &peer);
     let env = FreezeEnv {
@@ -130,7 +131,7 @@ fn a_thaw_that_names_another_proposal_is_refused() {
     image.apply(&MetadataRecord::V1BreakGlassProposal(approved_thaw(
         "literal:orders",
     )));
-    let principal = principal();
+    let principal = principal(ALICE_NAME);
     let peer = peer();
     let ctx = context(&principal, &peer);
     let env = FreezeEnv {
@@ -173,7 +174,7 @@ fn a_proposal_for_one_scope_does_not_thaw_another() {
     image.apply(&MetadataRecord::V1BreakGlassProposal(approved_thaw(
         "literal:orders",
     )));
-    let principal = principal();
+    let principal = principal(ALICE_NAME);
     let peer = peer();
     let ctx = context(&principal, &peer);
     let env = FreezeEnv {

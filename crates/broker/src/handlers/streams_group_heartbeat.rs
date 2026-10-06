@@ -165,6 +165,8 @@ mod tests {
     use krabka_protocol::{Decode, owned::streams_group_heartbeat_response};
     use krabka_security::Principal;
 
+    use crate::test_support::{peer, principal};
+
     /// A valid join of member `m1` with a one-subtopology topology.
     fn request(group_id: &str) -> StreamsGroupHeartbeatRequest {
         use krabka_protocol::owned::streams_group_heartbeat_request::{Subtopology, Topology};
@@ -251,8 +253,8 @@ mod tests {
         broker_handle.wait_until_group_coordinator_ready().await;
         let broker = broker_handle.broker_arc_for_test();
         finalize_streams_version(&broker).await;
-        let principal = principal();
-        let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
+        let principal = principal("alice");
+        let peer = peer();
         let ctx = context(&principal, &peer);
         let config = |name: &str, value: &str| KeyValue {
             key: name.into(),
@@ -392,8 +394,8 @@ mod tests {
         let (broker_handle, _dir) = start_broker(true).await;
         let broker = broker_handle.broker_arc_for_test();
         finalize_streams_version(&broker).await;
-        let principal = principal();
-        let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
+        let principal = principal("alice");
+        let peer = peer();
         let ctx = context(&principal, &peer);
 
         // (group id, source topic, the expected error message)
@@ -449,7 +451,7 @@ mod tests {
         let (broker_handle, _dir) = start_broker_with_grants().await;
         let broker = broker_handle.broker_arc_for_test();
         finalize_streams_version(&broker).await;
-        let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
+        let peer = peer();
         // `Group:Read` only: the source topic `in` gets no `Describe`.
         let principal = crate::test_support::principal("Group:Read");
         let ctx = context(&principal, &peer);
@@ -489,7 +491,7 @@ mod tests {
         let broker = broker_handle.broker_arc_for_test();
         finalize_streams_version(&broker).await;
         create_source_topic(&broker, "in").await;
-        let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
+        let peer = peer();
         // `Read` on the group and `Describe` on the topics, but no `Create`
         // anywhere.
         let principal = crate::test_support::principal("Group:Read+Topic:Describe");
@@ -541,8 +543,8 @@ mod tests {
         let (broker_handle, _dir) = start_broker(true).await;
         let broker = broker_handle.broker_arc_for_test();
         finalize_streams_version(&broker).await;
-        let principal = principal();
-        let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
+        let principal = principal("alice");
+        let peer = peer();
         let ctx = context(&principal, &peer);
         broker.group_coordinator.mark_share("share");
         let _consumer = broker
@@ -611,8 +613,8 @@ mod tests {
         let (broker_handle, _dir) = start_broker(true).await;
         let broker = broker_handle.broker_arc_for_test();
         finalize_streams_version(&broker).await;
-        let principal = principal();
-        let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
+        let principal = principal("alice");
+        let peer = peer();
         let ctx = context(&principal, &peer);
         let req = StreamsGroupHeartbeatRequest {
             member_id: String::new(),
@@ -658,8 +660,8 @@ mod tests {
         let broker = broker_handle.broker_arc_for_test();
         finalize_streams_version(&broker).await;
         create_source_topic(&broker, "in").await;
-        let principal = principal();
-        let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
+        let principal = principal("alice");
+        let peer = peer();
         let ctx = context(&principal, &peer);
         let with_subtopology = |group_id: &str, subtopology: Subtopology| {
             let mut req = request(group_id);
@@ -734,10 +736,6 @@ mod tests {
         broker_handle.shutdown().await;
     }
 
-    fn principal() -> Principal {
-        crate::test_support::principal("alice")
-    }
-
     fn context<'a>(
         principal: &'a Principal,
         peer: &'a SocketAddr,
@@ -748,13 +746,11 @@ mod tests {
     async fn start_broker(
         streams_enabled: bool,
     ) -> (crate::broker::BrokerHandle, tempfile::TempDir) {
-        let (handle, dir) = crate::test_support::start_broker_with(|cfg| {
+        crate::test_support::start_group_broker_with(|cfg| {
             cfg.authorizer = Arc::new(crate::authorizer::AllowAllAuthorizer);
             cfg.streams_group.enable = streams_enabled;
         })
-        .await;
-        handle.wait_until_group_coordinator_ready().await;
-        (handle, dir)
+        .await
     }
 
     /// A broker whose authorizer grants exactly the operations named in the
@@ -762,15 +758,13 @@ mod tests {
     /// for the tests that drive a specific ACL gate rather than allow
     /// everything.
     async fn start_broker_with_grants() -> (crate::broker::BrokerHandle, tempfile::TempDir) {
-        let (handle, dir) = crate::test_support::start_broker_with(|cfg| {
+        crate::test_support::start_group_broker_with(|cfg| {
             cfg.authorizer = Arc::new(crate::test_support::ControllerPeerAllowed(
                 crate::test_support::GrantsInPrincipalName,
             ));
             cfg.streams_group.enable = true;
         })
-        .await;
-        handle.wait_until_group_coordinator_ready().await;
-        (handle, dir)
+        .await
     }
 
     /// Finalizes `streams.version` 1, the level that turns the streams
@@ -838,8 +832,8 @@ mod tests {
         broker_handle.wait_until_group_coordinator_ready().await;
         let broker = broker_handle.broker_arc_for_test();
         finalize_streams_version(&broker).await;
-        let principal = principal();
-        let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
+        let principal = principal("alice");
+        let peer = peer();
         let ctx = context(&principal, &peer);
         // Through the dispatch registry: v0 drops the int64 lag on the wire.
         let heartbeat = |req: StreamsGroupHeartbeatRequest, version: i16| {
@@ -925,8 +919,8 @@ mod tests {
             )])
             .await
             .expect("store the group override");
-        let principal = principal();
-        let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
+        let principal = principal("alice");
+        let peer = peer();
         let ctx = context(&principal, &peer);
         // Through the dispatch registry: v0 drops the status the v1 adds.
         let heartbeat = |group_id: &str, version: i16| {
@@ -979,8 +973,8 @@ mod tests {
         let (broker_handle, _dir) = start_broker(true).await;
         let broker = broker_handle.broker_arc_for_test();
         unfinalize_streams_version(&broker).await;
-        let principal = principal();
-        let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
+        let principal = principal("alice");
+        let peer = peer();
         let ctx = context(&principal, &peer);
         let resp = handle(
             &broker,
@@ -1001,8 +995,8 @@ mod tests {
         let (broker_handle, _dir) = start_broker(false).await;
         let broker = broker_handle.broker_arc_for_test();
         finalize_streams_version(&broker).await;
-        let principal = principal();
-        let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
+        let principal = principal("alice");
+        let peer = peer();
         let ctx = context(&principal, &peer);
         let resp = handle(
             &broker,
@@ -1023,8 +1017,8 @@ mod tests {
         let (broker_handle, _dir) = start_broker(true).await;
         let broker = broker_handle.broker_arc_for_test();
         finalize_streams_version(&broker).await;
-        let principal = principal();
-        let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
+        let principal = principal("alice");
+        let peer = peer();
         let ctx = context(&principal, &peer);
 
         let resp = handle(&broker, request("identity-group"), version, &ctx)
@@ -1081,7 +1075,7 @@ mod tests {
             crate::authorizer::SimpleAclAuthorizer::new(std::collections::HashSet::new());
         let image = krabka_metadata::MetadataImage::new(uuid::Uuid::nil());
         let principal = crate::test_support::principal("ANONYMOUS");
-        let peer = std::net::SocketAddr::from(([127, 0, 0, 1], 9092));
+        let peer = peer();
         let ctx = crate::test_support::request_context(&principal, &peer, "streams-client");
 
         assert!(group_read_denied(&authorizer, &image, &ctx, "g"));

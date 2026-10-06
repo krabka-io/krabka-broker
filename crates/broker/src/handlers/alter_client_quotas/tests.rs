@@ -4,7 +4,7 @@
 //!
 //! Most of them drive a live broker, so they are kept out of the module root.
 
-use std::{net::SocketAddr, sync::Arc};
+use std::sync::Arc;
 
 use assert2::assert;
 use krabka_protocol::owned::alter_client_quotas_response::{
@@ -18,7 +18,7 @@ use super::{
 use crate::{
     broker::BrokerHandle,
     codes::INVALID_REQUEST,
-    test_support::{DenyAll, start_broker_with_authorizer as start_broker},
+    test_support::{DenyAll, peer, start_broker_with_authorizer as start_broker, test_ctx},
 };
 
 crate::test_support::context_helper!(client_id = "admin-client");
@@ -78,9 +78,7 @@ async fn handle_denies_cluster_alter_for_each_entry() {
     let version = 1;
     let (broker_handle, _dir) = start_broker(Arc::new(DenyAll)).await;
     let broker = broker_handle.broker_arc_for_test();
-    let principal = crate::test_support::principal("alice");
-    let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
-    let ctx = test_context(&principal, &peer);
+    test_ctx!(ctx, "alice");
     let req = request(
         vec![entry(
             vec![("user", Some("alice"))],
@@ -121,7 +119,7 @@ async fn cluster_alter_configs_gates_the_quota_write() {
     ))
     .await;
     let broker = broker_handle.broker_arc_for_test();
-    let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
+    let peer = peer();
 
     for (user, grant, allowed) in [
         ("no-grant", None, false),
@@ -186,9 +184,7 @@ async fn handle_returns_entry_results_and_submits_valid_changes() {
     let version = 1;
     let (broker_handle, _dir) = start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
     let broker = broker_handle.broker_arc_for_test();
-    let principal = crate::test_support::principal("admin");
-    let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
-    let ctx = test_context(&principal, &peer);
+    test_ctx!(ctx, "admin");
     let req = request(
         vec![
             entry(
@@ -249,9 +245,7 @@ async fn handle_validate_only_reports_success_without_submitting() {
     let version = 1;
     let (broker_handle, _dir) = start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
     let broker = broker_handle.broker_arc_for_test();
-    let principal = crate::test_support::principal("admin");
-    let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
-    let ctx = test_context(&principal, &peer);
+    test_ctx!(ctx, "admin");
     let req = request(
         vec![entry(
             vec![("user", Some("carol"))],
@@ -287,9 +281,7 @@ async fn handle_validate_only_reports_success_without_submitting() {
 #[tokio::test]
 async fn repeated_entity_answers_one_row_with_and_without_validate_only() {
     let version = 1;
-    let principal = crate::test_support::principal("admin");
-    let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
-    let ctx = test_context(&principal, &peer);
+    test_ctx!(ctx, "admin");
     let row = |name: &str, code: i16, message: Option<&str>| RespEntry {
         error_code: code,
         error_message: message.map(Into::into),

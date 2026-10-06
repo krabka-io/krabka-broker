@@ -198,7 +198,7 @@ mod tests {
 
     crate::test_support::context_helper!(client_id = "admin-client");
 
-    use crate::test_support::start_broker_with_authorizer_no_audit as start_broker;
+    use crate::test_support::{start_broker_with_authorizer_no_audit as start_broker, test_ctx};
 
     fn request(include_ops: bool) -> DescribeClusterRequest {
         DescribeClusterRequest {
@@ -243,9 +243,7 @@ mod tests {
         .await;
         seed_broker(&broker_handle).await;
         let broker = broker_handle.broker_arc_for_test();
-        let p = principal("alice");
-        let peer = peer();
-        let ctx = test_context(&p, &peer);
+        test_ctx!(ctx, "alice");
 
         let resp = handle(&broker, request(false), VERSION, &ctx)
             .await
@@ -299,9 +297,7 @@ mod tests {
             start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
         seed_broker(&broker_handle).await;
         let broker = broker_handle.broker_arc_for_test();
-        let p = principal("admin");
-        let peer = peer();
-        let ctx = test_context(&p, &peer);
+        test_ctx!(ctx, "admin");
 
         let resp = handle(&broker, request(false), VERSION, &ctx)
             .await
@@ -391,9 +387,7 @@ mod tests {
         for case in cases {
             let (broker_handle, _dir) = start_broker(Arc::new(DenyAll)).await;
             let broker = broker_handle.broker_arc_for_test();
-            let p = principal("alice");
-            let peer = peer();
-            let ctx = test_context(&p, &peer);
+            test_ctx!(ctx, "alice");
             let req = DescribeClusterRequest {
                 endpoint_type: case.endpoint_type,
                 ..Default::default()
@@ -431,9 +425,7 @@ mod tests {
         })
         .await;
         let broker = broker_handle.broker_arc_for_test();
-        let p = principal("describer");
-        let peer = peer();
-        let ctx = test_context(&p, &peer);
+        test_ctx!(ctx, "describer");
 
         let resp = handle(&broker, request(false), VERSION, &ctx)
             .await
@@ -453,9 +445,7 @@ mod tests {
         let authorizer = Arc::new(crate::authorizer::AllowAllAuthorizer);
         let (broker_handle, _dir) = start_broker(Arc::clone(&authorizer) as _).await;
         let broker = broker_handle.broker_arc_for_test();
-        let p = principal("admin");
-        let peer = peer();
-        let ctx = test_context(&p, &peer);
+        test_ctx!(ctx, "admin");
 
         let resp = handle(&broker, request(true), VERSION, &ctx)
             .await
@@ -499,9 +489,7 @@ mod tests {
             .await
             .expect("seed ACL");
         let broker = broker_handle.broker_arc_for_test();
-        let p = principal("alice");
-        let peer = peer();
-        let ctx = test_context(&p, &peer);
+        test_ctx!(ctx, "alice");
 
         let resp = handle(&broker, request(true), VERSION, &ctx)
             .await
@@ -527,9 +515,7 @@ mod tests {
         let broker = broker_handle.broker_arc_for_test();
         broker.liveness.record_fenced_heartbeat(42).await;
         assert!(broker.liveness.apply_fencing(42, true, true).await);
-        let p = principal("admin");
-        let peer = peer();
-        let ctx = test_context(&p, &peer);
+        test_ctx!(ctx, "admin");
 
         let response = handle(&broker, request(false), VERSION, &ctx)
             .await

@@ -1,7 +1,7 @@
 //! Handler tests for `OffsetDelete`: the group-level refusals, Kafka's check
 //! order and the subscription guard, each as a whole response.
 
-use std::{collections::HashMap, net::SocketAddr, sync::Arc, time::Duration};
+use std::{collections::HashMap, sync::Arc, time::Duration};
 
 use assert2::{assert, check};
 use bytes::{BufMut as _, Bytes};
@@ -19,7 +19,7 @@ use super::{
     test_support::{expected_row, expected_topic, req_with_topics},
 };
 use crate::{
-    authorizer::{AllowAllAuthorizer, Authorizer},
+    authorizer::AllowAllAuthorizer,
     broker::BrokerHandle,
     codes,
     coordinator::unified::{
@@ -29,17 +29,8 @@ use crate::{
         },
         group::{CoordinatorGroup, GroupKind},
     },
-    test_support::{DenyAll, request_context},
+    test_support::{DenyAll, peer, request_context},
 };
-
-async fn start(authorizer: Arc<dyn Authorizer>) -> (BrokerHandle, tempfile::TempDir) {
-    let (broker, dir) = crate::test_support::start_broker_no_audit_with(|cfg| {
-        cfg.authorizer = crate::test_support::controller_peer_allowed(authorizer);
-    })
-    .await;
-    broker.wait_until_group_coordinator_ready().await;
-    (broker, dir)
-}
 
 async fn create_topic(broker: &BrokerHandle, name: &str) {
     let client = krabka_client_core::Client::builder()
@@ -135,8 +126,10 @@ type Case<'a> = (
 
 #[tokio::test]
 async fn offset_delete_matches_kafka_whole_responses() {
-    let (allowed, _allowed_dir) = start(Arc::new(AllowAllAuthorizer)).await;
-    let (denied, _denied_dir) = start(Arc::new(DenyAll)).await;
+    let (allowed, _allowed_dir) =
+        crate::test_support::start_group_broker_no_audit(Arc::new(AllowAllAuthorizer)).await;
+    let (denied, _denied_dir) =
+        crate::test_support::start_group_broker_no_audit(Arc::new(DenyAll)).await;
     create_topic(&allowed, "t").await;
     create_topic(&allowed, "u").await;
     let coordinator = allowed.broker_arc_for_test().group_coordinator.clone();
@@ -231,7 +224,7 @@ async fn offset_delete_matches_kafka_whole_responses() {
     ];
 
     let principal = crate::test_support::principal("alice");
-    let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
+    let peer = peer();
     let ctx = request_context(&principal, &peer, "offset-delete-client");
     let version = offset_delete_response::MAX_VERSION;
     let before_ms = crate::time_util::now_ms();

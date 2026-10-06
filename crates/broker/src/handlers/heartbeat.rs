@@ -78,6 +78,7 @@ mod tests {
     use assert2::assert;
 
     use super::*;
+    use crate::test_support::peer;
 
     #[test]
     fn group_read_denied_yields_group_authorization_failed() {
@@ -85,7 +86,7 @@ mod tests {
             crate::authorizer::SimpleAclAuthorizer::new(std::collections::HashSet::new());
         let image = krabka_metadata::MetadataImage::new(uuid::Uuid::nil());
         let principal = crate::test_support::principal("ANONYMOUS");
-        let peer = std::net::SocketAddr::from(([127, 0, 0, 1], 9092));
+        let peer = peer();
         let ctx = crate::test_support::request_context(&principal, &peer, "heartbeat-client");
 
         assert!(group_read_denied(&authorizer, &image, &ctx, "g"));

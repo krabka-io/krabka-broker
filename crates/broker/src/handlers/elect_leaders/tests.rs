@@ -29,7 +29,7 @@ use crate::{
     config::BreakGlassConfig,
     handlers::RequestContext,
     leader_election::{ElectionType, test_support::one_partition_change},
-    test_support::{peer, principal, start_broker_no_audit_with},
+    test_support::{start_broker_no_audit_with, test_ctx},
 };
 
 const TOPIC: &str = "orders";
@@ -112,9 +112,7 @@ async fn elect(
 ) -> (PartitionResult, Vec<MetadataRecord>) {
     let alive = alive();
     let witnesses = HashSet::new();
-    let principal = principal("admin");
-    let peer = peer();
-    let ctx = test_context(&principal, &peer);
+    test_ctx!(ctx, "admin");
     let env = ElectionEnv {
         broker,
         image,
@@ -184,9 +182,7 @@ async fn a_topic_wide_proposal_is_spent_once_for_every_partition_it_covers() {
     )]);
     let alive = alive();
     let witnesses = HashSet::new();
-    let principal = principal("admin");
-    let peer = peer();
-    let ctx = test_context(&principal, &peer);
+    test_ctx!(ctx, "admin");
     let env = ElectionEnv {
         broker: &broker,
         image: &image,
@@ -246,9 +242,7 @@ async fn a_broker_with_no_approver_set_gates_nothing() {
 async fn the_wire_handler_refuses_an_unclean_election_that_no_proposal_covers() {
     let (handle, _dir) = broker_with(gated_config()).await;
     let broker = handle.broker_arc_for_test();
-    let principal = principal("admin");
-    let peer = peer();
-    let ctx = test_context(&principal, &peer);
+    test_ctx!(ctx, "admin");
     let request = |election_type| ElectLeadersRequest {
         election_type,
         topic_partitions: Some(vec![TopicPartitions {
@@ -416,9 +410,7 @@ async fn the_handler_elects_exactly_the_partitions_the_request_names() {
     let (broker_handle, _dir) = broker_with(BreakGlassConfig::default()).await;
     let broker = broker_handle.broker_arc_for_test();
     seed_preferred_topic(&broker).await;
-    let principal = principal("admin");
-    let peer = peer();
-    let ctx = test_context(&principal, &peer);
+    test_ctx!(ctx, "admin");
     let cases: Vec<(Option<Vec<TopicPartitions>>, Vec<ReplicaElectionResult>)> = vec![
         (
             Some(vec![named(TOPIC, &[])]),

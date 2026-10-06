@@ -96,7 +96,7 @@ mod tests {
     use super::*;
     use crate::{
         authorizer::{AuthorizationRequest, AuthorizationResult},
-        test_support::{DenyAll, peer, principal},
+        test_support::{DenyAll, peer, principal, test_ctx},
     };
 
     const VERSION: i16 = 2;
@@ -109,19 +109,6 @@ mod tests {
     }
 
     crate::test_support::context_helper!(client_id = "admin-client");
-
-    /// Start a broker with `authorizer` and audit off, and wait until its
-    /// group coordinator serves `__consumer_offsets`.
-    async fn start_broker(
-        authorizer: Arc<dyn crate::authorizer::Authorizer>,
-    ) -> (crate::broker::BrokerHandle, tempfile::TempDir) {
-        let (handle, dir) = crate::test_support::start_broker_with_authorizer_no_audit(
-            crate::test_support::controller_peer_allowed(authorizer),
-        )
-        .await;
-        handle.wait_until_group_coordinator_ready().await;
-        (handle, dir)
-    }
 
     async fn drive(
         broker: &Broker,
@@ -137,7 +124,8 @@ mod tests {
 
     #[tokio::test]
     async fn handle_denies_delete_for_each_group() {
-        let (broker_handle, _dir) = start_broker(Arc::new(DenyAll)).await;
+        let (broker_handle, _dir) =
+            crate::test_support::start_group_broker_no_audit(Arc::new(DenyAll)).await;
         let broker = broker_handle.broker_arc_for_test();
         let p = principal("alice");
         let peer = peer();
@@ -190,7 +178,8 @@ mod tests {
     /// `GROUP_AUTHORIZATION_FAILED` rows after the coordinator's rows.
     #[tokio::test]
     async fn handle_deduplicates_ids_and_appends_denied_rows() {
-        let (broker_handle, _dir) = start_broker(Arc::new(DenyGroupNamedDenied)).await;
+        let (broker_handle, _dir) =
+            crate::test_support::start_group_broker_no_audit(Arc::new(DenyGroupNamedDenied)).await;
         let broker = broker_handle.broker_arc_for_test();
         let p = principal("alice");
         let peer = peer();
@@ -242,8 +231,10 @@ mod tests {
 
     #[tokio::test]
     async fn handle_allowed_missing_group_returns_not_found() {
-        let (broker_handle, _dir) =
-            start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
+        let (broker_handle, _dir) = crate::test_support::start_group_broker_no_audit(Arc::new(
+            crate::authorizer::AllowAllAuthorizer,
+        ))
+        .await;
         let broker = broker_handle.broker_arc_for_test();
         let p = principal("admin");
         let peer = peer();
@@ -274,11 +265,10 @@ mod tests {
     async fn handle_answers_v3_with_a_null_error_message_per_group() {
         use krabka_protocol::{Decode as _, Encode as _};
 
-        let (broker_handle, _dir) = start_broker(Arc::new(DenyAll)).await;
+        let (broker_handle, _dir) =
+            crate::test_support::start_group_broker_no_audit(Arc::new(DenyAll)).await;
         let broker = broker_handle.broker_arc_for_test();
-        let p = principal("alice");
-        let peer = peer();
-        let ctx = test_context(&p, &peer);
+        test_ctx!(ctx, "alice");
         let req = request(&["group-a", "group-b"]);
 
         let mut answers = Vec::new();

@@ -263,13 +263,14 @@ pub(crate) fn requested_topic_name(
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::HashSet, net::SocketAddr};
+    use std::collections::HashSet;
 
     use assert2::{assert, check};
     use krabka_metadata::{AclOperation, MetadataImage, ResourceType};
     use krabka_security::{AuthMethod, Principal};
 
     use super::*;
+    use crate::test_support::peer;
 
     fn principal() -> Principal {
         Principal {
@@ -284,7 +285,7 @@ mod tests {
         let authorizer = crate::authorizer::SimpleAclAuthorizer::new(HashSet::new());
         let image = MetadataImage::new(uuid::Uuid::nil());
         let principal = principal();
-        let peer = SocketAddr::from(([127, 0, 0, 1], 9092));
+        let peer = peer();
         let ctx = RequestContext::new(
             &principal,
             &peer,
@@ -311,7 +312,7 @@ mod tests {
     fn cluster_describe_denied_refuses_a_principal_with_no_cluster_describe() {
         let image = MetadataImage::new(uuid::Uuid::nil());
         let principal = principal();
-        let peer = SocketAddr::from(([127, 0, 0, 1], 9092));
+        let peer = peer();
         let ctx = RequestContext::new(
             &principal,
             &peer,
@@ -355,7 +356,7 @@ mod tests {
     #[test]
     fn denied_and_allowed_topics_split_the_names_by_decision() {
         let principal = principal();
-        let peer = SocketAddr::from(([127, 0, 0, 1], 9092));
+        let peer = peer();
         let ctx = RequestContext::new(
             &principal,
             &peer,

@@ -207,25 +207,12 @@ mod tests {
     use crate::{
         coordinator::unified::actor::ClassicMemberView,
         handlers::authorized_operations::authorized_operations_bits,
-        test_support::{DenyAll, peer, principal},
+        test_support::{DenyAll, peer, principal, test_ctx},
     };
 
     const VERSION: i16 = krabka_protocol::owned::describe_groups_response::MAX_VERSION;
 
     crate::test_support::context_helper!(client_id = "admin-client");
-
-    /// Start a broker with `authorizer` and audit off, and wait until its
-    /// group coordinator serves `__consumer_offsets`.
-    async fn start_broker(
-        authorizer: Arc<dyn crate::authorizer::Authorizer>,
-    ) -> (crate::broker::BrokerHandle, tempfile::TempDir) {
-        let (handle, dir) = crate::test_support::start_broker_with_authorizer_no_audit(
-            crate::test_support::controller_peer_allowed(authorizer),
-        )
-        .await;
-        handle.wait_until_group_coordinator_ready().await;
-        (handle, dir)
-    }
 
     fn request(groups: &[&str], include_ops: bool) -> DescribeGroupsRequest {
         DescribeGroupsRequest {
@@ -256,9 +243,7 @@ mod tests {
         version: i16,
         req: &DescribeGroupsRequest,
     ) -> DescribeGroupsResponse {
-        let p = principal("admin");
-        let peer = peer();
-        let ctx = test_context(&p, &peer);
+        test_ctx!(ctx, "admin");
         handle(broker, req.clone(), version, &ctx)
             .await
             .expect("handle")
@@ -269,7 +254,8 @@ mod tests {
     /// never consulted.
     #[tokio::test]
     async fn a_denied_group_is_refused_per_row() {
-        let (broker_handle, _dir) = start_broker(Arc::new(DenyAll)).await;
+        let (broker_handle, _dir) =
+            crate::test_support::start_group_broker_no_audit(Arc::new(DenyAll)).await;
         let broker = broker_handle.broker_arc_for_test();
 
         let resp = drive(&broker, VERSION, &request(&["group-a", "group-b"], false)).await;
@@ -357,8 +343,10 @@ mod tests {
                 ),
             ),
         ];
-        let (broker_handle, _dir) =
-            start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
+        let (broker_handle, _dir) = crate::test_support::start_group_broker_no_audit(Arc::new(
+            crate::authorizer::AllowAllAuthorizer,
+        ))
+        .await;
         let broker = broker_handle.broker_arc_for_test();
         let _ = broker.group_coordinator.get_or_create_consumer("next-gen");
 
@@ -448,8 +436,10 @@ mod tests {
     /// separates this row from `the_authorized_operations_bitfield_is_filled_only_on_opt_in`.
     #[tokio::test]
     async fn a_classic_group_is_projected_without_the_kip430_bitfield() {
-        let (broker_handle, _dir) =
-            start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
+        let (broker_handle, _dir) = crate::test_support::start_group_broker_no_audit(Arc::new(
+            crate::authorizer::AllowAllAuthorizer,
+        ))
+        .await;
         let broker = broker_handle.broker_arc_for_test();
         let _ = broker.group_coordinator.get_or_create_classic("classic-a");
 
@@ -481,7 +471,8 @@ mod tests {
     #[tokio::test]
     async fn the_authorized_operations_bitfield_is_filled_only_on_opt_in() {
         let authorizer = Arc::new(crate::authorizer::AllowAllAuthorizer);
-        let (broker_handle, _dir) = start_broker(Arc::clone(&authorizer) as _).await;
+        let (broker_handle, _dir) =
+            crate::test_support::start_group_broker_no_audit(Arc::clone(&authorizer) as _).await;
         let broker = broker_handle.broker_arc_for_test();
         let _ = broker.group_coordinator.get_or_create_classic("classic-a");
 
@@ -578,7 +569,8 @@ mod tests {
         for (acls, include_ops, expected) in rows {
             let authorizer =
                 crate::authorizer::SimpleAclAuthorizer::new(std::collections::HashSet::new());
-            let (broker_handle, _dir) = start_broker(Arc::new(authorizer)).await;
+            let (broker_handle, _dir) =
+                crate::test_support::start_group_broker_no_audit(Arc::new(authorizer)).await;
             let broker = broker_handle.broker_arc_for_test();
             broker
                 .controller

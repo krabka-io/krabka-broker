@@ -113,36 +113,17 @@ mod tests {
     };
     use krabka_security::Principal;
 
-    use crate::{
-        authorizer::Authorizer,
-        broker::{Broker, BrokerHandle},
-        test_support::DenyAll,
-    };
+    use crate::{broker::Broker, test_support::DenyAll};
 
     const GROUP: &str = "sync-group-unit";
     const PROTOCOL_TYPE: &str = "consumer";
     const PROTOCOL_NAME: &str = "range";
-
-    fn principal() -> Principal {
-        crate::test_support::principal("alice")
-    }
 
     fn context<'a>(
         principal: &'a Principal,
         peer: &'a SocketAddr,
     ) -> crate::handlers::RequestContext<'a> {
         crate::test_support::request_context(principal, peer, "sync-group-client")
-    }
-
-    /// Start a broker with `authorizer` and audit off, and wait until its
-    /// group coordinator serves `__consumer_offsets`.
-    async fn start_broker(authorizer: Arc<dyn Authorizer>) -> (BrokerHandle, tempfile::TempDir) {
-        let (handle, dir) = crate::test_support::start_broker_no_audit_with(|cfg| {
-            cfg.authorizer = crate::test_support::controller_peer_allowed(authorizer);
-        })
-        .await;
-        handle.wait_until_group_coordinator_ready().await;
-        (handle, dir)
     }
 
     async fn bootstrap_member(
@@ -186,6 +167,7 @@ mod tests {
     }
 
     use super::*;
+    use crate::test_support::{peer, principal};
 
     #[test]
     fn group_read_denied_yields_group_authorization_failed() {
@@ -193,7 +175,7 @@ mod tests {
             crate::authorizer::SimpleAclAuthorizer::new(std::collections::HashSet::new());
         let image = krabka_metadata::MetadataImage::new(uuid::Uuid::nil());
         let principal = crate::test_support::principal("ANONYMOUS");
-        let peer = std::net::SocketAddr::from(([127, 0, 0, 1], 9092));
+        let peer = peer();
         let ctx = crate::test_support::request_context(&principal, &peer, "sync-client");
 
         assert!(group_read_denied(&authorizer, &image, &ctx, "g"));
@@ -270,11 +252,14 @@ mod tests {
                 want: codes::GROUP_AUTHORIZATION_FAILED,
             },
         ];
-        let (denied_handle, _denied_dir) = start_broker(Arc::new(DenyAll)).await;
-        let (allowed_handle, _allowed_dir) =
-            start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
-        let principal = principal();
-        let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
+        let (denied_handle, _denied_dir) =
+            crate::test_support::start_group_broker_no_audit(Arc::new(DenyAll)).await;
+        let (allowed_handle, _allowed_dir) = crate::test_support::start_group_broker_no_audit(
+            Arc::new(crate::authorizer::AllowAllAuthorizer),
+        )
+        .await;
+        let principal = principal("alice");
+        let peer = peer();
         let ctx = context(&principal, &peer);
 
         for r in rows {
@@ -309,10 +294,11 @@ mod tests {
     #[tokio::test]
     async fn handle_denies_group_read_and_preserves_error_response_shape() {
         let version = sync_group_response::MAX_VERSION;
-        let (broker_handle, _dir) = start_broker(Arc::new(DenyAll)).await;
+        let (broker_handle, _dir) =
+            crate::test_support::start_group_broker_no_audit(Arc::new(DenyAll)).await;
         let broker = broker_handle.broker_arc_for_test();
-        let principal = principal();
-        let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
+        let principal = principal("alice");
+        let peer = peer();
         let ctx = context(&principal, &peer);
         let req = SyncGroupRequest {
             group_id: GROUP.into(),
@@ -342,11 +328,13 @@ mod tests {
     #[tokio::test]
     async fn handle_success_preserves_assignment_and_kip559_protocol_fields() {
         let version = sync_group_response::MAX_VERSION;
-        let (broker_handle, _dir) =
-            start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
+        let (broker_handle, _dir) = crate::test_support::start_group_broker_no_audit(Arc::new(
+            crate::authorizer::AllowAllAuthorizer,
+        ))
+        .await;
         let broker = broker_handle.broker_arc_for_test();
-        let principal = principal();
-        let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
+        let principal = principal("alice");
+        let peer = peer();
         let ctx = context(&principal, &peer);
         let (member_id, generation_id) = bootstrap_member(&broker, &ctx).await;
         let assignment = Bytes::from_static(b"assignment-payload");

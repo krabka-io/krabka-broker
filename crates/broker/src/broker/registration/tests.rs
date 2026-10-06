@@ -560,7 +560,7 @@ mod unclean_restart {
         config::BrokerConfig,
         config_keys::MIN_INSYNC_REPLICAS,
         elr::{TopicElr, state::PartitionElr},
-        test_support::{request_context, start_broker_with_authorizer},
+        test_support::{peer, request_context, start_broker_with_authorizer},
     };
 
     const TOPIC: &str = "orders";
@@ -619,7 +619,7 @@ mod unclean_restart {
     /// which is how a real partition's ELR comes to exist at all.
     async fn alter_isr(broker: &Arc<Broker>, new_isr: &[i32]) {
         let principal = crate::test_support::principal("replica");
-        let peer = "127.0.0.1:9092".parse().expect("peer address");
+        let peer = peer();
         let ctx = request_context(&principal, &peer, "broker-client");
         // The controller checks the sender's broker epoch and the row's
         // partition epoch, as Kafka's `ReplicationControlManager` does.

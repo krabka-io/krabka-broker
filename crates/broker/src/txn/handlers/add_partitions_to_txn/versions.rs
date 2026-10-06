@@ -236,7 +236,7 @@ mod tests {
 
     use super::*;
     use crate::{
-        test_support::{DenyAll, peer, start_broker_with_authorizer_no_audit as start_broker},
+        test_support::{DenyAll, start_broker_with_authorizer_no_audit as start_broker, test_ctx},
         txn::handlers::add_partitions_to_txn::{
             handle,
             test_support::{enlisted, seed_transaction, start_coordinator, topic, topic_result},
@@ -245,19 +245,13 @@ mod tests {
 
     crate::test_support::context_helper!(client_id = "producer-client");
 
-    fn principal() -> Principal {
-        crate::test_support::principal("ANONYMOUS")
-    }
-
     /// A v4+ request comes from a broker, so a principal without
     /// `ClusterAction` gets Kafka's top-level `CLUSTER_AUTHORIZATION_FAILED`
     /// and no transaction row.
     #[tokio::test]
     async fn handle_v4_without_cluster_action_returns_the_top_level_error() {
         let (broker_handle, _dir) = start_broker(Arc::new(DenyAll)).await;
-        let principal = principal();
-        let peer = peer();
-        let ctx = test_context(&principal, &peer);
+        test_ctx!(ctx, "ANONYMOUS");
         let req = AddPartitionsToTxnRequest {
             transactions: vec![AddPartitionsToTxnTransaction {
                 transactional_id: "tid-4".into(),
@@ -393,9 +387,7 @@ mod tests {
         ))
         .await;
         let broker = broker_handle.broker_arc_for_test();
-        let principal = principal();
-        let peer = peer();
-        let ctx = test_context(&principal, &peer);
+        test_ctx!(ctx, "ANONYMOUS");
         for (index, case) in (0_i64..).zip(&cases) {
             let tid = format!("dup-tid-{index}");
             let producer_id = 100 + index;
@@ -451,9 +443,7 @@ mod tests {
     #[tokio::test]
     async fn handle_v3_transactional_id_deny_returns_topic_rows() {
         let (broker_handle, _dir) = start_broker(Arc::new(DenyAll)).await;
-        let principal = principal();
-        let peer = peer();
-        let ctx = test_context(&principal, &peer);
+        test_ctx!(ctx, "ANONYMOUS");
         let req = AddPartitionsToTxnRequest {
             v3_and_below_transactional_id: "tid-3".into(),
             v3_and_below_producer_id: 11,

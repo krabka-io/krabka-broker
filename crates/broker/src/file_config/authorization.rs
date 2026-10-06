@@ -125,7 +125,7 @@ mod tests {
     use krabka_units::{Time, convert::TimeExt as _};
 
     use super::*;
-    use crate::file_config::FileConfig;
+    use crate::{file_config::FileConfig, test_support::peer};
 
     /// Both `super_users` lists take Kafka's `User:<name>` form, and
     /// `User:ANONYMOUS` is a super user as in Kafka.
@@ -205,7 +205,7 @@ super_users = ["admin"]
         // explicit `type = "simple"` branch's own unit tests.
         let img = MetadataImage::new(uuid::Uuid::nil());
         let admin = test_principal("admin");
-        let host: std::net::SocketAddr = "127.0.0.1:9092".parse().unwrap();
+        let host = peer();
         let req = AuthorizationRequest {
             principal: &admin,
             host: &host,
@@ -244,7 +244,7 @@ super_users = ["admin"]
 
         let img = MetadataImage::new(uuid::Uuid::nil());
         let alice = test_principal("alice");
-        let host: std::net::SocketAddr = "127.0.0.1:9092".parse().unwrap();
+        let host = peer();
         let req = AuthorizationRequest {
             principal: &alice,
             host: &host,
@@ -322,7 +322,7 @@ expire_after_ms = 60000
             // made (and `opa.invalid` deliberately doesn't resolve).
             let img = MetadataImage::new(uuid::Uuid::nil());
             let operator = test_principal("operator");
-            let host: std::net::SocketAddr = "127.0.0.1:9092".parse().unwrap();
+            let host = peer();
             let req = AuthorizationRequest {
                 principal: &operator,
                 host: &host,
@@ -367,7 +367,7 @@ expire_after_ms = 60000
             .unwrap();
             let img = MetadataImage::new(uuid::Uuid::nil());
             let p = test_principal("alice");
-            let host: std::net::SocketAddr = "127.0.0.1:9092".parse().unwrap();
+            let host = peer();
             let req = AuthorizationRequest {
                 principal: &p,
                 host: &host,
@@ -405,7 +405,7 @@ url = "http://opa.invalid:8181/v1/data/k/a"
         // a principal who isn't in any super-user set.
         let img = MetadataImage::new(uuid::Uuid::nil());
         let anyone = test_principal("anyone");
-        let host: std::net::SocketAddr = "127.0.0.1:9092".parse().unwrap();
+        let host = peer();
         let req = AuthorizationRequest {
             principal: &anyone,
             host: &host,

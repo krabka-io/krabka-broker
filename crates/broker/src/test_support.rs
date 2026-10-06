@@ -781,6 +781,57 @@ pub(crate) async fn start_broker_with_authorizer_no_audit(
     start_broker_no_audit_with(|cfg| cfg.authorizer = authorizer).await
 }
 
+/// Like [`start_broker_with`], but it then waits until the group coordinator
+/// serves `__consumer_offsets`, which no broker creates at startup.
+///
+/// A group-handler test that needs more than an authorizer, such as streams
+/// groups turned on, passes its config tweaks here.
+pub(crate) async fn start_group_broker_with(
+    configure: impl FnOnce(&mut BrokerConfig),
+) -> (BrokerHandle, tempfile::TempDir) {
+    let (handle, dir) = start_broker_with(configure).await;
+    handle.wait_until_group_coordinator_ready().await;
+    (handle, dir)
+}
+
+/// Start an in-process broker with `authorizer` installed, and wait until its
+/// group coordinator serves `__consumer_offsets`.
+///
+/// The broker installs `authorizer` wrapped in [`controller_peer_allowed`],
+/// so a restrictive authorizer still lets the broker unfence and create the
+/// coordinator topic that this waits for.
+pub(crate) async fn start_group_broker(
+    authorizer: std::sync::Arc<dyn crate::authorizer::Authorizer>,
+) -> (BrokerHandle, tempfile::TempDir) {
+    start_group_broker_with(|cfg| cfg.authorizer = controller_peer_allowed(authorizer)).await
+}
+
+/// Like [`start_group_broker`], but it also disables audit logging.
+pub(crate) async fn start_group_broker_no_audit(
+    authorizer: std::sync::Arc<dyn crate::authorizer::Authorizer>,
+) -> (BrokerHandle, tempfile::TempDir) {
+    start_group_broker_with(|cfg| {
+        cfg.audit_enabled = false;
+        cfg.authorizer = controller_peer_allowed(authorizer);
+    })
+    .await
+}
+
+/// Like [`start_group_broker`], but it also waits until the share coordinator
+/// serves `__share_group_state`. With `share_enabled` false it then finalizes
+/// `share.version` at 0, which turns the share-group APIs off.
+pub(crate) async fn start_share_broker(
+    authorizer: std::sync::Arc<dyn crate::authorizer::Authorizer>,
+    share_enabled: bool,
+) -> (BrokerHandle, tempfile::TempDir) {
+    let (handle, dir) = start_group_broker(authorizer).await;
+    handle.wait_until_share_coordinator_ready().await;
+    if !share_enabled {
+        finalize_share_version(&handle.broker_arc_for_test(), 0).await;
+    }
+    (handle, dir)
+}
+
 /// Generate the `encode_request` / `decode_response` / `test_context`
 /// wrapper trio that every handler's `#[cfg(test)] mod handler_tests` binds
 /// over [`encode_request`], [`decode_response`], and [`request_context`].
@@ -865,6 +916,22 @@ macro_rules! context_helper {
     };
 }
 pub(crate) use context_helper;
+
+/// Bind `$ctx` to the calling module's `test_context` for a request from the
+/// anonymous principal named `$name` at [`peer`].
+///
+/// `test_ctx!(ctx, "admin");` stands for the three statements that build the
+/// principal, the peer, and the context. The principal and the peer live in
+/// hidden bindings for the rest of the enclosing block, so a test that reads
+/// either one again builds them itself.
+macro_rules! test_ctx {
+    ($ctx:ident, $name:expr) => {
+        let principal = crate::test_support::principal($name);
+        let peer = crate::test_support::peer();
+        let $ctx = test_context(&principal, &peer);
+    };
+}
+pub(crate) use test_ctx;
 
 /// The outcome a [`FakeMetadataSource`] returns from `submit_change`, as a
 /// function of the batch it was handed.

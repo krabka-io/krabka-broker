@@ -567,7 +567,7 @@ mod wire_tests {
     use crate::{
         config_keys::MIN_INSYNC_REPLICAS,
         elr::{TopicElr, state::PartitionElr},
-        test_support::{request_context, start_broker_with_authorizer},
+        test_support::{peer, request_context, start_broker_with_authorizer},
     };
 
     const TOPIC: &str = "orders";
@@ -730,7 +730,7 @@ mod wire_tests {
             ..Default::default()
         };
         let principal = crate::test_support::principal("broker");
-        let peer = "127.0.0.1:9092".parse().expect("peer address");
+        let peer = peer();
         let ctx = request_context(&principal, &peer, "broker-client");
         // Through the dispatch registry: `previous_broker_epoch` only rides
         // the wire from version 3.

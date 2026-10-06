@@ -18,6 +18,7 @@ use crate::{
     freeze::signing::freeze_signing_bytes,
     handlers::RequestContext,
     operator_keys::{OperatorKeyEntry, OperatorKeys},
+    test_support::principal,
 };
 
 mod approval;
@@ -53,10 +54,6 @@ fn image(entries: &[(&str, PatternType)]) -> MetadataImage {
         }));
     }
     image
-}
-
-fn principal() -> Principal {
-    crate::test_support::principal(ALICE_NAME)
 }
 
 fn peer() -> SocketAddr {
@@ -124,7 +121,7 @@ async fn handle_processes_request_and_encodes_response() {
     .await;
     let broker = broker_handle.broker_arc_for_test();
 
-    let p = principal();
+    let p = principal(ALICE_NAME);
     let s = peer();
     let ctx = context(&p, &s);
     let req = freeze_request(

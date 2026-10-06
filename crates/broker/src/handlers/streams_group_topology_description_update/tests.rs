@@ -12,6 +12,7 @@ use krabka_protocol::owned::{
 };
 
 use super::*;
+use crate::test_support::test_ctx;
 
 crate::test_support::context_helper!(client_id = "streams-client");
 
@@ -104,9 +105,7 @@ async fn handle_answers_as_a_trunk_broker_without_a_plugin() {
         .await;
         let broker = broker_handle.broker_arc_for_test();
         set_streams_version(&broker, streams_version).await;
-        let principal = crate::test_support::principal(grants);
-        let peer = crate::test_support::peer();
-        let ctx = test_context(&principal, &peer);
+        test_ctx!(ctx, grants);
 
         let answer = handle(&broker, request("app"), MAX_VERSION, &ctx)
             .await
@@ -139,9 +138,7 @@ async fn handle_refuses_what_a_trunk_broker_with_a_plugin_refuses() {
     let _classic = broker
         .group_coordinator
         .get_or_create_classic("classic-app");
-    let principal = crate::test_support::principal("Group:Read");
-    let peer = crate::test_support::peer();
-    let ctx = test_context(&principal, &peer);
+    test_ctx!(ctx, "Group:Read");
 
     let rows = [
         (

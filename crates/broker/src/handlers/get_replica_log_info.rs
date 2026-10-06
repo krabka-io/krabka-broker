@@ -141,6 +141,7 @@ mod tests {
     use krabka_protocol::Encode;
 
     use super::*;
+    use crate::test_support::peer;
 
     /// A locally hosted partition answers with its cached
     /// `current_leader_epoch` and `last_written_leader_epoch`. A non-zero
@@ -255,7 +256,7 @@ mod tests {
             crate::authorizer::SimpleAclAuthorizer::new(std::collections::HashSet::new());
         let image = krabka_metadata::MetadataImage::new(uuid::Uuid::nil());
         let principal = crate::test_support::principal("ANONYMOUS");
-        let peer = std::net::SocketAddr::from(([127, 0, 0, 1], 9092));
+        let peer = peer();
         let ctx = crate::handlers::RequestContext::new(
             &principal,
             &peer,

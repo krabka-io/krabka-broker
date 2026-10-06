@@ -137,7 +137,7 @@ fn request(topics: Vec<CreatableTopic>) -> CreateTopicsRequest {
 
 crate::test_support::context_helper!(client_id = "admin-client");
 
-use crate::test_support::start_broker_with_authorizer_no_audit as start_broker;
+use crate::test_support::{start_broker_with_authorizer_no_audit as start_broker, test_ctx};
 
 async fn drive(
     broker: &Broker,
@@ -1144,10 +1144,8 @@ async fn v4_response_encodes_without_the_kip_525_fields() {
 
     let (broker_handle, _dir) = start_broker(Arc::new(DenyDescribeConfigs)).await;
     let broker = broker_handle.broker_arc_for_test();
-    let p = principal("admin");
-    let peer = peer();
     let req = request(vec![topic_with_config("legacy")]);
-    let ctx = test_context(&p, &peer);
+    test_ctx!(ctx, "admin");
 
     let resp: CreateTopicsResponse = crate::test_support::dispatch_wire(
         &broker,
@@ -1442,9 +1440,7 @@ async fn manual_assignment_leaves_unavailable_brokers_out_of_the_isr() {
                 .collect(),
             ..Default::default()
         };
-        let p = principal("admin");
-        let peer = peer();
-        let ctx = test_context(&p, &peer);
+        test_ctx!(ctx, "admin");
 
         let resp: CreateTopicsResponse = crate::test_support::dispatch_wire(
             &broker,

@@ -246,8 +246,9 @@ mod tests {
     use krabka_metadata::{MetadataRecord, TopicRecord};
 
     use super::*;
-    use crate::authorizer::{
-        AclSource, AllowAllAuthorizer, AuthorizationRequest, SimpleAclAuthorizer,
+    use crate::{
+        authorizer::{AclSource, AllowAllAuthorizer, AuthorizationRequest, SimpleAclAuthorizer},
+        test_support::peer,
     };
 
     fn image_with_topics(names: &[&str]) -> MetadataImage {
@@ -277,13 +278,7 @@ mod tests {
     }
 
     fn resolver(image: MetadataImage, authorizer: Arc<dyn Authorizer>) -> ImageTopicRegexResolver {
-        ImageTopicRegexResolver::new(
-            Arc::new(image),
-            42,
-            authorizer,
-            alice(),
-            "127.0.0.1:9092".parse().unwrap(),
-        )
+        ImageTopicRegexResolver::new(Arc::new(image), 42, authorizer, alice(), peer())
     }
 
     fn resolved(

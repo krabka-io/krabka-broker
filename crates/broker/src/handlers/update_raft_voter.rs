@@ -118,7 +118,7 @@ pub(crate) async fn handle(
 
 #[cfg(test)]
 mod tests {
-    use std::{net::SocketAddr, sync::Arc};
+    use std::sync::Arc;
 
     use assert2::assert;
     use krabka_protocol::{
@@ -160,7 +160,7 @@ mod tests {
     );
 
     use super::*;
-    use crate::test_support::start_broker_with_authorizer as start_broker;
+    use crate::test_support::{start_broker_with_authorizer as start_broker, test_ctx};
 
     /// Decode and encode round-trip at the min and max versions.
     #[test]
@@ -187,9 +187,7 @@ mod tests {
         let version = 0;
         let (broker_handle, _dir) = start_broker(Arc::new(DenyAll)).await;
         let broker = broker_handle.broker_arc_for_test();
-        let principal = crate::test_support::principal("alice");
-        let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
-        let ctx = test_context(&principal, &peer);
+        test_ctx!(ctx, "alice");
         let req_bytes = encode_request(&request(2), version);
 
         let resp = super::handle(&broker, version, &req_bytes, &ctx)
@@ -207,9 +205,7 @@ mod tests {
         let (broker_handle, _dir) =
             start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
         let broker = broker_handle.broker_arc_for_test();
-        let principal = crate::test_support::principal("admin");
-        let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
-        let ctx = test_context(&principal, &peer);
+        test_ctx!(ctx, "admin");
         let mut request = request(-7);
         request.cluster_id = Some(broker.controller.current_image().cluster_id().to_string());
         request.current_leader_epoch =
@@ -234,9 +230,7 @@ mod tests {
         let (broker_handle, _dir) =
             start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
         let broker = broker_handle.broker_arc_for_test();
-        let principal = crate::test_support::principal("admin");
-        let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
-        let ctx = test_context(&principal, &peer);
+        test_ctx!(ctx, "admin");
         let cluster_id = broker.controller.current_image().cluster_id().to_string();
         let epoch = i32::try_from(broker.controller.quorum_state().current_term)
             .expect("the test quorum's term fits an i32");
@@ -318,9 +312,7 @@ mod tests {
         let (broker_handle, _dir) =
             start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
         let broker = broker_handle.broker_arc_for_test();
-        let principal = crate::test_support::principal("admin");
-        let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
-        let ctx = test_context(&principal, &peer);
+        test_ctx!(ctx, "admin");
         let mut named = request(2);
         // Kafka's `UpdateVoterHandler` checks the voter's kraft.version range
         // against the cluster's before it looks the voter up, so the range
@@ -403,9 +395,7 @@ mod tests {
         for (api_name, api, grant, want_cluster_authorization_failed) in cases {
             let (broker_handle, _dir) = start_broker(Arc::new(GrantOnly(grant))).await;
             let broker = broker_handle.broker_arc_for_test();
-            let principal = crate::test_support::principal("alice");
-            let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
-            let ctx = test_context(&principal, &peer);
+            test_ctx!(ctx, "alice");
 
             let error_code = match api {
                 Api::Update => {
@@ -471,9 +461,7 @@ mod tests {
         let (broker_handle, _dir) =
             start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
         let broker = broker_handle.broker_arc_for_test();
-        let principal = crate::test_support::principal("admin");
-        let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
-        let ctx = test_context(&principal, &peer);
+        test_ctx!(ctx, "admin");
         let mut request = request(2);
         // The range covers the cluster's kraft.version, so Kafka's handler
         // reaches the voter lookup.

@@ -262,7 +262,7 @@ pub(crate) async fn handle(
 
 #[cfg(test)]
 mod tests {
-    use std::{net::SocketAddr, sync::Arc};
+    use std::sync::Arc;
 
     use assert2::assert;
     use krabka_protocol::{
@@ -282,14 +282,13 @@ mod tests {
         },
         primitives::uuid::Uuid,
     };
-    use krabka_security::Principal;
 
     use super::handle;
     use crate::{
         authorizer::{AuthorizationResult, Authorizer},
         codes,
         coordinator::unified::{GroupType, ShareGroupSeed, share::actor::ShareGroupActorMessage},
-        test_support::DenyAll,
+        test_support::{DenyAll, test_ctx},
     };
 
     const UNKNOWN_TOPIC_OR_PARTITION_MESSAGE: &str =
@@ -353,26 +352,6 @@ mod tests {
     }
 
     crate::test_support::context_helper!(client_id = "admin-client");
-
-    async fn start_broker(
-        authorizer: Arc<dyn Authorizer>,
-        share_enabled: bool,
-    ) -> (crate::broker::BrokerHandle, tempfile::TempDir) {
-        let (handle, dir) = crate::test_support::start_broker_with(|cfg| {
-            cfg.authorizer = authorizer;
-        })
-        .await;
-        handle.wait_until_group_coordinator_ready().await;
-        handle.wait_until_share_coordinator_ready().await;
-        if !share_enabled {
-            crate::test_support::finalize_share_version(&handle.broker_arc_for_test(), 0).await;
-        }
-        (handle, dir)
-    }
-
-    fn principal() -> Principal {
-        crate::test_support::principal("alice")
-    }
 
     async fn create_topic(
         broker_handle: &crate::broker::BrokerHandle,
@@ -474,11 +453,10 @@ mod tests {
             ),
         ];
         for (case, authorizer, share_enabled, topic_name, partitions, expected) in cases {
-            let (broker_handle, _dir) = start_broker(authorizer, share_enabled).await;
+            let (broker_handle, _dir) =
+                crate::test_support::start_share_broker(authorizer, share_enabled).await;
             let broker = broker_handle.broker_arc_for_test();
-            let principal = principal();
-            let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
-            let ctx = test_context(&principal, &peer);
+            test_ctx!(ctx, "alice");
             let resp = handle(
                 &broker,
                 request("g1", topic_name, &partitions),
@@ -555,11 +533,10 @@ mod tests {
                     Vec::new()
                 },
             });
-            let (broker_handle, _dir) = start_broker(authorizer, true).await;
+            let (broker_handle, _dir) =
+                crate::test_support::start_share_broker(authorizer, true).await;
             let broker = broker_handle.broker_arc_for_test();
-            let principal = principal();
-            let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
-            let ctx = test_context(&principal, &peer);
+            test_ctx!(ctx, "alice");
             if topic_exists {
                 create_topic(&broker_handle, &broker, topic_name, &ctx).await;
                 crate::share_coordinator::handlers::test_support::lead_share_state_partitions(
@@ -628,12 +605,13 @@ mod tests {
     /// refused with `GROUP_ID_NOT_FOUND` (69), before any actor is touched.
     #[tokio::test]
     async fn invalid_and_wrong_type_group_ids_are_refused() {
-        let (broker_handle, _dir) =
-            start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer), true).await;
+        let (broker_handle, _dir) = crate::test_support::start_share_broker(
+            Arc::new(crate::authorizer::AllowAllAuthorizer),
+            true,
+        )
+        .await;
         let broker = broker_handle.broker_arc_for_test();
-        let principal = principal();
-        let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
-        let ctx = test_context(&principal, &peer);
+        test_ctx!(ctx, "alice");
 
         let empty_id_resp = handle(
             &broker,
@@ -671,12 +649,13 @@ mod tests {
     /// change its start offset back.
     #[tokio::test]
     async fn alter_creates_and_persists_a_new_share_group() {
-        let (broker_handle, _dir) =
-            start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer), true).await;
+        let (broker_handle, _dir) = crate::test_support::start_share_broker(
+            Arc::new(crate::authorizer::AllowAllAuthorizer),
+            true,
+        )
+        .await;
         let broker = broker_handle.broker_arc_for_test();
-        let principal = principal();
-        let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
-        let ctx = test_context(&principal, &peer);
+        test_ctx!(ctx, "alice");
         create_topic(&broker_handle, &broker, "new-topic", &ctx).await;
         crate::share_coordinator::handlers::test_support::lead_share_state_partitions(&broker)
             .await;
@@ -766,8 +745,11 @@ mod tests {
 
     #[tokio::test]
     async fn active_group_rejects_the_whole_reset_batch() {
-        let (broker_handle, _dir) =
-            start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer), true).await;
+        let (broker_handle, _dir) = crate::test_support::start_share_broker(
+            Arc::new(crate::authorizer::AllowAllAuthorizer),
+            true,
+        )
+        .await;
         let broker = broker_handle.broker_arc_for_test();
         let coordinator = broker.group_coordinator.clone();
 
@@ -793,9 +775,7 @@ mod tests {
         let resp = rx.await.expect("heartbeat response");
         assert!(resp.error_code == codes::NONE, "{resp:?}");
 
-        let principal = principal();
-        let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
-        let ctx = test_context(&principal, &peer);
+        test_ctx!(ctx, "alice");
         let response = handle(
             &broker,
             request("busy", "missing", &[0]),
@@ -813,12 +793,13 @@ mod tests {
 
     #[tokio::test]
     async fn reset_mutates_only_requested_valid_partitions_and_bumps_group_epoch() {
-        let (broker_handle, _dir) =
-            start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer), true).await;
+        let (broker_handle, _dir) = crate::test_support::start_share_broker(
+            Arc::new(crate::authorizer::AllowAllAuthorizer),
+            true,
+        )
+        .await;
         let broker = broker_handle.broker_arc_for_test();
-        let principal = principal();
-        let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
-        let ctx = test_context(&principal, &peer);
+        test_ctx!(ctx, "alice");
         create_topic(&broker_handle, &broker, "reset-topic", &ctx).await;
         crate::share_coordinator::handlers::test_support::lead_share_state_partitions(&broker)
             .await;

@@ -196,9 +196,7 @@ mod tests {
     use assert2::assert;
 
     use super::*;
-    use crate::test_support::{
-        peer, principal, start_broker_with_authorizer_no_audit as start_broker,
-    };
+    use crate::test_support::{start_broker_with_authorizer_no_audit as start_broker, test_ctx};
 
     #[test]
     fn txn_state_as_str_matches_jvm_names() {
@@ -314,9 +312,7 @@ mod tests {
             .await
             .expect("seed txn entry");
 
-        let p_alice = principal("admin");
-        let peer = peer();
-        let ctx = test_context(&p_alice, &peer);
+        test_ctx!(ctx, "admin");
         // Filter on the seeded pid → the matching entry must be kept.
         let req = ListTransactionsRequest {
             producer_id_filters: vec![100],
@@ -374,9 +370,7 @@ mod tests {
         let (broker_handle, _dir) =
             start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
         let broker = broker_handle.broker_arc_for_test();
-        let p = principal("admin");
-        let peer = peer();
-        let ctx = test_context(&p, &peer);
+        test_ctx!(ctx, "admin");
         let req = ListTransactionsRequest {
             state_filters: vec!["Ongoing".into(), "MysteryState".into()],
             producer_id_filters: vec![42],
@@ -438,9 +432,7 @@ mod tests {
                 .expect("seed the transaction");
         }
 
-        let p = principal("admin");
-        let peer = peer();
-        let ctx = test_context(&p, &peer);
+        test_ctx!(ctx, "admin");
         // (state filters, listed ids, unknown filters)
         let cases = [
             (Vec::new(), vec![ongoing_id.to_string()], Vec::new()),
@@ -487,9 +479,7 @@ mod tests {
         let (broker_handle, _dir) =
             start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
         let broker = broker_handle.broker_arc_for_test();
-        let p = principal("admin");
-        let peer = peer();
-        let ctx = test_context(&p, &peer);
+        test_ctx!(ctx, "admin");
 
         for (version, expected_error) in [(1, codes::NONE), (2, codes::INVALID_REGULAR_EXPRESSION)]
         {

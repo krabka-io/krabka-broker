@@ -101,7 +101,7 @@ pub(crate) async fn handle(
 
 #[cfg(test)]
 mod tests {
-    use std::{net::SocketAddr, sync::Arc};
+    use std::sync::Arc;
 
     use assert2::assert;
     use krabka_protocol::{Decode as _, primitives::uuid::Uuid as ProtoUuid};
@@ -124,7 +124,7 @@ mod tests {
     );
 
     use super::*;
-    use crate::test_support::start_broker_with_authorizer as start_broker;
+    use crate::test_support::{start_broker_with_authorizer as start_broker, test_ctx};
 
     /// Decode and encode round trip at the minimum and maximum versions.
     #[test]
@@ -162,9 +162,7 @@ mod tests {
         let version = krabka_protocol::owned::remove_raft_voter_response::MAX_VERSION;
         let (broker_handle, _dir) = start_broker(Arc::new(DenyAll)).await;
         let broker = broker_handle.broker_arc_for_test();
-        let principal = crate::test_support::principal("alice");
-        let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
-        let ctx = test_context(&principal, &peer);
+        test_ctx!(ctx, "alice");
         let req_bytes = encode_request(&request(2), version);
 
         let resp = super::handle(&broker, version, &req_bytes, &ctx)
@@ -183,9 +181,7 @@ mod tests {
         let (broker_handle, _dir) =
             start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
         let broker = broker_handle.broker_arc_for_test();
-        let principal = crate::test_support::principal("admin");
-        let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
-        let ctx = test_context(&principal, &peer);
+        test_ctx!(ctx, "admin");
         let mut request = request(-7);
         request.cluster_id = Some(broker.controller.current_image().cluster_id().to_string());
         let req_bytes = encode_request(&request, version);

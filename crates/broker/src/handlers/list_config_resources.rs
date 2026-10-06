@@ -191,10 +191,7 @@ mod tests {
     use uuid::Uuid;
 
     use super::*;
-    use crate::{
-        broker::BrokerHandle,
-        test_support::{DenyAll, peer, principal},
-    };
+    use crate::{broker::BrokerHandle, test_support::DenyAll};
 
     const VERSION: i16 = 1;
 
@@ -329,7 +326,7 @@ mod tests {
 
     crate::test_support::context_helper!(client_id = "admin-client");
 
-    use crate::test_support::start_broker_with_authorizer_no_audit as start_broker;
+    use crate::test_support::{start_broker_with_authorizer_no_audit as start_broker, test_ctx};
 
     async fn seed_topic(handle: &BrokerHandle, name: &str) {
         handle
@@ -356,9 +353,7 @@ mod tests {
             start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
         seed_topic(&broker_handle, "t-a").await;
         let broker = broker_handle.broker_arc_for_test();
-        let p = principal("admin");
-        let peer = peer();
-        let ctx = test_context(&p, &peer);
+        test_ctx!(ctx, "admin");
 
         let unsupported = ListConfigResourcesResponse {
             throttle_time_ms: 0,
@@ -400,9 +395,7 @@ mod tests {
             start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
         seed_topic(&broker_handle, "t-a").await;
         let broker = broker_handle.broker_arc_for_test();
-        let p = principal("admin");
-        let peer = peer();
-        let ctx = test_context(&p, &peer);
+        test_ctx!(ctx, "admin");
 
         let req = ListConfigResourcesRequest {
             resource_types: vec![RESOURCE_TYPE_TOPIC],
@@ -431,9 +424,7 @@ mod tests {
     async fn denied_handler_response_preserves_error_fields() {
         let (broker_handle, _dir) = start_broker(Arc::new(DenyAll)).await;
         let broker = broker_handle.broker_arc_for_test();
-        let p = principal("alice");
-        let peer = peer();
-        let ctx = test_context(&p, &peer);
+        test_ctx!(ctx, "alice");
         let req = ListConfigResourcesRequest {
             resource_types: vec![RESOURCE_TYPE_TOPIC],
             ..Default::default()
@@ -503,9 +494,7 @@ mod tests {
             if let Some(operation) = grant {
                 crate::test_support::grant_cluster_operation(&broker_handle, user, operation).await;
             }
-            let p = principal(user);
-            let peer = peer();
-            let ctx = test_context(&p, &peer);
+            test_ctx!(ctx, user);
 
             let resp = handle(&broker, &req, VERSION, &ctx);
 
@@ -520,9 +509,7 @@ mod tests {
             start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
         seed_topic(&broker_handle, "orders").await;
         let broker = broker_handle.broker_arc_for_test();
-        let p = principal("admin");
-        let peer = peer();
-        let ctx = test_context(&p, &peer);
+        test_ctx!(ctx, "admin");
         let req = ListConfigResourcesRequest {
             resource_types: vec![RESOURCE_TYPE_TOPIC],
             ..Default::default()

@@ -5,7 +5,7 @@
 //! per-partition rows KIP-932 asks for -- feature disabled, group
 //! denied, topic unknown -- stay exactly what the JVM admin client reads.
 
-use std::{net::SocketAddr, sync::Arc};
+use std::sync::Arc;
 
 use assert2::assert;
 use krabka_protocol::{
@@ -21,10 +21,12 @@ use krabka_protocol::{
     },
     primitives::uuid::Uuid,
 };
-use krabka_security::Principal;
 
-use super::{test_support::start_broker, *};
-use crate::{authorizer::Authorizer, test_support::DenyAll};
+use super::*;
+use crate::{
+    authorizer::Authorizer,
+    test_support::{DenyAll, test_ctx},
+};
 
 type RequestTopic<'a> = (&'a str, Vec<i32>);
 type RequestGroup<'a> = (&'a str, Vec<RequestTopic<'a>>);
@@ -55,10 +57,6 @@ fn request(groups: &[RequestGroup<'_>]) -> DescribeShareGroupOffsetsRequest {
 }
 
 crate::test_support::context_helper!(client_id = "admin-client");
-
-fn principal() -> Principal {
-    crate::test_support::principal("alice")
-}
 
 #[tokio::test]
 async fn handle_error_scenarios_preserve_expected_rows() {
@@ -157,11 +155,10 @@ async fn handle_error_scenarios_preserve_expected_rows() {
         ),
     ];
     for (case, authorizer, share_enabled, groups, expected) in cases {
-        let (broker_handle, _dir) = start_broker(authorizer, share_enabled).await;
+        let (broker_handle, _dir) =
+            crate::test_support::start_share_broker(authorizer, share_enabled).await;
         let broker = broker_handle.broker_arc_for_test();
-        let principal = principal();
-        let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
-        let ctx = test_context(&principal, &peer);
+        test_ctx!(ctx, "alice");
         let resp = handle(&broker, request(&groups), version, &ctx)
             .await
             .expect("handle");

@@ -134,13 +134,13 @@ mod tests {
     use uuid::Uuid;
 
     use super::*;
-    use crate::test_support::{DenyAll, peer, principal};
+    use crate::test_support::DenyAll;
 
     const VERSION: i16 = krabka_protocol::owned::list_partition_reassignments_response::MAX_VERSION;
 
     crate::test_support::context_helper!(client_id = "admin-client");
 
-    use crate::test_support::start_broker_with_authorizer_no_audit as start_broker;
+    use crate::test_support::{start_broker_with_authorizer_no_audit as start_broker, test_ctx};
 
     #[tokio::test]
     async fn denied_response_echoes_requested_topics() {
@@ -241,9 +241,7 @@ mod tests {
         for case in cases {
             let (broker_handle, _dir) = start_broker(Arc::new(DenyAll)).await;
             let broker = broker_handle.broker_arc_for_test();
-            let p = principal("alice");
-            let peer = peer();
-            let ctx = test_context(&p, &peer);
+            test_ctx!(ctx, "alice");
 
             let resp = handle(
                 &broker,
@@ -308,9 +306,7 @@ mod tests {
             .await
             .expect("seed reassignments");
         let broker = broker_handle.broker_arc_for_test();
-        let p = principal("admin");
-        let peer = peer();
-        let ctx = test_context(&p, &peer);
+        test_ctx!(ctx, "admin");
 
         let row = |partition_index: i32| OngoingPartitionReassignment {
             partition_index,

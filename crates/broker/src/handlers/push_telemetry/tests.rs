@@ -20,6 +20,7 @@ use crate::{
         },
     },
     handlers::push_telemetry::test_support::{metrics_data, number_point},
+    test_support::peer,
 };
 
 crate::test_support::codec_helpers!(
@@ -142,7 +143,7 @@ async fn push_after_get_checks(unstable: UnstableApiVersions) {
     })
     .await;
     let broker = broker_handle.broker_arc_for_test();
-    let peer = "127.0.0.1:9092".parse().unwrap();
+    let peer = peer();
     let client = Client {
         broker: &broker,
         ctx: TelemetryContext {
@@ -224,7 +225,7 @@ async fn push_after_get_checks(unstable: UnstableApiVersions) {
 async fn push_without_a_get_builds_the_instance() {
     let (broker_handle, _dir) = crate::test_support::start_broker_with(|_cfg| {}).await;
     let broker = broker_handle.broker_arc_for_test();
-    let peer = "127.0.0.1:9092".parse().unwrap();
+    let peer = peer();
     let client = Client {
         broker: &broker,
         ctx: TelemetryContext {

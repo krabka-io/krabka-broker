@@ -158,15 +158,14 @@ fn response(groups: Vec<DescribedGroup>) -> ShareGroupDescribeResponse {
 
 #[cfg(test)]
 mod tests {
-    use std::{net::SocketAddr, sync::Arc};
+    use std::sync::Arc;
 
     use assert2::assert;
     use krabka_metadata::ResourceType;
     use krabka_protocol::{UnknownTaggedFields, owned::share_group_describe_response};
-    use krabka_security::Principal;
 
     use super::*;
-    use crate::{authorizer::Authorizer, test_support::DenyAll};
+    use crate::test_support::{DenyAll, peer, principal, test_ctx};
 
     fn request(group_ids: &[&str]) -> ShareGroupDescribeRequest {
         ShareGroupDescribeRequest {
@@ -178,34 +177,13 @@ mod tests {
 
     crate::test_support::context_helper!(client_id = "admin-client");
 
-    async fn start_broker(
-        authorizer: Arc<dyn Authorizer>,
-        share_enabled: bool,
-    ) -> (crate::broker::BrokerHandle, tempfile::TempDir) {
-        let (handle, dir) = crate::test_support::start_broker_with(|cfg| {
-            cfg.authorizer = crate::test_support::controller_peer_allowed(authorizer);
-        })
-        .await;
-        handle.wait_until_group_coordinator_ready().await;
-        handle.wait_until_share_coordinator_ready().await;
-        if !share_enabled {
-            crate::test_support::finalize_share_version(&handle.broker_arc_for_test(), 0).await;
-        }
-        (handle, dir)
-    }
-
-    fn principal() -> Principal {
-        crate::test_support::principal("alice")
-    }
-
     #[tokio::test]
     async fn handle_denied_groups_preserve_group_ids_and_error_codes() {
         let version = share_group_describe_response::MAX_VERSION;
-        let (broker_handle, _dir) = start_broker(Arc::new(DenyAll), true).await;
+        let (broker_handle, _dir) =
+            crate::test_support::start_share_broker(Arc::new(DenyAll), true).await;
         let broker = broker_handle.broker_arc_for_test();
-        let principal = principal();
-        let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
-        let ctx = test_context(&principal, &peer);
+        test_ctx!(ctx, "alice");
         let resp = handle(&broker, request(&["g1", "g2"]), version, &ctx)
             .await
             .expect("handle");
@@ -249,13 +227,12 @@ mod tests {
     #[tokio::test]
     async fn handle_disabled_feature_wins_even_when_share_actor_exists() {
         let version = share_group_describe_response::MAX_VERSION;
-        let (broker_handle, _dir) = start_broker(Arc::new(DenyAll), false).await;
+        let (broker_handle, _dir) =
+            crate::test_support::start_share_broker(Arc::new(DenyAll), false).await;
         let broker = broker_handle.broker_arc_for_test();
         broker.group_coordinator.mark_share("g1");
         let _actor = broker.group_coordinator.get_or_create_share("g1");
-        let principal = principal();
-        let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
-        let ctx = test_context(&principal, &peer);
+        test_ctx!(ctx, "alice");
         let resp = handle(&broker, request(&["g1"]), version, &ctx)
             .await
             .expect("handle");
@@ -381,7 +358,7 @@ mod tests {
         };
 
         let version = share_group_describe_response::MAX_VERSION;
-        let (broker_handle, _dir) = start_broker(
+        let (broker_handle, _dir) = crate::test_support::start_share_broker(
             Arc::new(crate::authorizer::SimpleAclAuthorizer::new(
                 std::collections::HashSet::new(),
             )),
@@ -407,8 +384,8 @@ mod tests {
             .expect("ACLs and topics");
         seed_group(&broker, "g", &[visible]).await;
         seed_group(&broker, "h", &[visible, hidden]).await;
-        let principal = principal();
-        let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
+        let principal = principal("alice");
+        let peer = peer();
         let ctx = crate::test_support::request_context(&principal, &peer, "admin-client");
         let req = ShareGroupDescribeRequest {
             group_ids: vec!["g".into(), "denied".into(), "h".into(), "missing".into()],
@@ -472,13 +449,14 @@ mod tests {
     #[tokio::test]
     async fn handle_refuses_empty_and_foreign_group_ids() {
         let version = share_group_describe_response::MAX_VERSION;
-        let (broker_handle, _dir) =
-            start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer), true).await;
+        let (broker_handle, _dir) = crate::test_support::start_share_broker(
+            Arc::new(crate::authorizer::AllowAllAuthorizer),
+            true,
+        )
+        .await;
         let broker = broker_handle.broker_arc_for_test();
         let _classic = broker.group_coordinator.get_or_create_classic("classic");
-        let principal = principal();
-        let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
-        let ctx = test_context(&principal, &peer);
+        test_ctx!(ctx, "alice");
 
         let resp = handle(&broker, request(&["classic", ""]), version, &ctx)
             .await

@@ -18,7 +18,7 @@ use super::*;
 use crate::{
     break_glass::gate::tests::{approved_proposal, image_of},
     config::BreakGlassConfig,
-    test_support::DenyAll,
+    test_support::{DenyAll, peer, principal},
 };
 
 fn encode_request(req: &UnregisterBrokerRequest, version: i16) -> Bytes {
@@ -27,10 +27,6 @@ fn encode_request(req: &UnregisterBrokerRequest, version: i16) -> Bytes {
 
 fn decode_response(bytes: &Bytes) -> UnregisterBrokerResponse {
     crate::test_support::decode_response(bytes, unregister_broker_response::MAX_VERSION)
-}
-
-fn principal() -> Principal {
-    crate::test_support::principal("admin")
 }
 
 fn context<'a>(
@@ -60,8 +56,8 @@ async fn handle_denies_cluster_alter_with_message_and_throttle() {
     let (broker_handle, _dir) =
         crate::test_support::start_broker_with_authorizer_no_audit(Arc::new(DenyAll)).await;
     let broker = broker_handle.broker_arc_for_test();
-    let principal = principal();
-    let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
+    let principal = principal("admin");
+    let peer = peer();
     let ctx = context(&principal, &peer);
     let req = UnregisterBrokerRequest {
         broker_id: 1,
@@ -94,8 +90,8 @@ async fn handle_answers_broker_id_not_registered_for_unknown_ids() {
     )
     .await;
     let broker = broker_handle.broker_arc_for_test();
-    let principal = principal();
-    let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
+    let principal = principal("admin");
+    let peer = peer();
     let ctx = context(&principal, &peer);
 
     for broker_id in [-1, 0, 999] {
@@ -127,8 +123,8 @@ async fn handle_unregisters_registered_broker_with_success_shape() {
     )
     .await;
     let broker = broker_handle.broker_arc_for_test();
-    let principal = principal();
-    let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
+    let principal = principal("admin");
+    let peer = peer();
     let ctx = context(&principal, &peer);
     let req = UnregisterBrokerRequest {
         broker_id: 1,
@@ -248,8 +244,8 @@ async fn the_wire_handler_refuses_an_unregistration_that_no_proposal_covers() {
     })
     .await;
     let broker = broker_handle.broker_arc_for_test();
-    let principal = principal();
-    let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
+    let principal = principal("admin");
+    let peer = peer();
     let ctx = context(&principal, &peer);
     let req = UnregisterBrokerRequest {
         broker_id: 1,
@@ -354,8 +350,8 @@ async fn handle_removes_the_broker_from_every_isr_in_the_unregistering_append() 
         .expect("seed the partitions");
     // Broker 2 is heartbeating, so it may take over.
     broker.liveness.record_heartbeat(2).await;
-    let principal = principal();
-    let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
+    let principal = principal("admin");
+    let peer = peer();
     let ctx = context(&principal, &peer);
     let req = UnregisterBrokerRequest {
         broker_id: 1,
@@ -434,7 +430,7 @@ async fn a_request_on_the_controller_listener_is_answered_in_place() {
     .await;
     let broker = broker_handle.broker_arc_for_test();
     crate::test_support::wait_for_controller_leader(&broker).await;
-    let principal = principal();
+    let principal = principal("admin");
     let peer: SocketAddr = "127.0.0.1:9093".parse().unwrap();
     let ctx = crate::handlers::RequestContext::new(
         &principal,
