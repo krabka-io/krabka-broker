@@ -12,7 +12,7 @@ use std::{
 };
 
 use krabka_ids::PartitionIndex;
-use krabka_protocol::records::RecordBatch;
+use krabka_protocol::records::{Record, RecordBatch};
 use krabka_units::{ByteSize, mebibytes};
 use krabka_verified::{ReplayCursorDecision, replay_batch_cursor_decision};
 
@@ -20,12 +20,13 @@ use super::{
     OFFSETS_TOPIC,
     apply::{
         apply_group_metadata, apply_next_gen_record, apply_share_record, apply_streams_record,
+        check_value,
     },
 };
 use crate::{
     coordinator::{
         GroupCoordinator,
-        persistence::{self, GroupMetadataValue, Key, OffsetCommitValue},
+        persistence::{self, GroupMetadataValue, Key, OffsetCommitValue, RecordKey},
         unified::{
             classic_state::{ClassicGroup as ClassicState, OffsetEntry},
             group::{CoordinatorGroup, GroupKind},
@@ -182,11 +183,13 @@ pub(super) fn replay_records(
                 continue;
             }
             for record in &batch.records {
-                let Some(key_bytes) = &record.key else {
+                let Some(key) = parse_loaded_key(record, batch)? else {
                     continue;
                 };
-                let key = persistence::parse_key(key_bytes)?;
                 if batch.attributes.is_transactional() {
+                    if let Some(value) = &record.value {
+                        check_value(&key, value)?;
+                    }
                     pending_transactions
                         .entry(batch.producer_id)
                         .or_default()
@@ -233,6 +236,41 @@ pub(super) fn replay_records(
         }
     }
     Ok(acc)
+}
+
+/// Reads the key of one data record the way Kafka's `CoordinatorLoaderImpl`
+/// does, and returns `None` for a record that replay skips.
+///
+/// `CoordinatorRecordSerde.deserialize` reads the record type before anything
+/// else. A type that `GroupCoordinatorRecordSerde` does not know throws
+/// `UnknownRecordTypeException`, and the loader logs it at WARN and skips the
+/// record, value or tombstone, because it can be the leftover of an aborted
+/// upgrade. Every other failure fails the load: a missing key, a key too short
+/// for its type, and a key of a known type that does not decode.
+///
+/// # Errors
+///
+/// Returns [`BrokerError::Startup`] for a record without a key, and the
+/// decode error of a key of a known record type.
+fn parse_loaded_key(record: &Record, batch: &RecordBatch) -> Result<Option<Key>, BrokerError> {
+    let offset = batch.base_offset + i64::from(record.offset_delta);
+    let key_bytes = record.key.as_ref().ok_or_else(|| {
+        BrokerError::Startup(format!(
+            "{OFFSETS_TOPIC} record at offset {offset} has no key"
+        ))
+    })?;
+    match persistence::parse_record_key(key_bytes)? {
+        RecordKey::Known(key) => Ok(Some(key)),
+        RecordKey::UnknownType(record_type) => {
+            tracing::warn!(
+                record_type,
+                offset,
+                "Unknown record type {record_type} while loading offsets and group metadata from \
+                 {OFFSETS_TOPIC}. Ignoring it. It could be a left over from an aborted upgrade."
+            );
+            Ok(None)
+        }
+    }
 }
 
 /// Drops the offset commits that open transactions wrote for the key of a

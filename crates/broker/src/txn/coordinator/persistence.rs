@@ -212,6 +212,14 @@ impl TxnCoordinator {
 /// Replays `__transaction_state`-`partition` from its log start offset to its
 /// log end offset.
 ///
+/// A record whose key version or value version Kafka 4.3.1 does not read is
+/// logged at WARN and skipped, as Kafka's
+/// `TransactionStateManager.loadTransactionMetadata` skips the
+/// `UnknownKeyVersion` and `UnknownValueVersion` results of
+/// `TransactionLog.read`: it can be the leftover of an aborted upgrade. The
+/// key version is read first, so a tombstone of an unknown key version is
+/// skipped too.
+///
 /// `partition_for` maps a transactional id to its state partition. The replay
 /// is a pure fold over the log. It does not touch the coordinator, so a load
 /// can run it on the blocking pool.
@@ -248,6 +256,10 @@ pub(super) fn replay_partition(
                 let key_bytes = rec.key.as_ref().ok_or_else(|| {
                     BrokerError::Txn(format!("__transaction_state-{p} record is missing its key"))
                 })?;
+                if let Some(version) = unknown_version(key_bytes, KEY_VERSIONS) {
+                    warn_unknown_version("key", version, p);
+                    continue;
+                }
                 let tid = crate::txn::log_record::decode_key(key_bytes)?;
                 let partition_matches = partition_for(&tid) == p;
                 let Some(value_bytes) = rec.value.as_ref() else {
@@ -259,6 +271,10 @@ pub(super) fn replay_partition(
                     recovered.apply_tombstone(&tid);
                     continue;
                 };
+                if let Some(version) = unknown_version(value_bytes, VALUE_VERSIONS) {
+                    warn_unknown_version("value", version, p);
+                    continue;
+                }
                 let entry = crate::txn::log_record::decode_value(value_bytes, tid, last_epoch_tag)?;
                 recovered.apply_value(entry, partition_matches)?;
             }
@@ -266,6 +282,40 @@ pub(super) fn replay_partition(
         }
     }
     Ok(recovered)
+}
+
+/// The `TransactionLogKey` versions Kafka 4.3.1 reads: the key's
+/// `validVersions` is `"0"`.
+const KEY_VERSIONS: std::ops::RangeInclusive<i16> = 0..=0;
+
+/// The `TransactionLogValue` versions Kafka 4.3.1 reads: the value's
+/// `validVersions` is `"0-1"`.
+const VALUE_VERSIONS: std::ops::RangeInclusive<i16> = 0..=1;
+
+/// Returns the leading `i16` version of `bytes` when it lies outside
+/// `known`, which Kafka's `TransactionLog.read` reports as `UnknownKeyVersion`
+/// or `UnknownValueVersion`.
+///
+/// Bytes too short for a version return `None`, so the decoder that follows
+/// reports them.
+fn unknown_version(bytes: &[u8], known: std::ops::RangeInclusive<i16>) -> Option<i16> {
+    bytes
+        .first_chunk::<2>()
+        .map(|version| i16::from_be_bytes(*version))
+        .filter(|version| !known.contains(version))
+}
+
+/// Logs a skipped record of an unknown key or value version as Kafka's
+/// `TransactionStateManager.loadTransactionMetadata` does, at WARN.
+fn warn_unknown_version(version_type: &str, version: i16, partition: PartitionIndex) {
+    tracing::warn!(
+        version_type,
+        version,
+        "Unknown message {version_type} with version {version} while loading transaction \
+         state from {}-{partition}. Ignoring it. It could be a left over from an aborted \
+         upgrade.",
+        crate::txn::bootstrap::TOPIC
+    );
 }
 
 fn recovery_next_offset(base: i64, last_delta: i32) -> Result<Offset, BrokerError> {
@@ -280,7 +330,7 @@ fn recovery_next_offset(base: i64, last_delta: i32) -> Result<Offset, BrokerErro
 
 #[cfg(test)]
 mod tests {
-    use assert2::assert;
+    use assert2::{assert, check};
     use krabka_ids::PartitionIndex;
     use krabka_log::ProducerId;
 
@@ -330,5 +380,130 @@ mod tests {
             assert!(coordinator.state.contains_key(&tid) == persisted);
         }
         assert!(log.log_end_offset().0 == 1);
+    }
+
+    /// A record of a key or value version Kafka 4.3.1 does not read is
+    /// skipped, as `TransactionStateManager.loadTransactionMetadata` skips
+    /// `UnknownKeyVersion` and `UnknownValueVersion`, and the records around
+    /// it load. A key or value of a known version that does not decode fails
+    /// the load.
+    #[tokio::test]
+    async fn replay_skips_unknown_key_and_value_versions() {
+        use bytes::Bytes;
+        use krabka_protocol::records::{Record, RecordBatch};
+
+        use super::{RecoveredTransactions, replay_partition};
+        use crate::txn::log_record::{encode_key, encode_value};
+
+        let record = |key: Vec<u8>, value: Option<Vec<u8>>| RecordBatch {
+            records: vec![Record {
+                key: Some(Bytes::from(key)),
+                value: value.map(Bytes::from),
+                ..Record::default()
+            }],
+            ..RecordBatch::default()
+        };
+        let entry = |tid: &str, producer_id: i64| {
+            TxnEntry::new_empty(tid.to_owned(), ProducerId(producer_id), 0, 60_000, 0)
+        };
+        let value_of = |tid: &str, producer_id: i64| {
+            encode_value(&entry(tid, producer_id), TxnVersion::Classic, false)
+        };
+        let with_version = |mut bytes: Vec<u8>, version: i16| {
+            bytes[..2].copy_from_slice(&version.to_be_bytes());
+            bytes
+        };
+        let replay = |odd: Option<RecordBatch>| async move {
+            let dir = tempfile::tempdir().unwrap();
+            let (coordinator, _data) = live_coordinator(dir.path()).await;
+            let part = coordinator
+                .partitions
+                .get(bootstrap::TOPIC, PartitionIndex(0))
+                .expect("the state partition");
+            {
+                let mut log = part.log.lock().unwrap();
+                log.append(&mut record(
+                    encode_key("a").unwrap(),
+                    Some(value_of("a", 1)),
+                ))
+                .unwrap();
+                if let Some(mut odd) = odd {
+                    log.append(&mut odd).unwrap();
+                }
+                log.append(&mut record(
+                    encode_key("b").unwrap(),
+                    Some(value_of("b", 2)),
+                ))
+                .unwrap();
+            }
+            replay_partition(
+                &part,
+                PartitionIndex(0),
+                (krabka_units::mebibytes(1), false),
+                |_| PartitionIndex(0),
+            )
+            .ok()
+            .map(|RecoveredTransactions { state, pid_to_tid }| (state, pid_to_tid))
+        };
+        let both = replay(None).await;
+        assert!(both.as_ref().is_some_and(|(state, _)| state.len() == 2));
+
+        let cases = [
+            (
+                "key version 1 with a value",
+                record(
+                    with_version(encode_key("c").unwrap(), 1),
+                    Some(value_of("c", 3)),
+                ),
+                both.clone(),
+            ),
+            (
+                "key version -1 as a tombstone",
+                record(with_version(encode_key("a").unwrap(), -1), None),
+                both.clone(),
+            ),
+            (
+                "key version 1 with a key body that does not decode",
+                record(vec![0x00, 0x01, 0x7f], Some(vec![0xff])),
+                both.clone(),
+            ),
+            (
+                "value version 2",
+                record(
+                    encode_key("c").unwrap(),
+                    Some(with_version(value_of("c", 3), 2)),
+                ),
+                both.clone(),
+            ),
+            (
+                "value version -1",
+                record(
+                    encode_key("c").unwrap(),
+                    Some(with_version(value_of("c", 3), -1)),
+                ),
+                both.clone(),
+            ),
+            (
+                "known value version with a corrupt value",
+                record(
+                    encode_key("c").unwrap(),
+                    Some(value_of("c", 3)[..9].to_vec()),
+                ),
+                None,
+            ),
+            (
+                "known key version whose key does not decode",
+                record(vec![0x00, 0x00, 0x00, 0x05, b'c'], Some(value_of("c", 3))),
+                None,
+            ),
+            (
+                "key shorter than its version",
+                record(vec![0x00], Some(value_of("c", 3))),
+                None,
+            ),
+        ];
+        for (name, odd, expected) in cases {
+            check!(replay(Some(odd)).await == expected, "{name}");
+        }
     }
 }

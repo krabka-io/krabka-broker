@@ -161,41 +161,84 @@ pub enum Key {
     Streams(crate::coordinator::unified::streams::persistence::StreamsGroupKey),
 }
 
-pub fn parse_key(mut buf: &[u8]) -> Result<Key, BrokerError> {
+/// A `__consumer_offsets` record key as the coordinator loader reads it.
+///
+/// Kafka's `GroupCoordinatorRecordSerde.apiMessageKeyFor` throws
+/// `UnknownRecordTypeException` for a record type that its
+/// `CoordinatorRecordType` does not list, and `CoordinatorLoaderImpl` skips
+/// that record rather than fail the load. Such a key is
+/// [`RecordKey::UnknownType`] here, so the loader can tell it apart from a key
+/// of a known type that does not decode.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RecordKey {
+    /// A record type this broker reads, with its decoded key.
+    Known(Key),
+    /// A record type this broker does not read. Nothing past the leading
+    /// `i16` was decoded.
+    UnknownType(i16),
+}
+
+/// Decodes a `__consumer_offsets` record key and refuses an unknown record
+/// type.
+///
+/// # Errors
+///
+/// Returns [`BrokerError::Protocol`] when the key is shorter than its `i16`
+/// record type, names a record type that [`parse_record_key`] does not know,
+/// or does not decode as that type's key.
+pub fn parse_key(buf: &[u8]) -> Result<Key, BrokerError> {
+    match parse_record_key(buf)? {
+        RecordKey::Known(key) => Ok(key),
+        RecordKey::UnknownType(_) => Err(BrokerError::Protocol(
+            krabka_protocol::ProtocolError::InvalidValue("unknown __consumer_offsets key version"),
+        )),
+    }
+}
+
+/// Decodes a `__consumer_offsets` record key, reporting an unknown record type
+/// as [`RecordKey::UnknownType`] instead of an error.
+///
+/// The record type is read first, as Kafka's `CoordinatorRecordSerde.deserialize`
+/// does, so an unknown type is reported whatever bytes follow it.
+///
+/// # Errors
+///
+/// Returns [`BrokerError::Protocol`] when the key is shorter than its `i16`
+/// record type, or when a key of a known record type does not decode.
+pub fn parse_record_key(mut buf: &[u8]) -> Result<RecordKey, BrokerError> {
     if buf.remaining() < 2 {
         return Err(BrokerError::Protocol(
             krabka_protocol::ProtocolError::InvalidValue("offsets key too short"),
         ));
     }
     let version = buf.get_i16();
-    match version {
+    let key = match version {
         0 | 1 => {
             let group_id = get_string(&mut buf)?;
             let topic = get_string(&mut buf)?;
             let partition = get_i32(&mut buf)?;
-            Ok(Key::OffsetCommit {
+            Key::OffsetCommit {
                 group_id,
                 topic,
                 partition,
-            })
+            }
         }
         2 => {
             let group_id = get_string(&mut buf)?;
-            Ok(Key::GroupMetadata { group_id })
+            Key::GroupMetadata { group_id }
         }
-        3 | 5 | 6 | 7 | 8 | 16 => Ok(Key::NextGen(
+        3 | 5 | 6 | 7 | 8 | 16 => Key::NextGen(
             crate::coordinator::unified::persistence_next_gen::parse_key(version, buf)?,
-        )),
-        10..=15 => Ok(Key::Share(
+        ),
+        10..=15 => Key::Share(
             crate::coordinator::unified::share::persistence::parse_share_key(version, buf)?,
-        )),
-        17..=23 => Ok(Key::Streams(
+        ),
+        17..=23 => Key::Streams(
             crate::coordinator::unified::streams::persistence::parse_streams_key(version, buf)?,
-        )),
-        _ => Err(BrokerError::Protocol(
-            krabka_protocol::ProtocolError::InvalidValue("unknown __consumer_offsets key version"),
-        )),
-    }
+        ),
+        unknown => return Ok(RecordKey::UnknownType(unknown)),
+    };
+    Ok(RecordKey::Known(key))
 }
 
 /// Encodes a [`Key`] back to its `__consumer_offsets` wire bytes, symmetric to

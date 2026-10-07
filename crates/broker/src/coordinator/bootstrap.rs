@@ -32,6 +32,8 @@ mod test_support;
 #[cfg(test)]
 mod topic_bootstrap_tests;
 #[cfg(test)]
+mod unknown_record_tests;
+#[cfg(test)]
 mod upgrade_downgrade_tests;
 
 pub use self::audit::bootstrap_audit_topic;

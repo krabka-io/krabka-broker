@@ -10,13 +10,97 @@ use std::sync::Arc;
 use crate::{
     coordinator::{
         GroupCoordinator,
-        persistence::GroupMetadataValue,
+        persistence::{GroupMetadataValue, Key, OffsetCommitValue},
         unified::classic_state::{
             ClassicGroup as ClassicState, GroupState as ClassicGroupState, Member,
         },
     },
     error::BrokerError,
 };
+
+/// Decodes `value` as the value of `key`'s record type and drops the result.
+///
+/// Kafka's `CoordinatorRecordSerde.deserialize` decodes every value as the
+/// loader reads it, before `CoordinatorLoaderImpl` hands the record to the
+/// shard, so a value that does not decode fails the load even when it belongs
+/// to a transaction that later aborts or never ends. Replay defers the values
+/// of transactional records until their marker, so it calls this when it
+/// defers one.
+///
+/// # Errors
+///
+/// Returns the decode error of the value: an unsupported value version, or
+/// bytes that do not decode at that version.
+pub(super) fn check_value(key: &Key, value: &[u8]) -> Result<(), BrokerError> {
+    use crate::coordinator::unified::{
+        persistence_next_gen::{self as ng, NextGenKey},
+        share::persistence::{self as sp, ShareGroupKey},
+        streams::persistence::{self as st, StreamsGroupKey},
+    };
+    match key {
+        Key::OffsetCommit { .. } => OffsetCommitValue::decode_value(value).map(|_| ()),
+        Key::GroupMetadata { .. } => GroupMetadataValue::decode_value(value).map(|_| ()),
+        Key::NextGen(key) => match key {
+            NextGenKey::GroupMetadata { .. } => ng::GroupMetadataValue::decode(value).map(|_| ()),
+            NextGenKey::MemberMetadata { .. } => ng::MemberMetadataValue::decode(value).map(|_| ()),
+            NextGenKey::TargetAssignmentMetadata { .. } => {
+                ng::TargetAssignmentMetadataValue::decode(value).map(|_| ())
+            }
+            NextGenKey::TargetAssignmentMember { .. } => {
+                ng::TargetAssignmentMemberValue::decode(value).map(|_| ())
+            }
+            NextGenKey::CurrentMemberAssignment { .. } => {
+                ng::CurrentMemberAssignmentValue::decode(value).map(|_| ())
+            }
+            NextGenKey::RegularExpression { .. } => {
+                ng::RegularExpressionValue::decode(value).map(|_| ())
+            }
+        },
+        Key::Share(key) => match key {
+            ShareGroupKey::GroupMetadata { .. } => {
+                sp::ShareGroupMetadataValue::decode(value).map(|_| ())
+            }
+            ShareGroupKey::MemberMetadata { .. } => {
+                sp::ShareGroupMemberMetadataValue::decode(value).map(|_| ())
+            }
+            ShareGroupKey::TargetAssignmentMetadata { .. } => {
+                sp::ShareGroupTargetAssignmentMetadataValue::decode(value).map(|_| ())
+            }
+            ShareGroupKey::TargetAssignmentMember { .. } => {
+                sp::ShareGroupTargetAssignmentMemberValue::decode(value).map(|_| ())
+            }
+            ShareGroupKey::CurrentMemberAssignment { .. } => {
+                sp::ShareGroupCurrentMemberAssignmentValue::decode(value).map(|_| ())
+            }
+            ShareGroupKey::StatePartitionMetadata { .. } => {
+                sp::ShareGroupStatePartitionMetadataValue::decode(value).map(|_| ())
+            }
+        },
+        Key::Streams(key) => match key {
+            StreamsGroupKey::GroupMetadata { .. } => {
+                st::StreamsGroupMetadataValue::decode(value).map(|_| ())
+            }
+            StreamsGroupKey::MemberMetadata { .. } => {
+                st::StreamsGroupMemberMetadataValue::decode(value).map(|_| ())
+            }
+            StreamsGroupKey::Topology { .. } => {
+                st::StreamsGroupTopologyValue::decode(value).map(|_| ())
+            }
+            StreamsGroupKey::PartitionMetadata { .. } => {
+                st::StreamsGroupPartitionMetadataValue::decode(value).map(|_| ())
+            }
+            StreamsGroupKey::TargetAssignmentMetadata { .. } => {
+                st::StreamsGroupTargetAssignmentMetadataValue::decode(value).map(|_| ())
+            }
+            StreamsGroupKey::TargetAssignmentMember { .. } => {
+                st::StreamsGroupTargetAssignmentMemberValue::decode(value).map(|_| ())
+            }
+            StreamsGroupKey::CurrentMemberAssignment { .. } => {
+                st::StreamsGroupCurrentMemberAssignmentValue::decode(value).map(|_| ())
+            }
+        },
+    }
+}
 
 pub(super) fn apply_next_gen_record(
     coordinator: &Arc<GroupCoordinator>,

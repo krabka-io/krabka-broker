@@ -59,7 +59,10 @@ async fn recover_honors_nondefault_read_bound() {
         value: Some(snapshot.encode()),
         ..Record::default()
     });
+    // Padding that pushes the batch past the bounded read: a record of a type
+    // the share-state loader does not know, which it skips.
     batch.records.push(Record {
+        key: Some(Bytes::from_static(&[0x7f, 0xff])),
         value: Some(Bytes::from(vec![0; 2_048])),
         ..Record::default()
     });
@@ -692,4 +695,166 @@ fn update_then_snapshot(snap_key: bytes::Bytes, upd_key: bytes::Bytes) -> Record
         ..Default::default()
     });
     batch_a
+}
+
+/// What a successful replay of a state partition loads.
+type Loaded = HashMap<ShareStateKey3, SharePartitionState>;
+
+/// The share-state load skips and fails the records that Kafka's
+/// `CoordinatorLoaderImpl` does with a `ShareCoordinatorRecordSerde`: an
+/// unknown record type is skipped, value or tombstone, and a transaction marker
+/// is ignored, while a missing or short key, a key that does not decode, an
+/// unsupported value version and a corrupt value fail the load.
+#[tokio::test]
+async fn replay_skips_unknown_record_types_and_fails_on_bad_records() {
+    use crate::txn::marker::{MarkerType, build_marker_batch};
+
+    let topic_id = uuid::Uuid::from_bytes([48; 16]);
+    let key_of = |record_type: i16, partition: i32| {
+        encode_state_key(&ShareStateKey {
+            record_type,
+            group_id: "g".to_string(),
+            topic_id,
+            partition,
+        })
+        .unwrap()
+    };
+    let snapshot = |start: i64| ShareSnapshotValue {
+        snapshot_epoch: 0,
+        state_epoch: 1,
+        leader_epoch: 2,
+        start_offset: Offset(start),
+        delivery_complete_count: 0,
+        create_timestamp: 0,
+        write_timestamp: 0,
+        state_batches: vec![batch(start, start + 9)],
+    };
+    let update = ShareUpdateValue {
+        snapshot_epoch: 0,
+        leader_epoch: 2,
+        start_offset: Offset(30),
+        delivery_complete_count: 0,
+        state_batches: vec![],
+    };
+    let data = |key: Option<Bytes>, value: Option<Bytes>| RecordBatch {
+        records: vec![Record {
+            key,
+            value,
+            ..Record::default()
+        }],
+        ..RecordBatch::default()
+    };
+    let mut unsupported_version = snapshot(20).encode().to_vec();
+    unsupported_version[..2].copy_from_slice(&1_i16.to_be_bytes());
+    let unsupported_version = Bytes::from(unsupported_version);
+    let truncated_snapshot = snapshot(20).encode().slice(..10);
+    let truncated_update = update.encode().slice(..10);
+    let both_snapshots = HashMap::from([
+        (
+            ("g".to_string(), topic_id, 0),
+            SharePartitionState::from_snapshot(&snapshot(0), Offset(0)),
+        ),
+        (
+            ("g".to_string(), topic_id, 1),
+            SharePartitionState::from_snapshot(&snapshot(10), Offset(2)),
+        ),
+    ]);
+
+    let cases: Vec<(&str, RecordBatch, Option<Loaded>)> = vec![
+        (
+            "unknown type 2 with a value",
+            data(Some(key_of(2, 2)), Some(snapshot(20).encode())),
+            Some(both_snapshots.clone()),
+        ),
+        (
+            "unknown type as a tombstone",
+            data(Some(Bytes::from_static(&[0x7f, 0xff])), None),
+            Some(both_snapshots.clone()),
+        ),
+        (
+            "unknown type with a key body that does not decode",
+            data(
+                Some(Bytes::from_static(&[0x00, 0x05, 0x7f])),
+                Some(Bytes::new()),
+            ),
+            Some(both_snapshots.clone()),
+        ),
+        (
+            "transaction marker",
+            build_marker_batch(
+                krabka_log::ProducerId(7),
+                0,
+                Offset(0),
+                MarkerType::Commit,
+                0,
+            ),
+            Some(both_snapshots.clone()),
+        ),
+        (
+            "snapshot with an unsupported value version",
+            data(
+                Some(key_of(KEY_SHARE_SNAPSHOT, 2)),
+                Some(unsupported_version),
+            ),
+            None,
+        ),
+        (
+            "snapshot with a corrupt value",
+            data(
+                Some(key_of(KEY_SHARE_SNAPSHOT, 2)),
+                Some(truncated_snapshot),
+            ),
+            None,
+        ),
+        (
+            "update with a corrupt value",
+            data(Some(key_of(KEY_SHARE_UPDATE, 2)), Some(truncated_update)),
+            None,
+        ),
+        (
+            "known type whose key does not decode",
+            data(
+                Some(Bytes::from_static(&[0x00, 0x01, 0x00, 0x05, b'g'])),
+                None,
+            ),
+            None,
+        ),
+        (
+            "key shorter than its record type",
+            data(Some(Bytes::from_static(&[0x00])), Some(update.encode())),
+            None,
+        ),
+        (
+            "record without a key",
+            data(None, Some(update.encode())),
+            None,
+        ),
+    ];
+
+    for (name, mut odd, expected) in cases {
+        let dir = tempdir().unwrap();
+        let registry = PartitionRegistry::new();
+        open_state_partition(&registry, dir.path(), 0);
+        let part = registry
+            .get(bootstrap::TOPIC, PartitionIndex(0))
+            .expect("state partition open");
+        {
+            let mut log = part.log.lock().unwrap();
+            log.append(&mut data(
+                Some(key_of(KEY_SHARE_SNAPSHOT, 0)),
+                Some(snapshot(0).encode()),
+            ))
+            .unwrap();
+            log.append(&mut odd).unwrap();
+            log.append(&mut data(
+                Some(key_of(KEY_SHARE_SNAPSHOT, 1)),
+                Some(snapshot(10).encode()),
+            ))
+            .unwrap();
+        }
+
+        let replayed = replay_partition(&part, PartitionIndex(0), krabka_units::mebibytes(1), 10);
+
+        check!(replayed.ok() == expected, "{name}");
+    }
 }
