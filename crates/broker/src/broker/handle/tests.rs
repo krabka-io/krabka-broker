@@ -429,7 +429,7 @@ async fn only_a_stop_without_a_fatal_fault_leaves_a_clean_shutdown_proof() {
         handle.shutdown().await;
 
         check!(
-            dir.path().join("clean_shutdown").exists() == proof_expected,
+            dir.path().join(".kafka_cleanshutdown").exists() == proof_expected,
             "{name}"
         );
     }

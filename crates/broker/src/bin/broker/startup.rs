@@ -421,7 +421,7 @@ mod tests {
         FeatureLevelRecord(name='metadata.version', featureLevel=33), \
         but this controller only supports versions 7-30";
 
-    const CLEAN_SHUTDOWN_PROOF: &str = "clean_shutdown";
+    const CLEAN_SHUTDOWN_PROOF: &str = ".kafka_cleanshutdown";
 
     async fn start_broker(log_dir: &std::path::Path) -> BrokerHandle {
         Broker::start(BrokerConfig::for_tests(log_dir.to_path_buf()))

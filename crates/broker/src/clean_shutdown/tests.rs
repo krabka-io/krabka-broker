@@ -66,7 +66,7 @@ fn a_proof_is_spent_by_the_start_that_reads_it() {
 }
 
 /// The exact bytes Kafka 4.x's `CleanShutdownFileHandler.write(42)` leaves in
-/// `.kafka_cleanshutdown`, and krabka in `clean_shutdown`. This pins the
+/// `.kafka_cleanshutdown`, and krabka leaves in the same file. This pins the
 /// on-disk format: a change to it is a change to the 1.x contract.
 const GOLDEN: &str = r#"{"version":0,"brokerEpoch":42}"#;
 
@@ -75,11 +75,11 @@ fn the_proof_holds_kafkas_bytes() {
     let dir = tempfile::tempdir().expect("temp dir");
     write(dir.path(), 42);
 
-    let on_disk = std::fs::read_to_string(dir.path().join("clean_shutdown"))
-        .expect("the proof is at krabka's file name");
+    let on_disk = std::fs::read_to_string(dir.path().join(".kafka_cleanshutdown"))
+        .expect("the proof is at Kafka's file name");
     assert!(
         (FILE_NAME, encode(42), on_disk)
-            == ("clean_shutdown", GOLDEN.to_owned(), GOLDEN.to_owned())
+            == (".kafka_cleanshutdown", GOLDEN.to_owned(), GOLDEN.to_owned())
     );
 }
 

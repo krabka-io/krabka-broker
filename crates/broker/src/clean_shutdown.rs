@@ -2,7 +2,7 @@
 //! start.
 //!
 //! A broker that stops gracefully writes its current broker epoch to
-//! `{log_dir}/clean_shutdown`. The next start reads that epoch and offers it
+//! `{log_dir}/.kafka_cleanshutdown`. The next start reads that epoch and offers it
 //! back at registration; the controller accepts the restart as clean only when
 //! the epoch it still holds for that node is the one the file names.
 //! A broker that died -- SIGKILL, a lost machine, a panic -- wrote no file, so
@@ -14,10 +14,9 @@
 //! `LogManager.readBrokerEpochFromCleanShutdownFiles` reads it at startup, and
 //! `ClusterControlManager.registerBroker` computes
 //! `isCleanShutdown = storedBrokerEpoch == request.previousBrokerEpoch()`.
-//! krabka writes the same bytes as Kafka,
-//! `{"version":0,"brokerEpoch":<epoch>}`, in the field order Jackson gives
-//! `CleanShutdownFileHandler.Content`, but keeps its own file name,
-//! `clean_shutdown`, rather than Kafka's `.kafka_cleanshutdown`.
+//! krabka writes the same file as Kafka: the name `.kafka_cleanshutdown` and
+//! the bytes `{"version":0,"brokerEpoch":<epoch>}`, in the field order Jackson
+//! gives `CleanShutdownFileHandler.Content`.
 //!
 //! ## Absent means unclean
 //!
@@ -54,7 +53,7 @@ use serde::{Deserialize, Serialize};
 
 /// The file name. Kafka's `CleanShutdownFileHandler.CLEAN_SHUTDOWN_FILE_NAME`
 /// is `.kafka_cleanshutdown`; only krabka reads this file, so the name differs.
-const FILE_NAME: &str = "clean_shutdown";
+const FILE_NAME: &str = ".kafka_cleanshutdown";
 
 /// The `version` of the clean-shutdown file this build writes and reads.
 ///
@@ -121,7 +120,7 @@ fn decode(text: &str) -> Result<i64, ProofError> {
     Ok(content.broker_epoch)
 }
 
-/// Read the clean-shutdown proof from `{log_dir}/clean_shutdown` and delete
+/// Read the clean-shutdown proof from `{log_dir}/.kafka_cleanshutdown` and delete
 /// it, or return [`UNPROVEN`] when there is none to read.
 pub(crate) fn take(log_dir: &Path) -> i64 {
     let path = log_dir.join(FILE_NAME);
@@ -146,7 +145,7 @@ pub(crate) fn take(log_dir: &Path) -> i64 {
     epoch
 }
 
-/// Write `broker_epoch` to `{log_dir}/clean_shutdown` as this broker's
+/// Write `broker_epoch` to `{log_dir}/.kafka_cleanshutdown` as this broker's
 /// proof that it stopped on purpose, and sync it, as Kafka does.
 ///
 /// A failure to write is logged and otherwise ignored: the broker is stopping

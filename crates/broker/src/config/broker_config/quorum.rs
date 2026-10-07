@@ -48,7 +48,7 @@ macro_rules! quorum_fields {
 
             /// KIP-966 clean-shutdown proof: the broker epoch this node held
             /// when it last stopped gracefully, recovered from
-            /// `{log_dir}/clean_shutdown` at boot and offered back at
+            /// `{log_dir}/.kafka_cleanshutdown` at boot and offered back at
             /// registration. Kafka carries the same value as
             /// `BrokerRegistrationRequest.previousBrokerEpoch`. It is
             /// `clean_shutdown::UNPROVEN` when this node cannot prove
