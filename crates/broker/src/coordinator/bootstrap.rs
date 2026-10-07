@@ -24,6 +24,8 @@ mod classic_state_tests;
 #[cfg(test)]
 mod delete_groups_replay_tests;
 #[cfg(test)]
+mod group_type_replay_tests;
+#[cfg(test)]
 mod log_walk_tests;
 #[cfg(test)]
 mod partition_metadata_replay_tests;

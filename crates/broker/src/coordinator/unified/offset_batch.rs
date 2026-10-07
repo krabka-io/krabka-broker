@@ -24,24 +24,6 @@ impl OffsetRecordBatchBuilder {
         });
     }
 
-    /// Append keyed values or tombstones in iterator order, encoding each key first.
-    ///
-    /// # Errors
-    ///
-    /// Returns the first key-encoding error without appending that record.
-    pub(crate) fn extend_values<K, V, E>(
-        &mut self,
-        values: impl IntoIterator<Item = (K, Option<V>)>,
-        mut key: impl FnMut(K) -> Result<Bytes, E>,
-        mut encode: impl FnMut(V) -> Bytes,
-    ) -> Result<(), E> {
-        for (id, value) in values {
-            let key = key(id)?;
-            self.push(key, value.map(&mut encode));
-        }
-        Ok(())
-    }
-
     pub(crate) fn finish(self, now_ms: i64) -> RecordBatch {
         let last_delta = i32::try_from(self.records.len().saturating_sub(1)).unwrap_or(0);
         RecordBatch {

@@ -76,7 +76,18 @@ async fn share_group_records_replay_into_seed() {
     check!(seed.members.contains_key("m1"));
     check!(seed.current_per_member["m1"].member_epoch == 4);
 
-    // A member tombstone scrubs the member from the seed.
+    // Kafka's `shareGroupFenceMember` order removes the member: its current
+    // assignment tombstone leaves it at epoch -1, and then its member
+    // tombstone removes it.
+    let current_key = persistence::parse_key(
+        &sp::encode_share_key(&sp::ShareGroupKey::CurrentMemberAssignment {
+            group_id: "sg".into(),
+            member_id: "m1".into(),
+        })
+        .unwrap(),
+    )
+    .unwrap();
+    apply_tombstone(&coord, &mut Replayed::default(), current_key).unwrap();
     let tomb_key = persistence::parse_key(
         &sp::encode_share_key(&sp::ShareGroupKey::MemberMetadata {
             group_id: "sg".into(),
@@ -85,7 +96,7 @@ async fn share_group_records_replay_into_seed() {
         .unwrap(),
     )
     .unwrap();
-    apply_tombstone(&coord, &mut Replayed::default(), tomb_key);
+    apply_tombstone(&coord, &mut Replayed::default(), tomb_key).unwrap();
     let seed = coord.cached_share_seed("sg").expect("seed still present");
     assert!(!seed.members.contains_key("m1"), "tombstone removed member");
 }
@@ -170,7 +181,18 @@ async fn streams_group_records_replay_into_seed() {
     check!(seed.members.contains_key("m1"));
     check!(seed.current_per_member["m1"].member_epoch == 7);
 
-    // A member tombstone scrubs the member from the seed.
+    // Kafka's `removeStreamsMember` order removes the member: its current
+    // assignment tombstone leaves it at epoch -1, and then its member
+    // tombstone removes it.
+    let current_key = persistence::parse_key(
+        &sp::encode_streams_key(&sp::StreamsGroupKey::CurrentMemberAssignment {
+            group_id: "stg".into(),
+            member_id: "m1".into(),
+        })
+        .unwrap(),
+    )
+    .unwrap();
+    apply_tombstone(&coord, &mut Replayed::default(), current_key).unwrap();
     let tomb_key = persistence::parse_key(
         &sp::encode_streams_key(&sp::StreamsGroupKey::MemberMetadata {
             group_id: "stg".into(),
@@ -179,7 +201,7 @@ async fn streams_group_records_replay_into_seed() {
         .unwrap(),
     )
     .unwrap();
-    apply_tombstone(&coord, &mut Replayed::default(), tomb_key);
+    apply_tombstone(&coord, &mut Replayed::default(), tomb_key).unwrap();
     let seed = coord
         .cached_streams_seed("stg")
         .expect("seed still present");
@@ -187,7 +209,7 @@ async fn streams_group_records_replay_into_seed() {
 }
 
 #[test]
-fn malformed_and_orphan_records_do_not_publish_type_or_state() {
+fn a_malformed_record_publishes_nothing_and_a_child_record_creates_its_group() {
     use crate::coordinator::unified::{
         share::persistence as share, streams::persistence as streams,
     };
@@ -243,6 +265,14 @@ fn malformed_and_orphan_records_do_not_publish_type_or_state() {
         &batch,
     )
     .unwrap();
-    check!(coord.group_type("orphan-streams").is_none());
-    assert!(coord.cached_streams_seed("orphan-streams").is_none());
+    // Kafka's `getOrMaybeCreatePersistedStreamsGroup(groupId, true)`: the
+    // member record creates the group.
+    check!(
+        coord.group_type("orphan-streams") == Some(crate::coordinator::unified::GroupType::Streams)
+    );
+    assert!(
+        coord
+            .cached_streams_seed("orphan-streams")
+            .is_some_and(|seed| seed.members.contains_key("m"))
+    );
 }

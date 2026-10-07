@@ -92,10 +92,12 @@ fn partition_metadata_replays_as_kafka_4_3_1_does() {
             .encode(),
         )
     };
+    // A group that the replay creates is Kafka's new `ConsumerGroup`, at
+    // group and assignment epoch 1.
     let marked = |group_epoch: i32| GroupSeed {
         group_epoch,
         has_subscription_metadata_record: true,
-        ..GroupSeed::default()
+        ..GroupSeed::new_group()
     };
     let mut version_1 = value().to_vec();
     version_1[1] = 1;
@@ -105,7 +107,7 @@ fn partition_metadata_replays_as_kafka_4_3_1_does() {
         (
             "a value creates an empty consumer group that holds the record",
             vec![(key(partition_metadata), Some(value()))],
-            Outcome::Group(Box::new(marked(0))),
+            Outcome::Group(Box::new(marked(1))),
         ),
         (
             "a value marks an existing group",
@@ -124,7 +126,7 @@ fn partition_metadata_replays_as_kafka_4_3_1_does() {
             ],
             Outcome::Group(Box::new(GroupSeed {
                 group_epoch: 4,
-                ..GroupSeed::default()
+                ..GroupSeed::new_group()
             })),
         ),
         (

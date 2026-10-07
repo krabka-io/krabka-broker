@@ -154,8 +154,9 @@ impl PendingRecords {
     /// 2. the tombstones of each removed member, current assignment (k8),
     ///    target assignment (k7) and subscription (k5), as Kafka's
     ///    `removeMember` writes them and its replay requires;
-    /// 3. the group epoch (k3) with the deprecated k4 tombstone, the
-    ///    subscriptions (k5) and the resolved regular expressions (k16);
+    /// 3. the subscriptions (k5) of `consumerGroupHeartbeat`'s step 1, the
+    ///    resolved regular expressions (k16), and the group epoch (k3) with
+    ///    the deprecated k4 tombstone;
     /// 4. the target assignment of `TargetAssignmentBuilder`: the members'
     ///    targets (k7), then its metadata (k6);
     /// 5. the current assignments (k8);
@@ -224,17 +225,6 @@ impl PendingRecords {
                 None,
             );
         }
-        if let Some(v) = self.group_metadata {
-            batch.push(
-                key(NextGenKey::GroupMetadata { group_id: group() })?,
-                Some(v.encode()),
-            );
-            // Kafka's `updateSubscriptionMetadata` adds the k4 tombstone right
-            // after the epoch record.
-            if self.partition_metadata == PartitionMetadataWrite::Tombstone {
-                batch.push(partition_metadata_key(group_id)?, None);
-            }
-        }
         for (member_id, v) in &self.member_metadata {
             if let Some(v) = v {
                 batch.push(
@@ -254,6 +244,17 @@ impl PendingRecords {
                 })?,
                 v.as_ref().map(RegularExpressionValue::encode),
             );
+        }
+        if let Some(v) = self.group_metadata {
+            batch.push(
+                key(NextGenKey::GroupMetadata { group_id: group() })?,
+                Some(v.encode()),
+            );
+            // Kafka's `updateSubscriptionMetadata` adds the k4 tombstone right
+            // after the epoch record.
+            if self.partition_metadata == PartitionMetadataWrite::Tombstone {
+                batch.push(partition_metadata_key(group_id)?, None);
+            }
         }
         for (member_id, v) in &self.target_per_member {
             if is_removed(member_id) && v.is_none() {
@@ -773,8 +774,8 @@ mod tests {
                     (k8("leaves"), true),
                     (k7("leaves"), true),
                     (k5("leaves"), true),
-                    (k3.clone(), false),
                     (k5("stays"), false),
+                    (k3.clone(), false),
                     (k7("stays"), false),
                     (k6.clone(), false),
                     (k8("stays"), false),
@@ -799,8 +800,8 @@ mod tests {
                 },
                 vec![
                     (k2.clone(), true),
-                    (k3.clone(), false),
                     (k5("m"), false),
+                    (k3.clone(), false),
                     (k7("m"), false),
                     (k6.clone(), false),
                     (k8("m"), false),

@@ -6,17 +6,24 @@
 
 use std::collections::HashMap;
 
-use krabka_protocol::primitives::uuid::Uuid;
+use krabka_protocol::{primitives::uuid::Uuid, records::RecordBatch};
 
 use super::seed::snapshot_seed;
-use crate::coordinator::unified::share::{
-    persistence::{
-        ShareGroupCurrentMemberAssignmentValue, ShareGroupKey, ShareGroupMemberMetadataValue,
-        ShareGroupMetadataValue, ShareGroupStatePartitionMetadataValue,
-        ShareGroupTargetAssignmentMemberValue, ShareGroupTargetAssignmentMetadataValue,
-        TopicPartitionsInfo, UNKNOWN_TOPIC_NAME, encode_share_key,
+use crate::{
+    coordinator::unified::{
+        OffsetRecordBatchBuilder,
+        share::{
+            persistence::{
+                ShareGroupCurrentMemberAssignmentValue, ShareGroupKey,
+                ShareGroupMemberMetadataValue, ShareGroupMetadataValue,
+                ShareGroupStatePartitionMetadataValue, ShareGroupTargetAssignmentMemberValue,
+                ShareGroupTargetAssignmentMetadataValue, TopicPartitionsInfo, UNKNOWN_TOPIC_NAME,
+                encode_share_key,
+            },
+            state::{ShareGroupState, ShareMemberState},
+        },
     },
-    state::{ShareGroupState, ShareMemberState},
+    error::BrokerError,
 };
 
 #[derive(Debug, Default)]
@@ -43,29 +50,121 @@ impl PendingShareRecords {
             && self.state_partition_metadata.is_none()
     }
 
-    crate::coordinator::unified::persistence::encode_membership_records! {
-        @method
-        /// Encodes the delta as the one batch that `OffsetsLog::append` takes.
-        ///
-        /// # Errors
-        ///
-        /// Returns [`crate::error::BrokerError::Protocol`] when the group id or a member id is
-        /// longer than 32767 bytes, which a non-flexible key string cannot carry.
-        fn into_batch(self);
-        batch, self, group_id, now_ms, owned;
-            (typed, encode_share_key, ShareGroupKey);
-            before_members {}
-            before_target {}
-            after_members {
-                if let Some(v) = self.state_partition_metadata {
-                    batch.push(
-                        encode_share_key(&ShareGroupKey::StatePartitionMetadata {
-                            group_id: group_id.into(),
-                        })?,
-                        Some(v.encode()),
-                    );
-                }
+    /// Encodes the delta as the one batch that `OffsetsLog::append` takes, in
+    /// the order of Kafka's `GroupMetadataManager`, which is also the order
+    /// its replay accepts: the tombstones of each removed member, current
+    /// assignment, target assignment and subscription, as
+    /// `shareGroupFenceMember` writes them; then the members' subscriptions
+    /// and the group epoch of `shareGroupHeartbeat`; then the targets and
+    /// their metadata of `TargetAssignmentBuilder`; then the current
+    /// assignments; and the share-state partition metadata last.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BrokerError::Protocol`] when the group id or a member id is
+    /// longer than 32767 bytes, which a non-flexible key string cannot carry.
+    pub fn into_batch(self, group_id: &str, now_ms: i64) -> Result<RecordBatch, BrokerError> {
+        let mut batch = OffsetRecordBatchBuilder::default();
+        let key = |key: ShareGroupKey| encode_share_key(&key);
+        let group = || group_id.to_owned();
+        let removed: Vec<String> = self
+            .member_metadata
+            .iter()
+            .filter(|(_, value)| value.is_none())
+            .map(|(member_id, _)| member_id.clone())
+            .collect();
+        for member_id in &removed {
+            if self
+                .current_per_member
+                .iter()
+                .any(|(id, value)| id == member_id && value.is_none())
+            {
+                batch.push(
+                    key(ShareGroupKey::CurrentMemberAssignment {
+                        group_id: group(),
+                        member_id: member_id.clone(),
+                    })?,
+                    None,
+                );
             }
+            if self
+                .target_per_member
+                .iter()
+                .any(|(id, value)| id == member_id && value.is_none())
+            {
+                batch.push(
+                    key(ShareGroupKey::TargetAssignmentMember {
+                        group_id: group(),
+                        member_id: member_id.clone(),
+                    })?,
+                    None,
+                );
+            }
+            batch.push(
+                key(ShareGroupKey::MemberMetadata {
+                    group_id: group(),
+                    member_id: member_id.clone(),
+                })?,
+                None,
+            );
+        }
+        for (member_id, v) in self.member_metadata {
+            if let Some(v) = v {
+                batch.push(
+                    key(ShareGroupKey::MemberMetadata {
+                        group_id: group(),
+                        member_id,
+                    })?,
+                    Some(v.encode()),
+                );
+            }
+        }
+        if let Some(v) = self.group_metadata {
+            batch.push(
+                key(ShareGroupKey::GroupMetadata { group_id: group() })?,
+                Some(v.encode()),
+            );
+        }
+        for (member_id, v) in self.target_per_member {
+            if v.is_none() && removed.contains(&member_id) {
+                continue;
+            }
+            batch.push(
+                key(ShareGroupKey::TargetAssignmentMember {
+                    group_id: group(),
+                    member_id,
+                })?,
+                v.map(|x| x.encode()),
+            );
+        }
+        if let Some(v) = self.target_metadata {
+            batch.push(
+                key(ShareGroupKey::TargetAssignmentMetadata { group_id: group() })?,
+                Some(v.encode()),
+            );
+        }
+        for (member_id, v) in self.current_per_member {
+            if v.is_none() && removed.contains(&member_id) {
+                continue;
+            }
+            batch.push(
+                key(ShareGroupKey::CurrentMemberAssignment {
+                    group_id: group(),
+                    member_id,
+                })?,
+                v.map(|x| x.encode()),
+            );
+        }
+        if let Some(v) = self.state_partition_metadata {
+            batch.push(
+                encode_share_key(&ShareGroupKey::StatePartitionMetadata {
+                    group_id: group_id.into(),
+                })?,
+                Some(v.encode()),
+            );
+        }
+
+        Ok(batch.finish(now_ms))
     }
 }
 

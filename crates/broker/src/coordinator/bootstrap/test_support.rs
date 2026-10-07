@@ -163,7 +163,7 @@ pub(super) fn replay_stream(
         let key = crate::coordinator::persistence::parse_key(&key).unwrap();
         match value {
             Some(value) => apply_record(coordinator, &mut replayed, key, &value, &batch).unwrap(),
-            None => apply_tombstone(coordinator, &mut replayed, key),
+            None => apply_tombstone(coordinator, &mut replayed, key).unwrap(),
         }
     }
     replayed

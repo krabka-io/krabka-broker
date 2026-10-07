@@ -20,7 +20,7 @@ use super::{
     OFFSETS_TOPIC,
     apply::{
         apply_group_metadata, apply_next_gen_record, apply_share_record, apply_streams_record,
-        check_value,
+        check_value, settle_classic_group,
     },
 };
 use crate::{
@@ -67,6 +67,12 @@ pub(super) struct Replayed {
     /// `OffsetFetch` with `UNSTABLE_OFFSET_COMMIT` for these keys, exactly as
     /// it did before.
     pub(super) pending_txn: HashMap<String, HashMap<i64, PendingTxnKeys>>,
+    /// The simple classic groups: Kafka's `OffsetMetadataManager.replay`
+    /// creates one, an empty classic group with no protocol type, for an
+    /// offset commit of a group id that holds no group. It lives until a k2
+    /// tombstone removes it or a consumer or streams record replaces it, and
+    /// a share record refuses it.
+    pub(super) simple: HashSet<String>,
 }
 
 /// One producer's unresolved transactional offset commits for one group, as
@@ -87,6 +93,17 @@ impl Replayed {
         self.committed.extend(other.committed);
         self.empty_since.extend(other.empty_since);
         self.pending_txn.extend(other.pending_txn);
+        self.simple.extend(other.simple);
+    }
+
+    /// Kafka's `OffsetMetadataManager.replay` of an offset commit value: a
+    /// group id that holds no group gets a simple classic group.
+    fn note_offset_commit(&mut self, coordinator: &GroupCoordinator, group_id: &str) {
+        if !self.classic.contains_key(group_id)
+            && coordinator.replayed_modern_group(group_id).is_none()
+        {
+            self.simple.insert(group_id.to_owned());
+        }
     }
 }
 
@@ -175,7 +192,7 @@ pub(super) fn replay_records(
                                 &value,
                                 record.timestamp_ms,
                             )?,
-                            None => apply_tombstone(coordinator, &mut acc, record.key),
+                            None => apply_tombstone(coordinator, &mut acc, record.key)?,
                         }
                     }
                 }
@@ -189,6 +206,11 @@ pub(super) fn replay_records(
                 if batch.attributes.is_transactional() {
                     if let Some(value) = &record.value {
                         check_value(&key, value)?;
+                        // Kafka creates the simple group when it replays the
+                        // record, before the transaction ends.
+                        if let Key::OffsetCommit { group_id, .. } = &key {
+                            acc.note_offset_commit(coordinator, group_id);
+                        }
                     }
                     pending_transactions
                         .entry(batch.producer_id)
@@ -205,7 +227,7 @@ pub(super) fn replay_records(
                     apply_record(coordinator, &mut acc, key, value_bytes, batch)?;
                 } else {
                     drop_pending_offset_commits(&mut pending_transactions, &key);
-                    apply_tombstone(coordinator, &mut acc, key);
+                    apply_tombstone(coordinator, &mut acc, key)?;
                 }
             }
             advanced_to = krabka_log::Offset(batch_end);
@@ -316,6 +338,7 @@ fn apply_record_at_timestamp(
             partition,
         } => {
             let v = OffsetCommitValue::decode_value(value_bytes)?;
+            acc.note_offset_commit(coordinator, &group_id);
             acc.committed
                 .entry(group_id)
                 .or_default()
@@ -323,6 +346,10 @@ fn apply_record_at_timestamp(
         }
         Key::GroupMetadata { group_id } => {
             let v = GroupMetadataValue::decode_value(value_bytes)?;
+            // Kafka's replay puts the classic group in place of any group
+            // that held the id, whatever its type.
+            coordinator.forget_replayed_group(&group_id);
+            acc.simple.remove(&group_id);
             // A snapshot with no members is the moment the group emptied. A
             // pre-version-2 value has no such timestamp and decodes as -1.
             if v.members.is_empty() && v.current_state_timestamp_ms > 0 {
@@ -338,12 +365,14 @@ fn apply_record_at_timestamp(
             apply_group_metadata(state, v, timestamp_ms);
         }
         Key::NextGen(ng_key) => {
-            apply_next_gen_record(coordinator, ng_key, value_bytes)?;
+            apply_next_gen_record(coordinator, acc, ng_key, value_bytes)?;
         }
         Key::Share(share_key) => {
-            apply_share_record(coordinator, share_key, value_bytes)?;
+            apply_share_record(coordinator, acc, share_key, value_bytes)?;
         }
-        Key::Streams(streams_key) => apply_streams_record(coordinator, streams_key, value_bytes)?,
+        Key::Streams(streams_key) => {
+            apply_streams_record(coordinator, acc, streams_key, value_bytes)?;
+        }
     }
     Ok(())
 }
@@ -356,11 +385,46 @@ fn apply_record_at_timestamp(
 /// A group tombstone does NOT drop the group's offsets, because those are
 /// separate keys with their own records; the offset-retention sweep and
 /// `OffsetDelete` write both when both should go.
-pub(super) fn apply_tombstone(coordinator: &Arc<GroupCoordinator>, acc: &mut Replayed, key: Key) {
+///
+/// # Errors
+///
+/// Returns the `IllegalStateException` of Kafka's replay for a consumer,
+/// share or streams tombstone of a group of another type, or whose
+/// preconditions the records before it did not establish.
+pub(super) fn apply_tombstone(
+    coordinator: &Arc<GroupCoordinator>,
+    acc: &mut Replayed,
+    key: Key,
+) -> Result<(), BrokerError> {
+    use crate::coordinator::unified::replay_policy::ModernGroupType;
     match key {
-        Key::NextGen(ng_key) => coordinator.replay_next_gen_tombstone(&ng_key),
-        Key::Share(share_key) => coordinator.replay_share_tombstone(&share_key),
-        Key::Streams(streams_key) => coordinator.replay_streams_tombstone(&streams_key),
+        Key::NextGen(ng_key) => {
+            settle_classic_group(
+                coordinator,
+                acc,
+                ng_key.group_id(),
+                ModernGroupType::Consumer,
+            )?;
+            coordinator.replay_next_gen_tombstone(&ng_key)?;
+        }
+        Key::Share(share_key) => {
+            settle_classic_group(
+                coordinator,
+                acc,
+                share_key.group_id(),
+                ModernGroupType::Share,
+            )?;
+            coordinator.replay_share_tombstone(&share_key)?;
+        }
+        Key::Streams(streams_key) => {
+            settle_classic_group(
+                coordinator,
+                acc,
+                streams_key.group_id(),
+                ModernGroupType::Streams,
+            )?;
+            coordinator.replay_streams_tombstone(&streams_key)?;
+        }
         Key::OffsetCommit {
             group_id,
             topic,
@@ -379,11 +443,15 @@ pub(super) fn apply_tombstone(coordinator: &Arc<GroupCoordinator>, acc: &mut Rep
                 }
             }
         }
+        // Kafka's `removeGroup` drops whatever group holds the id.
         Key::GroupMetadata { group_id } => {
+            coordinator.forget_replayed_group(&group_id);
             acc.classic.remove(&group_id);
+            acc.simple.remove(&group_id);
             acc.empty_since.remove(&group_id);
         }
     }
+    Ok(())
 }
 
 /// Decide each group's kind and seed its actor.
