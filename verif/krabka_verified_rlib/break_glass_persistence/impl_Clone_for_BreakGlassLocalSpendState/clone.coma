@@ -1,4 +1,4 @@
-(* #"/workspace/crates/verified/src/break_glass_persistence.rs" 87 27 87 32 *)
+(* #"/workspace/crates/verified/src/break_glass_persistence.rs" 79 19 79 36 *)
 
 (* <break_glass_persistence::BreakGlassLocalSpendState as std::clone::Clone> *)
 
@@ -10,7 +10,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let clone_BreakGlassLocalSpendState [#"/workspace/crates/verified/src/break_glass_persistence.rs" 87 27 87 32]
+let clone_BreakGlassLocalSpendState [#"/workspace/crates/verified/src/break_glass_persistence.rs" 79 19 79 36]
   (self: t_BreakGlassLocalSpendState) (return (x: t_BreakGlassLocalSpendState)) = (! bb0
   [ bb0 = s0 [ s0 = [ &_ret <- self ] s1 | s1 = return {_ret} ] ]
   [ & _ret: t_BreakGlassLocalSpendState = Any.any_l () | & self: t_BreakGlassLocalSpendState = self ])

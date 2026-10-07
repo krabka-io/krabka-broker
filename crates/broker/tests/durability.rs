@@ -10,12 +10,9 @@ use assert2::{assert, check};
 use bytes::Bytes;
 use krabka_broker::{BootstrapMode, Broker, BrokerConfig, BrokerHandle};
 use krabka_client_consumer::{AutoOffsetReset, Consumer, IsolationLevel};
-use krabka_client_core::Client;
-use krabka_client_producer::{Producer, ProducerRecord};
 use krabka_protocol::{
     owned::{
-        create_topics_request::{CreatableTopic, CreateTopicsRequest},
-        fetch_request::{FetchPartition, FetchRequest, FetchTopic},
+        fetch_request::FetchRequest,
         produce_request::{PartitionProduceData, ProduceRequest, TopicProduceData},
     },
     records::RecordBatch,
@@ -30,16 +27,15 @@ use support::{
 };
 use tempfile::TempDir;
 
+use crate::support::{
+    client::connect_client,
+    fetch::{fetch_partition, single_partition_fetch},
+    topics::{creatable_topic, create_topic_request},
+};
+
 mod support;
 
-async fn boot_single() -> (BrokerHandle, String, TempDir) {
-    let dir = TempDir::new().unwrap();
-    let broker = Broker::start(BrokerConfig::for_tests(dir.path().to_path_buf()))
-        .await
-        .unwrap();
-    let bootstrap = broker.listen_addr().to_string();
-    (broker, bootstrap, dir)
-}
+pub use crate::support::boot_single;
 
 /// An idempotent batch with an explicit `(producer_id, base_sequence)`, so
 /// that a test can replay a "retry" deterministically by sending the same
@@ -208,30 +204,17 @@ async fn consumer_clamps_at_hw_when_followers_lag() {
     // does not race that post-ack recompute.
     broker.wait_until_high_watermark("clamp", 0, 3).await;
 
-    let client = Client::builder()
-        .bootstrap(bootstrap.clone())
-        .build()
-        .await
-        .unwrap();
+    let client = connect_client(bootstrap.clone(), None).await;
     let topic_id = topic_id_for(&client, "clamp").await;
     let resp = client
         .send(FetchRequest {
             replica_id: -1,
-            max_wait_ms: 500,
-            min_bytes: 1,
-            max_bytes: 1 << 20,
-            topics: vec![FetchTopic {
-                topic: "clamp".into(),
+            ..single_partition_fetch(
+                "clamp",
                 topic_id,
-                partitions: vec![FetchPartition {
-                    partition: 0,
-                    fetch_offset: 0,
-                    partition_max_bytes: 1 << 20,
-                    ..FetchPartition::default()
-                }],
-                ..FetchTopic::default()
-            }],
-            ..FetchRequest::default()
+                fetch_partition(0, 0, 1 << 20),
+                (500, 1, 1 << 20),
+            )
         })
         .await
         .expect("Fetch");
@@ -254,22 +237,18 @@ async fn read_committed_under_rf1_unchanged() {
     // FindCoordinator. Bring the transaction coordinator up first.
     broker.wait_until_transaction_coordinator_ready().await;
 
-    let producer = Producer::builder()
-        .bootstrap(bootstrap.clone())
-        .transactional_id("rc-tid")
-        .build()
-        .await
-        .unwrap();
-    producer.init_transactions().await.unwrap();
+    let producer =
+        crate::support::producer::transactional_producer(bootstrap.clone(), "rc-tid").await;
     let txn = producer.begin_transaction().await.unwrap();
     for v in ["p", "q", "r"] {
         drop(
             producer
-                .enqueue(ProducerRecord {
-                    topic: "rctxn".into(),
-                    value: Some(Bytes::from(v.to_string())),
-                    ..Default::default()
-                })
+                .enqueue(crate::support::producer::producer_record(
+                    "rctxn",
+                    None,
+                    None,
+                    Some(Bytes::from(v.to_string())),
+                ))
                 .await
                 .expect("record is queued"),
         );
@@ -306,10 +285,8 @@ async fn read_committed_under_rf1_unchanged() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn acks_all_completes_via_isr_shrink_when_follower_dead() {
     support::init_tracing();
-    let mut cluster = support::start_n_node_with_retry(3).await;
-    support::wait_for_all_brokers_registered(&cluster, 3).await;
-    let bootstrap_1 = cluster[0].1.listen_addr.to_string();
-    create_topic(&cluster[0].0, &bootstrap_1, "shrink", 3).await;
+    let (mut cluster, bootstrap_1) =
+        crate::support::durability::replicated_topic_fixture(3, "shrink", 3).await;
     // Wait for all 3 replicas to join the ISR before killing broker 3
     // so the scenario genuinely exercises ISR shrink rather than racing the
     // initial ISR population.
@@ -334,9 +311,7 @@ async fn acks_all_completes_via_isr_shrink_when_follower_dead() {
         elapsed < Duration::from_secs(5),
         "shrink + completion should be well under 5s; took {elapsed:?}"
     );
-    for (h, _, _) in cluster {
-        h.shutdown().await;
-    }
+    crate::support::shutdown_cluster(cluster).await;
 }
 
 /// A produce that waits on a stalled follower must land in the remote-time
@@ -352,10 +327,8 @@ async fn acks_all_completes_via_isr_shrink_when_follower_dead() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn acks_all_stalled_follower_wait_lands_in_remote_time_not_local_time() {
     support::init_tracing();
-    let mut cluster = support::start_n_node_with_retry(3).await;
-    support::wait_for_all_brokers_registered(&cluster, 3).await;
-    let bootstrap_1 = cluster[0].1.listen_addr.to_string();
-    create_topic(&cluster[0].0, &bootstrap_1, "phase-stall", 3).await;
+    let (mut cluster, bootstrap_1) =
+        crate::support::durability::replicated_topic_fixture(3, "phase-stall", 3).await;
     cluster[0].0.wait_until_isr_len("phase-stall", 0, 3).await;
 
     let dead = cluster.pop().expect("3rd broker");
@@ -397,9 +370,7 @@ async fn acks_all_stalled_follower_wait_lands_in_remote_time_not_local_time() {
          local={local} remote={remote}"
     );
 
-    for (h, _, _) in cluster {
-        h.shutdown().await;
-    }
+    crate::support::shutdown_cluster(cluster).await;
 }
 
 /// Partitions the overlapped-wait case produces to in one request. Wide
@@ -418,22 +389,12 @@ async fn create_topic_with_partitions(
     partitions: i32,
     rf: i16,
 ) {
-    let client = Client::builder()
-        .bootstrap(bootstrap.to_string())
-        .build()
-        .await
-        .unwrap();
+    let client = connect_client(bootstrap.to_string(), None).await;
     let resp = client
-        .send(CreateTopicsRequest {
-            topics: vec![CreatableTopic {
-                name: name.into(),
-                num_partitions: partitions,
-                replication_factor: rf,
-                ..Default::default()
-            }],
-            timeout_ms: 5_000,
-            ..Default::default()
-        })
+        .send(create_topic_request(
+            creatable_topic(name, partitions, rf),
+            5_000,
+        ))
         .await
         .expect("CreateTopics");
     assert!(
@@ -454,11 +415,7 @@ async fn produce_every_partition(
     acks: i16,
     timeout_ms: i32,
 ) -> Vec<(i32, i16)> {
-    let client = Client::builder()
-        .bootstrap(bootstrap.to_string())
-        .build()
-        .await
-        .unwrap();
+    let client = connect_client(bootstrap.to_string(), None).await;
     let topic_id = topic_id_for(&client, topic).await;
     let resp = client
         .send(ProduceRequest {
@@ -507,8 +464,7 @@ async fn produce_every_partition(
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn acks_all_waits_for_every_partition_at_once_not_one_after_another() {
     support::init_tracing();
-    let mut cluster = support::start_n_node_with_retry(2).await;
-    support::wait_for_all_brokers_registered(&cluster, 2).await;
+    let mut cluster = crate::support::registered_cluster(2).await;
     let bootstrap_1 = cluster[0].1.listen_addr.to_string();
     create_topic_with_partitions(
         &cluster[0].0,
@@ -569,7 +525,5 @@ async fn acks_all_waits_for_every_partition_at_once_not_one_after_another() {
          {waited} x {OVERLAP_TIMEOUT_MS}ms, this took {elapsed:?}"
     );
 
-    for (h, _, _) in cluster {
-        h.shutdown().await;
-    }
+    crate::support::shutdown_cluster(cluster).await;
 }

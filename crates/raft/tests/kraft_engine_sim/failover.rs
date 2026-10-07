@@ -10,12 +10,9 @@ use krabka_raft::{
     kraft::{KraftController, NodeId, snapshot_fetch::MetadataSnapshotFetchMax},
 };
 
-use crate::{
-    harness::{
-        STAGGERED_TIMEOUTS, await_single_leader, await_until, build_engine, metadata_log,
-        topic_record, voter_set,
-    },
-    sim_net::SimNet,
+use crate::harness::{
+    STAGGERED_TIMEOUTS, await_single_leader, await_until, build_engine, metadata_log,
+    start_engines, topic_record, voter_set,
 };
 
 /// Polls `ctrl`'s quorum-state snapshot until `f` accepts it, or panics.
@@ -46,17 +43,10 @@ where
 ///    leader, and a `submit_change` to the new leader commits.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn leader_failure_reelects() {
-    let net = SimNet::new();
-    let ids = [NodeId(1), NodeId(2), NodeId(3)];
+    let (net, ids) = crate::harness::three_voter_network();
     let cid = uuid::Uuid::from_u128(300);
 
-    let timeouts = STAGGERED_TIMEOUTS;
-    let mut dirs = Vec::new();
-    for (i, &id) in ids.iter().enumerate() {
-        let (ctrl, dir) = build_engine(id, &ids, cid, timeouts[i], &net);
-        net.register(id, ctrl);
-        dirs.push(dir);
-    }
+    let _dirs = start_engines(&net, &ids, cid, &STAGGERED_TIMEOUTS);
 
     let (leader, epoch1) = await_single_leader(&net, &ids, Duration::from_secs(10)).await;
 
@@ -111,8 +101,7 @@ async fn leader_failure_reelects() {
 ///     never idle and virtual time would never auto-advance.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn repeated_leader_restart_reelects() {
-    let net = SimNet::new();
-    let ids = [NodeId(1), NodeId(2), NodeId(3)];
+    let (net, ids) = crate::harness::three_voter_network();
     let cid = uuid::Uuid::from_u128(301);
     let mut dirs: HashMap<NodeId, tempfile::TempDir> = HashMap::new();
     for (i, &id) in ids.iter().enumerate() {
@@ -172,8 +161,7 @@ async fn repeated_leader_restart_reelects() {
 ///     changes is that no voter's Fetch arrives.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn isolated_leader_resigns_and_rejoins_after_heal() {
-    let net = SimNet::new();
-    let ids = [NodeId(1), NodeId(2), NodeId(3)];
+    let (net, ids) = crate::harness::three_voter_network();
     let cid = uuid::Uuid::from_u128(302);
     let mut dirs = Vec::new();
     for (i, &id) in ids.iter().enumerate() {

@@ -7,18 +7,14 @@ use std::time::Instant;
 
 use super::{
     assignment::reconcile,
-    records::{PendingShareRecords, chrono_now_ms, flush_pending},
+    records::{chrono_now_ms, flush_pending, snapshot_pending_after_change},
     share_state::reconcile_share_state,
 };
 use crate::coordinator::unified::{
     GroupCoordinator,
     actor::MetadataProvider,
     offsets_log::OffsetsLog,
-    share::{
-        config::ShareGroupConfig,
-        persistence::{ShareGroupMetadataValue, ShareGroupTargetAssignmentMetadataValue},
-        state::ShareGroupState,
-    },
+    share::{config::ShareGroupConfig, state::ShareGroupState},
 };
 
 /// Called on every heartbeat-interval tick. It evicts expired members and
@@ -41,17 +37,7 @@ pub(super) async fn handle_session_tick(
             "group epoch is exhausted".to_owned(),
         ));
     }
-    let mut pending = PendingShareRecords {
-        group_metadata: Some(ShareGroupMetadataValue {
-            epoch: state.group_epoch,
-        }),
-        ..Default::default()
-    };
-    if state.target.epoch > 0 {
-        pending.target_metadata = Some(ShareGroupTargetAssignmentMetadataValue {
-            assignment_epoch: state.target.epoch,
-        });
-    }
+    let mut pending = snapshot_pending_after_change(state, &[]);
     crate::coordinator::unified::persistence::tombstone_members!(pending, &evicted);
     let now_ms = chrono_now_ms();
     if let Err(e) = flush_pending(state, pending, offsets_log, coordinator, now_ms).await {

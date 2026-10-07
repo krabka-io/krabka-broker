@@ -23,52 +23,20 @@ use crate::jvm_acceptance::{
 async fn console_producer_round_trip() {
     const TOPIC: &str = "krabka-broker-itest";
 
-    let (broker, _dir) = start_host_broker().await;
-    nc_check_connectivity();
-
-    // 1. Create the topic via the JVM client.
-    crate::jvm_acceptance::create_console_topic(
-        crate::jvm_acceptance::KAFKA_IMAGE,
-        &[],
-        TOPIC,
-        1,
-        1,
-    );
+    let (broker, _dir) = crate::jvm_acceptance::start_console_broker(TOPIC, 1).await;
 
     // 2. Produce 3 records via stdin.
 
-    let producer_out = crate::jvm_acceptance::produce_console(
-        KAFKA_IMAGE,
-        &[],
-        TOPIC,
-        false,
-        b"alpha\nbravo\ncharlie\n",
-    );
-    assert!(
-        producer_out.status.success(),
-        "producer failed: {}",
-        String::from_utf8_lossy(&producer_out.stderr)
-    );
+    crate::jvm_acceptance::produce_console_checked(KAFKA_IMAGE, TOPIC, b"alpha\nbravo\ncharlie\n");
 
     // 3. Consume them back via --partition 0 (bypasses groups entirely).
-    let consumer_out = docker_run_kafka_tool(&[
-        "kafka-console-consumer",
-        "--bootstrap-server",
-        broker0_advertised(),
-        "--topic",
-        TOPIC,
-        "--partition",
-        "0",
-        "--from-beginning",
-        "--max-messages",
-        "3",
-        "--timeout-ms",
-        "10000",
-    ]);
+    let consumer_out = crate::jvm_acceptance::consume_console_partition(TOPIC, 3, 10000, &[]);
     let s = String::from_utf8_lossy(&consumer_out.stdout);
-    for needle in ["alpha", "bravo", "charlie"] {
-        assert!(s.contains(needle), "consumer didn't emit {needle}: {s:?}");
-    }
+    crate::jvm_acceptance::assert_console_values(
+        &s,
+        &["alpha", "bravo", "charlie"],
+        "consumer didn't emit",
+    );
 
     broker.shutdown().await;
 }
@@ -118,24 +86,9 @@ async fn rust_producer_to_console_consumer() {
     producer.close().await.expect("close");
 
     // 3. Consume via kafka-console-consumer --partition 0.
-    let consumer_out = docker_run_kafka_tool(&[
-        "kafka-console-consumer",
-        "--bootstrap-server",
-        broker0_advertised(),
-        "--topic",
-        TOPIC,
-        "--partition",
-        "0",
-        "--from-beginning",
-        "--max-messages",
-        "3",
-        "--timeout-ms",
-        "20000",
-    ]);
+    let consumer_out = crate::jvm_acceptance::consume_console_partition(TOPIC, 3, 20000, &[]);
     let s = String::from_utf8_lossy(&consumer_out.stdout);
-    for needle in ["x", "y", "z"] {
-        assert!(s.contains(needle), "missing {needle}: {s:?}");
-    }
+    crate::jvm_acceptance::assert_console_values(&s, &["x", "y", "z"], "missing");
 
     broker.shutdown().await;
 }
@@ -185,30 +138,14 @@ async fn console_consumer_prints_log_append_time() {
         broker0_advertised(),
     ]);
 
-    let producer_out =
-        crate::jvm_acceptance::produce_console(KAFKA_IMAGE, &[], TOPIC, false, b"stamped\n");
-    assert!(
-        producer_out.status.success(),
-        "producer failed: {}",
-        String::from_utf8_lossy(&producer_out.stderr)
-    );
+    crate::jvm_acceptance::produce_console_checked(KAFKA_IMAGE, TOPIC, b"stamped\n");
 
-    let consumer_out = docker_run_kafka_tool(&[
-        "kafka-console-consumer",
-        "--bootstrap-server",
-        broker0_advertised(),
-        "--topic",
+    let consumer_out = crate::jvm_acceptance::consume_console_partition(
         TOPIC,
-        "--partition",
-        "0",
-        "--from-beginning",
-        "--max-messages",
-        "1",
-        "--timeout-ms",
-        "20000",
-        "--property",
-        "print.timestamp=true",
-    ]);
+        1,
+        20000,
+        &["--property", "print.timestamp=true"],
+    );
     let printed = String::from_utf8_lossy(&consumer_out.stdout);
     // The default formatter prints `<timestampType>:<ms>\t<value>`.
     let line = printed

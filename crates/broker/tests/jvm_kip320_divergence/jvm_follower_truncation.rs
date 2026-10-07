@@ -7,16 +7,14 @@
 
 use std::time::{Duration, Instant};
 
-use krabka_metadata::{LeaderEpoch, MetadataRecord, PartitionRecord};
+use krabka_metadata::{LeaderEpoch, MetadataRecord};
 
 use crate::{
     docker::{
         KAFKA_IMAGE, docker_run_kafka_tool_with_image, produce_lines_via_jvm, set_container_paused,
     },
     dump_log::{dump_log_in_container, grep_base_offsets, max_offset_in_dump},
-    mixed_cluster::start_mixed_cluster,
-    support,
-    topic_admin::{LEADER_WAIT, create_mixed_topic, described_isr, wait_for_described_leader},
+    topic_admin::{LEADER_WAIT, wait_for_described_leader},
 };
 
 /// Steps 2-3 of Task 11. Force a real divergent suffix in a mixed cluster and
@@ -28,71 +26,12 @@ use crate::{
 #[ignore = "requires Docker + a published controller/data port; Linux-bound"]
 async fn kip320_jvm_follower_truncates_from_krabka_leader() {
     const TOPIC: &str = "krabka-kip320-jvm-follower";
-    let container = support::unique_container_name("krabka-kip320-jvm-follower-broker");
-
-    let cluster = start_mixed_cluster(&container, true).await;
-    let c1 = &cluster.krabka[0].0; // Krabka broker_id 1
-    let bootstrap_all = cluster.bootstrap_all.clone();
-
-    // 0. Gate on the JVM broker (id 3) registering into the cluster view. On
-    //    Linux/CI the cross-impl KRaft join completes within ~1 min; if it
-    //    never registers (the JVM broker failed to join the Krabka-led quorum
-    //    — the dominant Mac-vs-Linux difference here) we cannot build an RF=3
-    //    topic, so we surface that explicitly rather than fail opaquely inside
-    //    CreateTopics.
-    assert2::assert!(
-        cluster.wait_for_brokers(3, Duration::from_mins(2)).await,
-        "JVM broker never joined the mixed cluster (only the 2 Krabka brokers \
-         registered); the cross-impl KRaft data-plane join is Linux-bound"
-    );
-
-    // 1. Create an RF=3 topic placed on the two Krabka brokers + JVM. With 3
-    //    registered brokers the controller assigns replicas across all three;
-    //    we use partitions=1, replication-factor=3 so the JVM (id 3) is a
-    //    replica/follower of a Krabka leader.
-    create_mixed_topic(&bootstrap_all, TOPIC).await;
-
-    // 2. Wait for the partition to materialize on the Krabka leader and for the
-    //    JVM follower to join the ISR.
-    let deadline = Instant::now() + Duration::from_mins(2);
-    loop {
-        let desc = docker_run_kafka_tool_with_image(
-            KAFKA_IMAGE,
-            &[
-                "kafka-topics",
-                "--describe",
-                "--topic",
-                TOPIC,
-                "--bootstrap-server",
-                &bootstrap_all,
-            ],
-        );
-        let s = String::from_utf8_lossy(&desc.stdout);
-        // ISR must contain broker 3 (the JVM follower) so it is actively
-        // replicating from the Krabka leader before we induce divergence.
-        if described_isr(&s).contains(&3) {
-            break;
-        }
-        assert2::assert!(
-            Instant::now() <= deadline,
-            "JVM follower never joined ISR: {s}"
-        );
-        // intentional: polls an EXTERNAL kafka-topics --describe CLI for the
-        // JVM follower (id 3) to catch up and join the ISR; driven by the JVM
-        // broker's fetch, with a 2-min bound the 30s image awaiter can't match.
-        tokio::time::sleep(Duration::from_millis(500)).await;
-    }
-
-    // 3. Produce a committed prefix (epoch 0) via the JVM producer (acks=all),
-    //    so all replicas — including the JVM follower — share it.
-    produce_lines_via_jvm(
-        &bootstrap_all,
+    let (container, cluster, bootstrap_all, prefix_leo) = crate::mixed_cluster::prepare_divergence(
         TOPIC,
-        &(0..10).map(|i| format!("prefix-{i}")).collect::<Vec<_>>(),
-    );
-    // intentional: let the EXTERNAL JVM follower replicate the acks=all prefix;
-    // the follower's replication progress is not a Krabka image/metric signal.
-    tokio::time::sleep(Duration::from_secs(2)).await;
+        crate::mixed_cluster::DivergenceDirection::JvmFollower,
+    )
+    .await;
+    let c1 = &cluster.krabka[0].0;
 
     // 4. INDUCE REAL DIVERGENCE. First make the JVM broker leader and append a
     //    suffix there. Krabka follows that suffix so both sides demonstrably
@@ -101,13 +40,7 @@ async fn kip320_jvm_follower_truncates_from_krabka_leader() {
     //    the next epoch. Restoring broker 1 as leader leaves equal-length,
     //    byte-different tails: the JVM follower must truncate, not merely catch
     //    up from a shorter log.
-    let prefix_leo = c1
-        .local_log_end_offset(TOPIC, 0)
-        .expect("Krabka prefix log exists");
-    assert2::assert!(
-        prefix_leo == 10,
-        "expected ten-record prefix, got LEO {prefix_leo}"
-    );
+
     let pr = {
         // Wait for the partition to materialize in the Krabka leader's image.
         c1.wait_until_partition_present(TOPIC, 0).await;
@@ -117,18 +50,15 @@ async fn kip320_jvm_follower_truncates_from_krabka_leader() {
     eprintln!("KRABKA[kip320] partition before divergence: {pr:?}");
 
     let jvm_epoch = LeaderEpoch(pr.leader_epoch.0 + 1);
-    c1.submit_metadata_record_for_test(MetadataRecord::V1Partition(PartitionRecord {
-        topic: TOPIC.to_string(),
-        partition: 0,
-        leader: krabka_broker::NodeId(3),
-        replicas: pr.replicas.clone(),
-        isr: vec![krabka_broker::NodeId(3)],
-        leader_epoch: jvm_epoch,
-        adding_replicas: vec![],
-        removing_replicas: vec![],
-        directories: pr.directories.clone(),
-        partition_epoch: pr.partition_epoch + 1,
-    }))
+    c1.submit_metadata_record_for_test(MetadataRecord::V1Partition(
+        crate::mixed_cluster::single_leader_record(
+            TOPIC,
+            &pr,
+            krabka_broker::NodeId(3),
+            jvm_epoch,
+            1,
+        ),
+    ))
     .await
     .expect("promote JVM broker for divergent suffix");
     wait_for_described_leader(&bootstrap_all, TOPIC, 3, LEADER_WAIT).await;
@@ -155,18 +85,13 @@ async fn kip320_jvm_follower_truncates_from_krabka_leader() {
     // the assignment and directory vector intact so this record changes only
     // leadership/epoch state.
     let parked_epoch = LeaderEpoch(jvm_epoch.0 + 1);
-    let forged = MetadataRecord::V1Partition(PartitionRecord {
-        topic: TOPIC.to_string(),
-        partition: 0,
-        leader: krabka_broker::NodeId(99),
-        replicas: pr.replicas.clone(),
-        isr: vec![krabka_broker::NodeId(99)],
-        leader_epoch: parked_epoch,
-        adding_replicas: vec![],
-        removing_replicas: vec![],
-        directories: pr.directories.clone(),
-        partition_epoch: pr.partition_epoch + 2,
-    });
+    let forged = MetadataRecord::V1Partition(crate::mixed_cluster::single_leader_record(
+        TOPIC,
+        &pr,
+        krabka_broker::NodeId(99),
+        parked_epoch,
+        2,
+    ));
     c1.submit_metadata_record_for_test(forged)
         .await
         .expect("inject dead-leader PartitionRecord");
@@ -207,18 +132,13 @@ async fn kip320_jvm_follower_truncates_from_krabka_leader() {
     // Restore Krabka broker 1 as the leader at the next epoch with the JVM
     // follower (3) back in the replica set so it re-fetches and detects
     // divergence.
-    let restore = MetadataRecord::V1Partition(PartitionRecord {
-        topic: TOPIC.to_string(),
-        partition: 0,
-        leader: krabka_broker::NodeId(1),
-        replicas: pr.replicas.clone(),
-        isr: vec![krabka_broker::NodeId(1)],
-        leader_epoch: LeaderEpoch(parked_epoch.0 + 1),
-        adding_replicas: vec![],
-        removing_replicas: vec![],
-        directories: pr.directories.clone(),
-        partition_epoch: pr.partition_epoch + 3,
-    });
+    let restore = MetadataRecord::V1Partition(crate::mixed_cluster::single_leader_record(
+        TOPIC,
+        &pr,
+        krabka_broker::NodeId(1),
+        LeaderEpoch(parked_epoch.0 + 1),
+        3,
+    ));
     c1.submit_metadata_record_for_test(restore)
         .await
         .expect("restore Krabka leader");

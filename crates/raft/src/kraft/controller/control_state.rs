@@ -7,10 +7,7 @@ use std::collections::BTreeMap;
 use krabka_ids::Offset;
 use krabka_metadata::{KRaftVersionRecord, MetadataRecord, VoterSet, VotersRecord};
 use krabka_protocol::{
-    owned::voters_record::{
-        Endpoint as WireVoterEndpoint, KRaftVersionFeature as WireKRaftVersionFeature,
-        Voter as WireVoter, VotersRecord as WireVotersRecord,
-    },
+    owned::voters_record::VotersRecord as WireVotersRecord,
     records::{RecordBatch, metadata::control::ControlRecord},
 };
 use uuid::Uuid;
@@ -109,34 +106,16 @@ pub fn voter_supports_version(voter: &krabka_metadata::voters::Voter, version: u
 pub fn voter_set_to_wire(voters: &VoterSet) -> WireVotersRecord {
     let voters = voters
         .iter()
-        .map(|voter| WireVoter {
-            voter_id: i32::try_from(voter.id.0).unwrap_or(i32::MAX),
-            voter_directory_id: krabka_protocol::primitives::uuid::Uuid(
-                *voter.directory_id.as_bytes(),
-            ),
-            endpoints: voter
-                .endpoints
-                .iter()
-                .map(|endpoint| WireVoterEndpoint {
-                    name: endpoint.name.clone(),
-                    host: endpoint.host.clone(),
-                    port: endpoint.port,
-                    ..Default::default()
-                })
-                .collect(),
-            k_raft_version_feature: WireKRaftVersionFeature {
-                min_supported_version: i16::try_from(voter.kraft_version.min).unwrap_or(i16::MAX),
-                max_supported_version: i16::try_from(voter.kraft_version.max).unwrap_or(i16::MAX),
-                ..Default::default()
-            },
-            ..Default::default()
+        .map(|voter| {
+            crate::voter_wire::to_wire(
+                voter,
+                i32::try_from(voter.id.0).unwrap_or(i32::MAX),
+                i16::try_from(voter.kraft_version.min).unwrap_or(i16::MAX),
+                i16::try_from(voter.kraft_version.max).unwrap_or(i16::MAX),
+            )
         })
         .collect();
-    WireVotersRecord {
-        version: 0,
-        voters,
-        unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(Vec::new()),
-    }
+    crate::voter_wire::record(voters)
 }
 
 pub fn voter_set_from_wire(record: &WireVotersRecord) -> Result<VoterSet, RaftError> {
@@ -217,23 +196,12 @@ pub fn voter_set_from_wire(record: &WireVotersRecord) -> Result<VoterSet, RaftEr
                 .expect("voter wire admission proves the minimum version is nonnegative");
             let max = u16::try_from(voter.k_raft_version_feature.max_supported_version)
                 .expect("voter wire admission proves the maximum version is nonnegative");
-            let endpoints = voter
-                .endpoints
-                .iter()
-                .map(|endpoint| {
-                    krabka_metadata::voters::VoterEndpoint {
-                        name: endpoint.name.clone(),
-                        host: endpoint.host.clone(),
-                        port: endpoint.port,
-                    }
-                })
-                .collect();
-            Ok(krabka_metadata::voters::Voter {
-                id: NodeId(id),
+            Ok(crate::voter_wire::from_wire(
+                voter,
+                NodeId(id),
                 directory_id,
-                endpoints,
-                kraft_version: krabka_metadata::voters::KRaftVersionRange { min, max },
-            })
+                krabka_metadata::voters::KRaftVersionRange { min, max },
+            ))
         })
         .collect::<Result<Vec<_>, RaftError>>()?;
     Ok(VoterSet::from_voters(voters))
@@ -282,9 +250,8 @@ pub fn control_batch_image_records(batch: &RecordBatch) -> Result<Vec<MetadataRe
 mod tests {
     use super::*;
 
-    #[test]
-    fn voter_supports_version_checks_both_bounds() {
-        let voter = krabka_metadata::voters::Voter {
+    fn versioned_voter() -> krabka_metadata::voters::Voter {
+        krabka_metadata::voters::Voter {
             id: NodeId(1),
             directory_id: uuid::Uuid::nil(),
             endpoints: vec![krabka_metadata::voters::VoterEndpoint {
@@ -293,7 +260,12 @@ mod tests {
                 port: 9092,
             }],
             kraft_version: krabka_metadata::voters::KRaftVersionRange { min: 2, max: 4 },
-        };
+        }
+    }
+
+    #[test]
+    fn voter_supports_version_checks_both_bounds() {
+        let voter = versioned_voter();
         assert2::check!(!voter_supports_version(&voter, 1));
         assert2::check!(voter_supports_version(&voter, 2));
         assert2::check!(voter_supports_version(&voter, 3));
@@ -303,16 +275,7 @@ mod tests {
 
     #[test]
     fn voter_set_to_wire_encodes_version_and_features() {
-        let voter = krabka_metadata::voters::Voter {
-            id: NodeId(1),
-            directory_id: uuid::Uuid::nil(),
-            endpoints: vec![krabka_metadata::voters::VoterEndpoint {
-                name: "CONTROLLER".into(),
-                host: "127.0.0.1".into(),
-                port: 9092,
-            }],
-            kraft_version: krabka_metadata::voters::KRaftVersionRange { min: 2, max: 4 },
-        };
+        let voter = versioned_voter();
         let set = VoterSet::from_voters([voter]);
         let wire = voter_set_to_wire(&set);
         assert2::assert!(wire.version == 0);

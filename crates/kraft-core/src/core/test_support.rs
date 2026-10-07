@@ -31,6 +31,11 @@ pub struct FakeLog {
     pub end: i64,
     pub last_epoch: Epoch,
 }
+impl FakeLog {
+    pub const fn new(end: i64, last_epoch: Epoch) -> Self {
+        Self { end, last_epoch }
+    }
+}
 impl LogView for FakeLog {
     fn end_offset(&self) -> i64 {
         self.end
@@ -50,6 +55,14 @@ impl LogView for FakeLog {
 pub struct CellLog {
     pub end: std::cell::Cell<i64>,
     pub last_epoch: Epoch,
+}
+impl CellLog {
+    pub fn new(end: i64, last_epoch: Epoch) -> Self {
+        Self {
+            end: std::cell::Cell::new(end),
+            last_epoch,
+        }
+    }
 }
 impl LogView for CellLog {
     fn end_offset(&self) -> i64 {
@@ -80,25 +93,14 @@ impl RunsLog {
         }
     }
 }
-impl LogView for RunsLog {
-    fn end_offset(&self) -> i64 {
-        i64::try_from(self.epochs.len()).expect("test log length fits in i64")
-    }
-    fn last_epoch(&self) -> Epoch {
-        self.epochs.last().copied().unwrap_or(0)
-    }
-    fn end_offset_for_epoch(&self, epoch: Epoch) -> LogOffsetMetadata {
-        LogOffsetMetadata::end_of_epoch_in(&self.epochs, epoch)
-    }
+krabka_macros::epoch_log_view!(RunsLog, crate, "test log length fits in i64");
+
+pub use crate::simulation_support::voter_set as voters;
+/// Voter 1 in the standard three-voter quorum, fresh for each case.
+pub fn three_voter_machine() -> QuorumStateMachine {
+    machine(NodeId(1), &[NodeId(1), NodeId(2), NodeId(3)])
 }
-pub fn voters(ids: &[NodeId]) -> krabka_voters::VoterSet {
-    krabka_voters::VoterSet::from_voters(ids.iter().map(|&id| krabka_voters::Voter {
-        id,
-        directory_id: uuid::Uuid::nil(),
-        endpoints: vec![],
-        kraft_version: krabka_voters::KRaftVersionRange::default(),
-    }))
-}
+
 pub fn machine(me: NodeId, ids: &[NodeId]) -> QuorumStateMachine {
     QuorumStateMachine::new(
         me,

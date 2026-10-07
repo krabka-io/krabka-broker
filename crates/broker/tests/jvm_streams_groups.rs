@@ -48,7 +48,6 @@ use krabka_broker::BrokerHandle;
 use krabka_client_core::Client;
 use krabka_protocol::owned::{
     common::streams_group_heartbeat_request::task_ids::TaskIds as ReqTaskIds,
-    create_topics_request::{CreatableTopic, CreateTopicsRequest},
     streams_group_heartbeat_request::Topology,
     streams_group_heartbeat_response::StreamsGroupHeartbeatResponse,
 };
@@ -82,36 +81,18 @@ async fn start_host_broker() -> (BrokerHandle, tempfile::TempDir) {
 /// Native client that connects to the broker's local loopback listener. The
 /// container reaches the same broker through `host.docker.internal`.
 async fn connect() -> Client {
-    Client::builder()
-        .bootstrap(support::jvm_client_addr().to_string())
-        .client_id("krabka-streams-test")
-        .build()
-        .await
-        .expect("client build")
+    support::client::connect_owned(
+        support::jvm_client_addr(),
+        "krabka-streams-test",
+        "client build",
+    )
+    .await
 }
 
 /// Create `topic` (`partitions` partitions) and wait until this broker leads
 /// partition 0.
 async fn create_topic(broker: &BrokerHandle, client: &Client, topic: &str, partitions: i32) {
-    let resp = client
-        .send(CreateTopicsRequest {
-            topics: vec![CreatableTopic {
-                name: topic.into(),
-                num_partitions: partitions,
-                replication_factor: 1,
-                ..Default::default()
-            }],
-            timeout_ms: 5_000,
-            ..Default::default()
-        })
-        .await
-        .expect("CreateTopics");
-    assert!(
-        resp.topics[0].error_code == 0,
-        "topic create failed: {resp:?}"
-    );
-    broker.wait_until_partition_present(topic, 0).await;
-    assert!(broker.has_partition(topic, 0), "partition never led");
+    support::client::create_led_topic(broker, client, topic, partitions).await;
 }
 
 /// Finalize `streams.version` to level 1 so the heartbeat/describe handlers

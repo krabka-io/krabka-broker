@@ -10,36 +10,25 @@ use krabka_broker::codes;
 use krabka_client_core::Client;
 use krabka_protocol::{
     krabka::freeze::PATTERN_TYPE_LITERAL,
-    owned::{
-        delete_records_request::{
-            DeleteRecordsPartition, DeleteRecordsRequest, DeleteRecordsTopic,
-        },
-        delete_topics_request::{DeleteTopicState, DeleteTopicsRequest},
-    },
+    owned::delete_topics_request::{DeleteTopicState, DeleteTopicsRequest},
 };
 
 use crate::{
     control_plane::freeze_scope,
-    support,
-    wire::{CONTROL, create_topic, produce},
+    support::offsets::{delete_records_partition, delete_records_request, delete_records_topic},
+    wire::{CONTROL, produce},
 };
 
 /// Trim `topic` up to `offset`, and hand back the partition row's error code.
 async fn delete_records(client: &Client, topic: &str, offset: i64) -> i16 {
     let response = client
-        .send(DeleteRecordsRequest {
-            topics: vec![DeleteRecordsTopic {
-                name: topic.into(),
-                partitions: vec![DeleteRecordsPartition {
-                    partition_index: 0,
-                    offset,
-                    ..Default::default()
-                }],
-                ..Default::default()
-            }],
-            timeout_ms: 5_000,
-            ..Default::default()
-        })
+        .send(delete_records_request(
+            vec![delete_records_topic(
+                topic,
+                vec![delete_records_partition(0, offset)],
+            )],
+            5_000,
+        ))
         .await
         .expect("DeleteRecords");
     response.topics[0].partitions[0].error_code
@@ -71,9 +60,7 @@ async fn delete_topic(client: &Client, topic: &str) -> i16 {
 /// the control topic proves both paths still work when nothing is frozen.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn delete_records_and_delete_topics_refuse_on_a_frozen_topic() {
-    let p = support::start().await;
-    let frozen = create_topic(&p.broker, &p.client, "orders").await;
-    let control = create_topic(&p.broker, &p.client, CONTROL).await;
+    let (p, frozen, control) = crate::wire::controlled_fixture("orders").await;
     for _ in 0..2 {
         check!(produce(&p.client, "orders", frozen).await.error_code == codes::NONE);
         check!(produce(&p.client, CONTROL, control).await.error_code == codes::NONE);

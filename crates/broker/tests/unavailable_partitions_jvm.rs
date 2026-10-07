@@ -45,7 +45,7 @@ use std::{
 };
 
 use assert2::assert;
-use krabka_broker::{Broker, BrokerConfig, BrokerHandle};
+use krabka_broker::BrokerHandle;
 
 /// The release both halves of the differential use: krabka's client is this
 /// image's `kafka-topics`, and the oracle broker is the same image.
@@ -255,32 +255,11 @@ impl KrabkaCluster {
         support::init_tracing();
         let primary = tempfile::tempdir().expect("primary log dir");
         let extra = tempfile::tempdir().expect("extra log dir");
-        // Hold both listeners until `start_with_listeners` adopts them, so a
-        // concurrent test binary cannot take the port in between.
-        let data_plane = tokio::net::TcpListener::bind("0.0.0.0:0")
-            .await
-            .expect("bind data plane");
-        let controller = tokio::net::TcpListener::bind("127.0.0.1:0")
-            .await
-            .expect("bind controller");
-        let port = data_plane.local_addr().expect("data plane addr").port();
-        // The containers reach the broker through this name, and so does the
-        // broker itself: its `AssignReplicasToDirs` report and the heartbeat
-        // that carries the offline directory both dial the endpoint the
-        // registration advertises. CI maps the name to loopback in
-        // `/etc/hosts` for exactly this reason.
-        let bootstrap = format!("host.docker.internal:{port}");
-        let controller_addr = controller.local_addr().expect("controller addr");
-        let mut config = BrokerConfig::for_tests(primary.path().to_path_buf());
-        config.extra_log_dirs = vec![extra.path().to_path_buf()];
-        config.listen_addr = data_plane.local_addr().expect("data plane addr");
-        config.advertised_listener = bootstrap.clone();
-        config.controller_listen_addr = controller_addr;
-        config.controller_quorum_voters = vec![(config.node_id, controller_addr.to_string())];
-        let handle = Broker::start_with_listeners(config, Some(controller), [data_plane])
-            .await
-            .expect("broker start");
-        handle.wait_until_controller_leader().await;
+        let (handle, bootstrap) =
+            support::start_jvm_bound(primary.path().to_path_buf(), |config| {
+                config.extra_log_dirs = vec![extra.path().to_path_buf()];
+            })
+            .await;
 
         let created = kafka_topics_against(
             &bootstrap,
@@ -394,44 +373,16 @@ impl OracleCluster {
         let name = support::unique_container_name("krabka-unavailable-oracle");
         let tmpfs = format!("{ORACLE_TMPFS}:size=4m");
         let log_dirs = format!("KAFKA_LOG_DIRS=/var/lib/kafka/data1,{ORACLE_TMPFS}");
-        run_docker(
-            "run kafka oracle",
-            &[
-                "run",
-                "-d",
-                "--name",
-                &name,
-                "--tmpfs",
-                &tmpfs,
-                "-e",
-                "KAFKA_NODE_ID=1",
-                "-e",
-                "KAFKA_PROCESS_ROLES=broker,controller",
-                "-e",
-                "KAFKA_LISTENERS=PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093",
-                "-e",
-                "KAFKA_ADVERTISED_LISTENERS=PLAINTEXT://localhost:9092",
-                "-e",
-                "KAFKA_CONTROLLER_LISTENER_NAMES=CONTROLLER",
-                "-e",
-                "KAFKA_INTER_BROKER_LISTENER_NAME=PLAINTEXT",
-                "-e",
-                "KAFKA_LISTENER_SECURITY_PROTOCOL_MAP=CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT",
-                "-e",
-                "KAFKA_CONTROLLER_QUORUM_VOTERS=1@localhost:9093",
-                "-e",
-                "KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR=1",
-                "-e",
-                "KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR=1",
-                "-e",
-                "KAFKA_TRANSACTION_STATE_LOG_MIN_ISR=1",
-                "-e",
-                &log_dirs,
-                "-e",
-                "CLUSTER_ID=MkU3OEVBNTcwNTJENDM2Qk",
-                KAFKA_IMAGE,
-            ],
-        );
+        let mut args = vec!["run", "-d", "--name", &name, "--tmpfs", &tmpfs];
+        args.extend_from_slice(support::kafka_single_node_env_args());
+        args.extend_from_slice(&[
+            "-e",
+            &log_dirs,
+            "-e",
+            "CLUSTER_ID=MkU3OEVBNTcwNTJENDM2Qk",
+            KAFKA_IMAGE,
+        ]);
+        run_docker("run kafka oracle", &args);
         let mut oracle = Self {
             name,
             doomed: BTreeSet::new(),
@@ -447,12 +398,7 @@ impl OracleCluster {
     /// container, so the oracle needs no published port and cannot collide
     /// with a concurrent suite.
     fn exec(&self, args: &[&str]) -> std::process::Output {
-        let mut full: Vec<&str> = vec!["exec", &self.name];
-        full.extend_from_slice(args);
-        Command::new("docker")
-            .args(&full)
-            .output()
-            .expect("spawn docker exec")
+        support::docker_exec(&self.name, args)
     }
 
     fn wait_ready(&self) {

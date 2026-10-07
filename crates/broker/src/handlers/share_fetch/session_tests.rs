@@ -30,10 +30,7 @@ use crate::{
     broker::BrokerHandle,
     codes,
     share_partition::state::RecordState::{self, Acquired, Available},
-    test_support::{
-        decode_response, encode_request, peer, principal, request_context,
-        start_broker_no_audit_with,
-    },
+    test_support::{decode_response, encode_request, peer, principal, start_broker_no_audit_with},
 };
 
 const VERSION: i16 = 2;
@@ -60,26 +57,13 @@ async fn produce(broker: &BrokerHandle, topic: &str, partition: i32) {
 
 /// Starts `group` at the earliest offset of each partition of `topic_id`.
 async fn earliest(broker: &BrokerHandle, group: &str, topic_id: WireUuid, partitions: i32) {
-    broker
-        .broker_arc_for_test()
-        .controller
-        .submit_change(vec![MetadataRecord::V1GroupConfig(GroupConfigRecord {
-            group_id: group.to_string(),
-            configs: maplit::btreemap! {
-                "share.auto.offset.reset".to_owned() => "earliest".to_owned()
-            },
-        })])
-        .await
-        .expect("set the group config");
-    for partition in 0..partitions {
-        crate::test_support::initialize_share_state(
-            broker,
-            group,
-            uuid::Uuid::from_bytes(topic_id.0),
-            partition,
-        )
-        .await;
-    }
+    crate::handlers::test_support::initialize_earliest_share(
+        broker,
+        group,
+        topic_id,
+        0..partitions,
+    )
+    .await;
 }
 
 /// One request row: `(partition, acknowledgement batches)`.
@@ -139,35 +123,11 @@ async fn share_fetch(broker: &BrokerHandle, fetch: &Fetch<'_>) -> ShareFetchResp
         },
         ..Default::default()
     };
-    let shared = broker.broker_arc_for_test();
-    let user = principal("share-consumer");
-    let address = peer();
-    let ctx = request_context(&user, &address, "share-client");
-    let bytes = encode_request(&request, VERSION);
-    let response = crate::test_support::try_dispatch_context(
-        &shared,
-        krabka_protocol::owned::share_fetch_request::API_KEY,
-        VERSION,
-        &bytes,
-        &ctx,
-    )
-    .await
-    .expect("handle share fetch");
-    decode_response(&response, VERSION)
+    crate::handlers::test_support::share_fetch_wire(broker, VERSION, &request).await
 }
 
 async fn states(broker: &BrokerHandle, group: &str, topic_id: WireUuid) -> Vec<RecordState> {
-    let cell = broker
-        .broker_arc_for_test()
-        .share_partition_leaders
-        .peek_for_test(group, uuid::Uuid::from_bytes(topic_id.0), 0)
-        .expect("a loaded share partition");
-    let state = cell.lock().await;
-    state
-        .record_states()
-        .into_iter()
-        .map(|(_, state)| state)
-        .collect()
+    crate::handlers::test_support::share_record_states(broker, group, topic_id).await
 }
 
 /// `(partition, error_code, acknowledge_error_code, acquired ranges)` of one
@@ -185,10 +145,7 @@ fn rows(response: &ShareFetchResponse) -> Vec<RowOutcome> {
                 row.partition_index,
                 row.error_code,
                 row.acknowledge_error_code,
-                row.acquired_records
-                    .iter()
-                    .map(|range| (range.first_offset, range.last_offset))
-                    .collect(),
+                crate::handlers::test_support::acquired_share_records(row),
             )
         })
         .collect()
@@ -430,20 +387,8 @@ async fn the_acquire_mode_and_batch_size_shape_the_acquired_rows() {
             }],
             ..Default::default()
         };
-        let shared = broker.broker_arc_for_test();
-        let user = principal("share-consumer");
-        let address = peer();
-        let ctx = request_context(&user, &address, "share-client");
-        let response = crate::test_support::try_dispatch_context(
-            &shared,
-            krabka_protocol::owned::share_fetch_request::API_KEY,
-            version,
-            &encode_request(&request, version),
-            &ctx,
-        )
-        .await
-        .expect("handle share fetch");
-        let response: ShareFetchResponse = decode_response(&response, version);
+        let response =
+            crate::handlers::test_support::share_fetch_wire(&broker, version, &request).await;
         let acquired: Vec<(i64, i64)> = response
             .responses
             .iter()
@@ -477,23 +422,15 @@ async fn fetch_with_limits(
         max_wait_ms,
         max_records: 500,
         batch_size: 500,
-        topics: vec![FetchTopic {
-            topic_id,
-            partitions: partitions
-                .iter()
-                .map(|&partition_index| FetchPartition {
-                    partition_index,
-                    ..Default::default()
-                })
-                .collect(),
-            ..Default::default()
-        }],
+        topics: crate::handlers::test_support::share_fetch_topics(topic_id, partitions),
         ..Default::default()
     };
     let shared = broker.broker_arc_for_test();
-    let user = principal("share-consumer");
-    let address = peer();
-    let ctx = request_context(&user, &address, "share-client");
+    request_identity!(
+        (user, address, ctx),
+        principal("share-consumer"),
+        client_id = "share-client"
+    );
     let started = Instant::now();
     let response = crate::test_support::try_dispatch_context(
         &shared,
@@ -513,10 +450,7 @@ async fn fetch_with_limits(
         .map(|row| {
             (
                 row.partition_index,
-                row.acquired_records
-                    .iter()
-                    .map(|range| (range.first_offset, range.last_offset))
-                    .collect(),
+                crate::handlers::test_support::acquired_share_records(row),
             )
         })
         .collect();

@@ -4,6 +4,8 @@
 //! value that the test sent.
 
 use assert2::assert;
+
+use crate::support::topics::{creatable_topic, create_topic_request};
 mod kafka_wire;
 mod support;
 
@@ -17,10 +19,6 @@ use krabka_protocol::{
             ProduceRequest as LegacyProduceRequest, TopicProduceData as LegacyTopicProduceData,
         },
         produce_response::ProduceResponse as LegacyProduceResponse,
-    },
-    owned::{
-        create_topics_request::{CreatableTopic, CreateTopicsRequest},
-        fetch_request::{FetchPartition, FetchRequest, FetchTopic},
     },
     records::RecordsPayload,
 };
@@ -83,16 +81,10 @@ async fn produce_v0_upconverts_and_is_readable_via_fetch() {
     // 1. Create topic "legacy_v0" with 1 partition using the typed client.
     let cr = p
         .client
-        .send(CreateTopicsRequest {
-            topics: vec![CreatableTopic {
-                name: "legacy_v0".into(),
-                num_partitions: 1,
-                replication_factor: 1,
-                ..Default::default()
-            }],
-            timeout_ms: 5_000,
-            ..Default::default()
-        })
+        .send(create_topic_request(
+            creatable_topic("legacy_v0", 1, 1),
+            5_000,
+        ))
         .await
         .expect("CreateTopics");
     assert!(
@@ -161,23 +153,12 @@ async fn produce_v0_upconverts_and_is_readable_via_fetch() {
     let topic_id = topic_id_for(&p.client, "legacy_v0").await;
     let fetch_resp = p
         .client
-        .send(FetchRequest {
-            max_wait_ms: 500,
-            min_bytes: 1,
-            max_bytes: 1 << 20,
-            topics: vec![FetchTopic {
-                topic: "legacy_v0".into(),
-                topic_id,
-                partitions: vec![FetchPartition {
-                    partition: 0,
-                    fetch_offset: 0,
-                    partition_max_bytes: 1 << 20,
-                    ..Default::default()
-                }],
-                ..Default::default()
-            }],
-            ..Default::default()
-        })
+        .send(crate::support::fetch::single_partition_fetch(
+            "legacy_v0".to_owned(),
+            topic_id,
+            crate::support::fetch::fetch_partition(0, 0, 1 << 20),
+            (500, 1, 1 << 20),
+        ))
         .await
         .expect("Fetch");
 

@@ -1,10 +1,29 @@
 use assert2::assert;
 
 use super::{control_support::expected_control, *};
+use crate::{
+    composition::reconfiguration::CommittedControl, reconfiguration::ReconfigurationState,
+};
+
+/// Finalize the same three-voter version-zero set with both prefix reports.
+fn finalized_control(progress: (i64, i64, i64, i64)) -> CommittedControl {
+    reconfiguration_control_commit_waiter(
+        &[1, 2, 3],
+        (leading(), current(3, 0)),
+        VoterChangeRequest {
+            kind: VoterChangeKind::FinalizeKraftVersion,
+            requested_kraft_version: 1,
+        },
+        1,
+        target(TargetMembership::Absent),
+        &[(7, 7); 4],
+        progress,
+    )
+}
 
 fn check_waiter(
     old: &[u64],
-    state: (ReconfigurationLeadership, CurrentVoterSet),
+    state: ReconfigurationState,
     request: VoterChangeRequest,
     node: u64,
     candidate: TargetVoter,
@@ -47,13 +66,11 @@ fn check_waiter(
 proptest! {
     #[test]
     fn control_commitment_matches_actual_row_visibility(
-        old in prop::collection::vec(0u64..12, 0..10), node in 0u64..13,
-        bits in any::<u16>(), operation in 0u8..4, membership in 0u8..4,
-        version in 0u16..3, requested_version in 0u16..3,
+        input in request_cases(),
         progress in (any::<i64>(), any::<i64>(), any::<i64>(), any::<i64>()),
-        reports in prop::collection::vec((any::<i64>(), any::<i64>()), 11),
+        reports in prefix_report_cases(),
     ) {
-        let (leader, context, request, candidate) = generated_request(old.len(), bits, operation, membership, version, requested_version);
+        let (old, node, (leader, context, request, candidate)) = input;
         check_waiter(&old, (leader, context), request, node, candidate, &reports[..=old.len()], progress);
     }
 }
@@ -114,19 +131,7 @@ fn supported_controls_commit_in_record_order_at_every_frontier() {
 #[test]
 fn equal_membership_values_do_not_commit_the_final_voters_record() {
     let old = [1, 2, 3];
-    let (plan, next, rows, frontier) = reconfiguration_control_commit_waiter(
-        &old,
-        (leading(), current(3, 0)),
-        VoterChangeRequest {
-            kind: VoterChangeKind::FinalizeKraftVersion,
-            requested_kraft_version: 1,
-        },
-        1,
-        target(TargetMembership::Absent),
-        &[(7, 7); 4],
-        (5, 5, 6, 10),
-    )
-    .unwrap();
+    let (plan, next, rows, frontier) = finalized_control((5, 5, 6, 10)).unwrap();
     assert!(plan.write_kraft_version && plan.write_voters);
     assert!(next == old);
     assert!(rows == [(5, true, true), (6, false, false)]);
@@ -142,19 +147,7 @@ fn later_appends_and_repeated_advances_preserve_whole_batch_readiness() {
         (8, 5, 8, true),
         (8, i64::MAX, 10, true),
     ] {
-        let (_, _, rows, frontier) = reconfiguration_control_commit_waiter(
-            &[1, 2, 3],
-            (leading(), current(3, 0)),
-            VoterChangeRequest {
-                kind: VoterChangeKind::FinalizeKraftVersion,
-                requested_kraft_version: 1,
-            },
-            1,
-            target(TargetMembership::Absent),
-            &[(7, 7); 4],
-            (5, previous, requested, 10),
-        )
-        .unwrap();
+        let (_, _, rows, frontier) = finalized_control((5, previous, requested, 10)).unwrap();
         assert!(rows == [(5, true, true), (6, false, ready)]);
         assert!(frontier == Some((7, expected_hwm, if ready { 2 } else { 1 }, ready, 1)));
     }

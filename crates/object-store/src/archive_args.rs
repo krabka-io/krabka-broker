@@ -240,6 +240,19 @@ mod tests {
             .map(|cli| cli.archive)
     }
 
+    fn s3_archive_args(prefix: &str) -> ArchiveArgs {
+        ArchiveArgs {
+            s3_bucket: Some("backups".to_owned()),
+            s3_region: Some("eu-west-1".to_owned()),
+            s3_endpoint: Some("http://minio:9000".to_owned()),
+            s3_access_key_id: Some("key".to_owned()),
+            s3_secret_access_key: Some("secret".to_owned()),
+            s3_allow_http: true,
+            prefix: Some(prefix.to_owned()),
+            ..ArchiveArgs::default()
+        }
+    }
+
     #[test]
     fn every_flag_parses_into_its_field() {
         check!(
@@ -259,16 +272,7 @@ mod tests {
                 "/tier/",
             ])
             .expect("args")
-                == ArchiveArgs {
-                    s3_bucket: Some("backups".to_owned()),
-                    s3_region: Some("eu-west-1".to_owned()),
-                    s3_endpoint: Some("http://minio:9000".to_owned()),
-                    s3_access_key_id: Some("key".to_owned()),
-                    s3_secret_access_key: Some("secret".to_owned()),
-                    s3_allow_http: true,
-                    prefix: Some("/tier/".to_owned()),
-                    ..ArchiveArgs::default()
-                }
+                == s3_archive_args("/tier/")
         );
         check!(
             parse(&[
@@ -414,16 +418,7 @@ mod tests {
 
     #[test]
     fn the_s3_flags_map_onto_the_s3_config() {
-        let args = ArchiveArgs {
-            s3_bucket: Some("backups".to_owned()),
-            s3_region: Some("eu-west-1".to_owned()),
-            s3_endpoint: Some("http://minio:9000".to_owned()),
-            s3_access_key_id: Some("key".to_owned()),
-            s3_secret_access_key: Some("secret".to_owned()),
-            s3_allow_http: true,
-            prefix: Some("tier".to_owned()),
-            ..ArchiveArgs::default()
-        };
+        let args = s3_archive_args("tier");
         let ObjectStoreConfig::S3(s3) = args.to_config().expect("config") else {
             panic!("the s3 bucket selects the S3 backend");
         };

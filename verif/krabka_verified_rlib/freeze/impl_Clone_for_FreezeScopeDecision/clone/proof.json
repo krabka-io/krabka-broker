@@ -2,7 +2,7 @@
   "profile": [],
   "proofs": {
     "Coma": {
-      "vc_clone_FreezeScopeDecision": { "prover": "alt-ergo", "time": 0.005 }
+      "vc_clone_FreezeScopeDecision": { "prover": "alt-ergo", "time": 0.013 }
     }
   }
 }

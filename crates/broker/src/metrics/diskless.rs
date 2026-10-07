@@ -137,9 +137,7 @@ mod tests {
         metrics.diskless_wal_cold_read_misses_total.inc();
         metrics.diskless_wal_cold_read_errors_total.inc();
 
-        let mut body = String::new();
-        let registry = metrics.registry.lock().await;
-        prometheus_client::encoding::text::encode(&mut body, &registry).unwrap();
+        crate::metrics::test_support::render_registry!(metrics, body, registry; unwrap());
 
         for sample in [
             "krabka_broker_diskless_wal_durable_watermark{topic_id=\"00000000-0000-0000-0000-00000000002a\",partition=\"3\"} 17",

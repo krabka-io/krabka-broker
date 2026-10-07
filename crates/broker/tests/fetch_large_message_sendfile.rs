@@ -17,16 +17,19 @@
 //! a regression quietly routes every plaintext fetch onto the copy path.
 
 use assert2::assert;
+
+use crate::support::{
+    fetch::{fetch_partition, single_partition_fetch},
+    produce::single_partition_produce,
+    records::value_record,
+    topics::{creatable_topic, create_topic_request},
+};
 mod support;
 
 use bytes::Bytes;
 use krabka_broker::metrics::{BrokerMetrics, FetchDrainPath, FetchDrainPathLabel};
 use krabka_protocol::{
-    owned::{
-        create_topics_request::{CreatableTopic, CreateTopicsRequest},
-        fetch_request::{FetchPartition, FetchRequest, FetchTopic},
-        produce_request::{PartitionProduceData, ProduceRequest, TopicProduceData},
-    },
+    owned::fetch_request::FetchRequest,
     records::{Record, RecordBatch},
 };
 use support::topic_id_for;
@@ -34,16 +37,7 @@ use support::topic_id_for;
 async fn create_topic(p: &support::InProcess, name: &str) {
     let resp = p
         .client
-        .send(CreateTopicsRequest {
-            topics: vec![CreatableTopic {
-                name: name.into(),
-                num_partitions: 1,
-                replication_factor: 1,
-                ..Default::default()
-            }],
-            timeout_ms: 5_000,
-            ..Default::default()
-        })
+        .send(create_topic_request(creatable_topic(name, 1, 1), 5_000))
         .await
         .expect("CreateTopics");
     assert!(resp.topics[0].error_code == 0);
@@ -70,10 +64,8 @@ fn large_records(n: i32, value_len: usize) -> (RecordBatch, Vec<Bytes>) {
         let value = Bytes::from(v);
         expected.push(value.clone());
         batch.records.push(Record {
-            offset_delta: i,
             key: Some(Bytes::from(format!("key-{i}"))),
-            value: Some(value),
-            ..Default::default()
+            ..value_record(i, Some(value))
         });
     }
     (batch, expected)
@@ -134,21 +126,13 @@ async fn large_message_fetch_round_trips_byte_exact() {
 
     let prod = p
         .client
-        .send(ProduceRequest {
-            acks: 1,
-            timeout_ms: 5_000,
-            topic_data: vec![TopicProduceData {
-                name: "big".into(),
-                topic_id: tid,
-                partition_data: vec![PartitionProduceData {
-                    index: 0,
-                    records: Some(batch.into()),
-                    ..Default::default()
-                }],
-                ..Default::default()
-            }],
-            ..Default::default()
-        })
+        .send(single_partition_produce(
+            "big",
+            tid,
+            0,
+            Some(batch.into()),
+            (1, 5_000),
+        ))
         .await
         .expect("Produce");
     assert!(prod.responses[0].partition_responses[0].error_code == 0);
@@ -158,23 +142,14 @@ async fn large_message_fetch_round_trips_byte_exact() {
     let r = p
         .client
         .send(FetchRequest {
-            max_wait_ms: 200,
-            min_bytes: 1,
-            max_bytes: 8 * 1024 * 1024,
             session_id: 0,
             session_epoch: -1,
-            topics: vec![FetchTopic {
-                topic: "big".into(),
-                topic_id: tid,
-                partitions: vec![FetchPartition {
-                    partition: 0,
-                    fetch_offset: 0,
-                    partition_max_bytes: 8 * 1024 * 1024,
-                    ..Default::default()
-                }],
-                ..Default::default()
-            }],
-            ..Default::default()
+            ..single_partition_fetch(
+                "big",
+                tid,
+                fetch_partition(0, 0, 8 * 1024 * 1024),
+                (200, 1, 8 * 1024 * 1024),
+            )
         })
         .await
         .expect("Fetch");

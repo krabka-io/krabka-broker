@@ -111,9 +111,7 @@ use assert2::{assert, check};
 use krabka_client_consumer::{AutoOffsetReset, Consumer};
 use krabka_client_core::Client;
 use krabka_client_producer::{Acks, Producer, ProducerRecord};
-use krabka_protocol::owned::create_topics_request::{
-    CreatableTopic, CreatableTopicConfig, CreateTopicsRequest,
-};
+use krabka_protocol::owned::create_topics_request::{CreatableTopic, CreateTopicsRequest};
 use tokio::sync::Mutex;
 
 // Cargo compiles this file as its own test binary, so the crate root's module
@@ -244,14 +242,12 @@ fn soak_duration() -> Duration {
 
 /// One record of `PAYLOAD_BYTES` bytes on `topic`.
 fn record(topic: &str, key: String, value: Vec<u8>) -> ProducerRecord {
-    ProducerRecord {
-        topic: topic.to_owned(),
-        partition: None,
-        key: Some(key.into()),
-        value: Some(value.into()),
-        headers: vec![],
-        timestamp_ms: None,
-    }
+    crate::support::producer::producer_record(
+        topic.to_owned(),
+        None,
+        Some(key.into()),
+        Some(value.into()),
+    )
 }
 
 /// A producer for the load tasks.
@@ -333,14 +329,7 @@ fn topic(name: &str, partitions: i32, configs: &[(&str, &str)]) -> CreatableTopi
         // partition, so each one's descriptors and log directory carry the
         // whole load rather than a third of it.
         replication_factor: 3,
-        configs: configs
-            .iter()
-            .map(|(name, value)| CreatableTopicConfig {
-                name: (*name).to_owned(),
-                value: Some((*value).to_owned()),
-                ..Default::default()
-            })
-            .collect(),
+        configs: crate::support::topics::topic_configs(configs.iter().copied()),
         ..Default::default()
     }
 }

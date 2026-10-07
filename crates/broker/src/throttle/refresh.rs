@@ -74,24 +74,28 @@ mod tests {
 
     use super::*;
 
+    fn set_broker_rate(image: &mut MetadataImage, name: &str, value: Option<&str>) {
+        image.apply(&MetadataRecord::V1BrokerConfig(BrokerConfigRecord {
+            node_id: NodeId(1),
+            config_name: name.into(),
+            config_value: value.map(str::to_owned),
+        }));
+    }
+
     #[test]
     fn apply_image_sets_rates() {
         let mut img = MetadataImage::new(Uuid::nil());
-        img.apply(&MetadataRecord::V1BrokerConfig(BrokerConfigRecord {
-            node_id: NodeId(1),
-            config_name: "leader.replication.throttled.rate".into(),
-            config_value: Some("2048".into()),
-        }));
-        img.apply(&MetadataRecord::V1BrokerConfig(BrokerConfigRecord {
-            node_id: NodeId(1),
-            config_name: "follower.replication.throttled.rate".into(),
-            config_value: Some("1024".into()),
-        }));
-        img.apply(&MetadataRecord::V1BrokerConfig(BrokerConfigRecord {
-            node_id: NodeId(1),
-            config_name: "replica.alter.log.dirs.io.max.bytes.per.second".into(),
-            config_value: Some("512".into()),
-        }));
+        set_broker_rate(&mut img, "leader.replication.throttled.rate", Some("2048"));
+        set_broker_rate(
+            &mut img,
+            "follower.replication.throttled.rate",
+            Some("1024"),
+        );
+        set_broker_rate(
+            &mut img,
+            "replica.alter.log.dirs.io.max.bytes.per.second",
+            Some("512"),
+        );
         let throttle = ThrottleState::new();
         apply_image(&img, NodeId(1), &throttle);
         assert!(throttle.leader_out.byte_rate() == bytes_per_sec(2048));
@@ -102,30 +106,22 @@ mod tests {
     #[test]
     fn apply_image_resets_to_zero_when_config_deleted() {
         let mut img = MetadataImage::new(Uuid::nil());
-        img.apply(&MetadataRecord::V1BrokerConfig(BrokerConfigRecord {
-            node_id: NodeId(1),
-            config_name: "leader.replication.throttled.rate".into(),
-            config_value: Some("2048".into()),
-        }));
-        img.apply(&MetadataRecord::V1BrokerConfig(BrokerConfigRecord {
-            node_id: NodeId(1),
-            config_name: "replica.alter.log.dirs.io.max.bytes.per.second".into(),
-            config_value: Some("512".into()),
-        }));
+        set_broker_rate(&mut img, "leader.replication.throttled.rate", Some("2048"));
+        set_broker_rate(
+            &mut img,
+            "replica.alter.log.dirs.io.max.bytes.per.second",
+            Some("512"),
+        );
         let throttle = ThrottleState::new();
         apply_image(&img, NodeId(1), &throttle);
         assert!(throttle.leader_out.byte_rate() == bytes_per_sec(2048));
         // Delete the config.
-        img.apply(&MetadataRecord::V1BrokerConfig(BrokerConfigRecord {
-            node_id: NodeId(1),
-            config_name: "leader.replication.throttled.rate".into(),
-            config_value: None,
-        }));
-        img.apply(&MetadataRecord::V1BrokerConfig(BrokerConfigRecord {
-            node_id: NodeId(1),
-            config_name: "replica.alter.log.dirs.io.max.bytes.per.second".into(),
-            config_value: None,
-        }));
+        set_broker_rate(&mut img, "leader.replication.throttled.rate", None);
+        set_broker_rate(
+            &mut img,
+            "replica.alter.log.dirs.io.max.bytes.per.second",
+            None,
+        );
         apply_image(&img, NodeId(1), &throttle);
         assert!(throttle.leader_out.byte_rate() == <ByteRate as ByteRateExt>::ZERO);
         assert!(throttle.alter_log_dirs.byte_rate() == <ByteRate as ByteRateExt>::ZERO);

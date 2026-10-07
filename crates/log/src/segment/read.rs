@@ -77,7 +77,7 @@ mod tests {
     use tempfile::tempdir;
 
     use super::*;
-    use crate::segment::test_support::{DENSE_INDEX, NO_LIMIT, sample_batch};
+    use crate::segment::test_support::{NO_LIMIT, sample_batch, seeded_segment};
 
     // `Segment::read` maps the absolute fetch offset to a relative index key
     // via `offset - base_offset`. With a dense index and base_offset 100,
@@ -102,28 +102,24 @@ mod tests {
     #[test]
     fn read_consumed_bytes_gates_max_bytes_budget() {
         let dir = tempdir().unwrap();
-        let mut seg = Segment::create(dir.path(), Offset(0)).unwrap();
-        seg.append(&sample_batch(0, 1, 100), DENSE_INDEX).unwrap();
-        seg.append(&sample_batch(1, 1, 200), DENSE_INDEX).unwrap();
-        seg.append(&sample_batch(2, 1, 300), DENSE_INDEX).unwrap();
+        let seg = seeded_segment(dir.path(), 0, &[(0, 1, 100), (1, 1, 200), (2, 1, 300)]);
         // Exactly the whole segment: correct consumed accounting fits all three
         // batches; inflated accounting overshoots after the first.
         let max_size = seg.size();
 
         let read = seg.read(Offset(0), max_size).unwrap();
         assert2::assert!(
-            read == vec![
-                sample_batch(0, 1, 100),
-                sample_batch(1, 1, 200),
-                sample_batch(2, 1, 300),
-            ]
+            read == crate::segment::test_support::sample_batches(&[
+                (0, 1, 100),
+                (1, 1, 200),
+                (2, 1, 300)
+            ])
         );
     }
 
     #[test]
     fn read_at_higher_offset_skips_earlier_batches() {
-        let dir = tempdir().unwrap();
-        let mut seg = Segment::create(dir.path(), Offset(0)).unwrap();
+        let (_dir, mut seg) = crate::segment::test_support::test_segment();
         seg.append(&sample_batch(0, 3, 1_000_000), kibibytes(4))
             .unwrap();
         seg.append(&sample_batch(3, 2, 2_000_000), kibibytes(4))
@@ -135,8 +131,7 @@ mod tests {
 
     #[test]
     fn read_past_last_offset_returns_empty() {
-        let dir = tempdir().unwrap();
-        let mut seg = Segment::create(dir.path(), Offset(0)).unwrap();
+        let (_dir, mut seg) = crate::segment::test_support::test_segment();
         seg.append(&sample_batch(0, 2, 1_000), kibibytes(4))
             .unwrap();
         let read = seg.read(Offset(100), NO_LIMIT).unwrap();

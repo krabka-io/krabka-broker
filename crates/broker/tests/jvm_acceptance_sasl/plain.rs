@@ -7,7 +7,7 @@
 //! JVM tools.
 
 use crate::jvm_acceptance::{
-    KAFKA_IMAGE, nc_check_connectivity, plain_jaas, start_sasl_plaintext_broker, write_client_props,
+    KAFKA_IMAGE, nc_check_connectivity, plain_jaas, start_sasl_plaintext_broker,
 };
 
 /// End-to-end `SASL_PLAINTEXT` + PLAIN drive of the JVM `kafka-topics`,
@@ -32,22 +32,8 @@ async fn jvm_sasl_plain_produce_consume() {
          sasl.jaas.config={}\n",
         plain_jaas(USER, PASS),
     );
-    let props_file = write_client_props(&props);
-    let mount = props_file.mount_str();
-
-    // 2. Create the topic. `kafka-topics` uses `--command-config`.
-    crate::jvm_acceptance::create_console_topic(
-        crate::jvm_acceptance::KAFKA_IMAGE,
-        &[&mount],
-        TOPIC,
-        1,
-        1,
-    );
-
-    // 3. Produce 10 records via stdin. `kafka-console-producer` uses
-    //    `--producer.config` (not `--command-config`).
-
-    crate::jvm_acceptance::authenticated_console_round_trip(KAFKA_IMAGE, &[&mount], TOPIC);
+    let _props_file =
+        crate::jvm_acceptance::console_round_trip_with_props(KAFKA_IMAGE, TOPIC, &props);
 
     broker.shutdown().await;
 }

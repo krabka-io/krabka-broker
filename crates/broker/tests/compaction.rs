@@ -11,6 +11,8 @@
 //!
 //! Gated to non-Windows to match the multi-broker test convention established by the existing integration suites.
 
+mod support;
+
 use krabka_broker::metrics::PartitionLabel;
 
 use crate::{

@@ -2,35 +2,13 @@
   "profile": [],
   "proofs": {
     "Coma": {
-      "vc_elim_Some": { "prover": "alt-ergo", "time": 0.008 },
-      "vc_max_i64": { "prover": "alt-ergo", "time": 0.008 },
+      "vc_elim_Some": { "prover": "alt-ergo", "time": 0.011 },
+      "vc_max_i64": { "prover": "alt-ergo", "time": 0.013 },
       "vc_remote_retention_floor_step": {
-        "tactic": "compute_specified",
-        "children": [
-          {
-            "tactic": "split_vc",
-            "children": [
-              { "prover": "alt-ergo", "time": 0.01 },
-              { "prover": "alt-ergo", "time": 0.01 },
-              {
-                "tactic": "split_vc",
-                "children": [
-                  { "prover": "alt-ergo", "time": 0.01 },
-                  { "prover": "alt-ergo", "time": 0.007 },
-                  { "prover": "alt-ergo", "time": 0.011 },
-                  { "prover": "alt-ergo", "time": 0.012 }
-                ]
-              },
-              { "prover": "alt-ergo", "time": 0.01 },
-              { "prover": "alt-ergo", "time": 0.009 },
-              { "prover": "alt-ergo", "time": 0.008 },
-              { "prover": "alt-ergo", "time": 0.01 },
-              { "prover": "alt-ergo", "time": 0.009 }
-            ]
-          }
-        ]
+        "prover": "alt-ergo",
+        "time": 0.057
       },
-      "vc_retention_delete_target": { "prover": "alt-ergo", "time": 0.01 }
+      "vc_retention_delete_target": { "prover": "alt-ergo", "time": 0.011 }
     }
   }
 }

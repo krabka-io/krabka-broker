@@ -25,8 +25,7 @@ use super::{
 /// (S3-compatible object store), or `[remote_storage.gcs]` (native Google
 /// Cloud Storage) should be set. Setting more than one errors at load time.
 #[krabka_macros::human_units]
-#[derive(Debug, Clone, Default, Deserialize, JsonSchema, PartialEq)]
-#[serde(deny_unknown_fields)]
+#[krabka_macros::config_table(strict)]
 pub struct FileRemoteStorageConfig {
     /// Root directory for the local `LocalTieredStorage` backend.
     pub storage_dir: Option<String>,
@@ -395,9 +394,7 @@ mod tests {
 [remote_storage]
 storage_dir = "/var/lib/krabka/tier"
 "#;
-        let file: FileConfig = toml::from_str(toml).unwrap();
-        let mut cfg = crate::config::BrokerConfig::default();
-        file.apply_to(&mut cfg).unwrap();
+        let cfg = crate::file_config::test_support::configured_unwrap_parse(toml).unwrap();
         match cfg.remote_storage_backend {
             Some(crate::config::RemoteStorageBackend::Local { dir }) => {
                 assert!(dir == std::path::PathBuf::from("/var/lib/krabka/tier"));
@@ -407,9 +404,8 @@ storage_dir = "/var/lib/krabka/tier"
     }
     #[test]
     fn no_remote_storage_section_leaves_backend_none() {
-        let file: FileConfig = toml::from_str("broker_id = 1").unwrap();
-        let mut cfg = crate::config::BrokerConfig::default();
-        file.apply_to(&mut cfg).unwrap();
+        let cfg =
+            crate::file_config::test_support::configured_unwrap_parse("broker_id = 1").unwrap();
         assert!(cfg.remote_storage_backend.is_none());
         // No remote_storage section: RLMM stays at the production default (TopicBacked).
         assert!(matches!(
@@ -426,9 +422,7 @@ storage_dir = "/tmp/tier"
 [remote_storage.kafka_metadata]
 bootstrap = "127.0.0.1:9092"
 "#;
-        let file: FileConfig = toml::from_str(toml).unwrap();
-        let mut cfg = crate::config::BrokerConfig::default();
-        file.apply_to(&mut cfg).unwrap();
+        let cfg = crate::file_config::test_support::configured_unwrap_parse(toml).unwrap();
         let km = match &cfg.remote_log_metadata {
             crate::config::RlmmKind::TopicBacked(k) => k.clone(),
             crate::config::RlmmKind::InMemory => panic!("expected TopicBacked"),
@@ -462,9 +456,7 @@ fetch_retry_backoff = "300ms"
 event_queue_capacity = 2048
 snapshot_interval = "90s"
 "#;
-        let file: FileConfig = toml::from_str(toml).unwrap();
-        let mut cfg = crate::config::BrokerConfig::default();
-        file.apply_to(&mut cfg).unwrap();
+        let cfg = crate::file_config::test_support::configured_unwrap_parse(toml).unwrap();
         let km = match &cfg.remote_log_metadata {
             crate::config::RlmmKind::TopicBacked(k) => k.clone(),
             crate::config::RlmmKind::InMemory => panic!("expected TopicBacked"),
@@ -513,9 +505,7 @@ snapshot_interval = "90s"
 [remote_storage]
 storage_dir = "/tmp/tier"
 "#;
-        let file: FileConfig = toml::from_str(toml).unwrap();
-        let mut cfg = crate::config::BrokerConfig::default();
-        file.apply_to(&mut cfg).unwrap();
+        let cfg = crate::file_config::test_support::configured_unwrap_parse(toml).unwrap();
         check!(cfg.remote_reader_threads == 10);
         check!(cfg.remote_reader_max_pending_tasks == 100);
         check!(cfg.remote_index_cache_size == gibibytes(1));
@@ -530,9 +520,7 @@ reader_threads = 4
 reader_max_pending_tasks = 32
 index_cache_size = "256MiB"
 "#;
-        let file: FileConfig = toml::from_str(toml).unwrap();
-        let mut cfg = crate::config::BrokerConfig::default();
-        file.apply_to(&mut cfg).unwrap();
+        let cfg = crate::file_config::test_support::configured_unwrap_parse(toml).unwrap();
         check!(cfg.remote_reader_threads == 4);
         check!(cfg.remote_reader_max_pending_tasks == 32);
         check!(cfg.remote_index_cache_size == mebibytes(256));
@@ -557,9 +545,7 @@ index_cache_size = "256MiB"
                 4,
             ),
         ] {
-            let file: FileConfig = toml::from_str(toml).unwrap();
-            let mut cfg = crate::config::BrokerConfig::default();
-            file.apply_to(&mut cfg).unwrap();
+            let cfg = crate::file_config::test_support::configured_unwrap_parse(toml).unwrap();
             check!(cfg.remote_copier_threads == copier, "{case}");
             check!(cfg.remote_expiration_threads == expiration, "{case}");
         }
@@ -595,9 +581,7 @@ storage_dir = "/tmp/tier"
 bucket = "b"
 region = "us-east-1"
 "#;
-        let file: FileConfig = toml::from_str(toml).unwrap();
-        let mut cfg = crate::config::BrokerConfig::default();
-        let err = file.apply_to(&mut cfg).unwrap_err();
+        let err = crate::file_config::test_support::configured_unwrap_parse(toml).unwrap_err();
         let rendered = err.to_string();
         assert!(
             rendered.contains("cannot set both"),
@@ -613,9 +597,7 @@ storage_dir = "/tmp/tier"
 [remote_storage.gcs]
 bucket = "b"
 "#;
-        let file: FileConfig = toml::from_str(toml).unwrap();
-        let mut cfg = crate::config::BrokerConfig::default();
-        let err = file.apply_to(&mut cfg).unwrap_err();
+        let err = crate::file_config::test_support::configured_unwrap_parse(toml).unwrap_err();
         let rendered = err.to_string();
         assert!(
             rendered.contains("cannot set"),
@@ -632,9 +614,7 @@ region = "us-east-1"
 [remote_storage.gcs]
 bucket = "b"
 "#;
-        let file: FileConfig = toml::from_str(toml).unwrap();
-        let mut cfg = crate::config::BrokerConfig::default();
-        let err = file.apply_to(&mut cfg).unwrap_err();
+        let err = crate::file_config::test_support::configured_unwrap_parse(toml).unwrap_err();
         let rendered = err.to_string();
         assert!(
             rendered.contains("cannot set"),
@@ -650,9 +630,7 @@ storage_dir = "/tmp/tier"
 [remote_storage.kafka_metadata]
 in_memory = true
 "#;
-        let file: FileConfig = toml::from_str(toml).unwrap();
-        let mut cfg = crate::config::BrokerConfig::default();
-        file.apply_to(&mut cfg).unwrap();
+        let cfg = crate::file_config::test_support::configured_unwrap_parse(toml).unwrap();
         assert!(
             matches!(cfg.remote_log_metadata, crate::config::RlmmKind::InMemory),
             "in_memory = true must opt out to RlmmKind::InMemory, got {:?}",
@@ -670,9 +648,7 @@ in_memory = true
         ];
         for (line, want) in cases {
             let toml = format!("[remote_storage]\nstorage_dir = \"/tmp/tier\"\n{line}");
-            let file: FileConfig = toml::from_str(&toml).unwrap();
-            let mut cfg = crate::config::BrokerConfig::default();
-            file.apply_to(&mut cfg).unwrap();
+            let cfg = crate::file_config::test_support::configured_unwrap_parse(&toml).unwrap();
             check!(cfg.remote_copy_timeout == want, "{line:?}");
         }
     }
@@ -686,9 +662,7 @@ in_memory = true
 storage_dir = "/tmp/tier"
 copy_timeout = "0s"
 "#;
-        let file: FileConfig = toml::from_str(toml).unwrap();
-        let mut cfg = crate::config::BrokerConfig::default();
-        let err = file.apply_to(&mut cfg).unwrap_err();
+        let err = crate::file_config::test_support::configured_unwrap_parse(toml).unwrap_err();
         check!(err.to_string().contains("remote_storage.copy_timeout"));
     }
 }

@@ -14,21 +14,14 @@ use krabka_units::Time;
 ///
 /// Shared by the binary and by [`crate::run_from_args`], so both accept
 /// exactly the same flags.
+#[krabka_macros::bootstrap_cli_fields]
 #[derive(Parser)]
 #[command(
     name = "krabka-barrier",
     version,
     about = "Define barrier groups, trigger cuts, and verify a cut against the log"
 )]
-pub struct Cli {
-    /// One or more `host:port` pairs to bootstrap against.
-    #[arg(long, short = 'b', env = "KRABKA_BOOTSTRAP_SERVER", required = true)]
-    pub bootstrap_server: String,
-
-    /// What to do.
-    #[command(subcommand)]
-    pub command: Command,
-}
+pub struct Cli {}
 
 /// The subcommands, one per barrier api.
 #[derive(Subcommand)]
@@ -117,19 +110,19 @@ fn parse_time(raw: &str) -> Result<Time, String> {
 
 #[cfg(test)]
 mod tests {
-    use assert2::{assert, check};
+    use assert2::check;
     use krabka_units::convert::TimeExt as _;
 
     use super::*;
 
-    /// A time argument takes any unit the broker's own configuration takes,
-    /// so an operator never has to convert to milliseconds by hand, and a
-    /// number with no unit is refused rather than guessed at.
-    #[test]
-    fn a_time_argument_takes_any_unit() {
-        let cases = [
-            ("500ms", Some(500)),
-            ("30s", Some(30_000)),
+    krabka_macros::duration_parser_fixture!(
+        {
+            /// A time argument takes any unit the broker's own configuration takes,
+            /// so an operator never has to convert to milliseconds by hand, and a
+            /// number with no unit is refused rather than guessed at.
+
+        },
+        [
             ("5m", Some(300_000)),
             ("1h", Some(3_600_000)),
             ("2d", Some(172_800_000)),
@@ -141,25 +134,13 @@ mod tests {
             ("0", Some(0)),
             ("banana", None),
             ("", None),
-        ];
-        for (raw, expected) in cases {
-            check!(
-                parse_time(raw).ok().map(Time::millis_i64) == expected,
-                "{raw}"
-            );
-        }
-    }
+        ]
+    );
 
-    /// `--bootstrap-server` is the one flag every subcommand needs, so the
-    /// parser refuses a command line without it rather than defaulting to a
-    /// guess about where the cluster is.
-    #[test]
-    fn a_command_line_without_a_bootstrap_server_is_refused() {
-        assert!(Cli::try_parse_from(["krabka-barrier", "describe"]).is_err());
-        assert!(
-            Cli::try_parse_from(["krabka-barrier", "-b", "localhost:9092", "describe"]).is_ok()
-        );
-    }
+    krabka_macros::bootstrap_parser_fixture!(
+        ["krabka-barrier", "describe"],
+        ["krabka-barrier", "-b", "localhost:9092", "describe"]
+    );
 
     /// A group with no periodic injection is the default, and it reaches the
     /// wire as the -1 the broker reads as "on demand only".

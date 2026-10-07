@@ -1,23 +1,23 @@
-(* #"/workspace/crates/verified/src/share.rs" 109 0 109 59 *)
+(* #"/workspace/crates/verified/src/share.rs" 106 0 106 59 *)
 
 let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
 let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
 let%span swell_founded = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/well_founded.rs" 43 8 43 33
 let%span sslice = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 331 18 331 22
-let%span sshare = "/workspace/crates/verified/src/share.rs" 110 16 110 29
-let%span sshare'0 = "/workspace/crates/verified/src/share.rs" 113 31 113 32
-let%span sshare'1 = "/workspace/crates/verified/src/share.rs" 113 23 113 33
-let%span sshare'2 = "/workspace/crates/verified/src/share.rs" 114 16 114 22
-let%span sshare'3 = "/workspace/crates/verified/src/share.rs" 118 14 118 33
-let%span sshare'4 = "/workspace/crates/verified/src/share.rs" 119 14 119 27
-let%span sshare'5 = "/workspace/crates/verified/src/share.rs" 117 16 117 76
-let%span sshare'6 = "/workspace/crates/verified/src/share.rs" 116 16 116 77
-let%span sshare'7 = "/workspace/crates/verified/src/share.rs" 115 16 115 47
-let%span sshare'8 = "/workspace/crates/verified/src/share.rs" 120 11 120 21
-let%span sshare'9 = "/workspace/crates/verified/src/share.rs" 121 23 121 33
-let%span sshare'10 = "/workspace/crates/verified/src/share.rs" 123 13 123 14
-let%span sshare'11 = "/workspace/crates/verified/src/share.rs" 123 8 123 14
-let%span sshare'12 = "/workspace/crates/verified/src/share.rs" 100 10 107 1
+let%span sshare = "/workspace/crates/verified/src/share.rs" 107 16 107 29
+let%span sshare'0 = "/workspace/crates/verified/src/share.rs" 110 31 110 32
+let%span sshare'1 = "/workspace/crates/verified/src/share.rs" 110 23 110 33
+let%span sshare'2 = "/workspace/crates/verified/src/share.rs" 111 16 111 22
+let%span sshare'3 = "/workspace/crates/verified/src/share.rs" 115 14 115 33
+let%span sshare'4 = "/workspace/crates/verified/src/share.rs" 116 14 116 27
+let%span sshare'5 = "/workspace/crates/verified/src/share.rs" 114 16 114 76
+let%span sshare'6 = "/workspace/crates/verified/src/share.rs" 113 16 113 77
+let%span sshare'7 = "/workspace/crates/verified/src/share.rs" 112 16 112 47
+let%span sshare'8 = "/workspace/crates/verified/src/share.rs" 117 11 117 21
+let%span sshare'9 = "/workspace/crates/verified/src/share.rs" 118 23 118 33
+let%span sshare'10 = "/workspace/crates/verified/src/share.rs" 120 13 120 14
+let%span sshare'11 = "/workspace/crates/verified/src/share.rs" 120 8 120 14
+let%span sshare'12 = "/workspace/crates/verified/src/share.rs" 97 10 104 1
 
 use creusot.slice.Slice64
 use creusot.int.Int64
@@ -50,7 +50,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let share_prune_frontier [#"/workspace/crates/verified/src/share.rs" 109 0 109 59] (offsets: Slice64.slice Int64.t)
+let share_prune_frontier [#"/workspace/crates/verified/src/share.rs" 106 0 106 59] (offsets: Slice64.slice Int64.t)
   (return (x: t_Option_i64)) = (! bb0
   [ bb0 = s0
     [ s0 = len_i64 [%#sshare] {offsets} (fun (_x: UInt64.t) -> [ &_6 <- _x ] s1)

@@ -144,15 +144,13 @@ fn schedules_reject_corrupt_tails_and_ignore_stale_gate_fields() {
         lso: i64::MIN,
         deliverable: i64::MIN,
     };
-    for (batches, times) in [
-        (&[(0, 1), (2, 1), (4, 1)][..], &[0, 100, 0][..]),
-        (&[(0, 1), (4, 1)][..], &[10, 20][..]),
+    for (batches, times) in super::VALID_SCHEDULES.into_iter().chain([
         (&[(0, 1), (1, 1)][..], &[0, 0][..]),
         (&[(0, 1), (4, -1)][..], &[0, 0][..]),
         (&[(0, 1)][..], &[0][..]),
         (&[][..], &[][..]),
         (&[(0, 5)][..], &[i64::MAX][..]),
-    ] {
+    ]) {
         for now in [i64::MIN, 0, 100, i64::MAX] {
             for uncertainty in [-1, 0, 1, i64::MAX] {
                 for starts in [&[][..], &[1, 5][..], &[3, 1, 3][..], &[7][..]] {

@@ -162,23 +162,20 @@ impl RemoteIndexCache {
             Err(error) => return Err(RemoteStorageError::Io(error)),
         }
         std::fs::create_dir_all(&root).map_err(RemoteStorageError::Io)?;
-        Ok(Self {
-            root: Some(root),
-            max_bytes,
-            state: Mutex::new(CacheState::default()),
-            hits: AtomicU64::new(0),
-            misses: AtomicU64::new(0),
-            evictions: AtomicU64::new(0),
-        })
+        Ok(Self::empty(Some(root), max_bytes))
     }
 
     /// A cache that stores nothing: every lookup runs the fetcher and reports
     /// [`IndexCacheOutcome::Disabled`].
     #[must_use]
     pub fn disabled() -> Self {
+        Self::empty(None, 0)
+    }
+
+    fn empty(root: Option<PathBuf>, max_bytes: u64) -> Self {
         Self {
-            root: None,
-            max_bytes: 0,
+            root,
+            max_bytes,
             state: Mutex::new(CacheState::default()),
             hits: AtomicU64::new(0),
             misses: AtomicU64::new(0),

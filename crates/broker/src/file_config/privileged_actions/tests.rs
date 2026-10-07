@@ -182,10 +182,8 @@ fn freeze_and_break_glass_sections_apply_their_documented_defaults() {
         "{}\n[freeze]\n[break_glass]\napprovers = [\"User:alice\", \"User:bob\"]\n",
         operator_key_fixture(&dir, "alice-yubi", "User:alice")
     );
-    let file: FileConfig = toml::from_str(&toml).expect("parse config");
-    let mut cfg = crate::config::BrokerConfig::default();
-
-    file.apply_to(&mut cfg).expect("apply config");
+    let cfg =
+        crate::file_config::test_support::configured(&toml, "parse config").expect("apply config");
 
     check!(cfg.freeze == crate::config::FreezeConfig::default());
     check!(
@@ -211,10 +209,8 @@ fn freeze_and_break_glass_sections_apply_their_documented_defaults() {
 
 #[test]
 fn absent_privileged_action_sections_retain_the_broker_defaults() {
-    let file: FileConfig = toml::from_str("").expect("parse empty config");
-    let mut cfg = crate::config::BrokerConfig::default();
-
-    file.apply_to(&mut cfg).expect("apply empty config");
+    let cfg = crate::file_config::test_support::configured("", "parse empty config")
+        .expect("apply empty config");
 
     check!(cfg.operator_keys.is_empty());
     check!(cfg.freeze == crate::config::FreezeConfig::default());
@@ -233,10 +229,8 @@ fn freeze_and_break_glass_values_replace_the_broker_defaults() {
          signed_actions = [\"delete_topic\"]\nbackground_unclean_recovery = \"require\"\n",
         operator_key_fixture(&dir, "alice-yubi", "User:alice")
     );
-    let file: FileConfig = toml::from_str(&toml).expect("parse config");
-    let mut cfg = crate::config::BrokerConfig::default();
-
-    file.apply_to(&mut cfg).expect("apply config");
+    let cfg =
+        crate::file_config::test_support::configured(&toml, "parse config").expect("apply config");
 
     check!(
         cfg.freeze
@@ -344,12 +338,11 @@ fn demanding_a_signature_with_no_operator_key_is_a_startup_error() {
 fn an_empty_signed_actions_list_needs_no_operator_key() {
     // The explicit opt-out. It is distinct from omitting the key, which
     // selects the irreversible set.
-    let file: FileConfig =
-        toml::from_str("[break_glass]\napprovers = [\"User:alice\"]\nsigned_actions = []\n")
-            .expect("parse break_glass section");
-    let mut cfg = crate::config::BrokerConfig::default();
-
-    file.apply_to(&mut cfg).expect("apply break_glass section");
+    let cfg = crate::file_config::test_support::configured(
+        "[break_glass]\napprovers = [\"User:alice\"]\nsigned_actions = []\n",
+        "parse break_glass section",
+    )
+    .expect("apply break_glass section");
 
     check!(cfg.break_glass.signed_actions.is_empty());
     check!(cfg.operator_keys.is_empty());

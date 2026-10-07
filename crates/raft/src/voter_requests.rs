@@ -123,6 +123,15 @@ pub fn valid_wire_listeners<'a>(
     count != 0
 }
 
+fn leader_request_refusal(
+    request_cluster: Option<&str>,
+    cluster_id: &str,
+    quorum: &QuorumStateSnapshot,
+) -> Option<Refusal> {
+    cluster_id_refusal(request_cluster, cluster_id)
+        .or_else(|| (!quorum.is_leader).then_some((NOT_LEADER_OR_FOLLOWER, None)))
+}
+
 /// The refusal of an `AddRaftVoter` request before the candidate probe, as
 /// `KafkaRaftClient.handleAddVoterRequest` orders it.
 #[must_use]
@@ -131,11 +140,9 @@ pub fn add_voter_refusal(
     cluster_id: &str,
     quorum: &QuorumStateSnapshot,
 ) -> Option<Refusal> {
-    if let Some(refusal) = cluster_id_refusal(request.cluster_id.as_deref(), cluster_id) {
+    if let Some(refusal) = leader_request_refusal(request.cluster_id.as_deref(), cluster_id, quorum)
+    {
         return Some(refusal);
-    }
-    if !quorum.is_leader {
-        return Some((NOT_LEADER_OR_FOLLOWER, None));
     }
     if request.voter_id < 0
         || request.voter_directory_id == WireUuid::ZERO
@@ -213,11 +220,9 @@ pub fn remove_voter_refusal(
     cluster_id: &str,
     quorum: &QuorumStateSnapshot,
 ) -> Option<Refusal> {
-    if let Some(refusal) = cluster_id_refusal(request.cluster_id.as_deref(), cluster_id) {
+    if let Some(refusal) = leader_request_refusal(request.cluster_id.as_deref(), cluster_id, quorum)
+    {
         return Some(refusal);
-    }
-    if !quorum.is_leader {
-        return Some((NOT_LEADER_OR_FOLLOWER, None));
     }
     if request.voter_id < 0 || request.voter_directory_id == WireUuid::ZERO {
         return Some((

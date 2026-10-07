@@ -9,7 +9,7 @@ use std::{collections::HashMap, time::Instant};
 
 use tokio::sync::oneshot;
 
-use super::{JoinResult, SyncResult};
+use super::{JoinResult, ParkedWaiters, SyncResult};
 use crate::{
     codes,
     coordinator::unified::{
@@ -118,16 +118,26 @@ pub(super) fn fence_replaced_classic_member(
     joiners: &mut HashMap<String, oneshot::Sender<JoinResult>>,
     followers: &mut HashMap<String, oneshot::Sender<SyncResult>>,
 ) {
+    reject_parked_member(member_id, codes::FENCED_INSTANCE_ID, joiners, followers);
+}
+
+/// Remove and answer one member's join and sync waiters, in that order.
+fn reject_parked_member(
+    member_id: &str,
+    error_code: i16,
+    joiners: &mut HashMap<String, oneshot::Sender<JoinResult>>,
+    followers: &mut HashMap<String, oneshot::Sender<SyncResult>>,
+) {
     if let Some(sender) = joiners.remove(member_id) {
         let _ = sender.send(JoinResult {
-            error_code: codes::FENCED_INSTANCE_ID,
+            error_code,
             member_id: member_id.to_string(),
             ..JoinResult::default()
         });
     }
     if let Some(sender) = followers.remove(member_id) {
         let _ = sender.send(SyncResult {
-            error_code: codes::FENCED_INSTANCE_ID,
+            error_code,
             ..SyncResult::default()
         });
     }
@@ -139,20 +149,25 @@ pub(super) fn drain_removed_classic_waiters(
     followers: &mut HashMap<String, oneshot::Sender<SyncResult>>,
 ) {
     for member_id in removed {
-        if let Some(sender) = joiners.remove(member_id) {
-            let _ = sender.send(JoinResult {
-                error_code: codes::UNKNOWN_MEMBER_ID,
-                member_id: member_id.clone(),
-                ..JoinResult::default()
-            });
-        }
-        if let Some(sender) = followers.remove(member_id) {
-            let _ = sender.send(SyncResult {
-                error_code: codes::UNKNOWN_MEMBER_ID,
-                ..SyncResult::default()
-            });
-        }
+        reject_parked_member(member_id, codes::UNKNOWN_MEMBER_ID, joiners, followers);
     }
+}
+
+/// Answer removed members first, then fence followers of an interrupted sync
+/// phase, and finally complete any join phase the survivors have all joined.
+pub(super) fn settle_removed_classic_waiters(
+    state: &mut ClassicState,
+    previous: ClassicGroupState,
+    removed: &[String],
+    parked: &mut ParkedWaiters,
+) {
+    drain_removed_classic_waiters(removed, &mut parked.joiners, &mut parked.followers);
+    if previous == ClassicGroupState::CompletingRebalance
+        && state.state == ClassicGroupState::PreparingRebalance
+    {
+        drain_followers_with(&mut parked.followers, codes::REBALANCE_IN_PROGRESS);
+    }
+    maybe_complete_classic(state, &mut parked.joiners, &mut parked.followers);
 }
 
 /// Completes the rebalance early if and only if every member has joined a

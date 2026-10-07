@@ -27,13 +27,7 @@
 //! key string keeps the legacy `i16` length prefix and a key carries no
 //! tagged-field trailer. Only the values are flexible.
 
-use bytes::Bytes;
-use krabka_protocol::ProtocolError;
-
-use crate::{
-    coordinator::unified::persistence::{encode_string_key, get_string},
-    error::BrokerError,
-};
+use crate::coordinator::unified::persistence::{group_record_keys, string_key_encoders};
 
 pub const KEY_STREAMS_GROUP_METADATA: i16 = 17;
 /// The one key with no Kafka counterpart at 4.3.1. See the module docs.
@@ -44,161 +38,89 @@ pub const KEY_STREAMS_TARGET_ASSIGNMENT_MEMBER: i16 = 21;
 pub const KEY_STREAMS_CURRENT_MEMBER_ASSIGNMENT: i16 = 22;
 pub const KEY_STREAMS_TOPOLOGY: i16 = 23;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum StreamsGroupKey {
-    GroupMetadata { group_id: String },
-    MemberMetadata { group_id: String, member_id: String },
-    Topology { group_id: String },
-    PartitionMetadata { group_id: String },
-    TargetAssignmentMetadata { group_id: String },
-    TargetAssignmentMember { group_id: String, member_id: String },
-    CurrentMemberAssignment { group_id: String, member_id: String },
-}
-
-/// Encodes the group-metadata key.
-///
-/// # Errors
-///
-/// Returns [`BrokerError::Protocol`] when a string of the key is longer than
-/// 32767 bytes.
-pub fn encode_group_metadata_key(group_id: &str) -> Result<Bytes, BrokerError> {
-    encode_string_key(KEY_STREAMS_GROUP_METADATA, &[group_id])
-}
-
-/// Encodes the member-metadata key.
-///
-/// # Errors
-///
-/// Returns [`BrokerError::Protocol`] when a string of the key is longer than
-/// 32767 bytes.
-pub fn encode_member_metadata_key(group_id: &str, member_id: &str) -> Result<Bytes, BrokerError> {
-    encode_string_key(KEY_STREAMS_MEMBER_METADATA, &[group_id, member_id])
-}
-
-/// Encodes the topology key.
-///
-/// # Errors
-///
-/// Returns [`BrokerError::Protocol`] when a string of the key is longer than
-/// 32767 bytes.
-pub fn encode_topology_key(group_id: &str) -> Result<Bytes, BrokerError> {
-    encode_string_key(KEY_STREAMS_TOPOLOGY, &[group_id])
-}
-
-/// Encodes the partition-metadata key.
-///
-/// # Errors
-///
-/// Returns [`BrokerError::Protocol`] when a string of the key is longer than
-/// 32767 bytes.
-pub fn encode_partition_metadata_key(group_id: &str) -> Result<Bytes, BrokerError> {
-    encode_string_key(KEY_STREAMS_PARTITION_METADATA, &[group_id])
-}
-
-/// Encodes the target-assignment-metadata key.
-///
-/// # Errors
-///
-/// Returns [`BrokerError::Protocol`] when a string of the key is longer than
-/// 32767 bytes.
-pub fn encode_target_assignment_metadata_key(group_id: &str) -> Result<Bytes, BrokerError> {
-    encode_string_key(KEY_STREAMS_TARGET_ASSIGNMENT_METADATA, &[group_id])
-}
-
-/// Encodes the target-assignment-member key.
-///
-/// # Errors
-///
-/// Returns [`BrokerError::Protocol`] when a string of the key is longer than
-/// 32767 bytes.
-pub fn encode_target_assignment_member_key(
-    group_id: &str,
-    member_id: &str,
-) -> Result<Bytes, BrokerError> {
-    encode_string_key(KEY_STREAMS_TARGET_ASSIGNMENT_MEMBER, &[group_id, member_id])
-}
-
-/// Encodes the current-member-assignment key.
-///
-/// # Errors
-///
-/// Returns [`BrokerError::Protocol`] when a string of the key is longer than
-/// 32767 bytes.
-pub fn encode_current_member_assignment_key(
-    group_id: &str,
-    member_id: &str,
-) -> Result<Bytes, BrokerError> {
-    encode_string_key(
-        KEY_STREAMS_CURRENT_MEMBER_ASSIGNMENT,
-        &[group_id, member_id],
-    )
-}
-
-/// Encodes a [`StreamsGroupKey`] for dispatch, with a leading `i16` key
-/// version.
-///
-/// # Errors
-///
-/// Returns [`BrokerError::Protocol`] when a string of the key is longer than
-/// 32767 bytes.
-pub fn encode_streams_key(key: &StreamsGroupKey) -> Result<Bytes, BrokerError> {
-    match key {
-        StreamsGroupKey::GroupMetadata { group_id } => encode_group_metadata_key(group_id),
-        StreamsGroupKey::MemberMetadata {
-            group_id,
-            member_id,
-        } => encode_member_metadata_key(group_id, member_id),
-        StreamsGroupKey::Topology { group_id } => encode_topology_key(group_id),
-        StreamsGroupKey::PartitionMetadata { group_id } => encode_partition_metadata_key(group_id),
-        StreamsGroupKey::TargetAssignmentMetadata { group_id } => {
-            encode_target_assignment_metadata_key(group_id)
-        }
-        StreamsGroupKey::TargetAssignmentMember {
-            group_id,
-            member_id,
-        } => encode_target_assignment_member_key(group_id, member_id),
-        StreamsGroupKey::CurrentMemberAssignment {
-            group_id,
-            member_id,
-        } => encode_current_member_assignment_key(group_id, member_id),
+group_record_keys! {
+    pub enum StreamsGroupKey {
+        GroupMetadata => KEY_STREAMS_GROUP_METADATA,
+        MemberMetadata(member_id) => KEY_STREAMS_MEMBER_METADATA,
+        Topology => KEY_STREAMS_TOPOLOGY,
+        PartitionMetadata => KEY_STREAMS_PARTITION_METADATA,
+        TargetAssignmentMetadata => KEY_STREAMS_TARGET_ASSIGNMENT_METADATA,
+        TargetAssignmentMember(member_id) => KEY_STREAMS_TARGET_ASSIGNMENT_MEMBER,
+        CurrentMemberAssignment(member_id) => KEY_STREAMS_CURRENT_MEMBER_ASSIGNMENT,
     }
+
+    /// # Errors
+    /// Returns an error when log I/O fails, a record or index is corrupt, or the requested offset violates the segment state.
+    fn parse_streams_key;
+
+    /// Encodes a [`StreamsGroupKey`] for dispatch, with a leading `i16` key
+    /// version.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::error::BrokerError::Protocol`] when a string of the key is longer than
+    /// 32767 bytes.
+    fn encode_streams_key;
+
+    invalid "unknown streams-group key version";
 }
 
-/// # Errors
-/// Returns an error when log I/O fails, a record or index is corrupt, or the requested offset violates the segment state.
-pub fn parse_streams_key(version: i16, mut buf: &[u8]) -> Result<StreamsGroupKey, BrokerError> {
-    let key = match version {
-        KEY_STREAMS_GROUP_METADATA => StreamsGroupKey::GroupMetadata {
-            group_id: get_string(&mut buf)?,
-        },
-        KEY_STREAMS_MEMBER_METADATA => StreamsGroupKey::MemberMetadata {
-            group_id: get_string(&mut buf)?,
-            member_id: get_string(&mut buf)?,
-        },
-        KEY_STREAMS_TOPOLOGY => StreamsGroupKey::Topology {
-            group_id: get_string(&mut buf)?,
-        },
-        KEY_STREAMS_PARTITION_METADATA => StreamsGroupKey::PartitionMetadata {
-            group_id: get_string(&mut buf)?,
-        },
-        KEY_STREAMS_TARGET_ASSIGNMENT_METADATA => StreamsGroupKey::TargetAssignmentMetadata {
-            group_id: get_string(&mut buf)?,
-        },
-        KEY_STREAMS_TARGET_ASSIGNMENT_MEMBER => StreamsGroupKey::TargetAssignmentMember {
-            group_id: get_string(&mut buf)?,
-            member_id: get_string(&mut buf)?,
-        },
-        KEY_STREAMS_CURRENT_MEMBER_ASSIGNMENT => StreamsGroupKey::CurrentMemberAssignment {
-            group_id: get_string(&mut buf)?,
-            member_id: get_string(&mut buf)?,
-        },
-        _ => {
-            return Err(BrokerError::Protocol(ProtocolError::InvalidValue(
-                "unknown streams-group key version",
-            )));
-        }
-    };
-    Ok(key)
+string_key_encoders! {
+    /// Encodes the group-metadata key.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::error::BrokerError::Protocol`] when a string of the key is longer than
+    /// 32767 bytes.
+    pub fn encode_group_metadata_key(group_id) = KEY_STREAMS_GROUP_METADATA;
+
+    /// Encodes the member-metadata key.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::error::BrokerError::Protocol`] when a string of the key is longer than
+    /// 32767 bytes.
+    pub fn encode_member_metadata_key(group_id, member_id) = KEY_STREAMS_MEMBER_METADATA;
+
+    /// Encodes the topology key.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::error::BrokerError::Protocol`] when a string of the key is longer than
+    /// 32767 bytes.
+    pub fn encode_topology_key(group_id) = KEY_STREAMS_TOPOLOGY;
+
+    /// Encodes the partition-metadata key.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::error::BrokerError::Protocol`] when a string of the key is longer than
+    /// 32767 bytes.
+    pub fn encode_partition_metadata_key(group_id) = KEY_STREAMS_PARTITION_METADATA;
+
+    /// Encodes the target-assignment-metadata key.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::error::BrokerError::Protocol`] when a string of the key is longer than
+    /// 32767 bytes.
+    pub fn encode_target_assignment_metadata_key(group_id) = KEY_STREAMS_TARGET_ASSIGNMENT_METADATA;
+
+    /// Encodes the target-assignment-member key.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::error::BrokerError::Protocol`] when a string of the key is longer than
+    /// 32767 bytes.
+    pub fn encode_target_assignment_member_key(group_id, member_id) = KEY_STREAMS_TARGET_ASSIGNMENT_MEMBER;
+
+    /// Encodes the current-member-assignment key.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::error::BrokerError::Protocol`] when a string of the key is longer than
+    /// 32767 bytes.
+    pub fn encode_current_member_assignment_key(group_id, member_id) = KEY_STREAMS_CURRENT_MEMBER_ASSIGNMENT;
 }
 
 #[cfg(test)]

@@ -63,12 +63,7 @@ pub(super) async fn validate_batch_schemas(
         let reason = RejectReason::RegistryUnavailable(
             "no [schema_registry] section is configured on this broker".to_owned(),
         );
-        metrics.record_schema_validation_rejection(topic_name, reason.label());
-        return Err(vec![BatchIndexAndErrorMessage {
-            batch_index: 0,
-            batch_index_error_message: Some(reason.to_string()),
-            ..Default::default()
-        }]);
+        return Err(vec![schema_rejection(metrics, topic_name, 0, &reason)]);
     };
 
     let check = SchemaCheck {
@@ -108,12 +103,7 @@ pub(super) async fn validate_batch_schemas(
             let Ok(batch) = RecordBatchBorrowed::decode_borrow_with_policy(&mut cursor, policy)
             else {
                 let reason = RejectReason::Unframed("batch did not decode".to_owned());
-                metrics.record_schema_validation_rejection(topic_name, reason.label());
-                return Err(vec![BatchIndexAndErrorMessage {
-                    batch_index: 0,
-                    batch_index_error_message: Some(reason.to_string()),
-                    ..Default::default()
-                }]);
+                return Err(vec![schema_rejection(metrics, topic_name, 0, &reason)]);
             };
             for (index, record) in batch.iter().enumerate() {
                 // `prepare_batch`'s `validate_records` walk already parsed
@@ -124,12 +114,12 @@ pub(super) async fn validate_batch_schemas(
                 // would leave `errors` empty and admit the batch.
                 let Ok(record) = record else {
                     let reason = RejectReason::Unframed("record did not decode".to_owned());
-                    metrics.record_schema_validation_rejection(topic_name, reason.label());
-                    errors.push(BatchIndexAndErrorMessage {
-                        batch_index: i32::try_from(index).unwrap_or(i32::MAX),
-                        batch_index_error_message: Some(reason.to_string()),
-                        ..Default::default()
-                    });
+                    errors.push(schema_rejection(
+                        metrics,
+                        topic_name,
+                        i32::try_from(index).unwrap_or(i32::MAX),
+                        &reason,
+                    ));
                     walk_complete = false;
                     break;
                 };
@@ -149,6 +139,21 @@ pub(super) async fn validate_batch_schemas(
     match schema_batch_admission(walk_complete, applicable, admitted) {
         SchemaBatchAdmission::Admit => Ok(()),
         SchemaBatchAdmission::Reject => Err(errors),
+    }
+}
+
+/// Every schema refusal records its reason and reports the same wire row.
+fn schema_rejection(
+    metrics: &crate::metrics::BrokerMetrics,
+    topic: &str,
+    batch_index: i32,
+    reason: &RejectReason,
+) -> BatchIndexAndErrorMessage {
+    metrics.record_schema_validation_rejection(topic, reason.label());
+    BatchIndexAndErrorMessage {
+        batch_index,
+        batch_index_error_message: Some(reason.to_string()),
+        ..Default::default()
     }
 }
 
@@ -201,13 +206,12 @@ impl SchemaCheck<'_> {
             {
                 Ok(()) => tally.admitted += 1,
                 Err(reason) => {
-                    self.metrics
-                        .record_schema_validation_rejection(self.topic_name, reason.label());
-                    errors.push(BatchIndexAndErrorMessage {
+                    errors.push(schema_rejection(
+                        self.metrics,
+                        self.topic_name,
                         batch_index,
-                        batch_index_error_message: Some(reason.to_string()),
-                        ..Default::default()
-                    });
+                        &reason,
+                    ));
                 }
             }
         }

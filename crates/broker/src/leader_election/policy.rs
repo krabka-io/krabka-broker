@@ -514,7 +514,6 @@ pub(crate) fn unclean_restart_one(
 #[cfg(test)]
 mod tests {
     use assert2::assert;
-    use krabka_metadata::LeaderEpoch;
 
     use super::*;
     use crate::leader_election::test_support::witnesses;
@@ -545,12 +544,7 @@ mod tests {
 
     /// The published ELR state of a partition: the eligible and the last-known
     /// replicas.
-    fn elr(eligible: &[i32], last_known: &[i32]) -> PartitionElr {
-        PartitionElr {
-            eligible_leader_replicas: eligible.to_vec(),
-            last_known_elr: last_known.to_vec(),
-        }
-    }
+    use crate::test_support::partition_elr as elr;
 
     /// [`decide_with_elr`] for a partition that publishes no ELR at all, which
     /// is every partition of a healthy cluster.
@@ -566,18 +560,7 @@ mod tests {
     }
 
     fn partition_record(leader: u64, replicas: &[u64], isr: &[u64]) -> PartitionRecord {
-        PartitionRecord {
-            topic: "t".into(),
-            partition: 0,
-            leader: NodeId(leader),
-            replicas: replicas.iter().copied().map(NodeId).collect(),
-            isr: isr.iter().copied().map(NodeId).collect(),
-            leader_epoch: LeaderEpoch(5),
-            adding_replicas: vec![],
-            removing_replicas: vec![],
-            directories: vec![],
-            partition_epoch: 0,
-        }
+        crate::leader_election::test_support::seed_partition("t", 0, leader, replicas, isr, &[])
     }
 
     #[test]

@@ -7,10 +7,10 @@
 //! that commits the chain head. The degraded spool-and-replay path lives in
 //! `super::spool_mode`.
 
-use std::{sync::Arc, time::Duration};
+use std::sync::Arc;
 
 use krabka_units::prelude::{Time, TimeExt as _};
-use qubit_clock::{TimeError, Timer, TimerFuture};
+use qubit_clock::Timer;
 
 use super::handle::AuditReceiver;
 use crate::{
@@ -291,45 +291,31 @@ const CHECKPOINT_TASK: &str = "audit checkpoint";
 /// Names the spool-replay cadence in the timer-failure logs.
 const REPLAY_TASK: &str = "audit replay";
 
-/// Registers a deadline `delay` from now on `timer`, for the ticker named
-/// `task`.
-///
-/// `None` means the timer refused the registration, and [`AuditWriter::run`]
-/// must stop. `krabka-audit` cannot reach the broker's `time_util` guards, so
-/// it keeps this pair local, with the same contract.
-///
-/// Stopping is the right answer here in particular. A broker whose timer
-/// backend is gone can no longer checkpoint the audit chain on cadence, and an
-/// audit writer that silently keeps running without its cadence is worse than
-/// one that stops loudly: the chain would grow with no committed head, and
-/// nothing would say so. Returning closes the channel the writer drains, so
-/// every sender sees the failure on its next emit instead of writing into a
-/// pipeline that has quietly lost half its guarantees. Re-arming in a loop is
-/// not an option either, because an unarmable timer would spin the task at
-/// full speed.
-fn arm(timer: &dyn Timer, delay: Duration, task: &'static str) -> Option<TimerFuture> {
-    match timer.after(delay) {
-        Ok(future) => Some(future),
-        Err(error) => {
-            tracing::error!(%error, task, "could not arm the audit timer; stopping the writer");
-            None
-        }
-    }
-}
+krabka_macros::timer_hooks! {
+    /// Registers a deadline `delay` from now on `timer`, for the ticker named
+    /// `task`.
+    ///
+    /// `None` means the timer refused the registration, and [`AuditWriter::run`]
+    /// must stop. `krabka-audit` cannot reach the broker's `time_util` guards, so
+    /// it keeps this pair local, with the same contract.
+    ///
+    /// Stopping is the right answer here in particular. A broker whose timer
+    /// backend is gone can no longer checkpoint the audit chain on cadence, and an
+    /// audit writer that silently keeps running without its cadence is worse than
+    /// one that stops loudly: the chain would grow with no committed head, and
+    /// nothing would say so. Returning closes the channel the writer drains, so
+    /// every sender sees the failure on its next emit instead of writing into a
+    /// pipeline that has quietly lost half its guarantees. Re-arming in a loop is
+    /// not an option either, because an unarmable timer would spin the task at
+    /// full speed.
+    arm("could not arm the audit timer; stopping the writer");
 
-/// Reports whether a deadline armed by [`arm`] completed, for the ticker named
-/// `task`.
-///
-/// `false` means the timer gave up on a registration it had accepted, and the
-/// writer must stop for the same reason [`arm`] returning `None` makes it stop.
-fn fired(outcome: Result<(), TimeError>, task: &'static str) -> bool {
-    match outcome {
-        Ok(()) => true,
-        Err(error) => {
-            tracing::error!(%error, task, "the armed audit timer failed; stopping the writer");
-            false
-        }
-    }
+    /// Reports whether a deadline armed by [`arm`] completed, for the ticker named
+    /// `task`.
+    ///
+    /// `false` means the timer gave up on a registration it had accepted, and the
+    /// writer must stop for the same reason [`arm`] returning `None` makes it stop.
+    fired("the armed audit timer failed; stopping the writer");
 }
 
 /// Epoch-millisecond clock for the checkpoint timestamps.
@@ -345,49 +331,100 @@ fn now_ms() -> i64 {
 #[cfg(test)]
 mod tests {
     use assert2::check;
-    use qubit_clock::{MonotonicClock, MonotonicInstant, StdMonotonicClock};
+    use qubit_clock::{
+        MonotonicClock, MonotonicInstant, StdMonotonicClock, TimeError, TimerFuture,
+    };
 
     use super::*;
     use crate::{
         event::AuditEventClass,
         log::{
             AuditLog,
-            test_support::{DORMANT, ROOMY_CAP, dormant_timer, header, life, product, test_signer},
+            test_support::{
+                ROOMY_CAP, finish_writer, header, life, roomy_spool, spawn_writer, test_signer,
+            },
         },
-        sink::MemorySink,
+        sink::{AuditSink, MemorySink},
+        spool::PendingLosses,
     };
+
+    fn memory_writer(
+        directory: &std::path::Path,
+        capacity: usize,
+        signer: Option<Arc<FileEd25519Signer>>,
+        checkpoint_every_n: u64,
+    ) -> (Arc<AuditLog>, Arc<MemorySink>, tokio::task::JoinHandle<()>) {
+        let spool = Spool::open(directory, ROOMY_CAP).unwrap();
+        let (log, receiver) = AuditLog::new(capacity);
+        let sink = Arc::new(MemorySink::default());
+        let handle = spawn_writer(
+            receiver,
+            crate::log::test_support::quiet_params(
+                sink.clone(),
+                spool,
+                Arc::new(AuditStats::new()),
+                signer,
+                checkpoint_every_n,
+            ),
+        );
+        (log, sink, handle)
+    }
+
+    type SignedWriterFixture = (
+        Vec<u8>,
+        tempfile::TempDir,
+        (Arc<AuditLog>, Arc<MemorySink>, tokio::task::JoinHandle<()>),
+    );
+
+    fn signed_writer(capacity: usize, checkpoint_every_n: u64) -> SignedWriterFixture {
+        let (signer, public_key) = test_signer();
+        let directory = tempfile::tempdir().unwrap();
+        let writer = memory_writer(directory.path(), capacity, Some(signer), checkpoint_every_n);
+        (public_key, directory, writer)
+    }
+
+    struct PendingLossWriter {
+        log: Arc<AuditLog>,
+        receiver: AuditReceiver,
+        directory: tempfile::TempDir,
+        // Retain the original caller's loss-counter ownership for the whole test.
+        _losses: Arc<PendingLosses>,
+        params: AuditWriterParams,
+    }
+
+    fn pending_loss_writer<T: AuditSink + 'static>(
+        sink: &Arc<T>,
+        stats: impl FnOnce() -> Arc<AuditStats>,
+        signer: Arc<FileEd25519Signer>,
+    ) -> PendingLossWriter {
+        let (log, receiver) = AuditLog::new(16);
+        let losses = receiver.pending_losses();
+        losses.add(1);
+        let directory = tempfile::tempdir().unwrap();
+        let spool = Spool::open(directory.path(), ROOMY_CAP).unwrap();
+        let mut params = crate::log::test_support::params(sink.clone(), spool, stats());
+        params.signer = Some(signer);
+        params.checkpoint_every_n = 2;
+        PendingLossWriter {
+            log,
+            receiver,
+            directory,
+            _losses: losses,
+            params,
+        }
+    }
 
     #[tokio::test]
     async fn emitted_events_reach_the_sink_in_order() {
         let dir = tempfile::tempdir().unwrap();
-        let spool = Spool::open(dir.path(), ROOMY_CAP).unwrap();
-        let sink = Arc::new(MemorySink::default());
-        let stats = Arc::new(AuditStats::new());
-        let (log, rx) = AuditLog::new(16);
-        let writer = AuditWriter::new(
-            rx,
-            AuditWriterParams {
-                sink: sink.clone(),
-                product: product(),
-                signer: None,
-                checkpoint_every_n: 1_000_000,
-                checkpoint_every: DORMANT,
-                chain: ChainState::new(),
-                spool: Some(spool),
-                stats,
-                replay_every: DORMANT,
-                timer: dormant_timer(),
-            },
-        );
-        let handle = tokio::spawn(writer.run());
+        let (log, sink, handle) = memory_writer(dir.path(), 16, None, 1_000_000);
 
         log.emit(life(1));
         log.emit(life(2));
         log.emit(life(3));
 
         // Dropping the only sender ends the writer loop cleanly.
-        drop(log);
-        handle.await.unwrap();
+        finish_writer(log, handle).await;
 
         let recs = sink.records();
         check!((recs.len(), recs[0].class) == (3, AuditEventClass::ApplicationLifecycle));
@@ -399,30 +436,11 @@ mod tests {
     #[tokio::test]
     async fn chained_records_carry_seq_and_prev_hash() {
         let dir = tempfile::tempdir().unwrap();
-        let spool = Spool::open(dir.path(), ROOMY_CAP).unwrap();
-        let (log, rx) = AuditLog::new(16);
-        let sink = Arc::new(MemorySink::default());
         // no signer, huge interval => no checkpoints, just chaining
-        let writer = AuditWriter::new(
-            rx,
-            AuditWriterParams {
-                sink: sink.clone(),
-                product: product(),
-                signer: None,
-                checkpoint_every_n: 1_000_000,
-                checkpoint_every: DORMANT,
-                chain: ChainState::new(),
-                spool: Some(spool),
-                stats: Arc::new(AuditStats::new()),
-                replay_every: DORMANT,
-                timer: dormant_timer(),
-            },
-        );
-        let h = tokio::spawn(writer.run());
+        let (log, sink, h) = memory_writer(dir.path(), 16, None, 1_000_000);
         log.emit(life(1));
         log.emit(life(2));
-        drop(log);
-        h.await.unwrap();
+        finish_writer(log, h).await;
 
         let recs = sink.records();
         check!(recs.len() == 2); // no checkpoints (no signer)
@@ -448,33 +466,12 @@ mod tests {
 
     #[tokio::test]
     async fn checkpoints_emitted_by_count_and_verify_against_recomputed_head() {
-        let (signer, pubkey) = test_signer();
-        let dir = tempfile::tempdir().unwrap();
-        let spool = Spool::open(dir.path(), ROOMY_CAP).unwrap();
-        let (log, rx) = AuditLog::new(64);
-        let sink = Arc::new(MemorySink::default());
         // checkpoint every 2 records; long interval so only count triggers
-        let writer = AuditWriter::new(
-            rx,
-            AuditWriterParams {
-                sink: sink.clone(),
-                product: product(),
-                signer: Some(signer),
-                checkpoint_every_n: 2,
-                checkpoint_every: DORMANT,
-                chain: ChainState::new(),
-                spool: Some(spool),
-                stats: Arc::new(AuditStats::new()),
-                replay_every: DORMANT,
-                timer: dormant_timer(),
-            },
-        );
-        let h = tokio::spawn(writer.run());
+        let (pubkey, _dir, (log, sink, h)) = signed_writer(64, 2);
         for i in 0..4 {
             log.emit(life(i));
         }
-        drop(log); // closes channel -> final checkpoint (none pending here: 4 % 2 == 0)
-        h.await.unwrap();
+        finish_writer(log, h).await; // closes channel -> final checkpoint (none pending here: 4 % 2 == 0)
 
         let recs = sink.records();
         // 4 chained + 2 checkpoints (after record 2 and record 4)
@@ -503,33 +500,12 @@ mod tests {
 
     #[tokio::test]
     async fn shutdown_emits_final_checkpoint_for_pending_tail() {
-        let (signer, pubkey) = test_signer();
-        let dir = tempfile::tempdir().unwrap();
-        let spool = Spool::open(dir.path(), ROOMY_CAP).unwrap();
-        let (log, rx) = AuditLog::new(16);
-        let sink = Arc::new(MemorySink::default());
         // every_n large so only the shutdown path emits
-        let writer = AuditWriter::new(
-            rx,
-            AuditWriterParams {
-                sink: sink.clone(),
-                product: product(),
-                signer: Some(signer),
-                checkpoint_every_n: 1_000_000,
-                checkpoint_every: DORMANT,
-                chain: ChainState::new(),
-                spool: Some(spool),
-                stats: Arc::new(AuditStats::new()),
-                replay_every: DORMANT,
-                timer: dormant_timer(),
-            },
-        );
-        let h = tokio::spawn(writer.run());
+        let (pubkey, _dir, (log, sink, h)) = signed_writer(16, 1_000_000);
         log.emit(life(1));
         log.emit(life(2));
         log.emit(life(3));
-        drop(log);
-        h.await.unwrap();
+        finish_writer(log, h).await;
 
         let recs = sink.records();
         let cps: Vec<_> = recs
@@ -557,14 +533,13 @@ mod tests {
 
     #[tokio::test]
     async fn writer_stops_when_a_ticker_cannot_be_armed() {
-        let dir = tempfile::tempdir().unwrap();
-        let spool = Spool::open(dir.path(), ROOMY_CAP).unwrap();
+        let (_dir, spool) = roomy_spool();
         let sink = Arc::new(MemorySink::default());
         let (log, rx) = AuditLog::new(16);
         let mut params =
             crate::log::test_support::params(sink.clone(), spool, Arc::new(AuditStats::new()));
         params.timer = Arc::new(DeadTimer(StdMonotonicClock::new()));
-        let handle = tokio::spawn(AuditWriter::new(rx, params).run());
+        let handle = spawn_writer(rx, params);
 
         // The sender is still alive, so nothing but the unarmable ticker can
         // end the run: the writer stops rather than run on without a cadence,
@@ -577,8 +552,7 @@ mod tests {
 
     #[tokio::test]
     async fn failed_checkpoint_increments_dropped() {
-        let dir = tempfile::tempdir().unwrap();
-        let spool = Spool::open(dir.path(), ROOMY_CAP).unwrap();
+        let (_dir, spool) = roomy_spool();
         let sink = Arc::new(crate::log::test_support::FailableSink::default());
         sink.allow_n(1);
         let stats = Arc::new(AuditStats::new());
@@ -587,11 +561,10 @@ mod tests {
         params.signer = Some(test_signer().0);
         params.checkpoint_every_n = 1;
         params.spool = None;
-        let handle = tokio::spawn(AuditWriter::new(rx, params).run());
+        let handle = spawn_writer(rx, params);
 
         log.emit(life(1));
-        drop(log);
-        handle.await.unwrap();
+        finish_writer(log, handle).await;
 
         check!(stats.dropped() >= 1);
     }
@@ -606,17 +579,15 @@ mod tests {
     async fn pending_loss_marker_advances_since_checkpoint_without_spool() {
         let (signer, _pubkey) = test_signer();
         let sink = Arc::new(MemorySink::default());
-        let (log, rx) = AuditLog::new(16);
-        let losses = rx.pending_losses();
-        losses.add(1);
-        let dir = tempfile::tempdir().unwrap();
-        let spool = Spool::open(dir.path(), ROOMY_CAP).unwrap();
-        let mut params =
-            crate::log::test_support::params(sink.clone(), spool, Arc::new(AuditStats::new()));
-        params.signer = Some(signer);
-        params.checkpoint_every_n = 2;
+        let PendingLossWriter {
+            log,
+            receiver: rx,
+            _losses,
+            directory: _dir,
+            mut params,
+        } = pending_loss_writer(&sink, || Arc::new(AuditStats::new()), signer);
         params.spool = None;
-        let handle = tokio::spawn(AuditWriter::new(rx, params).run());
+        let handle = spawn_writer(rx, params);
 
         log.emit(life(1));
         crate::log::test_support::await_until(
@@ -628,8 +599,7 @@ mod tests {
             },
         )
         .await;
-        drop(log);
-        handle.await.unwrap();
+        finish_writer(log, handle).await;
 
         let recs = sink.records();
         check!(
@@ -655,25 +625,21 @@ mod tests {
     #[tokio::test]
     async fn pending_loss_marker_advances_since_checkpoint_with_spool() {
         let (signer, _pubkey) = test_signer();
-        let sink = Arc::new(crate::log::test_support::FailableSink::default());
-        sink.set_fail(true);
-        let stats = Arc::new(AuditStats::new());
-        let (log, rx) = AuditLog::new(16);
-        let losses = rx.pending_losses();
-        losses.add(1);
-        let dir = tempfile::tempdir().unwrap();
-        let spool = Spool::open(dir.path(), ROOMY_CAP).unwrap();
-        let mut params = crate::log::test_support::params(sink.clone(), spool, Arc::clone(&stats));
-        params.signer = Some(signer);
-        params.checkpoint_every_n = 2;
-        let handle = tokio::spawn(AuditWriter::new(rx, params).run());
+        let (sink, stats) = crate::log::test_support::failed_sink_stats();
+        let PendingLossWriter {
+            log,
+            receiver: rx,
+            _losses,
+            directory: _dir,
+            params,
+        } = pending_loss_writer(&sink, || Arc::clone(&stats), signer);
+        let handle = spawn_writer(rx, params);
 
         log.emit(life(1));
         crate::log::test_support::await_until("loss marker, event, and checkpoint spooled", || {
             stats.spooled() >= 3
         })
         .await;
-        drop(log);
-        handle.await.unwrap();
+        finish_writer(log, handle).await;
     }
 }

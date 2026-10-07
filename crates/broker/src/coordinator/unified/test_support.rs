@@ -5,7 +5,7 @@
 //! Several sibling modules assert against the same fixtures, so they live in
 //! one module rather than being rebuilt per test file.
 
-use std::sync::Arc;
+use std::{collections::BTreeMap, sync::Arc};
 
 use super::{
     actor::MetadataProvider,
@@ -15,6 +15,25 @@ use super::{
     share::{self, config::ShareGroupConfig},
     streams::{self, config::StreamsGroupConfig},
 };
+use crate::test_support::string_pairs;
+
+/// An active-only stable streams seed, with no standby, warmup or revocations.
+pub(crate) fn stable_streams_assignment(
+    epochs: (i32, i32),
+    active: BTreeMap<String, Vec<i32>>,
+) -> streams::persistence::StreamsGroupCurrentMemberAssignmentValue {
+    streams::persistence::StreamsGroupCurrentMemberAssignmentValue {
+        member_epoch: epochs.0,
+        previous_member_epoch: epochs.1,
+        state: streams::persistence::StreamsMemberWireState::Stable,
+        active,
+        standby: BTreeMap::new(),
+        warmup: BTreeMap::new(),
+        active_pending_revocation: BTreeMap::new(),
+        standby_pending_revocation: BTreeMap::new(),
+        warmup_pending_revocation: BTreeMap::new(),
+    }
+}
 
 pub(crate) fn make_coord() -> Arc<GroupCoordinator> {
     make_coord_with_log().0
@@ -204,27 +223,159 @@ pub(crate) fn group_config_image(
         image.apply(&krabka_metadata::MetadataRecord::V1GroupConfig(
             krabka_metadata::GroupConfigRecord {
                 group_id: (*group_id).to_owned(),
-                configs: entries
-                    .iter()
-                    .map(|(key, value)| ((*key).to_owned(), (*value).to_owned()))
-                    .collect(),
+                configs: string_pairs(entries),
             },
         ));
     }
     image
 }
 
+/// The fields every heartbeat capacity/timing contract observes.
+pub(crate) trait HeartbeatStatus {
+    fn status(self) -> (i16, i32);
+}
+
+macro_rules! heartbeat_status {
+    ($($response:ty),+ $(,)?) => {$(
+        impl HeartbeatStatus for $response {
+            fn status(self) -> (i16, i32) {
+                (self.error_code, self.member_epoch)
+            }
+        }
+    )+};
+}
+heartbeat_status!(
+    krabka_protocol::owned::consumer_group_heartbeat_response::ConsumerGroupHeartbeatResponse,
+    krabka_protocol::owned::share_group_heartbeat_response::ShareGroupHeartbeatResponse,
+    krabka_protocol::owned::streams_group_heartbeat_response::StreamsGroupHeartbeatResponse,
+);
+
 /// Exercise one-member capacity through each protocol's heartbeat RPC.
-pub(crate) async fn assert_single_member_limit<F, Fut>(mut heartbeat: F)
-where
-    F: FnMut(&'static str, i32) -> Fut,
-    Fut: std::future::Future<Output = (i16, i32)>,
-{
-    let (code, epoch) = heartbeat("m1", 0).await;
+pub(crate) async fn assert_single_member_limit<H, Q, R: HeartbeatStatus>(
+    handle: &Arc<H>,
+    request: impl Fn(&str, i32) -> Q,
+    heartbeat: impl AsyncFn(&H, Q) -> R,
+) {
+    let status = async |id: &'static str, epoch| {
+        let request = request(id, epoch);
+        heartbeat(&Arc::clone(handle), request).await.status()
+    };
+
+    let (code, epoch) = status("m1", 0).await;
     assert2::check!(code == crate::codes::NONE);
-    let (code, _) = heartbeat("m2", 0).await;
+    let (code, _) = status("m2", 0).await;
     assert2::check!(code == crate::codes::GROUP_MAX_SIZE_REACHED);
-    let (code, existing_epoch) = heartbeat("m1", epoch).await;
+    let (code, existing_epoch) = status("m1", epoch).await;
     assert2::check!(code == crate::codes::NONE);
     assert2::check!(existing_epoch == epoch);
+}
+
+/// Run the shared session-timeout contract after protocol-specific setup.
+pub(crate) async fn check_group_session_timeout<H, R: HeartbeatStatus>(
+    create: impl Fn(&str) -> Arc<H>,
+    heartbeat: impl AsyncFn(&H, &str, i32) -> R,
+) {
+    use assert2::{assert, check};
+    let mut epochs = Vec::new();
+    for group_id in ["brief", "plain"] {
+        let handle = create(group_id);
+        let (code, epoch) = heartbeat(&handle, "m1", 0).await.status();
+        check!(code == crate::codes::NONE, "{group_id}");
+        epochs.push((group_id, handle, epoch));
+    }
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    let mut answers = Vec::new();
+    for (group_id, handle, epoch) in &epochs {
+        answers.push((*group_id, heartbeat(handle, "m1", *epoch).await.status().0));
+    }
+    assert!(
+        answers
+            == [
+                ("brief", crate::codes::UNKNOWN_MEMBER_ID),
+                ("plain", crate::codes::NONE)
+            ]
+    );
+}
+
+/// Join two members in each configured group, then heartbeat after the paced
+/// interval. Each protocol checks the first paced response with its own oracle.
+pub(crate) async fn check_group_assignment_timing<H, R: HeartbeatStatus>(
+    create: impl AsyncFn(&str) -> Arc<H>,
+    heartbeat: impl AsyncFn(&H, &str, i32) -> R,
+    check_first: impl Fn((i16, i32)),
+) {
+    use assert2::{assert, check};
+    let mut joined = Vec::new();
+    let mut handles = Vec::new();
+    for group_id in ["slow", "fast", "paced"] {
+        let handle = create(group_id).await;
+        check!(
+            heartbeat(&handle, "m1", 0).await.status().1 == 1,
+            "{group_id}"
+        );
+        joined.push((group_id, heartbeat(&handle, "m2", 0).await.status().1));
+        handles.push((group_id, handle));
+    }
+    assert!(joined == [("slow", 1), ("fast", 2), ("paced", 1)]);
+    tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+    let (_, paced) = &handles[2];
+    check_first(heartbeat(paced, "m1", 1).await.status());
+    check!(heartbeat(paced, "m2", 1).await.status().1 == 2);
+    // The slow group still waits for the broker's minute.
+    let (_, slow) = &handles[0];
+    check!(heartbeat(slow, "m2", 1).await.status().1 == 1);
+}
+
+/// Split a freshly encoded key into its leading version and body, mirroring
+/// the broker's `__consumer_offsets` dispatch.
+pub(crate) fn peek_version(mut buf: &[u8]) -> (i16, &[u8]) {
+    let version = bytes::Buf::get_i16(&mut buf);
+    (version, buf)
+}
+
+/// Literal wire fields, decoded independently of the record codecs. Each field
+/// must contain complete hexadecimal byte pairs; malformed literals fail the test.
+pub(crate) fn wire_bytes(fields: &[&str]) -> Vec<u8> {
+    fields
+        .iter()
+        .flat_map(|field| hex::decode(field).expect("valid literal wire bytes"))
+        .collect()
+}
+
+/// The three independent failure expectations for a heartbeat's durable write.
+pub(crate) fn heartbeat_write_failures()
+-> [(&'static str, Option<crate::error::BrokerError>, i16); 3] {
+    let uncommitted =
+        |code| Some(crate::error::BrokerError::CoordinatorWriteUncommitted { partition: 0, code });
+    [
+        (
+            "the partition writer is gone",
+            None,
+            crate::codes::COORDINATOR_LOAD_IN_PROGRESS,
+        ),
+        (
+            "the leadership moved before the write committed",
+            uncommitted(crate::codes::NOT_COORDINATOR),
+            crate::codes::NOT_COORDINATOR,
+        ),
+        (
+            "the write did not commit in time",
+            uncommitted(crate::codes::COORDINATOR_NOT_AVAILABLE),
+            crate::codes::COORDINATOR_NOT_AVAILABLE,
+        ),
+    ]
+}
+
+/// A successful leave appends exactly one batch containing a tombstone.
+pub(crate) async fn assert_next_tombstone_batch(
+    log: &crate::coordinator::unified::offsets_log::fake::InMemoryOffsetsLog,
+    pre_leave: usize,
+) {
+    let batches = log.batches().await;
+    assert2::assert!(batches.len() == pre_leave + 1);
+    let leave_batch = &batches[batches.len() - 1];
+    assert2::assert!(
+        leave_batch.records.iter().any(|r| r.value.is_none()),
+        "leave batch must contain at least one tombstone"
+    );
 }

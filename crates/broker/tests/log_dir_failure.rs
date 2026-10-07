@@ -27,13 +27,13 @@ use std::{
 use assert2::assert;
 use bytes::Bytes;
 use krabka_broker::{
-    BootstrapMode, Broker, BrokerConfig, BrokerHandle, config::NodeRole, file_config::FileConfig,
+    BootstrapMode, BrokerConfig, BrokerHandle, config::NodeRole, file_config::FileConfig,
     log_dir_id::LogDirIds,
 };
-use krabka_client_core::Client;
 use krabka_client_producer::{Acks, Producer, ProducerRecord};
-use krabka_protocol::owned::create_topics_request::{CreatableTopic, CreateTopicsRequest};
 use tempfile::TempDir;
+
+use crate::support::topics::{creatable_topic, create_topic_request};
 
 mod support;
 
@@ -89,51 +89,41 @@ async fn start_cluster() -> Cluster {
     let (client_addrs, controller_addrs, client_listeners, controller_listeners) =
         support::bind_and_hold_ports(NODES).await;
     let voters = [(1u64, controller_addrs[0])];
+    let topology = support::RoleTopology::new(&client_addrs, &controller_addrs, &voters);
     let mut data_listeners = client_listeners.into_iter();
     let mut ctrl_listeners = controller_listeners.into_iter();
 
     let controller_dir = TempDir::new().unwrap();
-    let mut ctrl_cfg = support::broker_config(
+    let ctrl_cfg = topology.config(
         0,
-        &client_addrs,
-        &controller_addrs,
-        &voters,
         controller_dir.path(),
         BootstrapMode::Bootstrap,
+        NodeRole::Controller,
     );
-    ctrl_cfg.roles = vec![NodeRole::Controller];
-    let controller = Broker::start_with_listeners(
+    let controller = support::start_held_node(
         ctrl_cfg,
-        Some(ctrl_listeners.next().unwrap()),
-        Some(data_listeners.next().unwrap()),
+        &mut ctrl_listeners,
+        &mut data_listeners,
+        "controller-only start",
     )
-    .await
-    .expect("controller-only start");
+    .await;
     controller.wait_until_controller_leader().await;
 
     let mut brokers = Vec::with_capacity(NODES - 1);
     for index in 1..NODES {
         let primary = TempDir::new().unwrap();
         let extra = TempDir::new().unwrap();
-        let mut cfg = support::broker_config(
-            index,
-            &client_addrs,
-            &controller_addrs,
-            &voters,
-            primary.path(),
-            BootstrapMode::Join,
-        );
-        cfg.roles = vec![NodeRole::Broker];
+        let mut cfg = topology.config(index, primary.path(), BootstrapMode::Join, NodeRole::Broker);
         cfg.extra_log_dirs = vec![extra.path().to_path_buf()];
         cfg.replica_lag_time_max = krabka_units::minutes(10);
         apply_server_properties(&mut cfg);
-        let handle = Broker::start_with_listeners(
+        let handle = support::start_held_node(
             cfg,
-            Some(ctrl_listeners.next().unwrap()),
-            Some(data_listeners.next().unwrap()),
+            &mut ctrl_listeners,
+            &mut data_listeners,
+            "broker-only start",
         )
-        .await
-        .expect("broker-only start");
+        .await;
         brokers.push(BrokerNode {
             handle,
             primary,
@@ -162,22 +152,14 @@ fn apply_server_properties(cfg: &mut BrokerConfig) {
 /// Creates `topic` with one partition on all three brokers, through the client
 /// listener of `broker`.
 async fn create_topic(broker: &BrokerHandle, topic: &str) {
-    let client = Client::builder()
-        .bootstrap(broker.listen_addr().to_string())
-        .build()
-        .await
-        .expect("client");
+    let client = crate::support::client::connect_with_context(
+        broker.listen_addr().to_string(),
+        None,
+        "client",
+    )
+    .await;
     let resp = client
-        .send(CreateTopicsRequest {
-            topics: vec![CreatableTopic {
-                name: topic.into(),
-                num_partitions: 1,
-                replication_factor: 3,
-                ..Default::default()
-            }],
-            timeout_ms: 5_000,
-            ..Default::default()
-        })
+        .send(create_topic_request(creatable_topic(topic, 1, 3), 5_000))
         .await
         .expect("CreateTopics");
     assert!(resp.topics[0].error_code == 0, "{resp:?}");
@@ -256,12 +238,13 @@ impl Drop for ReadOnlyTree {
 async fn produce(producer: &Producer, timestamp_ms: i64) {
     producer
         .send(ProducerRecord {
-            topic: TOPIC.to_owned(),
-            partition: Some(0),
-            key: None,
-            value: Some(Bytes::from_static(b"log-dir-failure")),
-            headers: Vec::new(),
             timestamp_ms: Some(timestamp_ms),
+            ..crate::support::producer::producer_record(
+                TOPIC.to_owned(),
+                Some(0),
+                None,
+                Some(Bytes::from_static(b"log-dir-failure")),
+            )
         })
         .await
         .expect("the leader acknowledges the record");

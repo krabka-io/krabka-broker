@@ -6,26 +6,22 @@
 //! `__consumer_offsets`, so it asks for the topic and the client retries.
 
 use assert2::{assert, check};
-use krabka_protocol::owned::{
-    api_versions_request::ApiVersionsRequest,
-    create_topics_request::{CreatableTopic, CreateTopicsRequest},
-    find_coordinator_request::FindCoordinatorRequest,
-    find_coordinator_response::{Coordinator, FindCoordinatorResponse},
-    metadata_request::MetadataRequest,
-};
+use krabka_protocol::owned::find_coordinator_request::FindCoordinatorRequest;
 
-use crate::support;
+use crate::{
+    support,
+    support::{
+        discovery::{api_versions_request_for, topic_metadata_request},
+        topics::{creatable_topic, create_topic_request},
+    },
+};
 
 #[tokio::test]
 async fn api_versions_round_trip() {
     let p = support::start().await;
     let resp = p
         .client
-        .send(ApiVersionsRequest {
-            client_software_name: "krabka-test".into(),
-            client_software_version: "0.0.0".into(),
-            ..Default::default()
-        })
+        .send(api_versions_request_for("krabka-test", "0.0.0"))
         .await
         .expect("ApiVersions");
     assert!(resp.error_code == 0);
@@ -38,25 +34,13 @@ async fn api_versions_round_trip() {
 async fn metadata_returns_this_broker_and_listed_topics() {
     let p = support::start().await;
     // Create a topic first.
-    let create = CreateTopicsRequest {
-        topics: vec![CreatableTopic {
-            name: "beta".into(),
-            num_partitions: 3,
-            replication_factor: 1,
-            ..Default::default()
-        }],
-        timeout_ms: 5_000,
-        ..Default::default()
-    };
+    let create = create_topic_request(creatable_topic("beta", 3, 1), 5_000);
     let _ = p.client.send(create).await.unwrap();
 
     let resp = p
         .client
         // Null topics means every topic; the schema default is an empty list.
-        .send(MetadataRequest {
-            topics: None,
-            ..Default::default()
-        })
+        .send(topic_metadata_request(None))
         .await
         .expect("Metadata");
     assert!(resp.brokers.len() == 1);
@@ -85,35 +69,10 @@ async fn find_coordinator_creates_the_offsets_topic_then_returns_self() {
         ..Default::default()
     };
     let first = p.client.send(req).await.expect("FindCoordinator");
-    check!(
-        first
-            == FindCoordinatorResponse {
-                coordinators: vec![Coordinator {
-                    key: "any-group".into(),
-                    node_id: -1,
-                    host: String::new(),
-                    port: -1,
-                    error_code: 15,
-                    error_message: None,
-                    ..Default::default()
-                }],
-                ..Default::default()
-            }
-    );
+    crate::check_expected_coordinator!(response, first => ("any-group", -1, String::new(), -1, 15, None));
 
     let retried = support::find_coordinator(&p.client, support::KEY_TYPE_GROUP, "any-group").await;
     let listen = p.broker.listen_addr();
-    check!(
-        retried
-            == Coordinator {
-                key: "any-group".into(),
-                node_id: 1,
-                host: listen.ip().to_string(),
-                port: i32::from(listen.port()),
-                error_code: 0,
-                error_message: None,
-                ..Default::default()
-            }
-    );
+    crate::check_expected_coordinator!(row, retried => ("any-group", 1, listen.ip().to_string(), i32::from(listen.port()), 0, None));
     p.broker.shutdown().await;
 }

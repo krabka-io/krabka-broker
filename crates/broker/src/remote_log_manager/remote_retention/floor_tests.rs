@@ -1,4 +1,5 @@
 use assert2::assert;
+use fixtures::{local_backends, tier, tp};
 use krabka_remote_storage::{
     RemoteLogSegmentDetails, RemoteLogSegmentId, RemoteLogSegmentMetadataUpdate,
 };
@@ -6,7 +7,7 @@ use krabka_units::millis;
 use uuid::Uuid;
 
 use super::*;
-use crate::remote_log_manager::test_support::{local_backends, tier, tp};
+use crate::remote_log_manager::test_support as fixtures;
 
 #[tokio::test]
 async fn completed_remote_delete_uses_a_representable_floor() {

@@ -9,13 +9,14 @@
 //! KIP-559 fields.
 
 use assert2::{assert, check};
+
+use crate::support::classic::{
+    classic_join_request, classic_sync_request, join_protocol, sync_assignment,
+};
 mod support;
 
 use krabka_protocol::owned::{
-    join_group_request::{JoinGroupRequest, JoinGroupRequestProtocol},
-    join_group_response::JoinGroupResponse,
-    sync_group_request::{SyncGroupRequest, SyncGroupRequestAssignment},
-    sync_group_response::SyncGroupResponse,
+    join_group_response::JoinGroupResponse, sync_group_response::SyncGroupResponse,
 };
 
 const GROUP: &str = "kip559-grp";
@@ -36,19 +37,13 @@ async fn bootstrap_member(p: &support::InProcess) -> (String, i32) {
     // hasn't recorded a protocol yet).
     let r1 = p
         .client
-        .send(JoinGroupRequest {
-            group_id: GROUP.into(),
-            protocol_type: PROTOCOL_TYPE.into(),
-            member_id: String::new(),
-            session_timeout_ms: 30_000,
-            rebalance_timeout_ms: 1_500,
-            protocols: vec![JoinGroupRequestProtocol {
-                name: PROTOCOL_NAME.into(),
-                metadata: bytes::Bytes::new(),
-                ..Default::default()
-            }],
-            ..Default::default()
-        })
+        .send(classic_join_request(
+            GROUP,
+            String::new(),
+            (30_000, 1_500),
+            PROTOCOL_TYPE,
+            vec![join_protocol(PROTOCOL_NAME, bytes::Bytes::new())],
+        ))
         .await
         .expect("JoinGroup (bootstrap)");
     assert!(r1.error_code == 79, "expected MEMBER_ID_REQUIRED");
@@ -58,19 +53,13 @@ async fn bootstrap_member(p: &support::InProcess) -> (String, i32) {
     // Step 2: re-join with the assigned member_id, falls out as leader.
     let r2 = p
         .client
-        .send(JoinGroupRequest {
-            group_id: GROUP.into(),
-            protocol_type: PROTOCOL_TYPE.into(),
-            member_id: mid.clone(),
-            session_timeout_ms: 30_000,
-            rebalance_timeout_ms: 1_500,
-            protocols: vec![JoinGroupRequestProtocol {
-                name: PROTOCOL_NAME.into(),
-                metadata: bytes::Bytes::new(),
-                ..Default::default()
-            }],
-            ..Default::default()
-        })
+        .send(classic_join_request(
+            GROUP,
+            mid.clone(),
+            (30_000, 1_500),
+            PROTOCOL_TYPE,
+            vec![join_protocol(PROTOCOL_NAME, bytes::Bytes::new())],
+        ))
         .await
         .expect("JoinGroup");
     check!(r2.error_code == 0, "JoinGroup must succeed: {r2:?}");
@@ -103,19 +92,17 @@ async fn sync_group_response_carries_protocol_type_and_name_on_success() {
 
     let r3 = p
         .client
-        .send(SyncGroupRequest {
-            group_id: GROUP.into(),
-            generation_id: generation,
-            member_id: mid.clone(),
-            protocol_type: Some(PROTOCOL_TYPE.into()),
-            protocol_name: Some(PROTOCOL_NAME.into()),
-            assignments: vec![SyncGroupRequestAssignment {
-                member_id: mid.clone(),
-                assignment: bytes::Bytes::from_static(b"asgn"),
-                ..Default::default()
-            }],
-            ..Default::default()
-        })
+        .send(classic_sync_request(
+            GROUP,
+            generation,
+            mid.clone(),
+            Some(PROTOCOL_TYPE.into()),
+            Some(PROTOCOL_NAME.into()),
+            vec![sync_assignment(
+                mid.clone(),
+                bytes::Bytes::from_static(b"asgn"),
+            )],
+        ))
         .await
         .expect("SyncGroup");
     check!(r3.error_code == 0, "SyncGroup must succeed: {r3:?}");
@@ -145,19 +132,13 @@ async fn join_group_inconsistent_protocol_error_carries_no_protocol_fields() {
     // fields stay null, as in every `JoinGroup` error Kafka sends.
     let r = p
         .client
-        .send(JoinGroupRequest {
-            group_id: GROUP.into(),
-            protocol_type: "stream".into(),
-            member_id: String::new(),
-            session_timeout_ms: 30_000,
-            rebalance_timeout_ms: 1_500,
-            protocols: vec![JoinGroupRequestProtocol {
-                name: "doesnt-matter".into(),
-                metadata: bytes::Bytes::new(),
-                ..Default::default()
-            }],
-            ..Default::default()
-        })
+        .send(classic_join_request(
+            GROUP,
+            String::new(),
+            (30_000, 1_500),
+            "stream",
+            vec![join_protocol("doesnt-matter", bytes::Bytes::new())],
+        ))
         .await
         .expect("JoinGroup");
     assert!(
@@ -182,15 +163,14 @@ async fn sync_group_error_carries_no_protocol_fields() {
 
     let r = p
         .client
-        .send(SyncGroupRequest {
-            group_id: GROUP.into(),
-            generation_id: generation,
-            member_id: "ghost-member".into(),
-            protocol_type: Some(PROTOCOL_TYPE.into()),
-            protocol_name: Some(PROTOCOL_NAME.into()),
-            assignments: vec![],
-            ..Default::default()
-        })
+        .send(classic_sync_request(
+            GROUP,
+            generation,
+            "ghost-member",
+            Some(PROTOCOL_TYPE.into()),
+            Some(PROTOCOL_NAME.into()),
+            vec![],
+        ))
         .await
         .expect("SyncGroup");
     check!(

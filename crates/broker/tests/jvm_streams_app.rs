@@ -58,8 +58,6 @@ use jvm_acceptance::{
     KAFKA_IMAGE_TXN, STREAMS_APP_JAVA, broker0_advertised, docker_run_kafka_tool_with_image,
     rlmm_broker0_advertised, start_host_broker,
 };
-use krabka_client_core::Client;
-use krabka_protocol::owned::update_features_request::{FeatureUpdateKey, UpdateFeaturesRequest};
 
 /// The Apache Kafka image whose jars carry KIP-1071. It is JRE-only, which is
 /// why the class it runs is compiled elsewhere.
@@ -199,10 +197,7 @@ fn shared_class_dir() -> tempfile::TempDir {
     let dir = tempfile::tempdir().expect("tempdir");
     #[cfg(unix)]
     {
-        use std::os::unix::fs::PermissionsExt as _;
-
-        std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o777))
-            .expect("chmod the class directory");
+        crate::support::chmod_for_container(dir.path(), 0o777, "chmod the class directory");
     }
     dir
 }
@@ -213,22 +208,7 @@ fn shared_class_dir() -> tempfile::TempDir {
 /// topics of the topology: `builder.stream(...)` and `.to(...)` both require
 /// the topic to exist already.
 fn create_topic(bootstrap: &str, topic: &str) {
-    docker_run_kafka_tool_with_image(
-        KAFKA_IMAGE_TXN,
-        &[
-            "kafka-topics",
-            "--create",
-            "--if-not-exists",
-            "--topic",
-            topic,
-            "--partitions",
-            "1",
-            "--replication-factor",
-            "1",
-            "--bootstrap-server",
-            bootstrap,
-        ],
-    );
+    crate::jvm_acceptance::create_console_topic_at(bootstrap, topic);
 }
 
 /// Every topic the broker holds, one per line.
@@ -237,12 +217,7 @@ fn list_topics(bootstrap: &str) -> Vec<String> {
         KAFKA_IMAGE_TXN,
         &["kafka-topics", "--list", "--bootstrap-server", bootstrap],
     );
-    String::from_utf8_lossy(&out.stdout)
-        .lines()
-        .map(str::trim)
-        .filter(|line| !line.is_empty())
-        .map(str::to_owned)
-        .collect()
+    support::jvm_output_lines(&out)
 }
 
 /// The one topic in `topics` that `matches` accepts, or a failure naming every
@@ -267,22 +242,7 @@ fn only_topic(topics: &[String], what: &str, matches: impl Fn(&str) -> bool) -> 
 /// sent on the `CreateTopics` request, so a broker that dropped it renders
 /// nothing rather than a default.
 fn describe_topic_configs(bootstrap: &str, topic: &str) -> String {
-    let out = docker_run_kafka_tool_with_image(
-        KAFKA_IMAGE_TXN,
-        &[
-            "kafka-configs",
-            "--describe",
-            "--entity-type",
-            "topics",
-            "--entity-name",
-            topic,
-            "--bootstrap-server",
-            bootstrap,
-        ],
-    );
-    let text = String::from_utf8_lossy(&out.stdout).into_owned();
-    eprintln!("KRABKA[test] kafka-configs --describe {topic}:\n{text}");
-    text
+    crate::jvm_acceptance::describe_console_topic_configs(bootstrap, topic)
 }
 
 /// Read the sink topic under `read_committed`, which is the isolation level
@@ -305,40 +265,20 @@ fn read_committed_sink(bootstrap: &str, topic: &str) -> Vec<String> {
             "60000",
         ],
     );
-    String::from_utf8_lossy(&out.stdout)
-        .lines()
-        .map(str::trim)
-        .filter(|line| !line.is_empty())
-        .map(str::to_owned)
-        .collect()
+    support::jvm_output_lines(&out)
 }
 
 /// Finalize `streams.version` to level 1, so the KIP-1071 heartbeat handlers
 /// stop answering `UNSUPPORTED_VERSION`. `upgrade_type: 1` is UPGRADE, the
 /// same call `jvm_streams_groups.rs` makes.
 async fn finalize_streams_version() {
-    let client = Client::builder()
-        .bootstrap(rlmm_broker0_advertised().to_string())
-        .client_id("krabka-streams-app-test")
-        .build()
-        .await
-        .expect("client build");
-    let resp = client
-        .send(UpdateFeaturesRequest {
-            feature_updates: vec![FeatureUpdateKey {
-                feature: "streams.version".into(),
-                max_version_level: 1,
-                upgrade_type: 1,
-                ..Default::default()
-            }],
-            ..Default::default()
-        })
-        .await
-        .expect("UpdateFeatures");
-    assert!(
-        resp.error_code == 0,
-        "streams.version finalize failed: {resp:?}"
-    );
+    let client = crate::support::client::connect_owned(
+        rlmm_broker0_advertised(),
+        "krabka-streams-app-test",
+        "client build",
+    )
+    .await;
+    support::streams::finalize_streams_version(&client).await;
 }
 
 /// The shared half of both cases: the app has run, so check what it left

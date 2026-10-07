@@ -645,22 +645,9 @@ mod tests {
     fn two_record_log() -> (tempfile::TempDir, Log) {
         let dir = tempfile::tempdir().expect("tempdir");
         let mut log = Log::open(dir.path(), LogConfig::default()).expect("open log");
-        log.append(&mut RecordBatch {
-            last_offset_delta: 1,
-            records: vec![
-                Record {
-                    offset_delta: 0,
-                    value: Some(Bytes::from_static(b"first")),
-                    ..Record::default()
-                },
-                Record {
-                    offset_delta: 1,
-                    value: Some(Bytes::from_static(b"second")),
-                    ..Record::default()
-                },
-            ],
-            ..RecordBatch::default()
-        })
+        log.append(&mut crate::handlers::test_support::default_records_batch(
+            &[b"first", b"second"],
+        ))
         .expect("append the batch under test");
         (dir, log)
     }
@@ -740,19 +727,11 @@ mod tests {
         assert!(!super::should_use_sendfile(64, false, 64));
     }
 
+    krabka_macros::sendfile_platform! {
     /// On a plaintext connection [`super::read_records`] describes the records
     /// run for the `sendfile` drain instead of `pread`ing it, but only once
     /// the run is long enough to pay for the syscall. Below the threshold it
     /// falls back to the byte copy, and both answers carry the same bytes.
-    #[cfg(any(
-        target_os = "linux",
-        target_os = "macos",
-        target_os = "ios",
-        target_os = "tvos",
-        target_os = "watchos",
-        target_os = "freebsd",
-        target_os = "dragonfly",
-    ))]
     #[test]
     fn a_sendfile_capable_read_describes_the_run_only_above_the_threshold() {
         let (_dir, log) = two_record_log();
@@ -785,6 +764,7 @@ mod tests {
         assert!(described.0.payload_len() == raw.len());
         assert!(described.1.is_empty());
         assert!(copied == (RecordsPayload::Raw(raw), Vec::new()));
+    }
     }
 
     /// A `read_committed` fetch does no server-side filtering: it serves the
@@ -955,22 +935,9 @@ mod tests {
             crate::partition::test_support::test_partition(Arc::new(tokio::sync::Notify::new()));
         let (limit, records) = {
             let mut log = partition.log.lock().expect("log mutex poisoned");
-            log.append(&mut RecordBatch {
-                last_offset_delta: 1,
-                records: vec![
-                    Record {
-                        offset_delta: 0,
-                        value: Some(Bytes::from_static(b"first")),
-                        ..Record::default()
-                    },
-                    Record {
-                        offset_delta: 1,
-                        value: Some(Bytes::from_static(b"second")),
-                        ..Record::default()
-                    },
-                ],
-                ..RecordBatch::default()
-            })
+            log.append(&mut crate::handlers::test_support::default_records_batch(
+                &[b"first", b"second"],
+            ))
             .expect("append the batch under test");
             let limit = log.log_end_offset();
             let records = log
@@ -1025,6 +992,18 @@ mod tests {
         }
     }
 
+    macro_rules! before_and_transaction {
+        ($log:ident, $partition:ident, $transaction_label:literal) => {
+            let mut $log = $partition.log.lock().expect("log mutex poisoned");
+            $log.append(&mut crate::handlers::test_support::default_records_batch(
+                &[b"before"],
+            ))
+            .expect("append the record before the transaction"); // offset 0
+            $log.append(&mut transactional_batch(PID))
+                .expect($transaction_label); // offset 1
+        };
+    }
+
     /// A `read_committed` consumer sees nothing of a committed transaction
     /// until the high watermark passes its commit marker. Kafka keeps the
     /// transaction in `unreplicatedTxns` until then, so the last stable offset
@@ -1035,18 +1014,7 @@ mod tests {
         let (partition, _dir) =
             crate::partition::test_support::test_partition(Arc::new(tokio::sync::Notify::new()));
         let transaction = {
-            let mut log = partition.log.lock().expect("log mutex poisoned");
-            log.append(&mut RecordBatch {
-                records: vec![Record {
-                    offset_delta: 0,
-                    value: Some(Bytes::from_static(b"before")),
-                    ..Record::default()
-                }],
-                ..RecordBatch::default()
-            })
-            .expect("append the record before the transaction"); // offset 0
-            log.append(&mut transactional_batch(PID))
-                .expect("append the transaction's data"); // offset 1
+            before_and_transaction!(log, partition, "append the transaction's data");
             let mut commit = abort_marker(PID);
             commit.records[0].key = Some(Bytes::from_static(&[0, 0, 0, 1]));
             log.append(&mut commit).expect("append the commit marker"); // offset 2
@@ -1171,18 +1139,7 @@ mod tests {
         let (partition, _dir) =
             crate::partition::test_support::test_partition(Arc::new(tokio::sync::Notify::new()));
         {
-            let mut log = partition.log.lock().expect("log mutex poisoned");
-            log.append(&mut RecordBatch {
-                records: vec![Record {
-                    offset_delta: 0,
-                    value: Some(Bytes::from_static(b"before")),
-                    ..Record::default()
-                }],
-                ..RecordBatch::default()
-            })
-            .expect("append the record before the transaction"); // offset 0
-            log.append(&mut transactional_batch(PID))
-                .expect("append the open transaction"); // offset 1
+            before_and_transaction!(log, partition, "append the open transaction");
         }
         partition.replica_state.lock().await.hw = Offset(2);
 

@@ -1,10 +1,10 @@
-(* #"/workspace/crates/verified/src/timestamp.rs" 158 0 162 16 *)
+(* #"/workspace/crates/verified/src/timestamp.rs" 171 0 175 16 *)
 
 let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
 let%span snum = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 328 20 329 89
 let%span snum'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 332 26 332 87
-let%span stimestamp = "/workspace/crates/verified/src/timestamp.rs" 165 16 165 60
-let%span stimestamp'0 = "/workspace/crates/verified/src/timestamp.rs" 149 10 156 1
+let%span stimestamp = "/workspace/crates/verified/src/timestamp.rs" 178 16 178 60
+let%span stimestamp'0 = "/workspace/crates/verified/src/timestamp.rs" 162 10 169 1
 
 use creusot.int.Int64
 use creusot.prelude.Any
@@ -41,8 +41,8 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let timestamp_record_time [#"/workspace/crates/verified/src/timestamp.rs" 158 0 162 16]
-  (batch_timestamp: Int64.t) (timestamp_delta: Int64.t) (append_time: t_Option_i64) (return (x: t_Option_i64)) = (! bb0
+let timestamp_record_time [#"/workspace/crates/verified/src/timestamp.rs" 171 0 175 16] (batch_timestamp: Int64.t)
+  (timestamp_delta: Int64.t) (append_time: t_Option_i64) (return (x: t_Option_i64)) = (! bb0
   [ bb0 = any [ br0 -> {append_time = None} (! bb3) | br1 (x0: Int64.t) -> {append_time = Some x0} (! bb4) ]
   | bb4 = s0
     [ s0 = elim_Some {append_time} (fun (r0: Int64.t) -> [ &stamp <- r0 ] s1)

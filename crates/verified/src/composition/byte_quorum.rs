@@ -17,10 +17,7 @@ use spec::{copy_admitted, reference_valid};
 type WalCopyObservation = (Option<u64>, i32, bool, Vec<WalCopyBatch>);
 type ByteQuorum = (i64, i64, Vec<(u64, i64)>, Vec<i64>);
 
-// cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
-#[cfg(creusot)]
-#[cfg_attr(test, mutants::skip)]
-#[logic(open)]
+open_logic! {
 fn complete_copy(
     observation: WalCopyObservation,
     voter: u64,
@@ -32,9 +29,9 @@ fn complete_copy(
         && (observation.1@ < 0 || observation.1 == epoch)
         && observation.3@.len() == source.len()
         && (forall<j: Int> 0 <= j && j < source.len() ==>
-            observation.3@[j].0 == source[j].0 && observation.3@[j].1 == source[j].1
-            && observation.3@[j].2@ == source[j].2@)
+            super::wal_copy::copy_batch_equal(observation.3@[j], source[j]))
     }
+}
 }
 
 /// Derive explicit votes from admitted actual copies, then consume installed
@@ -44,12 +41,12 @@ fn complete_copy(
 /// contribute only the inherited logical floor. Source decoding, current-epoch
 /// coherence, accurate completion observations and actual I/O remain external.
 #[requires(0 <= w.log_start@ && w.log_start@ <= w.log_end@ && current@ <= w.log_end@)]
-#[ensures((match result { Some(_) => true, None => false }) == (
+#[ensures((result != None) == (
     reference_valid(source@, w.log_start@, w.log_end@)
     && crate::composition::wal_copy::wal_copy_byte_count(source@, source@.len()) <= u64::MAX@
     && voters@.len() == observations@.len() && voters@.len() == placement.1@ && placement.1@ > 0
     && voters@[0] == placement.0
-    && forall<i: Int, j: Int> 0 <= i && i < j && j < voters@.len() ==> voters@[i] != voters@[j]))]
+    && crate::sequence::distinct(voters@)))]
 #[ensures(match result {
     None => true,
     Some((hw, limit, _, reports)) => current@ <= hw@ && w.log_start@ <= hw@ && hw@ <= w.log_end@
@@ -62,23 +59,20 @@ fn complete_copy(
 })]
 #[ensures(match result {
     None => true,
-    Some((_, _, supporters, _)) => forall<i: Int, j: Int> 0 <= i && i < j && j < supporters@.len()
-        ==> supporters@[i].0 != supporters@[j].0,
+    Some((_, _, supporters, _)) => crate::consensus::supporting_nodes_distinct(supporters@),
 })]
 #[ensures(match result {
     None => true,
     Some((hw, limit, supporters, _)) =>
         (hw@ > current@ && limit@ > w.log_start@ ==> supporters@.len() >= voters@.len() / 2 + 1)
-        && (forall<i: Int> 0 <= i && i < supporters@.len() ==> supporters@[i].1@ >= limit@
-            && exists<j: Int> 0 <= j && j < voters@.len() && supporters@[i].0 == voters@[j]
-                && (limit@ > w.log_start@ ==> observations@[j].2
-                    && observations@[j].0 == Some(voters@[j])
-                    && (observations@[j].1@ < 0 || observations@[j].1 == placement.2)
-                    && 0 < observations@[j].3@.len() && observations@[j].3@.len() <= source@.len()
-                    && supporters@[i].1@ == source@[observations@[j].3@.len() - 1].0@
-                        + source@[observations@[j].3@.len() - 1].1@ + 1
-                    && (forall<k: Int> 0 <= k && k < observations@[j].3@.len() ==>
-                        observations@[j].3@[k].0 == source@[k].0 && observations@[j].3@[k].1 == source@[k].1 && observations@[j].3@[k].2@ == source@[k].2@))),
+        && (crate::consensus::supporting_voter_witnesses(supporters@, voters@, limit@, |(i, j): (Int, Int)| (limit@ > w.log_start@ ==> observations@[j].2
+        && observations@[j].0 == Some(voters@[j])
+        && (observations@[j].1@ < 0 || observations@[j].1 == placement.2)
+        && 0 < observations@[j].3@.len() && observations@[j].3@.len() <= source@.len()
+        && supporters@[i].1@ == source@[observations@[j].3@.len() - 1].0@
+            + source@[observations@[j].3@.len() - 1].1@ + 1
+        && (forall<k: Int> 0 <= k && k < observations@[j].3@.len() ==>
+            super::wal_copy::copy_batch_equal(observations@[j].3@[k], source@[k]))))),
 })]
 #[ensures(match result {
     None => true,

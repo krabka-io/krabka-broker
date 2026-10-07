@@ -1,22 +1,22 @@
 (* #"/workspace/crates/verified/src/composition/quorum_fetch.rs" 20 0 27 15 *)
 
-let%span sord = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
-let%span sord'0 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
-let%span sfetch = "/workspace/crates/verified/src/broker/fetch.rs" 177 10 177 63
-let%span sfetch'0 = "/workspace/crates/verified/src/broker/fetch.rs" 178 10 179 97
-let%span sfetch'1 = "/workspace/crates/verified/src/broker/fetch.rs" 180 10 180 83
-let%span sfetch'2 = "/workspace/crates/verified/src/broker/fetch.rs" 181 10 183 58
-let%span sfetch'3 = "/workspace/crates/verified/src/broker/fetch.rs" 184 10 184 74
-let%span sfetch'4 = "/workspace/crates/verified/src/broker/fetch.rs" 185 10 189 1
-let%span sfetch'5 = "/workspace/crates/verified/src/broker/fetch.rs" 190 10 190 36
-let%span sfetch'6 = "/workspace/crates/verified/src/broker/fetch.rs" 191 10 191 59
-let%span sfetch'7 = "/workspace/crates/verified/src/broker/fetch.rs" 127 16 127 42
-let%span sfetch'8 = "/workspace/crates/verified/src/broker/fetch.rs" 142 8 148 9
-let%span sfailover = "/workspace/crates/verified/src/consensus/failover.rs" 203 10 203 17
-let%span sfailover'0 = "/workspace/crates/verified/src/consensus/failover.rs" 205 16 205 74
-let%span sfailover'1 = "/workspace/crates/verified/src/consensus/failover.rs" 186 10 186 15
-let%span sfailover'2 = "/workspace/crates/verified/src/consensus/failover.rs" 189 8 195 9
-let%span sfailover'3 = "/workspace/crates/verified/src/consensus/failover.rs" 178 8 178 48
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span sfetch = "/workspace/crates/verified/src/broker/fetch.rs" 169 10 169 63
+let%span sfetch'0 = "/workspace/crates/verified/src/broker/fetch.rs" 170 10 171 97
+let%span sfetch'1 = "/workspace/crates/verified/src/broker/fetch.rs" 172 10 172 83
+let%span sfetch'2 = "/workspace/crates/verified/src/broker/fetch.rs" 173 10 175 58
+let%span sfetch'3 = "/workspace/crates/verified/src/broker/fetch.rs" 176 10 176 74
+let%span sfetch'4 = "/workspace/crates/verified/src/broker/fetch.rs" 177 10 181 1
+let%span sfetch'5 = "/workspace/crates/verified/src/broker/fetch.rs" 182 10 182 36
+let%span sfetch'6 = "/workspace/crates/verified/src/broker/fetch.rs" 183 10 183 59
+let%span sfetch'7 = "/workspace/crates/verified/src/broker/fetch.rs" 120 16 120 42
+let%span sfetch'8 = "/workspace/crates/verified/src/broker/fetch.rs" 133 8 139 9
+let%span sfailover = "/workspace/crates/verified/src/consensus/failover.rs" 196 10 196 17
+let%span sfailover'0 = "/workspace/crates/verified/src/consensus/failover.rs" 198 16 198 74
+let%span sfailover'1 = "/workspace/crates/verified/src/consensus/failover.rs" 181 10 181 15
+let%span sfailover'2 = "/workspace/crates/verified/src/consensus/failover.rs" 184 8 190 9
+let%span sfailover'3 = "/workspace/crates/verified/src/consensus/failover.rs" 175 8 175 48
 let%span squorum_fetch = "/workspace/crates/verified/src/composition/quorum_fetch.rs" 28 13 35 5
 let%span squorum_fetch'0 = "/workspace/crates/verified/src/composition/quorum_fetch.rs" 37 25 37 30
 let%span squorum_fetch'1 = "/workspace/crates/verified/src/composition/quorum_fetch.rs" 37 32 37 36
@@ -62,10 +62,10 @@ predicate gt_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord'0] oth
 
 meta "rewrite_def" predicate gt_log_Int
 
-function hwm_member_at [#"/workspace/crates/verified/src/consensus/failover.rs" 176 0 176 62] (log_end'0: int) (s: Seq.seq Int64.t) (k: int) : int
+function hwm_member_at [#"/workspace/crates/verified/src/consensus/failover.rs" 173 0 173 62] (log_end'0: int) (s: Seq.seq Int64.t) (k: int) : int
  = [%#sfailover'3] if k = 0 then log_end'0 else Int64.to_int (Seq.get s (k - 1))
 
-function count_ge_prefix [#"/workspace/crates/verified/src/consensus/failover.rs" 187 0 187 97] (log_end'0: int) (s: Seq.seq Int64.t) (v: int) (limit: int) (leader_counts: bool) : int
+function count_ge_prefix [#"/workspace/crates/verified/src/consensus/failover.rs" 182 0 182 97] (log_end'0: int) (s: Seq.seq Int64.t) (v: int) (limit: int) (leader_counts: bool) : int
 
 axiom count_ge_prefix_def:
   forall log_end'0: int, s: Seq.seq Int64.t, v: int, limit: int, leader_counts: bool [count_ge_prefix log_end'0 s v limit leader_counts]. count_ge_prefix log_end'0 s v limit leader_counts
@@ -76,7 +76,7 @@ axiom count_ge_prefix_def:
       + (if (leader_counts \/ gt_log_Int limit 1) /\ ge_log_Int (hwm_member_at log_end'0 s (limit - 1)) v then 1 else 0)
     )
 
-function count_ge [#"/workspace/crates/verified/src/consensus/failover.rs" 204 0 204 78] (log_end'0: int) (s: Seq.seq Int64.t) (v: int) (leader_counts: bool) : int
+function count_ge [#"/workspace/crates/verified/src/consensus/failover.rs" 197 0 197 78] (log_end'0: int) (s: Seq.seq Int64.t) (v: int) (leader_counts: bool) : int
 
 axiom count_ge_def:
   forall log_end'0: int, s: Seq.seq Int64.t, v: int, leader_counts: bool [count_ge log_end'0 s v leader_counts]. count_ge log_end'0 s v leader_counts
@@ -116,10 +116,10 @@ type t_FetchVisibility = {
   response_hw: Int64.t;
   response_lso: Int64.t }
 
-function offset_min [#"/workspace/crates/verified/src/broker/fetch.rs" 126 0 126 40] (a: int) (b: int) : int =
+function offset_min [#"/workspace/crates/verified/src/broker/fetch.rs" 119 0 119 40] (a: int) (b: int) : int =
   [%#sfetch'7] if a <= b then a else b
 
-function fetch_limit_model [#"/workspace/crates/verified/src/broker/fetch.rs" 140 0 140 92] (is_follower: bool) (read_committed: bool) (w: t_FetchWatermarks) : int
+function fetch_limit_model [#"/workspace/crates/verified/src/broker/fetch.rs" 131 0 131 92] (is_follower: bool) (read_committed: bool) (w: t_FetchWatermarks) : int
  = [%#sfetch'8] if is_follower then
     Int64.to_int w.log_end
   else

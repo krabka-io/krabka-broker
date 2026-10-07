@@ -82,23 +82,19 @@ pub(crate) async fn create_tiered_topic(broker: &krabka_broker::BrokerHandle, to
 
     // Only the overrides the JVM CLI actually sent are worth waiting for; the
     // segment size is inherited the moment the partition exists.
-    let cfg_deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
-    let cfg = loop {
-        if let Some(cfg) = broker.partition_log_config_for_test(topic, 0)
-            && cfg.remote_storage_enable
-            && cfg.local_retention_size == Some(krabka_units::bytes(1))
-        {
-            break cfg;
-        }
-        assert!(
-            std::time::Instant::now() <= cfg_deadline,
-            "tiered-storage topic config never propagated within 10s; saw {:?}",
-            broker.partition_log_config_for_test(topic, 0)
-        );
-        // intentional: bounded poll of the local reconciled LogConfig override;
-        // `partition_log_config_for_test` is not surfaced by any awaiter/metric.
-        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-    };
+    let cfg = crate::jvm_acceptance::wait_jvm_log_config(
+        broker,
+        topic,
+        |cfg| cfg.remote_storage_enable && cfg.local_retention_size == Some(krabka_units::bytes(1)),
+        |within| {
+            assert!(
+                within,
+                "tiered-storage topic config never propagated within 10s; saw {:?}",
+                broker.partition_log_config_for_test(topic, 0)
+            );
+        },
+    )
+    .await;
     assert!(
         cfg.segment_size == TIERED_SEGMENT_SIZE,
         "the tiered harness must boot its broker with log_config.segment_size = \

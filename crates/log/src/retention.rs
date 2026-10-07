@@ -110,21 +110,40 @@ mod tests {
     use super::*;
     use crate::io::FileIo;
 
+    fn segment_files(
+        base: Offset,
+        extensions: &[&str],
+        contents: &[u8],
+    ) -> (tempfile::TempDir, Vec<std::path::PathBuf>) {
+        let dir = tempdir().unwrap();
+        let paths = extensions
+            .iter()
+            .map(|extension| {
+                dir.path()
+                    .join(format!("{}.{extension}", name::format_base_offset(base.0)))
+            })
+            .collect::<Vec<_>>();
+        for path in &paths {
+            std::fs::write(path, contents).unwrap();
+        }
+        (dir, paths)
+    }
+
     #[test]
     fn delete_segment_files_removes_required_and_optional_sidecars() {
-        let dir = tempdir().unwrap();
         let base = Offset(7);
-        let paths = [
-            name::log_path(dir.path(), base.0),
-            name::index_path(dir.path(), base.0),
-            name::timeindex_path(dir.path(), base.0),
-            name::txnindex_path(dir.path(), base.0),
-            name::stampindex_path(dir.path(), base.0),
-            name::producer_snapshot_path(dir.path(), base.0),
-        ];
-        for path in &paths {
-            std::fs::write(path, []).unwrap();
-        }
+        let (dir, paths) = segment_files(
+            base,
+            &[
+                "log",
+                "index",
+                "timeindex",
+                "txnindex",
+                "stampindex",
+                "snapshot",
+            ],
+            &[],
+        );
 
         delete_segment_files(&FileIo, dir.path(), base).unwrap();
 
@@ -133,15 +152,8 @@ mod tests {
 
     #[test]
     fn delete_segment_files_accepts_missing_optional_sidecars() {
-        let dir = tempdir().unwrap();
         let base = Offset(8);
-        for path in [
-            name::log_path(dir.path(), base.0),
-            name::index_path(dir.path(), base.0),
-            name::timeindex_path(dir.path(), base.0),
-        ] {
-            std::fs::write(path, []).unwrap();
-        }
+        let (dir, _paths) = segment_files(base, &["log", "index", "timeindex"], &[]);
 
         delete_segment_files(&FileIo, dir.path(), base).unwrap();
     }
@@ -161,17 +173,9 @@ mod tests {
             }
         }
 
-        let dir = tempdir().unwrap();
         let base = Offset(9);
-        let live = [
-            name::log_path(dir.path(), base.0),
-            name::index_path(dir.path(), base.0),
-            name::timeindex_path(dir.path(), base.0),
-            name::stampindex_path(dir.path(), base.0),
-        ];
-        for path in &live {
-            std::fs::write(path, b"bytes").unwrap();
-        }
+        let (dir, live) =
+            segment_files(base, &["log", "index", "timeindex", "stampindex"], b"bytes");
 
         let error = delete_segment_files(&NoUnlink, dir.path(), base)
             .expect_err("the refused unlink must be reported");

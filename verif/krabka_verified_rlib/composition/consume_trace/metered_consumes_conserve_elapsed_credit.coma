@@ -1,16 +1,17 @@
-(* #"/workspace/crates/verified/src/composition/consume_trace.rs" 31 0 38 39 *)
+(* #"/workspace/crates/verified/src/composition/consume_trace.rs" 26 0 33 39 *)
 
-let%span sord = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
-let%span sord'0 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
-let%span snum = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 27 28 27 33
-let%span scmp = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 66 26 66 66
-let%span scmp'0 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 67 26 67 63
-let%span scmp'1 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 68 36 68 40
-let%span scmp'2 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 69 26 69 30
-let%span scmp'3 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 70 75 70 79
-let%span sconvert = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/convert.rs" 274 26 274 51
-let%span swell_founded = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/well_founded.rs" 43 8 43 33
-let%span sslice = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 331 18 331 22
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span snum = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 27 28 27 33
+let%span scmp = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 66 26 66 66
+let%span scmp'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 67 26 67 63
+let%span scmp'1 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 68 36 68 40
+let%span scmp'2 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 69 26 69 30
+let%span scmp'3 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 70 75 70 79
+let%span sconvert = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/convert.rs" 274 26 274 51
+let%span swell_founded = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/well_founded.rs" 43 8 43 33
+let%span sslice = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 331 18 331 22
+let%span squota = "/workspace/crates/verified/src/quota.rs" 222 16 222 67
 let%span srefill = "/workspace/crates/verified/src/quota/refill.rs" 9 11 9 36
 let%span srefill'0 = "/workspace/crates/verified/src/quota/refill.rs" 10 11 10 66
 let%span srefill'1 = "/workspace/crates/verified/src/quota/refill.rs" 11 10 11 67
@@ -23,86 +24,86 @@ let%span srequest = "/workspace/crates/verified/src/quota/request.rs" 9 11 9 31
 let%span srequest'0 = "/workspace/crates/verified/src/quota/request.rs" 10 10 10 62
 let%span srequest'1 = "/workspace/crates/verified/src/quota/request.rs" 11 10 13 36
 let%span srequest'2 = "/workspace/crates/verified/src/quota/request.rs" 14 10 16 56
-let%span sthrottle = "/workspace/crates/verified/src/throttle.rs" 87 10 87 37
-let%span sthrottle'0 = "/workspace/crates/verified/src/throttle.rs" 88 10 88 33
-let%span sthrottle'1 = "/workspace/crates/verified/src/throttle.rs" 89 10 89 80
-let%span sthrottle'2 = "/workspace/crates/verified/src/throttle.rs" 90 10 94 1
-let%span sthrottle'3 = "/workspace/crates/verified/src/throttle.rs" 79 4 83 5
-let%span sconsume_trace = "/workspace/crates/verified/src/composition/consume_trace.rs" 42 22 42 28
-let%span sconsume_trace'0 = "/workspace/crates/verified/src/composition/consume_trace.rs" 43 19 43 25
-let%span sconsume_trace'1 = "/workspace/crates/verified/src/composition/consume_trace.rs" 46 45 46 46
-let%span sconsume_trace'2 = "/workspace/crates/verified/src/composition/consume_trace.rs" 47 23 47 24
-let%span sconsume_trace'3 = "/workspace/crates/verified/src/composition/consume_trace.rs" 66 32 66 49
-let%span sconsume_trace'4 = "/workspace/crates/verified/src/composition/consume_trace.rs" 67 14 67 25
-let%span sconsume_trace'5 = "/workspace/crates/verified/src/composition/consume_trace.rs" 64 34 65 91
-let%span sconsume_trace'6 = "/workspace/crates/verified/src/composition/consume_trace.rs" 62 34 63 71
-let%span sconsume_trace'7 = "/workspace/crates/verified/src/composition/consume_trace.rs" 59 34 61 98
-let%span sconsume_trace'8 = "/workspace/crates/verified/src/composition/consume_trace.rs" 58 34 58 86
-let%span sconsume_trace'9 = "/workspace/crates/verified/src/composition/consume_trace.rs" 57 34 57 67
-let%span sconsume_trace'10 = "/workspace/crates/verified/src/composition/consume_trace.rs" 56 34 56 45
-let%span sconsume_trace'11 = "/workspace/crates/verified/src/composition/consume_trace.rs" 55 34 55 71
-let%span sconsume_trace'12 = "/workspace/crates/verified/src/composition/consume_trace.rs" 53 34 54 55
-let%span sconsume_trace'13 = "/workspace/crates/verified/src/composition/consume_trace.rs" 52 34 52 97
-let%span sconsume_trace'14 = "/workspace/crates/verified/src/composition/consume_trace.rs" 51 34 51 55
-let%span sconsume_trace'15 = "/workspace/crates/verified/src/composition/consume_trace.rs" 50 34 50 82
-let%span sconsume_trace'16 = "/workspace/crates/verified/src/composition/consume_trace.rs" 49 34 49 89
-let%span sconsume_trace'17 = "/workspace/crates/verified/src/composition/consume_trace.rs" 48 34 48 52
-let%span sconsume_trace'18 = "/workspace/crates/verified/src/composition/consume_trace.rs" 68 34 68 42
-let%span sconsume_trace'19 = "/workspace/crates/verified/src/composition/consume_trace.rs" 68 34 68 44
-let%span sconsume_trace'20 = "/workspace/crates/verified/src/composition/consume_trace.rs" 68 19 68 45
-let%span sconsume_trace'21 = "/workspace/crates/verified/src/composition/consume_trace.rs" 69 22 69 39
-let%span sconsume_trace'22 = "/workspace/crates/verified/src/composition/consume_trace.rs" 70 22 71 64
-let%span sconsume_trace'23 = "/workspace/crates/verified/src/composition/consume_trace.rs" 72 23 72 84
-let%span sconsume_trace'24 = "/workspace/crates/verified/src/composition/consume_trace.rs" 73 24 73 43
-let%span sconsume_trace'25 = "/workspace/crates/verified/src/composition/consume_trace.rs" 73 46 73 62
-let%span sconsume_trace'26 = "/workspace/crates/verified/src/composition/consume_trace.rs" 73 24 73 62
-let%span sconsume_trace'27 = "/workspace/crates/verified/src/composition/consume_trace.rs" 73 65 73 85
-let%span sconsume_trace'28 = "/workspace/crates/verified/src/composition/consume_trace.rs" 73 24 73 85
-let%span sconsume_trace'29 = "/workspace/crates/verified/src/composition/consume_trace.rs" 74 64 74 65
-let%span sconsume_trace'30 = "/workspace/crates/verified/src/composition/consume_trace.rs" 75 38 75 55
-let%span sconsume_trace'31 = "/workspace/crates/verified/src/composition/consume_trace.rs" 75 27 75 56
-let%span sconsume_trace'32 = "/workspace/crates/verified/src/composition/consume_trace.rs" 75 70 75 92
-let%span sconsume_trace'33 = "/workspace/crates/verified/src/composition/consume_trace.rs" 75 59 75 93
-let%span sconsume_trace'34 = "/workspace/crates/verified/src/composition/consume_trace.rs" 75 27 75 93
-let%span sconsume_trace'35 = "/workspace/crates/verified/src/composition/consume_trace.rs" 76 35 76 48
-let%span sconsume_trace'36 = "/workspace/crates/verified/src/composition/consume_trace.rs" 76 24 76 48
-let%span sconsume_trace'37 = "/workspace/crates/verified/src/composition/consume_trace.rs" 76 12 76 48
-let%span sconsume_trace'38 = "/workspace/crates/verified/src/composition/consume_trace.rs" 78 12 78 13
-let%span sconsume_trace'39 = "/workspace/crates/verified/src/composition/consume_trace.rs" 80 22 81 82
-let%span sconsume_trace'40 = "/workspace/crates/verified/src/composition/consume_trace.rs" 82 42 82 50
-let%span sconsume_trace'41 = "/workspace/crates/verified/src/composition/consume_trace.rs" 82 42 82 52
-let%span sconsume_trace'42 = "/workspace/crates/verified/src/composition/consume_trace.rs" 82 22 82 82
-let%span sconsume_trace'43 = "/workspace/crates/verified/src/composition/consume_trace.rs" 84 12 84 85
-let%span sconsume_trace'44 = "/workspace/crates/verified/src/composition/consume_trace.rs" 89 25 89 26
-let%span sconsume_trace'45 = "/workspace/crates/verified/src/composition/consume_trace.rs" 87 28 92 9
-let%span sconsume_trace'46 = "/workspace/crates/verified/src/composition/consume_trace.rs" 93 22 93 42
-let%span sconsume_trace'47 = "/workspace/crates/verified/src/composition/consume_trace.rs" 94 22 94 82
-let%span sconsume_trace'48 = "/workspace/crates/verified/src/composition/consume_trace.rs" 95 22 96 53
-let%span sconsume_trace'49 = "/workspace/crates/verified/src/composition/consume_trace.rs" 98 12 104 13
-let%span sconsume_trace'50 = "/workspace/crates/verified/src/composition/consume_trace.rs" 111 30 111 47
-let%span sconsume_trace'51 = "/workspace/crates/verified/src/composition/consume_trace.rs" 113 30 113 55
-let%span sconsume_trace'52 = "/workspace/crates/verified/src/composition/consume_trace.rs" 113 19 113 56
-let%span sconsume_trace'53 = "/workspace/crates/verified/src/composition/consume_trace.rs" 113 8 113 56
-let%span sconsume_trace'54 = "/workspace/crates/verified/src/composition/consume_trace.rs" 114 8 114 25
-let%span sconsume_trace'55 = "/workspace/crates/verified/src/composition/consume_trace.rs" 119 13 119 14
-let%span sconsume_trace'56 = "/workspace/crates/verified/src/composition/consume_trace.rs" 119 8 119 14
-let%span sconsume_trace'57 = "/workspace/crates/verified/src/composition/consume_trace.rs" 13 11 13 71
-let%span sconsume_trace'58 = "/workspace/crates/verified/src/composition/consume_trace.rs" 14 11 14 61
-let%span sconsume_trace'59 = "/workspace/crates/verified/src/composition/consume_trace.rs" 15 11 15 20
-let%span sconsume_trace'60 = "/workspace/crates/verified/src/composition/consume_trace.rs" 16 10 16 73
-let%span sconsume_trace'61 = "/workspace/crates/verified/src/composition/consume_trace.rs" 17 10 17 66
-let%span sconsume_trace'62 = "/workspace/crates/verified/src/composition/consume_trace.rs" 18 10 18 31
-let%span sconsume_trace'63 = "/workspace/crates/verified/src/composition/consume_trace.rs" 19 10 19 83
-let%span sconsume_trace'64 = "/workspace/crates/verified/src/composition/consume_trace.rs" 20 10 21 61
-let%span sconsume_trace'65 = "/workspace/crates/verified/src/composition/consume_trace.rs" 22 10 25 40
-let%span sconsume_trace'66 = "/workspace/crates/verified/src/composition/consume_trace.rs" 26 10 27 67
-let%span sconsume_trace'67 = "/workspace/crates/verified/src/composition/consume_trace.rs" 28 10 30 38
-let%span sconsume_trace'68 = "/workspace/crates/verified/src/composition/consume_trace.rs" 130 11 131 55
-let%span sconsume_trace'69 = "/workspace/crates/verified/src/composition/consume_trace.rs" 132 11 132 48
-let%span sconsume_trace'70 = "/workspace/crates/verified/src/composition/consume_trace.rs" 133 10 134 67
-let%span sconsume_trace'71 = "/workspace/crates/verified/src/composition/consume_trace.rs" 141 2 142 1
-let%span smin_insync_is_site_loss_safe = "/workspace/crates/verified/src/stretch/min_insync_is_site_loss_safe.rs" 29 11 29 50
-let%span smin_insync_is_site_loss_safe'0 = "/workspace/crates/verified/src/stretch/min_insync_is_site_loss_safe.rs" 30 10 30 41
+let%span sthrottle = "/workspace/crates/verified/src/throttle.rs" 47 10 47 37
+let%span sthrottle'0 = "/workspace/crates/verified/src/throttle.rs" 48 10 48 33
+let%span sthrottle'1 = "/workspace/crates/verified/src/throttle.rs" 49 10 49 80
+let%span sthrottle'2 = "/workspace/crates/verified/src/throttle.rs" 50 10 54 1
+let%span sthrottle'3 = "/workspace/crates/verified/src/throttle.rs" 38 4 42 5
+let%span sconsume_trace = "/workspace/crates/verified/src/composition/consume_trace.rs" 37 22 37 28
+let%span sconsume_trace'0 = "/workspace/crates/verified/src/composition/consume_trace.rs" 38 19 38 25
+let%span sconsume_trace'1 = "/workspace/crates/verified/src/composition/consume_trace.rs" 41 45 41 46
+let%span sconsume_trace'2 = "/workspace/crates/verified/src/composition/consume_trace.rs" 42 23 42 24
+let%span sconsume_trace'3 = "/workspace/crates/verified/src/composition/consume_trace.rs" 61 32 61 49
+let%span sconsume_trace'4 = "/workspace/crates/verified/src/composition/consume_trace.rs" 62 14 62 25
+let%span sconsume_trace'5 = "/workspace/crates/verified/src/composition/consume_trace.rs" 59 34 60 91
+let%span sconsume_trace'6 = "/workspace/crates/verified/src/composition/consume_trace.rs" 57 34 58 71
+let%span sconsume_trace'7 = "/workspace/crates/verified/src/composition/consume_trace.rs" 54 34 56 98
+let%span sconsume_trace'8 = "/workspace/crates/verified/src/composition/consume_trace.rs" 53 34 53 86
+let%span sconsume_trace'9 = "/workspace/crates/verified/src/composition/consume_trace.rs" 52 34 52 67
+let%span sconsume_trace'10 = "/workspace/crates/verified/src/composition/consume_trace.rs" 51 34 51 45
+let%span sconsume_trace'11 = "/workspace/crates/verified/src/composition/consume_trace.rs" 50 34 50 71
+let%span sconsume_trace'12 = "/workspace/crates/verified/src/composition/consume_trace.rs" 48 34 49 55
+let%span sconsume_trace'13 = "/workspace/crates/verified/src/composition/consume_trace.rs" 47 34 47 97
+let%span sconsume_trace'14 = "/workspace/crates/verified/src/composition/consume_trace.rs" 46 34 46 55
+let%span sconsume_trace'15 = "/workspace/crates/verified/src/composition/consume_trace.rs" 45 34 45 82
+let%span sconsume_trace'16 = "/workspace/crates/verified/src/composition/consume_trace.rs" 44 34 44 89
+let%span sconsume_trace'17 = "/workspace/crates/verified/src/composition/consume_trace.rs" 43 34 43 52
+let%span sconsume_trace'18 = "/workspace/crates/verified/src/composition/consume_trace.rs" 63 34 63 42
+let%span sconsume_trace'19 = "/workspace/crates/verified/src/composition/consume_trace.rs" 63 34 63 44
+let%span sconsume_trace'20 = "/workspace/crates/verified/src/composition/consume_trace.rs" 63 19 63 45
+let%span sconsume_trace'21 = "/workspace/crates/verified/src/composition/consume_trace.rs" 64 22 64 39
+let%span sconsume_trace'22 = "/workspace/crates/verified/src/composition/consume_trace.rs" 65 22 66 64
+let%span sconsume_trace'23 = "/workspace/crates/verified/src/composition/consume_trace.rs" 67 23 67 84
+let%span sconsume_trace'24 = "/workspace/crates/verified/src/composition/consume_trace.rs" 68 24 68 43
+let%span sconsume_trace'25 = "/workspace/crates/verified/src/composition/consume_trace.rs" 68 46 68 62
+let%span sconsume_trace'26 = "/workspace/crates/verified/src/composition/consume_trace.rs" 68 24 68 62
+let%span sconsume_trace'27 = "/workspace/crates/verified/src/composition/consume_trace.rs" 68 65 68 85
+let%span sconsume_trace'28 = "/workspace/crates/verified/src/composition/consume_trace.rs" 68 24 68 85
+let%span sconsume_trace'29 = "/workspace/crates/verified/src/composition/consume_trace.rs" 69 64 69 65
+let%span sconsume_trace'30 = "/workspace/crates/verified/src/composition/consume_trace.rs" 70 38 70 55
+let%span sconsume_trace'31 = "/workspace/crates/verified/src/composition/consume_trace.rs" 70 27 70 56
+let%span sconsume_trace'32 = "/workspace/crates/verified/src/composition/consume_trace.rs" 70 70 70 92
+let%span sconsume_trace'33 = "/workspace/crates/verified/src/composition/consume_trace.rs" 70 59 70 93
+let%span sconsume_trace'34 = "/workspace/crates/verified/src/composition/consume_trace.rs" 70 27 70 93
+let%span sconsume_trace'35 = "/workspace/crates/verified/src/composition/consume_trace.rs" 71 35 71 48
+let%span sconsume_trace'36 = "/workspace/crates/verified/src/composition/consume_trace.rs" 71 24 71 48
+let%span sconsume_trace'37 = "/workspace/crates/verified/src/composition/consume_trace.rs" 71 12 71 48
+let%span sconsume_trace'38 = "/workspace/crates/verified/src/composition/consume_trace.rs" 73 12 73 13
+let%span sconsume_trace'39 = "/workspace/crates/verified/src/composition/consume_trace.rs" 75 22 76 82
+let%span sconsume_trace'40 = "/workspace/crates/verified/src/composition/consume_trace.rs" 77 42 77 50
+let%span sconsume_trace'41 = "/workspace/crates/verified/src/composition/consume_trace.rs" 77 42 77 52
+let%span sconsume_trace'42 = "/workspace/crates/verified/src/composition/consume_trace.rs" 77 22 77 82
+let%span sconsume_trace'43 = "/workspace/crates/verified/src/composition/consume_trace.rs" 79 12 79 85
+let%span sconsume_trace'44 = "/workspace/crates/verified/src/composition/consume_trace.rs" 84 25 84 26
+let%span sconsume_trace'45 = "/workspace/crates/verified/src/composition/consume_trace.rs" 82 28 87 9
+let%span sconsume_trace'46 = "/workspace/crates/verified/src/composition/consume_trace.rs" 88 22 88 42
+let%span sconsume_trace'47 = "/workspace/crates/verified/src/composition/consume_trace.rs" 89 22 89 82
+let%span sconsume_trace'48 = "/workspace/crates/verified/src/composition/consume_trace.rs" 90 22 91 53
+let%span sconsume_trace'49 = "/workspace/crates/verified/src/composition/consume_trace.rs" 93 12 99 13
+let%span sconsume_trace'50 = "/workspace/crates/verified/src/composition/consume_trace.rs" 106 30 106 47
+let%span sconsume_trace'51 = "/workspace/crates/verified/src/composition/consume_trace.rs" 108 30 108 55
+let%span sconsume_trace'52 = "/workspace/crates/verified/src/composition/consume_trace.rs" 108 19 108 56
+let%span sconsume_trace'53 = "/workspace/crates/verified/src/composition/consume_trace.rs" 108 8 108 56
+let%span sconsume_trace'54 = "/workspace/crates/verified/src/composition/consume_trace.rs" 109 8 109 25
+let%span sconsume_trace'55 = "/workspace/crates/verified/src/composition/consume_trace.rs" 114 13 114 14
+let%span sconsume_trace'56 = "/workspace/crates/verified/src/composition/consume_trace.rs" 114 8 114 14
+let%span sconsume_trace'57 = "/workspace/crates/verified/src/composition/consume_trace.rs" 8 11 8 77
+let%span sconsume_trace'58 = "/workspace/crates/verified/src/composition/consume_trace.rs" 9 11 9 61
+let%span sconsume_trace'59 = "/workspace/crates/verified/src/composition/consume_trace.rs" 10 11 10 20
+let%span sconsume_trace'60 = "/workspace/crates/verified/src/composition/consume_trace.rs" 11 10 11 73
+let%span sconsume_trace'61 = "/workspace/crates/verified/src/composition/consume_trace.rs" 12 10 12 66
+let%span sconsume_trace'62 = "/workspace/crates/verified/src/composition/consume_trace.rs" 13 10 13 31
+let%span sconsume_trace'63 = "/workspace/crates/verified/src/composition/consume_trace.rs" 14 10 14 83
+let%span sconsume_trace'64 = "/workspace/crates/verified/src/composition/consume_trace.rs" 15 10 16 61
+let%span sconsume_trace'65 = "/workspace/crates/verified/src/composition/consume_trace.rs" 17 10 20 40
+let%span sconsume_trace'66 = "/workspace/crates/verified/src/composition/consume_trace.rs" 21 10 22 67
+let%span sconsume_trace'67 = "/workspace/crates/verified/src/composition/consume_trace.rs" 23 10 25 38
+let%span sconsume_trace'68 = "/workspace/crates/verified/src/composition/consume_trace.rs" 125 11 126 55
+let%span sconsume_trace'69 = "/workspace/crates/verified/src/composition/consume_trace.rs" 127 11 127 48
+let%span sconsume_trace'70 = "/workspace/crates/verified/src/composition/consume_trace.rs" 128 10 129 67
+let%span sconsume_trace'71 = "/workspace/crates/verified/src/composition/consume_trace.rs" 136 2 137 1
+let%span smin_insync_is_site_loss_safe = "/workspace/crates/verified/src/stretch/min_insync_is_site_loss_safe.rs" 45 11 45 50
+let%span smin_insync_is_site_loss_safe'0 = "/workspace/crates/verified/src/stretch/min_insync_is_site_loss_safe.rs" 46 10 46 41
 
 use creusot.int.UInt64
 use creusot.int.UInt128
@@ -147,7 +148,7 @@ let max_u64 (self_: UInt64.t) (o: UInt64.t) (return (x: UInt64.t)) = any
     /\ ([@stop_split] [@expl:max ensures #4] [%#scmp'3] deep_model_u64 o < deep_model_u64 self_ -> result = self_)}
     (! return {result}) ]
 
-function capped [#"/workspace/crates/verified/src/throttle.rs" 78 0 78 61] (available: int) (refill: int) (burst: int) : int
+function capped [#"/workspace/crates/verified/src/throttle.rs" 37 0 37 61] (available: int) (refill: int) (burst: int) : int
  = [%#sthrottle'3] if available + refill <= burst then available + refill else burst
 
 let quota_refill (available: UInt64.t) (debt: UInt64.t) (fraction: UInt64.t) (elapsed: UInt64.t) (rate: UInt64.t)
@@ -215,7 +216,7 @@ let quota_whole_request (requested: UInt64.t) (total: UInt64.t) (units_per_token
     * UInt64.t'int units_per_token)}
     (! return {result}) ]
 
-function lemma_div_monotone [#"/workspace/crates/verified/src/stretch/min_insync_is_site_loss_safe.rs" 31 0 31 60] (low: int) (high: int) (divisor: int) : ()
+function lemma_div_monotone [#"/workspace/crates/verified/src/stretch/min_insync_is_site_loss_safe.rs" 47 0 47 60] (low: int) (high: int) (divisor: int) : ()
 
 axiom lemma_div_monotone_spec: forall low: int, high: int, divisor: int. ([%#smin_insync_is_site_loss_safe] 0 <= low
       /\ low <= high /\ ge_log_Int divisor 1)
@@ -258,7 +259,7 @@ type tup2_Int_Int = { f0'8: int; f1'8: int }
 
 type tup3_Int_Int_Int = { f0'9: int; f1'9: int; f2'9: int }
 
-function lemma_refill_grant_ledger [#"/workspace/crates/verified/src/composition/consume_trace.rs" 135 0 141 1] (granted: int) (previous: tup2_Int_Int) (refilled: tup3_Int_Int_Int) (consumed: tup2_Int_Int) (credit: int) : ()
+function lemma_refill_grant_ledger [#"/workspace/crates/verified/src/composition/consume_trace.rs" 130 0 136 1] (granted: int) (previous: tup2_Int_Int) (refilled: tup3_Int_Int_Int) (consumed: tup2_Int_Int) (credit: int) : ()
  = [%#sconsume_trace'71] ()
 
 axiom lemma_refill_grant_ledger_spec:
@@ -275,16 +276,17 @@ type tup4_u64_u64_u64_u64 = { f0'10: UInt64.t; f1'10: UInt64.t; f2'10: UInt64.t;
 
 type tup3_u128_tup4_u64_u64_u64_u64_u128 = { f0'11: UInt128.t; f1'11: tup4_u64_u64_u64_u64; f2'11: UInt128.t }
 
+predicate balance_within_burst [#"/workspace/crates/verified/src/quota.rs" 221 0 221 81] (available: int) (debt: int) (burst: int) =
+  [%#squota] available <= burst /\ (available = 0 \/ debt = 0)
+
 meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let metered_consumes_conserve_elapsed_credit [#"/workspace/crates/verified/src/composition/consume_trace.rs" 31 0 38 39]
+let metered_consumes_conserve_elapsed_credit [#"/workspace/crates/verified/src/composition/consume_trace.rs" 26 0 33 39]
   (initial: tup3_u64_u64_u64) (start: UInt64.t) (steps: Slice64.slice tup2_u64_u64) (rate: UInt64.t) (burst: UInt64.t)
   (units_per_token: UInt64.t) (return (x: tup3_u128_tup4_u64_u64_u64_u64_u128)) =
-{[@stop_split] [@expl:metered_consumes_conserve_elapsed_credit requires] ([@stop_split] [@expl:metered_consumes_conserve_elapsed_credit requires #0] [%#sconsume_trace'57] UInt64.t'int initial.f0
-      <= UInt64.t'int burst
-    /\ (UInt64.t'int initial.f0 = 0 \/ UInt64.t'int initial.f1 = 0))
+{[@stop_split] [@expl:metered_consumes_conserve_elapsed_credit requires] ([@stop_split] [@expl:metered_consumes_conserve_elapsed_credit requires #0] [%#sconsume_trace'57] balance_within_burst (UInt64.t'int initial.f0) (UInt64.t'int initial.f1) (UInt64.t'int burst))
   /\ ([@stop_split] [@expl:metered_consumes_conserve_elapsed_credit requires #1] [%#sconsume_trace'58] UInt64.t'int initial.f2
       < 1000000000
     /\ gt_log_Int (UInt64.t'int units_per_token) 0)

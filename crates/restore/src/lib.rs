@@ -307,19 +307,8 @@ pub async fn restore(args: &RestoreArgs) -> Result<RestoreReport, RestoreError> 
                 Err(error) => return Err(error),
             };
             if matches!(&authenticated, Some((Some(_), _))) {
-                consumed_authenticated_objects.extend(
-                    [
-                        segment.log.as_ref(),
-                        segment.offset_index.as_ref(),
-                        segment.time_index.as_ref(),
-                        segment.producer_snapshot.as_ref(),
-                        segment.leader_epoch.as_ref(),
-                        segment.transaction_index.as_ref(),
-                    ]
-                    .into_iter()
-                    .flatten()
-                    .map(|object| object.key.to_string()),
-                );
+                consumed_authenticated_objects
+                    .extend(segment.artifacts().map(|object| object.key.to_string()));
             }
             segments.push(write_segment(args, &entry.partition, &verified, &predicates).await?);
         }

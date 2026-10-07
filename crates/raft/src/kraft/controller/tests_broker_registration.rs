@@ -5,39 +5,24 @@
 use assert2::{assert, check};
 
 use super::*;
-use crate::kraft::controller::test_support::{
-    await_leader, build, build_engine_only, elect_single_voter_engine, submit_change_with_timeout,
-    topic_record,
-};
+use crate::kraft::controller::test_support::{build, submit_change_with_timeout, topic_record};
 
 #[test]
 fn broker_registration_epoch_is_assigned_from_appended_offset() {
     use krabka_metadata::{BrokerRegistrationRecord, MetadataRecord};
 
-    let (mut engine, _dir) = build_engine_only(NodeId(1), &[NodeId(1)]);
-    elect_single_voter_engine(&mut engine);
+    let (mut engine, _dir) = super::test_support::single_voter_leader_engine();
 
-    let (reply, mut rx) = oneshot::channel();
-    engine.on_submit_change(&topic_record("anchor"), reply);
+    let mut rx = super::test_support::submit_on_engine(&mut engine, &topic_record("anchor"));
     assert2::assert!(matches!(rx.try_recv(), Ok(Ok(_))));
 
     let base = engine.log.log_end_offset();
     let reg = MetadataRecord::V1BrokerRegistration(BrokerRegistrationRecord {
         fenced: false,
-        in_controlled_shutdown: false,
-        cordoned_log_dirs: None,
-        node_id: NodeId(7),
-        broker_epoch: -1,
-        incarnation_id: uuid::Uuid::from_u128(7),
-        host: "broker-7".into(),
-        port: 9092,
-        rack: None,
         log_dirs: vec![],
-        endpoints: vec![],
-        features: std::collections::BTreeMap::new(),
+        ..new_registration()
     });
-    let (reply, mut rx) = oneshot::channel();
-    engine.on_submit_change(&[reg], reply);
+    let mut rx = super::test_support::submit_on_engine(&mut engine, &[reg]);
 
     assert!(matches!(rx.try_recv(), Ok(Ok(_))));
     assert!(engine.image.broker_epoch(NodeId(7)) == Some(base.0));
@@ -47,31 +32,24 @@ fn broker_registration_epoch_is_assigned_from_appended_offset() {
 fn broker_registration_projection_preserves_existing_epoch() {
     use krabka_metadata::{BrokerRegistrationRecord, MetadataRecord};
 
-    let (mut engine, _dir) = build_engine_only(NodeId(1), &[NodeId(1)]);
-    elect_single_voter_engine(&mut engine);
+    let (mut engine, _dir) = super::test_support::single_voter_leader_engine();
     let registration = BrokerRegistrationRecord {
         fenced: false,
-        in_controlled_shutdown: false,
-        cordoned_log_dirs: None,
-        node_id: NodeId(7),
-        broker_epoch: -1,
-        incarnation_id: uuid::Uuid::from_u128(7),
-        host: "broker-7".into(),
-        port: 9092,
-        rack: None,
-        endpoints: vec![],
-        log_dirs: vec![uuid::Uuid::from_u128(0xD1)],
-        features: std::collections::BTreeMap::new(),
+        ..new_registration()
     };
-    let (reply, mut rx) = oneshot::channel();
-    engine.on_submit_change(&[MetadataRecord::V1BrokerRegistration(registration)], reply);
+    let mut rx = super::test_support::submit_on_engine(
+        &mut engine,
+        &[MetadataRecord::V1BrokerRegistration(registration)],
+    );
     assert2::assert!(matches!(rx.try_recv(), Ok(Ok(_))));
     let mut projection = engine.image.broker(NodeId(7)).unwrap().clone();
     let assigned_epoch = projection.broker_epoch;
     projection.log_dirs.clear();
 
-    let (reply, mut rx) = oneshot::channel();
-    engine.on_submit_change(&[MetadataRecord::V1BrokerRegistration(projection)], reply);
+    let mut rx = super::test_support::submit_on_engine(
+        &mut engine,
+        &[MetadataRecord::V1BrokerRegistration(projection)],
+    );
 
     assert2::assert!(matches!(rx.try_recv(), Ok(Ok(_))));
     let stored = engine.image.broker(NodeId(7)).unwrap();
@@ -82,9 +60,7 @@ fn broker_registration_projection_preserves_existing_epoch() {
 #[tokio::test]
 async fn broker_registration_epoch_equals_commit_offset() {
     use krabka_metadata::{BrokerRegistrationRecord, MetadataRecord};
-    let (ctrl, _dir) = build(NodeId(1), &[NodeId(1)]);
-    ctrl.inject_event(Event::ElectionTimeout).await.unwrap();
-    await_leader(&ctrl, Some(NodeId(1))).await;
+    let (ctrl, _dir) = super::test_support::single_voter_leader().await;
 
     let reg = |id: u64| {
         vec![MetadataRecord::V1BrokerRegistration(
@@ -152,11 +128,12 @@ fn new_registration() -> krabka_metadata::BrokerRegistrationRecord {
 fn a_registration_change_applies_only_at_the_epoch_it_names() {
     use krabka_metadata::{BrokerRegistrationRecord, MetadataRecord};
 
-    let (mut engine, _dir) = build_engine_only(NodeId(1), &[NodeId(1)]);
-    elect_single_voter_engine(&mut engine);
+    let (mut engine, _dir) = super::test_support::single_voter_leader_engine();
     let submit = |engine: &mut Engine, record: BrokerRegistrationRecord| {
-        let (reply, mut rx) = oneshot::channel();
-        engine.on_submit_change(&[MetadataRecord::V1BrokerRegistration(record)], reply);
+        let mut rx = super::test_support::submit_on_engine(
+            engine,
+            &[MetadataRecord::V1BrokerRegistration(record)],
+        );
         assert!(matches!(rx.try_recv(), Ok(Ok(_))));
         engine.image.broker(NodeId(7)).cloned()
     };
@@ -302,12 +279,10 @@ fn registration_transitions_are_written_as_kafkas_records() {
         records::metadata::KraftMetadataRecord,
     };
 
-    let (mut engine, _dir) = build_engine_only(NodeId(1), &[NodeId(1)]);
-    elect_single_voter_engine(&mut engine);
+    let (mut engine, _dir) = super::test_support::single_voter_leader_engine();
     let submit = |engine: &mut Engine, record: MetadataRecord| {
         let start = engine.log.log_end_offset();
-        let (reply, mut rx) = oneshot::channel();
-        engine.on_submit_change(&[record], reply);
+        let mut rx = super::test_support::submit_on_engine(engine, &[record]);
         assert!(matches!(rx.try_recv(), Ok(Ok(_))));
         (
             kafka_records_from(engine, start),
@@ -409,11 +384,9 @@ fn registration_transitions_are_written_as_kafkas_records() {
 fn a_registration_change_at_a_replaced_epoch_is_dropped() {
     use krabka_metadata::{BrokerRegistrationChangeRecord, FencingChange, MetadataRecord};
 
-    let (mut engine, _dir) = build_engine_only(NodeId(1), &[NodeId(1)]);
-    elect_single_voter_engine(&mut engine);
+    let (mut engine, _dir) = super::test_support::single_voter_leader_engine();
     let submit = |engine: &mut Engine, records: &[MetadataRecord]| {
-        let (reply, mut rx) = oneshot::channel();
-        engine.on_submit_change(records, reply);
+        let mut rx = super::test_support::submit_on_engine(engine, records);
         assert!(matches!(rx.try_recv(), Ok(Ok(_))));
     };
     submit(
@@ -474,11 +447,9 @@ fn replay_recovers_fencing_and_controlled_shutdown() {
     };
     // Broker 7 unfences, broker 8 unfences and enters controlled shutdown,
     // broker 9 stays fenced.
-    let (mut engine, _dir) = build_engine_only(NodeId(1), &[NodeId(1)]);
-    elect_single_voter_engine(&mut engine);
+    let (mut engine, _dir) = super::test_support::single_voter_leader_engine();
     for node in [7, 8, 9] {
-        let (reply, mut rx) = oneshot::channel();
-        engine.on_submit_change(&[registration(node)], reply);
+        let mut rx = super::test_support::submit_on_engine(&mut engine, &[registration(node)]);
         assert!(matches!(rx.try_recv(), Ok(Ok(_))));
     }
     let changes = [

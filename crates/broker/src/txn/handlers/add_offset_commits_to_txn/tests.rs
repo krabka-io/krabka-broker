@@ -1,7 +1,6 @@
 use std::sync::Arc;
 
 use assert2::{assert, check};
-use krabka_log::{Log, LogConfig};
 
 use super::*;
 use crate::txn::bootstrap;
@@ -170,18 +169,7 @@ fn coordinator_with_log(
         1,
         krabka_units::mebibytes(1),
     ));
-    let partition_dir = crate::log_dir::partition_dir(directory, bootstrap::TOPIC, 0);
-    std::fs::create_dir_all(&partition_dir).expect("create transaction-state directory");
-    let log = Log::open(&partition_dir, LogConfig::default()).expect("open transaction log");
-    let partition = crate::broker::spawn_partition(
-        bootstrap::TOPIC.to_string(),
-        PartitionIndex(0),
-        directory.to_path_buf(),
-        log,
-        crate::log_dir_status::LogDirRegistry::default(),
-        Arc::new(crate::producer_state::ProducerState::new()),
-        false,
-    );
+    let partition = crate::test_support::open_partition(directory, bootstrap::TOPIC, 0);
     coordinator.partitions.insert(
         bootstrap::TOPIC.into(),
         PartitionIndex(0),

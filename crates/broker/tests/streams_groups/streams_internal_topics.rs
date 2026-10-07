@@ -9,9 +9,7 @@
 use std::time::Duration;
 
 use assert2::assert;
-use krabka_protocol::owned::common::streams_group_heartbeat_request::{
-    task_ids::TaskIds as ReqTaskIds, topic_info::TopicInfo,
-};
+use krabka_protocol::owned::common::streams_group_heartbeat_request::topic_info::TopicInfo;
 
 use crate::streams_harness::{
     active_partitions_for, boot, connect, create_topic, finalize_streams_version, first_join,
@@ -69,15 +67,7 @@ async fn stateful_member_triggers_internal_topic_creation() {
         // status. This convergence is coordinator-local; it has no metadata-image
         // signal or metric, so a bounded re-heartbeat loop is the only observer.
         tokio::time::sleep(Duration::from_millis(300)).await;
-        let active = resp.active_tasks.clone().map(|v| {
-            v.into_iter()
-                .map(|t| ReqTaskIds {
-                    subtopology_id: t.subtopology_id,
-                    partitions: t.partitions,
-                    ..Default::default()
-                })
-                .collect()
-        });
+        let active = crate::support::streams::request_active_tasks(&resp);
         // A heartbeat after the join carries no topology: Kafka refuses one.
         let hb = follow_up("streams-app-2", &member_id, resp.member_epoch, active);
         resp = client.send(hb).await.expect("follow-up heartbeat");

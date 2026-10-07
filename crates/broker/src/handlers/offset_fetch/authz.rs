@@ -9,19 +9,51 @@
 
 use crate::broker::Broker;
 
-/// Reports whether the principal may `Describe` the group, the gate that
-/// precedes every committed-offset read. A denial makes the whole response
-/// (legacy shape) or the group's entry (v8 and above) carry
-/// `GROUP_AUTHORIZATION_FAILED`.
-pub(super) fn group_authorized(
+/// Gate the group's `Describe` permission before checking its coordinator.
+/// A refusal belongs to the whole legacy response or the v8+ group entry.
+pub(super) fn group_error(
     broker: &Broker,
     context: &crate::handlers::RequestContext<'_>,
     group_id: &str,
-) -> bool {
-    !crate::handlers::group_describe_denied(
+) -> Option<i16> {
+    if crate::handlers::group_describe_denied(
         broker.config.authorizer.as_ref(),
         &broker.controller.current_image(),
         context,
         group_id,
+    ) {
+        Some(crate::codes::GROUP_AUTHORIZATION_FAILED)
+    } else {
+        crate::handlers::group_coordinator_error(broker, group_id)
+    }
+}
+
+/// Share the per-topic Describe batch across both `OffsetFetch` wire shapes.
+pub(super) fn topic_decisions<'a>(
+    broker: &Broker,
+    image: &krabka_metadata::MetadataImage,
+    context: &crate::handlers::RequestContext<'_>,
+    names: impl IntoIterator<Item = &'a str>,
+) -> std::collections::HashMap<&'a str, crate::authorizer::AuthorizationResult> {
+    crate::authorizer::authorize_topics(
+        broker.config.authorizer.as_ref(),
+        image,
+        context.principal,
+        context.peer,
+        krabka_metadata::AclOperation::Describe,
+        names,
     )
+}
+
+/// Fetch-all replies silently omit denied topics and retain sorted topic order.
+pub(super) fn visible_topics<'a, P>(
+    broker: &Broker,
+    image: &krabka_metadata::MetadataImage,
+    context: &crate::handlers::RequestContext<'_>,
+    topics: std::collections::BTreeMap<&'a str, Vec<P>>,
+) -> impl Iterator<Item = (&'a str, Vec<P>)> + use<'a, P> {
+    let decisions = topic_decisions(broker, image, context, topics.keys().copied());
+    topics.into_iter().filter(move |(name, _)| {
+        decisions.get(name).copied() == Some(crate::authorizer::AuthorizationResult::Allow)
+    })
 }

@@ -2,7 +2,7 @@
   "profile": [],
   "proofs": {
     "Coma": {
-      "vc_acl_identity_match": { "prover": "alt-ergo", "time": 0.008 }
+      "vc_acl_identity_match": { "prover": "alt-ergo", "time": 0.012 }
     }
   }
 }

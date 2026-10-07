@@ -1,6 +1,6 @@
 (* #"/workspace/crates/verified/src/list_offsets/selection_decision.rs" 13 0 15 33 *)
 
-let%span sselection_model = "/workspace/crates/verified/src/list_offsets/selection_model.rs" 161 8 195 9
+let%span sselection_model = "/workspace/crates/verified/src/list_offsets/selection_model.rs" 158 8 192 9
 let%span sselection_decision = "/workspace/crates/verified/src/list_offsets/selection_decision.rs" 22 13 22 14
 let%span sselection_decision'0 = "/workspace/crates/verified/src/list_offsets/selection_decision.rs" 21 35 21 36
 let%span sselection_decision'1 = "/workspace/crates/verified/src/list_offsets/selection_decision.rs" 20 70 20 71
@@ -36,7 +36,7 @@ type t_ListOffsetsSelectionFacts = {
 
 type t_ListOffsetsSelectionDecision = RejectMalformed | Unknown | Resolved Int64.t Int64.t Int32.t
 
-function list_offsets_selection_model [#"/workspace/crates/verified/src/list_offsets/selection_model.rs" 157 0 159 33] (facts: t_ListOffsetsSelectionFacts) : t_ListOffsetsSelectionDecision
+function list_offsets_selection_model [#"/workspace/crates/verified/src/list_offsets/selection_model.rs" 154 0 156 33] (facts: t_ListOffsetsSelectionFacts) : t_ListOffsetsSelectionDecision
  = [%#sselection_model] if facts.kind = Unsupported
   \/ Int64.to_int facts.candidate_offset < - 1
   \/ Int32.to_int facts.candidate_epoch < - 1 \/ Int64.to_int facts.last_fetchable < 0 then

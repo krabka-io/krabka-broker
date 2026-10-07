@@ -40,10 +40,8 @@ use krabka_protocol::{
 
 use crate::{
     authorizer::Authorizer,
-    broker::Broker,
     codes,
     coordinator::unified::actor::{DescribeMember, DescribeView, GroupActorMessage},
-    error::BrokerError,
     handlers::{
         authorized_operations::{DescribedGroupRow, fill_group_authorized_operations},
         group_version_disabled,
@@ -57,101 +55,100 @@ const MEMBER_TYPE_CLASSIC: i8 = 0;
 /// `member_type` of a member that speaks the consumer protocol.
 const MEMBER_TYPE_CONSUMER: i8 = 1;
 
-pub(crate) async fn handle(
-    broker: &Broker,
-    req: ConsumerGroupDescribeRequest,
-    _version: i16,
-    ctx: &crate::handlers::RequestContext<'_>,
-) -> Result<ConsumerGroupDescribeResponse, BrokerError> {
-    let coordinator = broker.group_coordinator.clone();
-    let image = broker.controller.current_image();
+context_handler! {
+    ConsumerGroupDescribeRequest => ConsumerGroupDescribeResponse,
+    (broker, req, _version, ctx),
+    {
+        let coordinator = broker.group_coordinator.clone();
+        let image = broker.controller.current_image();
 
-    // Kafka's `isConsumerGroupProtocolEnabled` gate, checked before any
-    // authorization: the `consumer` rebalance protocol must be enabled and
-    // `group.version` must be finalized at 1 or above.
-    if !coordinator.config.next_gen_enabled() || group_version_disabled(&image) {
-        let described = req
-            .group_ids
-            .iter()
-            .map(|group_id| DescribedGroup::error_row(group_id, codes::UNSUPPORTED_VERSION, None))
-            .collect();
-        return Ok(response(described));
-    }
+        // Kafka's `isConsumerGroupProtocolEnabled` gate, checked before any
+        // authorization: the `consumer` rebalance protocol must be enabled and
+        // `group.version` must be finalized at 1 or above.
+        if !coordinator.config.next_gen_enabled() || group_version_disabled(&image) {
+            let described = req
+                .group_ids
+                .iter()
+                .map(|group_id| DescribedGroup::error_row(group_id, codes::UNSUPPORTED_VERSION, None))
+                .collect();
+            return Ok(response(described));
+        }
 
-    let default_assignor = coordinator
-        .config
-        .assignors
-        .first()
-        .map(|a| a.name())
-        .unwrap_or_default();
-    // Kafka places every GROUP_AUTHORIZATION_FAILED row first, ahead of the
-    // coordinator results, which keep request order among themselves.
-    let mut denied: Vec<DescribedGroup> = Vec::new();
-    let mut described: Vec<DescribedGroup> = Vec::with_capacity(req.group_ids.len());
-    for group_id in &req.group_ids {
-        if crate::handlers::group_describe_denied(
+        let default_assignor = coordinator
+            .config
+            .assignors
+            .first()
+            .map(|a| a.name())
+            .unwrap_or_default();
+        // Kafka places every GROUP_AUTHORIZATION_FAILED row first, ahead of the
+        // coordinator results, which keep request order among themselves.
+        let mut denied: Vec<DescribedGroup> = Vec::new();
+        let mut described: Vec<DescribedGroup> = Vec::with_capacity(req.group_ids.len());
+        for group_id in &req.group_ids {
+            if crate::handlers::group_describe_denied(
+                broker.config.authorizer.as_ref(),
+                &image,
+                ctx,
+                group_id,
+            ) {
+                denied.push(DescribedGroup::error_row(
+                    group_id,
+                    codes::GROUP_AUTHORIZATION_FAILED,
+                    None,
+                ));
+                continue;
+            }
+            // GroupCoordinatorService.consumerGroupDescribe rejects an empty id
+            // before it routes the group to a shard.
+            if group_id.is_empty() {
+                described.push(DescribedGroup::error_row("", codes::INVALID_GROUP_ID, None));
+                continue;
+            }
+            if let Some(error_code) = crate::handlers::group_coordinator_error(broker, group_id) {
+                described.push(DescribedGroup::error_row(group_id, error_code, None));
+                continue;
+            }
+            // The `Describe` arm dispatches on the actor's LIVE `group.kind`: it
+            // replies ONLY for a consumer-kind group and drops the sender
+            // otherwise, so an upgraded group is reachable and a classic group
+            // is not.
+            // A share or streams group is another type's group, which Kafka's
+            // `consumerGroup` lookup refuses whether or not an actor holds its
+            // offsets.
+            if coordinator.is_share_or_streams_group(group_id) {
+                described.push(not_found_row(group_id, "is not a consumer group"));
+                continue;
+            }
+            let Some(handle) = coordinator.find(group_id) else {
+                described.push(not_found_row(group_id, "not found"));
+                continue;
+            };
+            described.push(
+                match ask(&handle.tx, |reply| GroupActorMessage::Describe { reply }).await {
+                    Ok(view) => described_group(view, default_assignor, &image),
+                    Err(AskError::Closed) => {
+                        DescribedGroup::error_row(group_id, codes::COORDINATOR_LOAD_IN_PROGRESS, None)
+                    }
+                    Err(AskError::Dropped) => not_found_row(group_id, "is not a consumer group"),
+                },
+            );
+        }
+
+        // KIP-430: bitfield of group operations the principal is authorized for,
+        // filled only on opt-in and only for rows that came back clean. Denied
+        // and errored rows keep the wire-default `i32::MIN` sentinel.
+        fill_group_authorized_operations(
             broker.config.authorizer.as_ref(),
             &image,
             ctx,
-            group_id,
-        ) {
-            denied.push(DescribedGroup::error_row(
-                group_id,
-                codes::GROUP_AUTHORIZATION_FAILED,
-                None,
-            ));
-            continue;
-        }
-        // GroupCoordinatorService.consumerGroupDescribe rejects an empty id
-        // before it routes the group to a shard.
-        if group_id.is_empty() {
-            described.push(DescribedGroup::error_row("", codes::INVALID_GROUP_ID, None));
-            continue;
-        }
-        if let Some(error_code) = crate::handlers::group_coordinator_error(broker, group_id) {
-            described.push(DescribedGroup::error_row(group_id, error_code, None));
-            continue;
-        }
-        // The `Describe` arm dispatches on the actor's LIVE `group.kind`: it
-        // replies ONLY for a consumer-kind group and drops the sender
-        // otherwise, so an upgraded group is reachable and a classic group
-        // is not.
-        // A share or streams group is another type's group, which Kafka's
-        // `consumerGroup` lookup refuses whether or not an actor holds its
-        // offsets.
-        if coordinator.is_share_or_streams_group(group_id) {
-            described.push(not_found_row(group_id, "is not a consumer group"));
-            continue;
-        }
-        let Some(handle) = coordinator.find(group_id) else {
-            described.push(not_found_row(group_id, "not found"));
-            continue;
-        };
-        described.push(
-            match ask(&handle.tx, |reply| GroupActorMessage::Describe { reply }).await {
-                Ok(view) => described_group(view, default_assignor, &image),
-                Err(AskError::Closed) => {
-                    DescribedGroup::error_row(group_id, codes::COORDINATOR_LOAD_IN_PROGRESS, None)
-                }
-                Err(AskError::Dropped) => not_found_row(group_id, "is not a consumer group"),
-            },
+            req.include_authorized_operations,
+            &mut described,
         );
+
+        denied.extend(described);
+        hide_undescribable_topics(broker.config.authorizer.as_ref(), &image, ctx, &mut denied);
+        Ok(response(denied))
     }
-
-    // KIP-430: bitfield of group operations the principal is authorized for,
-    // filled only on opt-in and only for rows that came back clean. Denied
-    // and errored rows keep the wire-default `i32::MIN` sentinel.
-    fill_group_authorized_operations(
-        broker.config.authorizer.as_ref(),
-        &image,
-        ctx,
-        req.include_authorized_operations,
-        &mut described,
-    );
-
-    denied.extend(described);
-    hide_undescribable_topics(broker.config.authorizer.as_ref(), &image, ctx, &mut denied);
-    Ok(response(denied))
 }
 
 /// The message of the row Kafka substitutes for a group whose assignment names
@@ -308,10 +305,13 @@ mod tests {
     use krabka_metadata::MetadataRecord;
 
     use super::*;
-    use crate::handlers::{
-        authorized_operations::authorized_operations_bits,
-        group_heartbeat_test_support::{
-            acl_authorizer, image_with_group_version, set_group_version,
+    use crate::{
+        broker::Broker,
+        handlers::{
+            authorized_operations::authorized_operations_bits,
+            group_heartbeat_test_support::{
+                acl_authorizer, image_with_group_version, set_group_version,
+            },
         },
     };
 
@@ -322,6 +322,24 @@ mod tests {
             group_ids: group_ids.into_iter().map(Into::into).collect(),
             ..Default::default()
         }
+    }
+
+    async fn describe_groups(
+        broker: &Broker,
+        request: ConsumerGroupDescribeRequest,
+        context: &crate::handlers::RequestContext<'_>,
+    ) -> ConsumerGroupDescribeResponse {
+        handle(broker, request, VERSION, context)
+            .await
+            .expect("ConsumerGroupDescribe handler")
+    }
+
+    fn group_errors(response: &ConsumerGroupDescribeResponse) -> Vec<(&str, i16)> {
+        response
+            .groups
+            .iter()
+            .map(|group| (group.group_id.as_str(), group.error_code))
+            .collect()
     }
 
     #[test]
@@ -391,23 +409,21 @@ mod tests {
     }
 
     fn topic(topic_id: Uuid, topic_name: &str, partitions: &[i32]) -> TopicPartitions {
-        TopicPartitions {
+        tagged_wire!(TopicPartitions {
             topic_id,
             topic_name: topic_name.into(),
             partitions: partitions.to_vec(),
-            unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(vec![]),
-        }
+        })
     }
 
     fn assigned(topics: Vec<TopicPartitions>) -> Assignment {
-        Assignment {
+        tagged_wire!(Assignment {
             topic_partitions: topics,
-            unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(vec![]),
-        }
+        })
     }
 
     fn wire_member(member_id: &str) -> Member {
-        Member {
+        tagged_wire!(Member {
             member_id: member_id.into(),
             instance_id: None,
             rack_id: None,
@@ -419,12 +435,11 @@ mod tests {
             assignment: assigned(vec![]),
             target_assignment: assigned(vec![]),
             member_type: MEMBER_TYPE_CONSUMER,
-            unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(vec![]),
-        }
+        })
     }
 
     fn wire_group(group_state: &str, assignor_name: &str, members: Vec<Member>) -> DescribedGroup {
-        DescribedGroup {
+        tagged_wire!(DescribedGroup {
             error_code: codes::NONE,
             error_message: None,
             group_id: "cg".into(),
@@ -434,8 +449,7 @@ mod tests {
             assignor_name: assignor_name.into(),
             members,
             authorized_operations: i32::MIN,
-            unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(vec![]),
-        }
+        })
     }
 
     /// `ConsumerGroup.asDescribedGroup`: the view's state and epochs, the
@@ -513,10 +527,9 @@ mod tests {
 
         let resp = response(vec![first, second]);
 
-        let expected = ConsumerGroupDescribeResponse {
-            throttle_time_ms: 0,
+        let expected = unthrottled_wire!(ConsumerGroupDescribeResponse {
             groups: vec![
-                DescribedGroup {
+                tagged_wire!(DescribedGroup {
                     error_code: codes::GROUP_ID_NOT_FOUND,
                     error_message: None,
                     group_id: "a".to_string(),
@@ -526,9 +539,8 @@ mod tests {
                     assignor_name: String::new(),
                     members: vec![],
                     authorized_operations: -2_147_483_648,
-                    unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(vec![]),
-                },
-                DescribedGroup {
+                }),
+                tagged_wire!(DescribedGroup {
                     error_code: codes::UNSUPPORTED_VERSION,
                     error_message: None,
                     group_id: "b".to_string(),
@@ -538,11 +550,9 @@ mod tests {
                     assignor_name: String::new(),
                     members: vec![],
                     authorized_operations: -2_147_483_648,
-                    unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(vec![]),
-                },
+                }),
             ],
-            unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(vec![]),
-        };
+        });
         assert!(resp == expected, "{resp:?}");
     }
 
@@ -563,9 +573,12 @@ mod tests {
             ),
         ));
         let authorizer = acl_authorizer();
-        let principal = crate::test_support::principal("alice");
-        let peer = crate::test_support::peer();
-        let ctx = crate::test_support::request_context(&principal, &peer, "alice-client");
+        request_identity!(
+            (principal, peer, ctx),
+            crate::test_support::principal("alice"),
+            client_id = "alice-client",
+            address = crate::test_support::peer()
+        );
 
         let orders = || topic(ORDERS, "orders", &[0]);
         let payments = || topic(PAYMENTS, "payments", &[0]);
@@ -623,20 +636,24 @@ mod tests {
         broker.group_coordinator.mark_share("share-group");
         broker.group_coordinator.mark_streams("streams-group");
         let _share_actor = broker.group_coordinator.get_or_create_share("share-actor");
-        let principal = crate::test_support::principal("admin");
-        let peer = crate::test_support::peer();
-        let ctx = crate::test_support::request_context(&principal, &peer, "admin-client");
-        let row = |group_id: &str, error_code, message: Option<&str>| DescribedGroup {
-            error_code,
-            error_message: message.map(str::to_string),
-            group_id: group_id.to_string(),
-            group_state: String::new(),
-            group_epoch: 0,
-            assignment_epoch: 0,
-            assignor_name: String::new(),
-            members: vec![],
-            authorized_operations: i32::MIN,
-            unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(vec![]),
+        request_identity!(
+            (principal, peer, ctx),
+            crate::test_support::principal("admin"),
+            client_id = "admin-client",
+            address = crate::test_support::peer()
+        );
+        let row = |group_id: &str, error_code, message: Option<&str>| {
+            tagged_wire!(DescribedGroup {
+                error_code,
+                error_message: message.map(str::to_string),
+                group_id: group_id.to_string(),
+                group_state: String::new(),
+                group_epoch: 0,
+                assignment_epoch: 0,
+                assignor_name: String::new(),
+                members: vec![],
+                authorized_operations: i32::MIN,
+            })
         };
         // (requested id, expected row)
         let rows = [
@@ -688,11 +705,9 @@ mod tests {
                 .expect("ConsumerGroupDescribe handler");
 
             assert!(
-                resp == ConsumerGroupDescribeResponse {
-                    throttle_time_ms: 0,
+                resp == unthrottled_wire!(ConsumerGroupDescribeResponse {
                     groups: vec![expected],
-                    unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(vec![]),
-                },
+                }),
                 "{group_id:?}"
             );
         }
@@ -723,26 +738,23 @@ mod tests {
     #[tokio::test]
     async fn handle_protocol_gate_precedes_group_acl_for_every_row() {
         let authorizer = acl_authorizer();
-        let (broker_handle, _dir) = crate::test_support::start_group_broker_no_audit(
-            std::sync::Arc::new(crate::test_support::ControllerPeerAllowed(authorizer)),
-        )
-        .await;
-        let broker = broker_handle.broker_arc_for_test();
+        broker_fixture!(
+            (broker_handle, _dir, broker),
+            group_controller_peer(authorizer)
+        );
         set_group_version(&broker, 0).await;
-        let principal = crate::test_support::principal("nobody");
-        let peer = crate::test_support::peer();
-        let ctx = crate::test_support::request_context(&principal, &peer, "consumer-client");
+        request_identity!(
+            (principal, peer, ctx),
+            crate::test_support::principal("nobody"),
+            client_id = "consumer-client",
+            address = crate::test_support::peer()
+        );
         let req = request(vec!["denied-group", "also-denied"]);
 
-        let resp = handle(&broker, req, VERSION, &ctx)
-            .await
-            .expect("ConsumerGroupDescribe handler");
+        let resp = describe_groups(&broker, req, &ctx).await;
 
         assert!(
-            resp.groups
-                .iter()
-                .map(|g| (g.group_id.as_str(), g.error_code))
-                .collect::<Vec<_>>()
+            group_errors(&resp)
                 == vec![
                     ("denied-group", codes::UNSUPPORTED_VERSION),
                     ("also-denied", codes::UNSUPPORTED_VERSION),
@@ -759,11 +771,10 @@ mod tests {
     #[tokio::test]
     async fn handle_orders_denied_rows_before_allowed_rows() {
         let authorizer = acl_authorizer();
-        let (broker_handle, _dir) = crate::test_support::start_group_broker_no_audit(
-            std::sync::Arc::new(crate::test_support::ControllerPeerAllowed(authorizer)),
-        )
-        .await;
-        let broker = broker_handle.broker_arc_for_test();
+        broker_fixture!(
+            (broker_handle, _dir, broker),
+            group_controller_peer(authorizer)
+        );
         // Grant "alice" Describe on "allowed" only; "denied" has no matching
         // ACL and stays denied under SimpleAclAuthorizer's default-deny.
         broker
@@ -778,23 +789,21 @@ mod tests {
             )])
             .await
             .expect("grant alice Describe on allowed");
-        let principal = crate::test_support::principal("alice");
-        let peer = crate::test_support::peer();
-        let ctx = crate::test_support::request_context(&principal, &peer, "alice-client");
+        request_identity!(
+            (principal, peer, ctx),
+            crate::test_support::principal("alice"),
+            client_id = "alice-client",
+            address = crate::test_support::peer()
+        );
         let req = request(vec!["allowed", "denied"]);
 
-        let resp = handle(&broker, req, VERSION, &ctx)
-            .await
-            .expect("ConsumerGroupDescribe handler");
+        let resp = describe_groups(&broker, req, &ctx).await;
 
         // Requested in order [allowed, denied]; the denied row comes first
         // in the response, ahead of the (unknown, hence GROUP_ID_NOT_FOUND)
         // allowed row.
         assert!(
-            resp.groups
-                .iter()
-                .map(|g| (g.group_id.as_str(), g.error_code))
-                .collect::<Vec<_>>()
+            group_errors(&resp)
                 == vec![
                     ("denied", codes::GROUP_AUTHORIZATION_FAILED),
                     ("allowed", codes::GROUP_ID_NOT_FOUND),
@@ -819,9 +828,12 @@ mod tests {
         let _ = broker
             .group_coordinator
             .get_or_create_consumer("live-group");
-        let principal = crate::test_support::principal("admin");
-        let peer = crate::test_support::peer();
-        let ctx = crate::test_support::request_context(&principal, &peer, "admin-client");
+        request_identity!(
+            (principal, peer, ctx),
+            crate::test_support::principal("admin"),
+            client_id = "admin-client",
+            address = crate::test_support::peer()
+        );
 
         let expected_bits = authorized_operations_bits(
             authorizer.as_ref(),

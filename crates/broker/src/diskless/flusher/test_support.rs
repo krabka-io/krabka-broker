@@ -24,6 +24,10 @@ fn batch(count: i32) -> RecordBatch {
     }
 }
 
+pub(super) fn orders_partition(root: &Path) -> Arc<Partition> {
+    test_partition(root, "orders", 0, true, NodeId(1))
+}
+
 pub(super) fn test_partition(
     root: &Path,
     topic: &str,
@@ -46,4 +50,36 @@ pub(super) fn test_partition(
     );
     handle.current_leader.store(leader.0, Ordering::Relaxed);
     handle
+}
+
+/// A real in-memory metadata log and its live diskless index projection.
+pub(super) async fn test_index_log() -> crate::diskless::index_log::DisklessIndexLog {
+    crate::diskless::index_log::DisklessIndexLog::start(
+        krabka_remote_storage_topic::InProcessMetadataEventLog::new(1),
+    )
+    .await
+    .unwrap()
+}
+
+/// One keyed range, with each scenario supplying its timestamps and byte size.
+pub(super) fn flush_record(
+    topic_id: uuid::Uuid,
+    object_key: &str,
+    (first_offset, last_offset, max_timestamp_ms): (i64, i64, i64),
+    byte_len: u32,
+) -> crate::diskless::wal_index::WalFlushRecord {
+    use crate::diskless::wal_index::{WalFlushRecord, WalIndexEntry};
+    WalFlushRecord {
+        object_key: object_key.into(),
+        format_version: WalFlushRecord::FORMAT_VERSION,
+        entries: vec![WalIndexEntry {
+            topic_id,
+            partition: 0,
+            first_offset,
+            last_offset,
+            byte_start: 0,
+            byte_len,
+            max_timestamp_ms,
+        }],
+    }
 }

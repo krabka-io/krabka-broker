@@ -46,11 +46,13 @@ mod streams_group_model;
 #[cfg(test)]
 mod tests;
 
+#[cfg(test)]
+mod test_support;
+
 pub use self::description::{DescriptionPush, PushAnswer};
 use self::{
     heartbeat::{handle_heartbeat, handle_session_tick},
-    reconciliation::reconcile,
-    records::{apply_seed, flush_pending, snapshot_pending_after_change},
+    records::{apply_seed, reconcile_and_flush},
     response::build_describe,
 };
 use super::{
@@ -530,14 +532,12 @@ async fn actor_loop(
                 if actor.state.members.is_empty() || !actor.assignment_pending() {
                     continue;
                 }
-                reconcile(&mut actor, &config, metadata_source);
-                let pending = snapshot_pending_after_change(&mut actor, &[]);
-                if flush_pending(
-                    &actor,
-                    pending,
+                if reconcile_and_flush(
+                    &mut actor,
+                    &config,
+                    metadata_source,
                     &*offsets_log,
                     &coordinator,
-                    chrono_now_ms(),
                 )
                 .await
                 .is_err()
@@ -556,14 +556,12 @@ async fn actor_loop(
                     config = next;
                     tick = session_tick(&config);
                     actor.state.dirty = true;
-                    reconcile(&mut actor, &config, metadata_source);
-                    let pending = snapshot_pending_after_change(&mut actor, &[]);
-                    if flush_pending(
-                        &actor,
-                        pending,
+                    if reconcile_and_flush(
+                        &mut actor,
+                        &config,
+                        metadata_source,
                         &*offsets_log,
                         &coordinator,
-                        chrono_now_ms(),
                     )
                     .await
                     .is_err()
@@ -795,9 +793,4 @@ async fn wait_for_metadata_change(
     }
 }
 
-fn chrono_now_ms() -> i64 {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(0))
-}
+use crate::txn::util::now_millis as chrono_now_ms;

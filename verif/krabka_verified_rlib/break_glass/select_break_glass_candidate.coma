@@ -1,19 +1,19 @@
-(* #"/workspace/crates/verified/src/break_glass.rs" 124 0 124 84 *)
+(* #"/workspace/crates/verified/src/break_glass.rs" 116 0 116 84 *)
 
 let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
 let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
-let%span sbreak_glass = "/workspace/crates/verified/src/break_glass.rs" 126 16 126 22
-let%span sbreak_glass'0 = "/workspace/crates/verified/src/break_glass.rs" 132 14 132 36
-let%span sbreak_glass'1 = "/workspace/crates/verified/src/break_glass.rs" 133 14 133 30
-let%span sbreak_glass'2 = "/workspace/crates/verified/src/break_glass.rs" 128 16 131 5
-let%span sbreak_glass'3 = "/workspace/crates/verified/src/break_glass.rs" 127 16 127 39
-let%span sbreak_glass'4 = "/workspace/crates/verified/src/break_glass.rs" 134 24 134 37
-let%span sbreak_glass'5 = "/workspace/crates/verified/src/break_glass.rs" 138 30 138 43
-let%span sbreak_glass'6 = "/workspace/crates/verified/src/break_glass.rs" 151 13 151 14
-let%span sbreak_glass'7 = "/workspace/crates/verified/src/break_glass.rs" 151 8 151 14
-let%span sbreak_glass'8 = "/workspace/crates/verified/src/break_glass.rs" 119 10 122 1
-let%span sbreak_glass'9 = "/workspace/crates/verified/src/break_glass.rs" 111 8 113 83
-let%span sbreak_glass'10 = "/workspace/crates/verified/src/break_glass.rs" 97 8 98 80
+let%span sbreak_glass = "/workspace/crates/verified/src/break_glass.rs" 118 16 118 22
+let%span sbreak_glass'0 = "/workspace/crates/verified/src/break_glass.rs" 124 14 124 36
+let%span sbreak_glass'1 = "/workspace/crates/verified/src/break_glass.rs" 125 14 125 30
+let%span sbreak_glass'2 = "/workspace/crates/verified/src/break_glass.rs" 120 16 123 5
+let%span sbreak_glass'3 = "/workspace/crates/verified/src/break_glass.rs" 119 16 119 39
+let%span sbreak_glass'4 = "/workspace/crates/verified/src/break_glass.rs" 126 24 126 37
+let%span sbreak_glass'5 = "/workspace/crates/verified/src/break_glass.rs" 130 30 130 43
+let%span sbreak_glass'6 = "/workspace/crates/verified/src/break_glass.rs" 143 13 143 14
+let%span sbreak_glass'7 = "/workspace/crates/verified/src/break_glass.rs" 143 8 143 14
+let%span sbreak_glass'8 = "/workspace/crates/verified/src/break_glass.rs" 111 10 114 1
+let%span sbreak_glass'9 = "/workspace/crates/verified/src/break_glass.rs" 103 8 105 83
+let%span sbreak_glass'10 = "/workspace/crates/verified/src/break_glass.rs" 89 8 90 80
 let%span swell_founded = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/well_founded.rs" 43 8 43 33
 let%span sslice = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 331 18 331 22
 
@@ -46,13 +46,13 @@ let len_tup3_i64_u64_u64 (self_: Slice64.slice tup3_i64_u64_u64) (return (x: UIn
     = UInt64.t'int result}
     (! return {result}) ]
 
-predicate lex_le [#"/workspace/crates/verified/src/break_glass.rs" 95 0 95 61] (a: tup3_i64_u64_u64) (b: tup3_i64_u64_u64) =
+predicate lex_le [#"/workspace/crates/verified/src/break_glass.rs" 87 0 87 61] (a: tup3_i64_u64_u64) (b: tup3_i64_u64_u64) =
   [%#sbreak_glass'10] Int64.to_int a.f0 < Int64.to_int b.f0
   \/ Int64.to_int a.f0 = Int64.to_int b.f0
   /\ (UInt64.t'int a.f1 < UInt64.t'int b.f1
   \/ UInt64.t'int a.f1 = UInt64.t'int b.f1 /\ UInt64.t'int a.f2 <= UInt64.t'int b.f2)
 
-predicate is_min_by [#"/workspace/crates/verified/src/break_glass.rs" 109 0 109 73] (keys: Seq.seq tup3_i64_u64_u64) (best: int) (len: int) =
+predicate is_min_by [#"/workspace/crates/verified/src/break_glass.rs" 101 0 101 73] (keys: Seq.seq tup3_i64_u64_u64) (best: int) (len: int) =
   [%#sbreak_glass'9] 0 <= best
   /\ best < len
   /\ len <= Seq.length keys
@@ -71,7 +71,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let select_break_glass_candidate [#"/workspace/crates/verified/src/break_glass.rs" 124 0 124 84]
+let select_break_glass_candidate [#"/workspace/crates/verified/src/break_glass.rs" 116 0 116 84]
   (candidates: Slice64.slice tup3_i64_u64_u64) (return (x: t_Option_usize)) = (! bb0
   [ bb0 = s0 [ s0 = [ &best <- None ] s1 | s1 = [ &i <- [%#sbreak_glass] (0: UInt64.t) ] s2 | s2 = bb1 ]
   | bb1 = bb1invariant

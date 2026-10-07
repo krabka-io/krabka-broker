@@ -3,11 +3,11 @@
 //! The container is owned by a guard that removes it on drop, so an aborted
 //! test does not leave one squatting on the published port.
 
-use std::process::{Command, Stdio};
-
 use assert2::assert;
 
 use super::ports::minio_port;
+
+krabka_macros::minio_fixture!(minio_process);
 
 // ---------------------------------------------------------------------------
 // MinIO-backed tiered-storage acceptance test (KIP-405 S3 backend).
@@ -49,34 +49,14 @@ impl MinioContainer {
         let minio_port = minio_port();
         let name = format!("krabka-minio-test-{}", uuid::Uuid::new_v4().simple());
         // Best-effort orphan reap from a prior aborted run.
-        let _ = Command::new("docker")
-            .args(["rm", "-f", &name])
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status();
-        let status = Command::new("docker")
-            .args([
-                "run",
-                "-d",
-                "--rm",
-                "--name",
-                &name,
-                "-p",
-                &format!("{minio_port}:9000"),
-                "-e",
-                &format!("MINIO_ROOT_USER={MINIO_ACCESS_KEY}"),
-                "-e",
-                &format!("MINIO_ROOT_PASSWORD={MINIO_SECRET_KEY}"),
-                MINIO_IMAGE,
-                "server",
-                "/data",
-            ])
-            .stdout(Stdio::null())
-            .stderr(Stdio::inherit())
-            .status()
-            .expect("spawn docker run minio");
-        assert!(status.success(), "docker run minio failed");
-        wait_for_minio_ready();
+        minio_process::remove(&name);
+        minio_process::start(
+            &name,
+            minio_port,
+            MINIO_IMAGE,
+            MINIO_ACCESS_KEY,
+            MINIO_SECRET_KEY,
+        );
         Self { name }
     }
 }
@@ -84,24 +64,7 @@ impl MinioContainer {
 /// Poll the published host port until `MinIO`'s HTTP listener answers. This
 /// avoids a race with the first health check of the fast-starting image.
 pub(crate) fn wait_for_minio_ready() {
-    let minio_port = minio_port();
-    let addr: std::net::SocketAddr = format!("127.0.0.1:{minio_port}")
-        .parse()
-        .expect("static addr");
-    for _ in 0..60 {
-        if std::net::TcpStream::connect_timeout(&addr, std::time::Duration::from_millis(500))
-            .is_ok()
-        {
-            // TCP accept != fully-initialised S3 server; give the
-            // listenbuckets path a moment to come up.
-            std::thread::sleep(std::time::Duration::from_millis(500));
-            return;
-        }
-        // intentional: bounded readiness poll of the external MinIO process;
-        // no krabka metric reflects its TCP/S3 listener coming up.
-        std::thread::sleep(std::time::Duration::from_millis(500));
-    }
-    panic!("MinIO never accepted TCP on 127.0.0.1:{minio_port}");
+    minio_process::wait(minio_port());
 }
 
 pub(crate) fn minio_make_bucket(bucket: &str) {
@@ -115,25 +78,7 @@ pub(crate) fn minio_make_bucket(bucket: &str) {
            sleep 1; \
          done && mc mb -p local/{bucket}"
     );
-    let out = std::process::Command::new("docker")
-        .args([
-            "run",
-            "--rm",
-            "--add-host=host.docker.internal:host-gateway",
-            "--entrypoint",
-            "/bin/sh",
-            MINIO_CLIENT_IMAGE,
-            "-c",
-            &script,
-        ])
-        .output()
-        .expect("spawn mc mb");
-    assert!(
-        out.status.success(),
-        "mc mb failed: stdout={}, stderr={}",
-        String::from_utf8_lossy(&out.stdout),
-        String::from_utf8_lossy(&out.stderr),
-    );
+    minio_process::make_bucket(MINIO_CLIENT_IMAGE, &script);
 }
 
 /// Create a bucket with S3 Object Lock on and a compliance-mode default
@@ -159,19 +104,7 @@ pub(crate) fn minio_make_locked_bucket(bucket: &str) {
          done && mc mb --with-lock local/{bucket} \
          && mc retention set --default COMPLIANCE 1d local/{bucket}"
     );
-    let out = std::process::Command::new("docker")
-        .args([
-            "run",
-            "--rm",
-            "--add-host=host.docker.internal:host-gateway",
-            "--entrypoint",
-            "/bin/sh",
-            MINIO_CLIENT_IMAGE,
-            "-c",
-            &script,
-        ])
-        .output()
-        .expect("spawn mc mb --with-lock");
+    let out = minio_process::mc(MINIO_CLIENT_IMAGE, &script, "spawn mc mb --with-lock");
     assert!(
         out.status.success(),
         "mc mb --with-lock failed: stdout={}, stderr={}",
@@ -187,19 +120,7 @@ pub(crate) fn minio_list_objects(bucket: &str) -> String {
         "mc alias set local http://host.docker.internal:{minio_port} {MINIO_ACCESS_KEY} {MINIO_SECRET_KEY} >/dev/null && \
          mc ls --recursive local/{bucket}"
     );
-    let out = std::process::Command::new("docker")
-        .args([
-            "run",
-            "--rm",
-            "--add-host=host.docker.internal:host-gateway",
-            "--entrypoint",
-            "/bin/sh",
-            MINIO_CLIENT_IMAGE,
-            "-c",
-            &script,
-        ])
-        .output()
-        .expect("spawn mc ls");
+    let out = minio_process::mc(MINIO_CLIENT_IMAGE, &script, "spawn mc ls");
     assert!(
         out.status.success(),
         "mc ls failed: stderr={}",
@@ -210,10 +131,6 @@ pub(crate) fn minio_list_objects(bucket: &str) -> String {
 
 impl Drop for MinioContainer {
     fn drop(&mut self) {
-        let _ = Command::new("docker")
-            .args(["rm", "-f", &self.name])
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status();
+        minio_process::remove(&self.name);
     }
 }

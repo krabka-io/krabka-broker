@@ -48,28 +48,7 @@ impl GroupCoordinator {
         member_id: &str,
         v: persistence_next_gen::MemberMetadataValue,
     ) {
-        {
-            if let Some(mut seed) = self.seeds.get_mut(group_id)
-                && replay_mutation(
-                    ReplayRecordKind::MemberMetadata,
-                    Some(ReplayRecordKind::MemberMetadata),
-                    true,
-                    seed.members.contains_key(member_id),
-                ) == ReplayMutation::Apply
-            {
-                seed.members.insert(member_id.into(), v.clone());
-            }
-        }
-        if let Some(mut cached) = self.seeds_cache.get_mut(group_id)
-            && replay_mutation(
-                ReplayRecordKind::MemberMetadata,
-                Some(ReplayRecordKind::MemberMetadata),
-                true,
-                cached.members.contains_key(member_id),
-            ) == ReplayMutation::Apply
-        {
-            cached.members.insert(member_id.into(), v);
-        }
+        super::seeds::update_replayed_member!((self, seeds, seeds_cache, group_id, member_id, v); metadata);
     }
     pub fn replay_target_assignment_metadata(
         &self,
@@ -79,30 +58,17 @@ impl GroupCoordinator {
         if v.assignment_epoch < 0 {
             return;
         }
-        {
-            if let Some(mut seed) = self.seeds.get_mut(group_id)
-                && replay_mutation(
-                    ReplayRecordKind::TargetAssignmentMetadata,
-                    Some(ReplayRecordKind::TargetAssignmentMetadata),
-                    true,
-                    false,
-                ) == ReplayMutation::Apply
-                && replay_epoch_is_admissible(seed.target_epoch, v.assignment_epoch)
-            {
-                seed.target_epoch = v.assignment_epoch;
-            }
-        }
-        if let Some(mut cached) = self.seeds_cache.get_mut(group_id)
-            && replay_mutation(
+        super::seeds::update_replayed_seeds!(self, seeds, seeds_cache, group_id; (v, v);
+            |seed| replay_mutation(
                 ReplayRecordKind::TargetAssignmentMetadata,
                 Some(ReplayRecordKind::TargetAssignmentMetadata),
                 true,
                 false,
             ) == ReplayMutation::Apply
-            && replay_epoch_is_admissible(cached.target_epoch, v.assignment_epoch)
-        {
-            cached.target_epoch = v.assignment_epoch;
-        }
+            && replay_epoch_is_admissible(seed.target_epoch, v.assignment_epoch) => |value| {
+                seed.target_epoch = value.assignment_epoch;
+            }
+        );
     }
     pub fn replay_target_assignment_member(
         &self,
@@ -110,28 +76,7 @@ impl GroupCoordinator {
         member_id: &str,
         v: persistence_next_gen::TargetAssignmentMemberValue,
     ) {
-        {
-            if let Some(mut seed) = self.seeds.get_mut(group_id)
-                && replay_mutation(
-                    ReplayRecordKind::TargetAssignmentMember,
-                    Some(ReplayRecordKind::TargetAssignmentMember),
-                    true,
-                    seed.members.contains_key(member_id),
-                ) == ReplayMutation::Apply
-            {
-                seed.target_per_member.insert(member_id.into(), v.clone());
-            }
-        }
-        if let Some(mut cached) = self.seeds_cache.get_mut(group_id)
-            && replay_mutation(
-                ReplayRecordKind::TargetAssignmentMember,
-                Some(ReplayRecordKind::TargetAssignmentMember),
-                true,
-                cached.members.contains_key(member_id),
-            ) == ReplayMutation::Apply
-        {
-            cached.target_per_member.insert(member_id.into(), v);
-        }
+        super::seeds::update_replayed_member!((self, seeds, seeds_cache, group_id, member_id, v); target);
     }
     pub fn replay_current_member_assignment(
         &self,
@@ -139,40 +84,7 @@ impl GroupCoordinator {
         member_id: &str,
         v: persistence_next_gen::CurrentMemberAssignmentValue,
     ) {
-        {
-            if let Some(mut seed) = self.seeds.get_mut(group_id)
-                && replay_mutation(
-                    ReplayRecordKind::CurrentMemberAssignment,
-                    Some(ReplayRecordKind::CurrentMemberAssignment),
-                    true,
-                    seed.members.contains_key(member_id),
-                ) == ReplayMutation::Apply
-                && seed
-                    .current_per_member
-                    .get(member_id)
-                    .is_none_or(|current| {
-                        replay_epoch_is_admissible(current.member_epoch, v.member_epoch)
-                    })
-            {
-                seed.current_per_member.insert(member_id.into(), v.clone());
-            }
-        }
-        if let Some(mut cached) = self.seeds_cache.get_mut(group_id)
-            && replay_mutation(
-                ReplayRecordKind::CurrentMemberAssignment,
-                Some(ReplayRecordKind::CurrentMemberAssignment),
-                true,
-                cached.members.contains_key(member_id),
-            ) == ReplayMutation::Apply
-            && cached
-                .current_per_member
-                .get(member_id)
-                .is_none_or(|current| {
-                    replay_epoch_is_admissible(current.member_epoch, v.member_epoch)
-                })
-        {
-            cached.current_per_member.insert(member_id.into(), v);
-        }
+        super::seeds::update_replayed_member!((self, seeds, seeds_cache, group_id, member_id, v); current);
     }
 
     /// Applies a `ConsumerGroupRegularExpression` record: what `regex`
@@ -186,28 +98,16 @@ impl GroupCoordinator {
         regex: &str,
         v: persistence_next_gen::RegularExpressionValue,
     ) {
-        {
-            if let Some(mut seed) = self.seeds.get_mut(group_id)
-                && replay_mutation(
-                    ReplayRecordKind::RegularExpression,
-                    Some(ReplayRecordKind::RegularExpression),
-                    true,
-                    false,
-                ) == ReplayMutation::Apply
-            {
-                seed.resolved_regexes.insert(regex.into(), v.clone());
-            }
-        }
-        if let Some(mut cached) = self.seeds_cache.get_mut(group_id)
-            && replay_mutation(
+        super::seeds::update_replayed_seeds!(self, seeds, seeds_cache, group_id; (v.clone(), v);
+            |seed| replay_mutation(
                 ReplayRecordKind::RegularExpression,
                 Some(ReplayRecordKind::RegularExpression),
                 true,
                 false,
-            ) == ReplayMutation::Apply
-        {
-            cached.resolved_regexes.insert(regex.into(), v);
-        }
+            ) == ReplayMutation::Apply => |value| {
+                seed.resolved_regexes.insert(regex.into(), value);
+            }
+        );
     }
 
     /// Apply a tombstone for a next-gen key.
@@ -226,23 +126,15 @@ impl GroupCoordinator {
     pub fn replay_next_gen_tombstone(&self, key: &persistence_next_gen::NextGenKey) {
         use persistence_next_gen::NextGenKey as K;
         if let K::GroupMetadata { group_id } = key {
-            assert2::debug_assert!(
-                replay_mutation(ReplayRecordKind::GroupMetadata, None, true, false)
-                    == ReplayMutation::RemoveGroup
+            super::seeds::remove_replayed_group(
+                &self.seeds,
+                &self.seeds_cache,
+                &self.group_types,
+                group_id,
             );
-            self.seeds.remove(group_id);
-            self.seeds_cache.remove(group_id);
-            self.group_types.remove(group_id);
             return;
         }
-        let group_id = match key {
-            K::GroupMetadata { group_id }
-            | K::MemberMetadata { group_id, .. }
-            | K::TargetAssignmentMetadata { group_id }
-            | K::TargetAssignmentMember { group_id, .. }
-            | K::CurrentMemberAssignment { group_id, .. }
-            | K::RegularExpression { group_id, .. } => group_id.as_str(),
-        };
+        let group_id = key.group_id();
         let scrub = |seed: &mut GroupSeed| {
             super::seeds::scrub_seed_assignments!(seed, key, K, target_epoch;
                 K::GroupMetadata { .. } => { seed.group_epoch = 0; },
@@ -250,14 +142,7 @@ impl GroupCoordinator {
             );
         };
 
-        {
-            if let Some(mut s) = self.seeds.get_mut(group_id) {
-                scrub(s.value_mut());
-            }
-        }
-        if let Some(mut s) = self.seeds_cache.get_mut(group_id) {
-            scrub(s.value_mut());
-        }
+        super::seeds::scrub_replayed_seeds(&self.seeds, &self.seeds_cache, group_id, scrub);
     }
 }
 

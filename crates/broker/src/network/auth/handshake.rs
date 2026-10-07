@@ -174,23 +174,19 @@ fn exchange_for_mechanism(m: SaslMechanism) -> SaslExchange {
 #[cfg(test)]
 mod tests {
     use assert2::assert;
-    use krabka_security::Principal;
 
     use super::*;
 
     const NOW_MS: i64 = 10_000_000;
 
     fn authenticated(expires_at_ms: Option<i64>) -> ConnectionAuth {
-        ConnectionAuth::Authenticated {
-            principal: Principal {
-                name: "alice".to_string(),
-                auth_method: krabka_security::AuthMethod::SaslOAuthBearer,
-                groups: vec![],
-            },
-            mechanism: SaslMechanism::OAuthBearer,
+        crate::network::auth::test_support::authenticated(
+            "alice",
+            krabka_security::AuthMethod::SaslOAuthBearer,
+            SaslMechanism::OAuthBearer,
             expires_at_ms,
-            authenticated_via_token: false,
-        }
+            false,
+        )
     }
 
     /// The state a handshake leaves, reduced to what the table compares.

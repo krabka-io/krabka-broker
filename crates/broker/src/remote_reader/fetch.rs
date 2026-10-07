@@ -281,13 +281,7 @@ fn relative_offset(
     leader_epoch: LeaderEpoch,
     requested_offset: LogOffset,
 ) -> Option<u32> {
-    let epochs = metadata.segment_leader_epochs();
-    let epoch_start = epochs.get(&leader_epoch).copied();
-    let next_epoch_start = epochs
-        .iter()
-        .filter(|(epoch, _)| **epoch > leader_epoch)
-        .map(|(_, start)| *start)
-        .min();
+    let (epoch_start, next_epoch_start) = metadata.epoch_bounds(leader_epoch);
     remote_read_relative_offset(
         metadata.start_offset(),
         metadata.end_offset(),
@@ -300,20 +294,14 @@ fn relative_offset(
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
-
     use assert2::{assert, check};
-    use krabka_remote_storage::{
-        InmemoryRemoteLogMetadataManager, LocalTieredStorage, RemoteLogMetadataManager,
-        RemoteLogSegmentMetadata, RemoteStorageManager,
-    };
+    use krabka_remote_storage::RemoteLogSegmentMetadata;
     use uuid::Uuid;
 
     use super::*;
     use crate::remote_reader::test_support::{
-        NotReadyRlmm, caching_sparse_remote_segment_reader, populated_reader,
-        sparse_fixture_batch_bytes, sparse_fixture_second_batch_len, sparse_remote_segment_reader,
-        tp,
+        caching_sparse_remote_segment_reader, sparse_fixture_batch_bytes,
+        sparse_fixture_second_batch_len, sparse_remote_segment_reader, tp,
     };
 
     // Kafka's `RemoteLogManager.read` returns the segment's own bytes from the
@@ -458,13 +446,11 @@ mod tests {
 
     #[tokio::test]
     async fn fetch_batch_finds_segment_and_returns_first_batch() {
-        let log_dir = tempfile::tempdir().unwrap();
-        let remote_dir = tempfile::tempdir().unwrap();
-        let (reader, log) = populated_reader(log_dir.path(), remote_dir.path());
-
         // Pick an offset inside the second sealed segment. Each batch covers
         // two records, so base_offset=2 lives in segment[1] (base=2).
-        let exports = log.tierable_segments();
+        crate::remote_reader::test_support::populated_reader_fixture!(
+            log_dir, remote_dir, reader, log, exports
+        );
         // Unwrap the log-layer `Offset` into this test's `i64` world at the seam.
         let target_offset = exports[1].base_offset.0;
 
@@ -521,12 +507,7 @@ mod tests {
 
     #[tokio::test]
     async fn fetch_batch_returns_none_when_segment_not_in_rlmm() {
-        let remote_dir = tempfile::tempdir().unwrap();
-        let rsm: Arc<dyn RemoteStorageManager> =
-            Arc::new(LocalTieredStorage::new(remote_dir.path()));
-        let rlmm: Arc<dyn RemoteLogMetadataManager> =
-            Arc::new(InmemoryRemoteLogMetadataManager::new());
-        let reader = RemoteReader::new(rsm, rlmm);
+        let (_remote_dir, reader) = crate::remote_reader::test_support::empty_reader();
         // RLMM is empty → no segment for `tp` at epoch 0.
         let got = reader
             .fetch_batch(&tp(), LeaderEpoch(0), 0, 4096)
@@ -538,10 +519,8 @@ mod tests {
     #[tokio::test]
     async fn fetch_batch_returns_none_for_in_progress_segment() {
         let remote_dir = tempfile::tempdir().unwrap();
-        let rsm: Arc<dyn RemoteStorageManager> =
-            Arc::new(LocalTieredStorage::new(remote_dir.path()));
-        let rlmm: Arc<dyn RemoteLogMetadataManager> =
-            Arc::new(InmemoryRemoteLogMetadataManager::new());
+        let (rsm, rlmm) =
+            crate::remote_log_manager::test_support::local_backends(remote_dir.path());
         let id = krabka_remote_storage::RemoteLogSegmentId::new(tp(), Uuid::new_v4());
         let md = RemoteLogSegmentMetadata::new(
             id,
@@ -571,11 +550,7 @@ mod tests {
 
     #[tokio::test]
     async fn fetch_batch_propagates_not_ready() {
-        let remote_dir = tempfile::tempdir().unwrap();
-        let rsm: Arc<dyn RemoteStorageManager> =
-            Arc::new(LocalTieredStorage::new(remote_dir.path()));
-        let rlmm: Arc<dyn RemoteLogMetadataManager> = Arc::new(NotReadyRlmm);
-        let reader = RemoteReader::new(rsm, rlmm);
+        let (_remote_dir, reader) = crate::remote_reader::test_support::not_ready_reader();
         let err = reader
             .fetch_batch(&tp(), LeaderEpoch(0), 0, 4096)
             .await
@@ -627,16 +602,13 @@ mod tests {
     /// must fail closed.
     #[tokio::test]
     async fn fallback_rejects_segment_from_the_wrong_leader_epoch() {
-        let log_dir = tempfile::tempdir().unwrap();
-        let remote_dir = tempfile::tempdir().unwrap();
-
         // `populated_reader` registers all segments under epoch 0 (the epoch
         // present in the tierable-segment export, defaulted to 0 when the log
         // was written without an explicit epoch).
-        let (reader, log) = populated_reader(log_dir.path(), remote_dir.path());
-
         // Pick an offset inside the first sealed segment.
-        let exports = log.tierable_segments();
+        crate::remote_reader::test_support::populated_reader_fixture!(
+            log_dir, remote_dir, reader, log, exports
+        );
         // Unwrap the log-layer `Offset` into this test's `i64` world at the seam.
         let target_offset = exports[0].base_offset.0;
 

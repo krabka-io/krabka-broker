@@ -30,6 +30,118 @@ use crate::error::BrokerError;
 
 pub(crate) mod flex;
 
+/// Encode and append one nonempty actor delta before publishing its cache update.
+/// Each protocol supplies its original borrowed or consuming encoder and cache operation.
+macro_rules! flush_pending_records {
+    ($state:ident: $state_type:ty, $pending:ident: $pending_type:ty;
+        $log:ident, $coordinator:ident, $now:ident;
+        group $group:expr; encode $encode:expr; cache $cache:expr;
+    ) => {
+        pub(super) async fn flush_pending(
+            $state: &$state_type,
+            $pending: $pending_type,
+            $log: &dyn $crate::coordinator::unified::offsets_log::OffsetsLog,
+            $coordinator: &$crate::coordinator::unified::GroupCoordinator,
+            $now: i64,
+        ) -> Result<(), $crate::error::BrokerError> {
+            if $pending.is_empty() {
+                return Ok(());
+            }
+            let batch = $encode?;
+            $log.append($group, batch).await?;
+            $cache;
+            Ok(())
+        }
+    };
+}
+pub(super) use flush_pending_records;
+
+/// The shared durable offset fields, keeping the runtime entry and wire value
+/// as distinct concrete types with their original documentation and derives.
+macro_rules! committed_offset_type {
+    ($(#[$meta:meta])* $visibility:vis struct $name:ident {
+        $(#[$expiry:meta])* expire_timestamp_ms,
+        $(#[$topic:meta])* topic_id,
+    }) => {
+        $(#[$meta])*
+        $visibility struct $name {
+            pub offset: ::krabka_log::Offset,
+            pub leader_epoch: i32,
+            pub metadata: String,
+            pub commit_timestamp_ms: i64,
+            $(#[$expiry])*
+            pub expire_timestamp_ms: Option<i64>,
+            $(#[$topic])*
+            pub topic_id: Option<::uuid::Uuid>,
+        }
+    };
+}
+pub(super) use committed_offset_type;
+
+/// The group record key families share a group id followed by at most one
+/// member id or regular expression. Keep their public variants and version
+/// tables together while using the same legacy string codec.
+macro_rules! group_record_keys {
+    ($visibility:vis enum $name:ident {
+        $($variant:ident $(($extra:ident))? => $version:ident,)*
+    }
+        $(#[$parse_docs:meta])* fn $parse:ident;
+        $(#[$encode_docs:meta])* fn $encode:ident;
+        invalid $invalid:literal;
+    ) => {
+        #[derive(Debug, Clone, PartialEq, Eq)]
+        $visibility enum $name {
+            $($variant { group_id: String, $($extra: String,)? },)*
+        }
+
+        impl $name {
+            /// The group named by any record family of this protocol.
+            #[must_use]
+            pub fn group_id(&self) -> &str {
+                match self {
+                    $(Self::$variant { group_id, .. } => group_id,)*
+                }
+            }
+        }
+
+        $(#[$parse_docs])*
+        $visibility fn $parse(version: i16, mut buf: &[u8]) -> Result<$name, $crate::error::BrokerError> {
+            let key = match version {
+                $($version => $name::$variant {
+                    group_id: $crate::coordinator::unified::persistence::get_string(&mut buf)?,
+                    $($extra: $crate::coordinator::unified::persistence::get_string(&mut buf)?,)?
+                },)*
+                _ => return Err($crate::error::BrokerError::Protocol(
+                    ::krabka_protocol::ProtocolError::InvalidValue($invalid),
+                )),
+            };
+            Ok(key)
+        }
+
+        $(#[$encode_docs])*
+        $visibility fn $encode(key: &$name) -> Result<::bytes::Bytes, $crate::error::BrokerError> {
+            match key {
+                $($name::$variant { group_id, $($extra,)? } =>
+                    $crate::coordinator::unified::persistence::encode_string_key(
+                        $version, &[group_id, $($extra,)?],
+                    ),)*
+            }
+        }
+    };
+}
+pub(super) use group_record_keys;
+
+/// Named leaf key encoders used by streams record writers.
+macro_rules! string_key_encoders {
+    ($($(#[$docs:meta])* $visibility:vis fn $name:ident($($field:ident),+) = $version:ident;)*) => {
+        $($(#[$docs])*
+        $visibility fn $name($($field: &str),+) -> Result<::bytes::Bytes, $crate::error::BrokerError> {
+            $crate::coordinator::unified::persistence::encode_string_key($version, &[$($field),+])
+        })*
+    };
+}
+pub(super) use string_key_encoders;
+
 /// Discriminator that [`parse_key`] returns.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Key {
@@ -109,20 +221,18 @@ pub fn encode_key(key: &Key) -> Result<Bytes, BrokerError> {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct OffsetCommitValue {
-    pub offset: Offset,
-    pub leader_epoch: i32,
-    pub metadata: String,
-    pub commit_timestamp_ms: i64,
-    /// KIP-211: the per-commit expiry a v2-v4 `OffsetCommitRequest` asked for
-    /// through `retention_time_ms`, as an absolute wall-clock millisecond.
-    /// `None` means the commit takes the broker's `offsets.retention.minutes`.
-    pub expire_timestamp_ms: Option<i64>,
-    /// The id of the committed topic, Kafka's `OffsetCommitValue.topicId`
-    /// (version 4, tagged field 0). `None` is Kafka's zero id: the topic was
-    /// unknown at commit time, or the record predates version 4.
-    pub topic_id: Option<uuid::Uuid>,
+committed_offset_type! {
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub struct OffsetCommitValue {
+        /// KIP-211: the per-commit expiry a v2-v4 `OffsetCommitRequest` asked for
+        /// through `retention_time_ms`, as an absolute wall-clock millisecond.
+        /// `None` means the commit takes the broker's `offsets.retention.minutes`.
+        expire_timestamp_ms,
+        /// The id of the committed topic, Kafka's `OffsetCommitValue.topicId`
+        /// (version 4, tagged field 0). `None` is Kafka's zero id: the topic was
+        /// unknown at commit time, or the record predates version 4.
+        topic_id,
+    }
 }
 
 impl OffsetCommitValue {
@@ -484,6 +594,98 @@ macro_rules! key_string_boundaries {
 #[cfg(test)]
 pub(crate) use key_string_boundaries;
 
+/// Write the five membership record families in wire order, with explicit protocol insertion points.
+/// Borrowed deltas retain their values; consumed deltas move their member ids into typed keys.
+macro_rules! encode_membership_records {
+    (@method $(#[$doc:meta])* fn $name:ident($($receiver:tt)*);
+        $batch:ident, $records:ident, $group:ident, $now_ms:ident, $mode:ident; $keys:tt;
+        before_members $before_members:block before_target $before_target:block after_members $after_members:block) => {
+        $(#[$doc])*
+        pub fn $name($($receiver)*, $group: &str, $now_ms: i64)
+            -> Result<::krabka_protocol::records::RecordBatch, $crate::error::BrokerError>
+        {
+            let mut $batch = $crate::coordinator::unified::OffsetRecordBatchBuilder::default();
+            $crate::coordinator::unified::persistence::encode_membership_records!(
+                $batch, $records, $group, $mode; $keys;
+                before_members $before_members before_target $before_target after_members $after_members
+            );
+            Ok($batch.finish($now_ms))
+        }
+    };
+
+    ($batch:ident, $records:ident, $group:ident, $mode:ident; $keys:tt;
+        before_members $before_members:block before_target $before_target:block after_members $after_members:block) => {
+        if let Some(value) = $crate::coordinator::unified::persistence::encode_membership_records!(@optional $mode $records.group_metadata) {
+            $batch.push($crate::coordinator::unified::persistence::encode_membership_records!(@group $keys GroupMetadata, $group)?, Some(value.encode()));
+        }
+        $before_members
+        $crate::coordinator::unified::persistence::encode_membership_records!(@members $batch, $records.member_metadata, $group, $mode; $keys; MemberMetadata);
+        $before_target
+        if let Some(value) = $crate::coordinator::unified::persistence::encode_membership_records!(@optional $mode $records.target_metadata) {
+            $batch.push($crate::coordinator::unified::persistence::encode_membership_records!(@group $keys TargetAssignmentMetadata, $group)?, Some(value.encode()));
+        }
+        $crate::coordinator::unified::persistence::encode_membership_records!(@members $batch, $records.target_per_member, $group, $mode; $keys; TargetAssignmentMember);
+        $crate::coordinator::unified::persistence::encode_membership_records!(@members $batch, $records.current_per_member, $group, $mode; $keys; CurrentMemberAssignment);
+        $after_members
+    };
+    (@optional borrowed $value:expr) => { ($value).as_ref() };
+    (@optional owned $value:expr) => { $value };
+    (@values borrowed $values:expr) => { ($values).iter().map(|(id, value)| (id, value.as_ref())) };
+    (@values owned $values:expr) => { $values };
+    (@id borrowed $id:ident) => { $id.clone() };
+    (@id owned $id:ident) => { $id };
+    (@members $batch:ident, $values:expr, $group:ident, $mode:ident; $keys:tt; $variant:ident) => {
+        $batch.extend_values(
+            $crate::coordinator::unified::persistence::encode_membership_records!(@values $mode $values),
+            |member_id| $crate::coordinator::unified::persistence::encode_membership_records!(@member $keys $variant, $group, $mode, member_id),
+            |value| value.encode(),
+        )?;
+    };
+    (@group (typed, $encode:ident, $key:ident) $variant:ident, $group:ident) => {
+        $encode(&$key::$variant { group_id: $group.into() })
+    };
+    (@member (typed, $encode:ident, $key:ident) $variant:ident, $group:ident, $mode:ident, $id:ident) => {
+        $encode(&$key::$variant {
+            group_id: $group.into(),
+            member_id: $crate::coordinator::unified::persistence::encode_membership_records!(@id $mode $id),
+        })
+    };
+    (@group (strings, $keys:ident) GroupMetadata, $group:ident) => { $keys::encode_group_metadata_key($group) };
+    (@group (strings, $keys:ident) TargetAssignmentMetadata, $group:ident) => { $keys::encode_target_assignment_metadata_key($group) };
+    (@member (strings, $keys:ident) MemberMetadata, $group:ident, $mode:ident, $id:ident) => { $keys::encode_member_metadata_key($group, &$id) };
+    (@member (strings, $keys:ident) TargetAssignmentMember, $group:ident, $mode:ident, $id:ident) => { $keys::encode_target_assignment_member_key($group, &$id) };
+    (@member (strings, $keys:ident) CurrentMemberAssignment, $group:ident, $mode:ident, $id:ident) => { $keys::encode_current_member_assignment_key($group, &$id) };
+}
+pub(crate) use encode_membership_records;
+
+/// Snapshot metadata and current assignment for each affected member, with protocol-specific extras.
+macro_rules! snapshot_members {
+    ($pending:ident, $state:ident, $members:expr; $metadata:ident, $current:ident; |$mid:ident, $member:ident| $extra:block) => {
+        for $mid in $members {
+            if let Some($member) = $state.members.get($mid) {
+                $pending
+                    .member_metadata
+                    .push(($mid.clone(), Some($metadata($member))));
+                $pending
+                    .current_per_member
+                    .push(($mid.clone(), Some($current($member))));
+                $extra
+            }
+        }
+    };
+}
+pub(crate) use snapshot_members;
+
+/// Validate the three per-member record families of an atomic migration.
+macro_rules! assert_member_record_count {
+    ($pending:expr, $count:expr) => {
+        assert2::debug_assert!($pending.member_metadata.len() == $count);
+        assert2::debug_assert!($pending.target_per_member.len() == $count);
+        assert2::debug_assert!($pending.current_per_member.len() == $count);
+    };
+}
+pub(crate) use assert_member_record_count;
+
 /// Queue all three member-record tombstones in the caller's member order.
 macro_rules! tombstone_members {
     ($pending:expr, $members:expr) => {
@@ -501,6 +703,7 @@ mod tests {
     use assert2::assert;
 
     use super::*;
+    use crate::coordinator::unified::test_support::wire_bytes;
 
     const TOPIC_ID: uuid::Uuid = uuid::Uuid::from_u128(0x0102_0304_0506_0708_090a_0b0c_0d0e_0f10);
 
@@ -521,26 +724,30 @@ mod tests {
     /// topic id in tagged field 0 unless it is the zero id.
     #[test]
     fn offset_commit_value_writes_kafkas_version_and_bytes() {
-        let mut v4_with_id = vec![
-            0x00, 0x04, // version
-            0, 0, 0, 0, 0, 0, 0, 42, // offset
-            0, 0, 0, 4, // leader epoch
-            5, b'm', b'e', b't', b'a', // compact metadata
-            0, 0, 0, 0, 0, 0x0f, 0x42, 0x40, // commit timestamp
-            1, 0, 16, // one tagged field: tag 0, 16 bytes
-        ];
-        v4_with_id.extend_from_slice(TOPIC_ID.as_bytes());
-        let v4_without_id = vec![
-            0x00, 0x04, 0, 0, 0, 0, 0, 0, 0, 42, 0, 0, 0, 4, 5, b'm', b'e', b't', b'a', 0, 0, 0, 0,
-            0, 0x0f, 0x42, 0x40, 0, // no tagged fields
-        ];
-        let v1 = vec![
-            0x00, 0x01, // version
-            0, 0, 0, 0, 0, 0, 0, 42, // offset
-            0, 4, b'm', b'e', b't', b'a', // metadata
-            0, 0, 0, 0, 0, 0x0f, 0x42, 0x40, // commit timestamp
-            0, 0, 0, 0, 0, 0x98, 0x96, 0x7f, // expire timestamp
-        ];
+        let v4_with_id = wire_bytes(&[
+            "0004",                             // version
+            "000000000000002a",                 // offset
+            "00000004",                         // leader epoch
+            "056d657461",                       // compact metadata
+            "00000000000f4240",                 // commit timestamp
+            "010010",                           // one tagged field: tag 0, 16 bytes
+            "0102030405060708090a0b0c0d0e0f10", // topic id
+        ]);
+        let v4_without_id = wire_bytes(&[
+            "0004",             // version
+            "000000000000002a", // offset
+            "00000004",         // leader epoch
+            "056d657461",       // compact metadata
+            "00000000000f4240", // commit timestamp
+            "00",               // no tagged fields
+        ]);
+        let v1 = wire_bytes(&[
+            "0001",             // version
+            "000000000000002a", // offset
+            "00046d657461",     // metadata
+            "00000000000f4240", // commit timestamp
+            "000000000098967f", // expire timestamp
+        ]);
         let cases = [
             (
                 value(None, Some(TOPIC_ID)),

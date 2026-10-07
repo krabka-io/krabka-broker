@@ -275,6 +275,12 @@ mod tests {
         assert2::assert!(applied_rows == expected_rows);
     }
 
+    fn applied_for_tests(file: FileConfig) -> crate::config::BrokerConfig {
+        let mut cfg = crate::config::BrokerConfig::for_tests(std::path::PathBuf::from("/tmp/x"));
+        file.apply_to(&mut cfg).expect("apply");
+        cfg
+    }
+
     #[test]
     fn audit_section_parses_and_applies() {
         let toml = r#"
@@ -287,8 +293,7 @@ mod tests {
         assert2::check!(audit.enabled);
         assert2::check!(audit.topic == "__krabka_audit");
 
-        let mut cfg = crate::config::BrokerConfig::for_tests(std::path::PathBuf::from("/tmp/x"));
-        fc.apply_to(&mut cfg).expect("apply");
+        let cfg = applied_for_tests(fc);
         assert2::check!(cfg.audit_enabled);
         assert2::check!(cfg.audit_failure_mode == krabka_audit::AuditMode::FailOpen);
         assert2::check!(cfg.audit_topic == "__krabka_audit");
@@ -298,8 +303,7 @@ mod tests {
     fn audit_defaults_to_enabled_with_internal_topic() {
         // Absent [audit] section → secure default (enabled, standard topic name).
         let fc: FileConfig = toml::from_str("").expect("parse empty");
-        let mut cfg = crate::config::BrokerConfig::for_tests(std::path::PathBuf::from("/tmp/x"));
-        fc.apply_to(&mut cfg).expect("apply");
+        let cfg = applied_for_tests(fc);
         assert2::check!(cfg.audit_enabled);
         assert2::check!(cfg.audit_failure_mode == krabka_audit::AuditMode::FailOpen);
         assert2::check!(cfg.audit_topic == "__krabka_audit");
@@ -320,8 +324,7 @@ mod tests {
             every_secs = 30
         "#;
         let fc: FileConfig = toml::from_str(toml).expect("parse");
-        let mut cfg = crate::config::BrokerConfig::for_tests(std::path::PathBuf::from("/tmp/x"));
-        fc.apply_to(&mut cfg).expect("apply");
+        let cfg = applied_for_tests(fc);
         assert2::check!(
             cfg.audit_signing_key_path == Some(std::path::PathBuf::from("/etc/krabka/audit.pk8"))
         );
@@ -333,8 +336,7 @@ mod tests {
     #[test]
     fn audit_checkpoint_has_sane_defaults_when_absent() {
         let fc: FileConfig = toml::from_str("[audit]\nenabled = true\n").expect("parse");
-        let mut cfg = crate::config::BrokerConfig::for_tests(std::path::PathBuf::from("/tmp/x"));
-        fc.apply_to(&mut cfg).expect("apply");
+        let cfg = applied_for_tests(fc);
         assert2::check!(cfg.audit_signing_key_path == None);
         assert2::check!(cfg.audit_signing_key_id == None);
         assert2::check!(cfg.audit_checkpoint_every_n == 1000);
@@ -353,8 +355,7 @@ mod tests {
             sync_every_n = 7
         "#;
         let fc: FileConfig = toml::from_str(toml).expect("parse");
-        let mut cfg = crate::config::BrokerConfig::for_tests(std::path::PathBuf::from("/tmp/x"));
-        fc.apply_to(&mut cfg).expect("apply");
+        let cfg = applied_for_tests(fc);
         assert2::check!(
             cfg.audit_spool_dir == std::path::PathBuf::from("/var/lib/krabka/audit-spool")
         );
@@ -363,8 +364,7 @@ mod tests {
         assert2::check!(cfg.audit_spool_sync_every_n.get() == 7);
 
         let fc2: FileConfig = toml::from_str("[audit]\nenabled = true\n").expect("parse");
-        let mut cfg2 = crate::config::BrokerConfig::for_tests(std::path::PathBuf::from("/tmp/x"));
-        fc2.apply_to(&mut cfg2).expect("apply");
+        let cfg2 = applied_for_tests(fc2);
         assert2::check!(cfg2.audit_spool_dir == std::path::PathBuf::from("audit-spool"));
         assert2::check!(cfg2.audit_spool_max == krabka_units::gibibytes(1));
         assert2::check!(cfg2.audit_spool_sync_every_n.get() == 1);

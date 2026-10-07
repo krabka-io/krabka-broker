@@ -14,8 +14,7 @@ use tempfile::TempDir;
 
 use super::{
     super::checks::{FreezeEnv, check_signature, is_signed, prepare, record_of},
-    ALICE, ALICE_KEY, ALICE_NAME, PROPOSAL, config_with_alice, context, freeze_request, image,
-    peer, principal, sign,
+    ALICE, ALICE_KEY, ALICE_NAME, PROPOSAL, config_with_alice, freeze_request, sign,
 };
 use crate::{
     break_glass::handlers::principal_name,
@@ -51,15 +50,7 @@ fn a_signature_is_named_by_either_half_of_the_pair() {
 fn the_freeze_path_names_the_author_the_way_the_break_glass_path_does() {
     let dir = TempDir::new().expect("tempdir");
     let (config, _) = config_with_alice(&dir);
-    let image = image(&[]);
-    let principal = principal(ALICE_NAME);
-    let peer = peer();
-    let ctx = context(&principal, &peer);
-    let env = FreezeEnv {
-        config: &config,
-        image: &image,
-        ctx: &ctx,
-    };
+    freeze_fixture!(image, principal, peer, ctx; &[] ; env, config);
 
     // What the listener actually authenticated, and what each path makes of it.
     check!(principal.name == ALICE_NAME);
@@ -88,10 +79,7 @@ fn the_freeze_path_names_the_author_the_way_the_break_glass_path_does() {
 fn an_unsigned_freeze_is_accepted_by_default_and_refused_under_require_signature() {
     let dir = TempDir::new().expect("tempdir");
     let (base, _) = config_with_alice(&dir);
-    let image = image(&[]);
-    let principal = principal(ALICE_NAME);
-    let peer = peer();
-    let ctx = context(&principal, &peer);
+    freeze_fixture!(image, principal, peer, ctx; &[]);
 
     for (label, require_signature, expected) in [
         ("the default accepts an unsigned freeze", false, None),
@@ -133,10 +121,7 @@ fn an_unsigned_freeze_is_accepted_by_default_and_refused_under_require_signature
 fn an_unsigned_thaw_is_refused_whatever_require_signature_says() {
     let dir = TempDir::new().expect("tempdir");
     let (base, _) = config_with_alice(&dir);
-    let image = image(&[("orders", PatternType::Literal)]);
-    let principal = principal(ALICE_NAME);
-    let peer = peer();
-    let ctx = context(&principal, &peer);
+    freeze_fixture!(image, principal, peer, ctx; &[("orders", PatternType::Literal)]);
 
     for require_signature in [false, true] {
         let config = BrokerConfig {
@@ -172,15 +157,7 @@ fn an_unsigned_thaw_is_refused_whatever_require_signature_says() {
 fn a_signed_freeze_verifies_and_a_tampered_one_answers_one_code() {
     let dir = TempDir::new().expect("tempdir");
     let (config, alice) = config_with_alice(&dir);
-    let image = image(&[]);
-    let principal = principal(ALICE_NAME);
-    let peer = peer();
-    let ctx = context(&principal, &peer);
-    let env = FreezeEnv {
-        config: &config,
-        image: &image,
-        ctx: &ctx,
-    };
+    freeze_fixture!(image, principal, peer, ctx; &[] ; env, config);
     let good = TopicFreezeRecord {
         key_id: ALICE_KEY.to_owned(),
         set_at_ms: now_ms(),

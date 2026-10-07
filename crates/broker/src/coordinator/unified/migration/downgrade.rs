@@ -131,15 +131,9 @@ pub(crate) fn downgrade_pending_records(
         ..Default::default()
     };
     if plan.member_metadata == GroupMigrationRecordAction::Tombstone {
-        for mid in consumer.members.keys() {
-            pending.member_metadata.push((mid.clone(), None));
-            pending.target_per_member.push((mid.clone(), None));
-            pending.current_per_member.push((mid.clone(), None));
-        }
+        super::super::persistence::tombstone_members!(pending, consumer.members.keys());
     }
-    assert2::debug_assert!(pending.member_metadata.len() == plan.member_count);
-    assert2::debug_assert!(pending.target_per_member.len() == plan.member_count);
-    assert2::debug_assert!(pending.current_per_member.len() == plan.member_count);
+    super::super::persistence::assert_member_record_count!(pending, plan.member_count);
     pending
 }
 
@@ -156,35 +150,17 @@ mod tests {
 
     #[test]
     fn downgrade_requires_every_member_to_have_a_classic_facade() {
-        use std::{
-            collections::{HashMap, HashSet},
-            time::{Duration, Instant},
-        };
+        use std::time::{Duration, Instant};
 
-        use crate::coordinator::unified::{
-            consumer_state::MemberState, persistence_next_gen::MemberAssignmentState,
-        };
+        use crate::coordinator::unified::consumer_state::MemberState;
 
         let mut state = ConsumerState::new("g");
         assert!(consumer_is_convertible(&state));
         state.add_or_update_member(MemberState {
-            member_id: "native".into(),
-            instance_id: None,
-            rack_id: None,
             client_id: "c".into(),
             client_host: "h".into(),
-            subscribed_topic_names: HashSet::default(),
-            subscribed_topic_regex: None,
-            server_assignor: None,
             rebalance_timeout: Duration::from_secs(30),
-            member_epoch: 0,
-            previous_member_epoch: 0,
-            assignment_state: MemberAssignmentState::Stable,
-            assigned_partitions: HashMap::new(),
-            partitions_pending_revocation: HashMap::new(),
-            assignment_epochs: HashMap::new(),
-            last_seen: Instant::now(),
-            classic: None,
+            ..MemberState::empty("native", Instant::now())
         });
         assert!(!consumer_is_convertible(&state));
     }

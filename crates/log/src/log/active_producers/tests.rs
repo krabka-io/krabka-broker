@@ -1,43 +1,17 @@
 use assert2::assert;
-use bytes::Bytes;
 use krabka_protocol::records::{Attributes, Record, RecordBatch};
 
 use super::*;
 use crate::{
     TransactionalBatch,
-    config::LogConfig,
     log::test_support::{
         AppendPath as Path, append_path as append, control_key, control_value, test_log,
     },
 };
 
-/// A data batch of `producer` (`(id, epoch)`) with `records` records from
-/// `base_sequence`, whose max timestamp is `max_timestamp`.
-fn data(
-    (producer_id, producer_epoch): (i64, i16),
-    base_sequence: i32,
-    records: i32,
-    max_timestamp: i64,
-    transactional: bool,
-) -> RecordBatch {
-    RecordBatch {
-        attributes: Attributes::default().with_transactional(transactional),
-        last_offset_delta: records - 1,
-        base_timestamp: max_timestamp,
-        max_timestamp,
-        producer_id,
-        producer_epoch,
-        base_sequence,
-        records: (0..records)
-            .map(|offset_delta| Record {
-                offset_delta,
-                value: Some(Bytes::from_static(b"v")),
-                ..Record::default()
-            })
-            .collect(),
-        ..RecordBatch::default()
-    }
-}
+// A data batch of `producer` (`(id, epoch)`) with `records` records from
+// `base_sequence`, whose max timestamp is `max_timestamp`.
+krabka_macros::producer_batch_fixture!(data, ::bytes::Bytes::from_static(b"v"));
 
 /// A commit (`commit = true`) or abort marker of `producer` that
 /// `coordinator_epoch` wrote at `timestamp`.
@@ -64,6 +38,41 @@ fn marker(
     }
 }
 
+#[derive(Clone, Copy)]
+enum ProducerHistory {
+    MissingId,
+    Idempotent,
+    Committed,
+    Aborted,
+    MarkerOnly,
+    SeveralProducers,
+}
+
+/// Identical input histories exercised by both producer-state projections.
+fn producer_history(history: ProducerHistory) -> Vec<RecordBatch> {
+    match history {
+        ProducerHistory::MissingId => vec![data((-1, -1), -1, 2, 1_000, false)],
+        ProducerHistory::Idempotent => vec![
+            data((7, 2), 0, 3, 1_000, false),
+            data((7, 2), 3, 2, 2_000, false),
+        ],
+        ProducerHistory::Committed => vec![
+            data((9, 1), 0, 2, 1_000, true),
+            marker((9, 1), true, 5, 3_000),
+        ],
+        ProducerHistory::Aborted => vec![
+            data((10, 1), 0, 2, 1_000, true),
+            marker((10, 2), false, 6, 4_000),
+        ],
+        ProducerHistory::MarkerOnly => vec![marker((11, 3), true, 7, 5_000)],
+        ProducerHistory::SeveralProducers => vec![
+            data((30, 0), 0, 1, 1_000, false),
+            data((20, 0), 0, 1, 2_000, false),
+            data((25, 4), 0, 1, 3_000, true),
+        ],
+    }
+}
+
 fn active(
     producer_id: i64,
     producer_epoch: i16,
@@ -82,6 +91,33 @@ fn active(
     }
 }
 
+/// Compare a projection after each append path, replay and producer snapshot load.
+fn check_append_paths<T: std::fmt::Debug + PartialEq>(
+    name: &str,
+    batches: &[RecordBatch],
+    want: &T,
+    read: impl Fn(&Log) -> T,
+) {
+    for path in [Path::Leader, Path::Follower, Path::Verbatim] {
+        let (dir, mut log) = test_log();
+        for batch in batches.iter().cloned() {
+            append(&mut log, path, batch);
+        }
+        assert!(read(&log) == *want, "{name}, {path:?}");
+
+        drop(log);
+        let replayed = crate::test_support::open_log(dir.path());
+        assert!(read(&replayed) == *want, "{name}, {path:?}, replayed");
+
+        replayed.close();
+        let loaded = crate::test_support::open_log(dir.path());
+        assert!(
+            read(&loaded) == *want,
+            "{name}, {path:?}, from the snapshot"
+        );
+    }
+}
+
 /// Kafka's `UnifiedLog.activeProducers` reads the `ProducerStateEntry` of
 /// each producer: the last sequence of its last batch at its epoch, the max
 /// timestamp of that batch or of the marker after it, the coordinator epoch
@@ -94,15 +130,12 @@ fn active_producers_report_the_producer_state_of_every_append_path() {
     let cases: Vec<(&str, Vec<RecordBatch>, Vec<ActiveProducer>)> = vec![
         (
             "a batch without a producer id",
-            vec![data((-1, -1), -1, 2, 1_000, false)],
+            producer_history(ProducerHistory::MissingId),
             vec![],
         ),
         (
             "idempotent batches",
-            vec![
-                data((7, 2), 0, 3, 1_000, false),
-                data((7, 2), 3, 2, 2_000, false),
-            ],
+            producer_history(ProducerHistory::Idempotent),
             vec![active(7, 2, 4, 2_000, -1, None)],
         ),
         (
@@ -115,23 +148,17 @@ fn active_producers_report_the_producer_state_of_every_append_path() {
         ),
         (
             "a commit at the same epoch (transaction version 1)",
-            vec![
-                data((9, 1), 0, 2, 1_000, true),
-                marker((9, 1), true, 5, 3_000),
-            ],
+            producer_history(ProducerHistory::Committed),
             vec![active(9, 1, 1, 3_000, 5, None)],
         ),
         (
             "an abort at a bumped epoch (transaction version 2)",
-            vec![
-                data((10, 1), 0, 2, 1_000, true),
-                marker((10, 2), false, 6, 4_000),
-            ],
+            producer_history(ProducerHistory::Aborted),
             vec![active(10, 2, -1, 4_000, 6, None)],
         ),
         (
             "a marker without a data batch",
-            vec![marker((11, 3), true, 7, 5_000)],
+            producer_history(ProducerHistory::MarkerOnly),
             vec![active(11, 3, -1, 5_000, 7, None)],
         ),
         (
@@ -145,11 +172,7 @@ fn active_producers_report_the_producer_state_of_every_append_path() {
         ),
         (
             "several producers, in producer id order",
-            vec![
-                data((30, 0), 0, 1, 1_000, false),
-                data((20, 0), 0, 1, 2_000, false),
-                data((25, 4), 0, 1, 3_000, true),
-            ],
+            producer_history(ProducerHistory::SeveralProducers),
             vec![
                 active(20, 0, 0, 2_000, -1, None),
                 active(25, 4, 0, 3_000, -1, Some(2)),
@@ -158,27 +181,7 @@ fn active_producers_report_the_producer_state_of_every_append_path() {
         ),
     ];
     for (name, batches, want) in cases {
-        for path in [Path::Leader, Path::Follower, Path::Verbatim] {
-            let (dir, mut log) = test_log();
-            for batch in batches.clone() {
-                append(&mut log, path, batch);
-            }
-            assert!(log.active_producers() == want, "{name}, {path:?}");
-
-            drop(log);
-            let replayed = Log::open(dir.path(), LogConfig::default()).unwrap();
-            assert!(
-                replayed.active_producers() == want,
-                "{name}, {path:?}, replayed"
-            );
-
-            replayed.close();
-            let loaded = Log::open(dir.path(), LogConfig::default()).unwrap();
-            assert!(
-                loaded.active_producers() == want,
-                "{name}, {path:?}, from the snapshot"
-            );
-        }
+        check_append_paths(name, &batches, &want, Log::active_producers);
     }
 }
 
@@ -205,45 +208,32 @@ fn last_records_of_active_producers_follow_every_append_path() {
     )> = vec![
         (
             "a batch without a producer id",
-            vec![data((-1, -1), -1, 2, 1_000, false)],
+            producer_history(ProducerHistory::MissingId),
             HashMap::new(),
         ),
         (
             "idempotent batches",
-            vec![
-                data((7, 2), 0, 3, 1_000, false),
-                data((7, 2), 3, 2, 2_000, false),
-            ],
+            producer_history(ProducerHistory::Idempotent),
             HashMap::from([last(7, Some(4), 2)]),
         ),
         (
             "a commit at the same epoch (transaction version 1)",
-            vec![
-                data((9, 1), 0, 2, 1_000, true),
-                marker((9, 1), true, 5, 3_000),
-            ],
+            producer_history(ProducerHistory::Committed),
             HashMap::from([last(9, Some(1), 1)]),
         ),
         (
             "an abort at a bumped epoch (transaction version 2)",
-            vec![
-                data((10, 1), 0, 2, 1_000, true),
-                marker((10, 2), false, 6, 4_000),
-            ],
+            producer_history(ProducerHistory::Aborted),
             HashMap::from([last(10, None, 2)]),
         ),
         (
             "a marker without a data batch",
-            vec![marker((11, 3), true, 7, 5_000)],
+            producer_history(ProducerHistory::MarkerOnly),
             HashMap::from([last(11, None, 3)]),
         ),
         (
             "several producers",
-            vec![
-                data((30, 0), 0, 1, 1_000, false),
-                data((20, 0), 0, 1, 2_000, false),
-                data((25, 4), 0, 1, 3_000, true),
-            ],
+            producer_history(ProducerHistory::SeveralProducers),
             HashMap::from([
                 last(20, Some(1), 0),
                 last(25, Some(2), 4),
@@ -252,30 +242,7 @@ fn last_records_of_active_producers_follow_every_append_path() {
         ),
     ];
     for (name, batches, want) in cases {
-        for path in [Path::Leader, Path::Follower, Path::Verbatim] {
-            let (dir, mut log) = test_log();
-            for batch in batches.clone() {
-                append(&mut log, path, batch);
-            }
-            assert!(
-                log.last_records_of_active_producers() == want,
-                "{name}, {path:?}"
-            );
-
-            drop(log);
-            let replayed = Log::open(dir.path(), LogConfig::default()).unwrap();
-            assert!(
-                replayed.last_records_of_active_producers() == want,
-                "{name}, {path:?}, replayed"
-            );
-
-            replayed.close();
-            let loaded = Log::open(dir.path(), LogConfig::default()).unwrap();
-            assert!(
-                loaded.last_records_of_active_producers() == want,
-                "{name}, {path:?}, from the snapshot"
-            );
-        }
+        check_append_paths(name, &batches, &want, Log::last_records_of_active_producers);
     }
 }
 

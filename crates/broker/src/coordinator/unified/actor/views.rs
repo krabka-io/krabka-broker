@@ -262,7 +262,7 @@ mod tests {
         coordinator::unified::actor::{
             GroupActorMessage,
             test_support::{
-                make_coordinator, make_coordinator_with_topic_policy, seed_and_upgrade,
+                make_coordinator, make_coordinator_with_topic_policy, rpc, seed_and_upgrade,
             },
         },
     };
@@ -307,39 +307,33 @@ mod tests {
         coord.mark_classic("g");
 
         // Empty member_id → immediate MEMBER_ID_REQUIRED (no member added).
-        let (tx, rx) = tokio::sync::oneshot::channel();
-        handle
-            .tx
-            .send(GroupActorMessage::ClassicJoin {
-                req: JoinGroupRequest {
-                    group_id: "g".into(),
-                    member_id: String::new(),
-                    protocol_type: "consumer".into(),
-                    protocols: vec![
-                        krabka_protocol::owned::join_group_request::JoinGroupRequestProtocol {
-                            name: "range".into(),
-                            ..Default::default()
-                        },
-                    ],
-                    ..Default::default()
-                },
-                version: 4,
-                client_id: "client-a".into(),
-                client_host: String::new(),
-                reply: tx,
-            })
-            .await
-            .unwrap();
+        let rx = rpc::begin(&handle, |tx| GroupActorMessage::ClassicJoin {
+            req: JoinGroupRequest {
+                group_id: "g".into(),
+                member_id: String::new(),
+                protocol_type: "consumer".into(),
+                protocols: vec![
+                    krabka_protocol::owned::join_group_request::JoinGroupRequestProtocol {
+                        name: "range".into(),
+                        ..Default::default()
+                    },
+                ],
+                ..Default::default()
+            },
+            version: 4,
+            client_id: "client-a".into(),
+            client_host: String::new(),
+            reply: tx,
+        })
+        .await;
         let r = rx.await.unwrap();
         assert!(r.error_code == codes::MEMBER_ID_REQUIRED);
 
         // ClassicInspect → empty view.
-        let (tx, rx) = tokio::sync::oneshot::channel();
-        handle
-            .tx
-            .send(GroupActorMessage::ClassicInspect { reply: tx })
-            .await
-            .unwrap();
+        let rx = rpc::begin(&handle, |tx| GroupActorMessage::ClassicInspect {
+            reply: tx,
+        })
+        .await;
         let view = rx.await.unwrap();
         assert!(view.group_id == "g" && view.members.is_empty());
 

@@ -53,11 +53,10 @@ pub(super) fn quorum_commit_bounds_fetch(
 /// still needs prior durability evidence. Reported offsets must name actual
 /// durable prefixes of the same log, including the local node's fsynced vote.
 #[requires(w.log_start@ <= w.log_end@ && current@ <= w.log_end@)]
-#[ensures((match result { None => false, Some(_) => true })
+#[ensures((result != None)
     == (voters@.len() == reported@.len() && voters@.len() == expected@ && expected@ > 0
         && voters@[0] == local_node
-        && forall<i: Int, j: Int> 0 <= i && i < j && j < voters@.len()
-            ==> voters@[i] != voters@[j]))]
+        && crate::sequence::distinct(voters@)))]
 #[ensures(match result {
     None => true,
     Some((hw, limit, _)) => current@ <= hw@ && w.log_start@ <= hw@
@@ -65,17 +64,11 @@ pub(super) fn quorum_commit_bounds_fetch(
 })]
 #[ensures(match result {
     None => true,
-    Some((_, _, supporters)) => forall<i: Int, j: Int>
-        0 <= i && i < j && j < supporters@.len()
-            ==> supporters@[i].0 != supporters@[j].0,
+    Some((_, _, supporters)) => crate::consensus::supporting_nodes_distinct(supporters@),
 })]
 #[ensures(match result {
     None => true,
-    Some((_, limit, supporters)) => forall<i: Int> 0 <= i && i < supporters@.len()
-        ==> supporters@[i].1@ >= limit@
-            && exists<j: Int> 0 <= j && j < voters@.len()
-                && supporters@[i].0 == voters@[j]
-                && supporters@[i].1@ == reported@[j]@.min(w.log_end@),
+    Some((_, limit, supporters)) => crate::consensus::supporting_voter_witnesses(supporters@, voters@, limit@, |(i, j): (Int, Int)| supporters@[i].1@ == reported@[j]@.min(w.log_end@)),
 })]
 #[ensures(match result {
     None => true,

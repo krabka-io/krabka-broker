@@ -25,7 +25,7 @@ mod model;
 
 use krabka_ids::NodeId;
 use model::ConsensusModel;
-use stateright::{Checker, Model};
+use stateright::Checker;
 
 /// Hard backstop on the explored, that is generated, states. It bounds memory
 /// even if `within_boundary` is looser than intended. It is set well above the
@@ -89,24 +89,11 @@ const PINNED_UNIQUE_STATES_THREE_VOTERS_FAULTS: usize = 1_128_704;
 const PINNED_UNIQUE_STATES_THREE_VOTERS_APPEND: usize = 839_339;
 const PINNED_UNIQUE_STATES_TWO_VOTERS_APPEND_VIA: usize = 256_973;
 
+krabka_macros::bounded_bfs!(bounded_bfs);
+
 fn run(model: ConsensusModel, label: &str, pinned_unique_states: usize) {
-    let checker = model
-        .checker()
-        .target_max_depth(MAX_DEPTH)
-        .target_state_count(MAX_STATES)
-        .spawn_bfs()
-        .join();
-    eprintln!(
-        "[{label}] unique_states={} generated={} max_depth={}",
-        checker.unique_state_count(),
-        checker.state_count(),
-        checker.max_depth()
-    );
-    // Guard against silent incompleteness: if we hit the depth or state cap, the
-    // `always` properties were only partially verified — fail loudly so the
-    // bounds get retuned rather than passing a non-exhaustive check.
-    assert2::assert!(checker.max_depth() < MAX_DEPTH);
-    assert2::assert!(checker.state_count() < MAX_STATES);
+    // Both truncation caps must remain strictly above the completed search.
+    let checker = bounded_bfs(model, label, MAX_DEPTH, MAX_STATES);
     // Pin: a changed count is a changed model, not a retuning knob.
     assert2::assert!(
         checker.unique_state_count() == pinned_unique_states,

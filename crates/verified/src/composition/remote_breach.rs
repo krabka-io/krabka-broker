@@ -1,6 +1,8 @@
 use creusot_std::prelude::*;
 
 #[cfg(creusot)]
+use super::trim::trim_rejection;
+#[cfg(creusot)]
 use super::trim::{trim_frontier, trim_store_frontiers_valid, trim_well_formed};
 use super::{
     DeleteRecordsTrimApplication, DeleteRecordsTrimDecision, DeleteRecordsTrimFacts,
@@ -24,13 +26,9 @@ type RemoteBreachPlan = (
 /// actual I/O and atomic publication remain host obligations.
 #[requires(trim_store_frontiers_valid(facts, stores.0@, stores.1@))]
 #[requires(match previous { None => true, Some(floor) => 0 <= floor@ && floor@ <= stores.0@ && floor@ <= stores.1@ })]
-#[requires(forall<i: Int> 0 <= i && i < finished@.len() ==> 0 <= finished@[i].0@ && finished@[i].0@ <= finished@[i].1@)]
+#[requires(super::finished_ranges_valid(finished@.len(), |i: Int| (finished@[i].0, finished@[i].1)))]
 #[ensures(match result {
-    Err(error) => match error {
-        DeleteRecordsTrimDecision::RejectMalformed => !trim_well_formed(facts),
-        DeleteRecordsTrimDecision::RejectOutOfRange => trim_well_formed(facts) && facts.requested@ != -1 && facts.requested@ > facts.high_watermark@,
-        _ => false,
-    },
+    Err(error) => trim_rejection(facts, error),
     Ok(plan) => {
         let canonical = trim_frontier(facts).max(stores.0@).max(stores.1@);
         trim_well_formed(facts) && (facts.requested@ == -1 || facts.requested@ <= facts.high_watermark@)

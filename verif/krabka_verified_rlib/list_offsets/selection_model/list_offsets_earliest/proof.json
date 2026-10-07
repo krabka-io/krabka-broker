@@ -2,7 +2,7 @@
   "profile": [],
   "proofs": {
     "Coma": {
-      "vc_list_offsets_earliest": { "prover": "alt-ergo", "time": 0.012 }
+      "vc_list_offsets_earliest": { "prover": "alt-ergo", "time": 0.028 }
     }
   }
 }

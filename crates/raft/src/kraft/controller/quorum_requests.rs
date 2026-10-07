@@ -354,56 +354,63 @@ impl Engine {
     /// Answers a `BeginQuorumEpoch` request. `None` means the body did not
     /// decode.
     pub(super) fn answer_begin_quorum_epoch(&mut self, body: &[u8], version: i16) -> Option<Bytes> {
-        let request = wire::decode_request::<BeginQuorumEpochRequest>(body, version)?;
-        let respond = |engine: &Self, top: i16, partition: i16| {
-            Some(wire::encode_begin_quorum_epoch_response(
-                top,
-                partition,
-                &engine.quorum_leader(),
-                version,
-            ))
-        };
-        let (leader_id, leader_epoch) = match self.quorum_epoch_request_leader(&request) {
-            Ok(leader) => leader,
-            Err((top, partition)) => return respond(self, top, partition),
-        };
-        let partition = &request.topics[0].partitions[0];
-        self.on_event(Event::ReceiveBeginQuorumEpoch {
-            leader_id,
-            leader_epoch,
-        });
-        // Kafka transitions first, then checks that the request was meant for
-        // this replica.
-        let voter_directory_id = wire::uuid_from_wire(partition.voter_directory_id);
-        if !self.is_valid_voter_key(request.voter_id, voter_directory_id) {
-            return respond(self, 0, INVALID_VOTER_KEY);
-        }
-        respond(self, 0, 0)
+        self.answer_epoch_request(
+            body,
+            version,
+            wire::encode_begin_quorum_epoch_response,
+            |engine, request: &BeginQuorumEpochRequest, leader_id, leader_epoch| {
+                let partition = &request.topics[0].partitions[0];
+                engine.on_event(Event::ReceiveBeginQuorumEpoch {
+                    leader_id,
+                    leader_epoch,
+                });
+                // Kafka transitions first, then checks that the request was meant for
+                // this replica.
+                let voter_directory_id = wire::uuid_from_wire(partition.voter_directory_id);
+                if engine.is_valid_voter_key(request.voter_id, voter_directory_id) {
+                    0
+                } else {
+                    INVALID_VOTER_KEY
+                }
+            },
+        )
     }
 
     /// Answers an `EndQuorumEpoch` request. `None` means the body did not
     /// decode.
     pub(super) fn answer_end_quorum_epoch(&mut self, body: &[u8], version: i16) -> Option<Bytes> {
-        let request = wire::decode_request::<EndQuorumEpochRequest>(body, version)?;
-        let respond = |engine: &Self, top: i16, partition: i16| {
-            Some(wire::encode_end_quorum_epoch_response(
-                top,
-                partition,
-                &engine.quorum_leader(),
-                version,
-            ))
+        self.answer_epoch_request(
+            body,
+            version,
+            wire::encode_end_quorum_epoch_response,
+            |engine, request: &EndQuorumEpochRequest, leader_id, leader_epoch| {
+                let partition = &request.topics[0].partitions[0];
+                engine.on_event(Event::ReceiveEndQuorumEpoch {
+                    leader_id,
+                    leader_epoch,
+                    successor_rank: engine.successor_rank(&partition.preferred_candidates),
+                });
+                0
+            },
+        )
+    }
+
+    fn answer_epoch_request<Request>(
+        &mut self,
+        body: &[u8],
+        version: i16,
+        encode: fn(i16, i16, &wire::QuorumLeader, i16) -> Bytes,
+        transition: impl FnOnce(&mut Self, &Request, NodeId, Epoch) -> i16,
+    ) -> Option<Bytes>
+    where
+        Request: QuorumEpochRequest + for<'de> krabka_protocol::Decode<'de>,
+    {
+        let request = wire::decode_request::<Request>(body, version)?;
+        let (top, partition) = match self.quorum_epoch_request_leader(&request) {
+            Ok((leader, epoch)) => (0, transition(self, &request, leader, epoch)),
+            Err(errors) => errors,
         };
-        let (leader_id, leader_epoch) = match self.quorum_epoch_request_leader(&request) {
-            Ok(leader) => leader,
-            Err((top, partition)) => return respond(self, top, partition),
-        };
-        let partition = &request.topics[0].partitions[0];
-        self.on_event(Event::ReceiveEndQuorumEpoch {
-            leader_id,
-            leader_epoch,
-            successor_rank: self.successor_rank(&partition.preferred_candidates),
-        });
-        respond(self, 0, 0)
+        Some(encode(top, partition, &self.quorum_leader(), version))
     }
 
     /// Answers a `FetchSnapshot` request. `None` means the body did not

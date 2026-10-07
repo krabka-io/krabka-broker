@@ -1,4 +1,4 @@
-(* #"/workspace/crates/verified/src/diskless/trim_decision.rs" 167 0 172 25 *)
+(* #"/workspace/crates/verified/src/diskless/trim_decision.rs" 163 0 168 25 *)
 
 let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
 let%span snum = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 27 28 27 33
@@ -12,24 +12,24 @@ let%span scmp'5 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cr
 let%span scmp'6 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 78 36 78 40
 let%span scmp'7 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 79 26 79 79
 let%span scmp'8 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 80 26 80 77
-let%span strim_decision = "/workspace/crates/verified/src/diskless/trim_decision.rs" 173 18 173 19
-let%span strim_decision'0 = "/workspace/crates/verified/src/diskless/trim_decision.rs" 173 40 173 41
-let%span strim_decision'1 = "/workspace/crates/verified/src/diskless/trim_decision.rs" 173 61 173 62
-let%span strim_decision'2 = "/workspace/crates/verified/src/diskless/trim_decision.rs" 175 25 175 30
-let%span strim_decision'3 = "/workspace/crates/verified/src/diskless/trim_decision.rs" 180 36 180 37
-let%span strim_decision'4 = "/workspace/crates/verified/src/diskless/trim_decision.rs" 180 21 180 38
-let%span strim_decision'5 = "/workspace/crates/verified/src/diskless/trim_decision.rs" 183 25 183 30
-let%span strim_decision'6 = "/workspace/crates/verified/src/diskless/trim_decision.rs" 188 30 188 57
-let%span strim_decision'7 = "/workspace/crates/verified/src/diskless/trim_decision.rs" 188 17 188 58
-let%span strim_decision'8 = "/workspace/crates/verified/src/diskless/trim_decision.rs" 191 25 191 30
-let%span strim_decision'9 = "/workspace/crates/verified/src/diskless/trim_decision.rs" 196 25 196 29
-let%span strim_decision'10 = "/workspace/crates/verified/src/diskless/trim_decision.rs" 150 10 156 1
-let%span strim_decision'11 = "/workspace/crates/verified/src/diskless/trim_decision.rs" 157 10 161 1
-let%span strim_decision'12 = "/workspace/crates/verified/src/diskless/trim_decision.rs" 162 10 162 42
-let%span strim_decision'13 = "/workspace/crates/verified/src/diskless/trim_decision.rs" 163 10 163 60
-let%span strim_decision'14 = "/workspace/crates/verified/src/diskless/trim_decision.rs" 164 10 165 70
-let%span strim_decision'15 = "/workspace/crates/verified/src/diskless/trim_decision.rs" 131 16 131 61
-let%span strim_decision'16 = "/workspace/crates/verified/src/diskless/trim_decision.rs" 140 8 140 84
+let%span strim_decision = "/workspace/crates/verified/src/diskless/trim_decision.rs" 169 18 169 19
+let%span strim_decision'0 = "/workspace/crates/verified/src/diskless/trim_decision.rs" 169 40 169 41
+let%span strim_decision'1 = "/workspace/crates/verified/src/diskless/trim_decision.rs" 169 61 169 62
+let%span strim_decision'2 = "/workspace/crates/verified/src/diskless/trim_decision.rs" 171 25 171 30
+let%span strim_decision'3 = "/workspace/crates/verified/src/diskless/trim_decision.rs" 176 36 176 37
+let%span strim_decision'4 = "/workspace/crates/verified/src/diskless/trim_decision.rs" 176 21 176 38
+let%span strim_decision'5 = "/workspace/crates/verified/src/diskless/trim_decision.rs" 179 25 179 30
+let%span strim_decision'6 = "/workspace/crates/verified/src/diskless/trim_decision.rs" 184 30 184 57
+let%span strim_decision'7 = "/workspace/crates/verified/src/diskless/trim_decision.rs" 184 17 184 58
+let%span strim_decision'8 = "/workspace/crates/verified/src/diskless/trim_decision.rs" 187 25 187 30
+let%span strim_decision'9 = "/workspace/crates/verified/src/diskless/trim_decision.rs" 192 25 192 29
+let%span strim_decision'10 = "/workspace/crates/verified/src/diskless/trim_decision.rs" 146 10 152 1
+let%span strim_decision'11 = "/workspace/crates/verified/src/diskless/trim_decision.rs" 153 10 157 1
+let%span strim_decision'12 = "/workspace/crates/verified/src/diskless/trim_decision.rs" 158 10 158 42
+let%span strim_decision'13 = "/workspace/crates/verified/src/diskless/trim_decision.rs" 159 10 159 60
+let%span strim_decision'14 = "/workspace/crates/verified/src/diskless/trim_decision.rs" 160 10 161 70
+let%span strim_decision'15 = "/workspace/crates/verified/src/diskless/trim_decision.rs" 128 16 128 61
+let%span strim_decision'16 = "/workspace/crates/verified/src/diskless/trim_decision.rs" 135 8 135 84
 
 use creusot.int.Int64
 use creusot.prelude.Any
@@ -64,10 +64,10 @@ let min_i64 (self_: Int64.t) (o: Int64.t) (return (x: Int64.t)) = any
     /\ ([@stop_split] [@expl:min ensures #4] [%#scmp'8] deep_model_i64 o <= deep_model_i64 self_ -> result = o)}
     (! return {result}) ]
 
-function effective_trim_lag [#"/workspace/crates/verified/src/diskless/trim_decision.rs" 130 0 130 49] (safety_lag: Int64.t) : int
+function effective_trim_lag [#"/workspace/crates/verified/src/diskless/trim_decision.rs" 127 0 127 49] (safety_lag: Int64.t) : int
  = [%#strim_decision'15] if Int64.to_int safety_lag < 0 then 0 else Int64.to_int safety_lag
 
-function trim_target [#"/workspace/crates/verified/src/diskless/trim_decision.rs" 138 0 138 74] (frontier: Int64.t) (high_watermark: Int64.t) (safety_lag: Int64.t) : int
+function trim_target [#"/workspace/crates/verified/src/diskless/trim_decision.rs" 133 0 133 74] (frontier: Int64.t) (high_watermark: Int64.t) (safety_lag: Int64.t) : int
  = [%#strim_decision'16] let high_watermark_floor = Int64.to_int high_watermark
   - effective_trim_lag safety_lag in if Int64.to_int frontier < high_watermark_floor then
     Int64.to_int frontier
@@ -79,7 +79,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let diskless_trim_decision [#"/workspace/crates/verified/src/diskless/trim_decision.rs" 167 0 172 25]
+let diskless_trim_decision [#"/workspace/crates/verified/src/diskless/trim_decision.rs" 163 0 168 25]
   (frontier: Int64.t) (high_watermark: Int64.t) (safety_lag: Int64.t) (current_start: Int64.t)
   (return (x: t_DisklessTrimDecision)) = (! bb0
   [ bb0 = s0

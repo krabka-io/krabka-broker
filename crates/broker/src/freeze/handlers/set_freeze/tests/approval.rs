@@ -26,15 +26,7 @@ use crate::{
 fn a_thaw_with_no_proposal_needs_a_break_glass_approval() {
     let dir = TempDir::new().expect("tempdir");
     let (config, _) = config_with_alice(&dir);
-    let image = image(&[("orders", PatternType::Literal)]);
-    let principal = principal(ALICE_NAME);
-    let peer = peer();
-    let ctx = context(&principal, &peer);
-    let env = FreezeEnv {
-        config: &config,
-        image: &image,
-        ctx: &ctx,
-    };
+    freeze_fixture!(image, principal, peer, ctx; &[("orders", PatternType::Literal)] ; env, config);
     let thaw = TopicFreezeRecord {
         frozen: false,
         proposal_id: Uuid::nil(),
@@ -54,15 +46,7 @@ fn a_thaw_with_no_proposal_needs_a_break_glass_approval() {
 fn a_freeze_needs_no_proposal() {
     let dir = TempDir::new().expect("tempdir");
     let (config, _) = config_with_alice(&dir);
-    let image = image(&[]);
-    let principal = principal(ALICE_NAME);
-    let peer = peer();
-    let ctx = context(&principal, &peer);
-    let env = FreezeEnv {
-        config: &config,
-        image: &image,
-        ctx: &ctx,
-    };
+    freeze_fixture!(image, principal, peer, ctx; &[] ; env, config);
     let record = record_of(
         &freeze_request("orders", PATTERN_TYPE_LITERAL),
         PatternType::Literal,

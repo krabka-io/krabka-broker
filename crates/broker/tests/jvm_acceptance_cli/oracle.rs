@@ -33,8 +33,6 @@
 // cases need, the same arrangement as `tests/jvm_acceptance/mod.rs`.
 #![allow(dead_code)]
 
-#[cfg(unix)]
-use std::os::unix::fs::PermissionsExt as _;
 use std::{
     io::Write as _,
     process::{Command, ExitStatus, Output, Stdio},
@@ -168,6 +166,34 @@ impl Side<'_> {
         }
     }
 
+    /// Create a fixed assignment through this side's own JVM admin client.
+    pub(crate) fn create_assigned_topic(
+        &self,
+        topic: &str,
+        assignment: &str,
+        props_path: &str,
+        files: &[ToolFile],
+    ) {
+        self.run_with_files(
+            "kafka-topics",
+            &[
+                "--bootstrap-server",
+                self.bootstrap(),
+                "--create",
+                "--if-not-exists",
+                "--topic",
+                topic,
+                "--replica-assignment",
+                assignment,
+                "--command-config",
+                props_path,
+            ],
+            files,
+            None,
+        )
+        .expect_success();
+    }
+
     /// Run `<tool>.sh <args>` on this side.
     pub(crate) fn run(&self, tool: &str, args: &[&str]) -> CliRun {
         self.run_with_files(tool, args, &[], None)
@@ -257,21 +283,16 @@ fn run_against_host(
         .collect();
 
     let name = support::unique_container_name("krabka-oracle-client");
-    let mut command = Command::new("docker");
-    command.args(["run", "--rm", "--name", &name]);
+    let mut options = vec!["--name", &name];
     if stdin.is_some() {
-        command.arg("-i");
+        options.push("-i");
     }
     for mount in &mounts {
-        command.arg("-v").arg(mount);
+        options.extend(["-v", mount]);
     }
-    command
-        .arg("--add-host=host.docker.internal:host-gateway")
-        .arg(ORACLE_IMAGE)
-        .arg(format!("{BIN}/{tool}.sh"))
-        .args(args)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
+    options.push("--add-host=host.docker.internal:host-gateway");
+    let mut command = support::docker_tool_command(ORACLE_IMAGE, &options);
+    command.arg(format!("{BIN}/{tool}.sh")).args(args);
     let out = feed(command, stdin);
     CliRun::new(side, tool, args, &out)
 }
@@ -286,8 +307,7 @@ fn host_tempfile(contents: &str) -> tempfile::NamedTempFile {
     std::fs::write(tmp.path(), contents).expect("write tool file");
     #[cfg(unix)]
     {
-        std::fs::set_permissions(tmp.path(), std::fs::Permissions::from_mode(0o644))
-            .expect("chmod tool file");
+        crate::support::chmod_for_container(tmp.path(), 0o644, "chmod tool file");
     }
     tmp
 }
@@ -380,12 +400,7 @@ impl Oracle {
 
     /// Run a command inside the container and hand back what it did.
     pub(crate) fn exec(&self, args: &[&str]) -> Output {
-        let mut full: Vec<&str> = vec!["exec", &self.name];
-        full.extend_from_slice(args);
-        Command::new("docker")
-            .args(&full)
-            .output()
-            .expect("spawn docker exec")
+        crate::support::docker_exec(&self.name, args)
     }
 
     /// Run `<tool>.sh <args>` inside the container.
@@ -466,23 +481,13 @@ impl Oracle {
 
     /// The container's own logs, for the panic message when it never came up.
     fn logs(&self) -> String {
-        let out = Command::new("docker")
-            .args(["logs", &self.name])
-            .output()
-            .expect("spawn docker logs");
-        format!(
-            "stdout:\n{}\nstderr:\n{}",
-            String::from_utf8_lossy(&out.stdout),
-            String::from_utf8_lossy(&out.stderr),
-        )
+        crate::support::docker_logs(&self.name)
     }
 }
 
 impl Drop for Oracle {
     fn drop(&mut self) {
-        let _ = Command::new("docker")
-            .args(["rm", "-f", &self.name])
-            .output();
+        crate::support::remove_container(&self.name);
     }
 }
 
@@ -493,8 +498,49 @@ pub(crate) struct DetachedTool {
 
 impl Drop for DetachedTool {
     fn drop(&mut self) {
-        let _ = Command::new("docker")
-            .args(["rm", "-f", &self.name])
-            .output();
+        crate::support::remove_container(&self.name);
     }
+}
+
+/// Stock-first brokers for CLI differential scenarios.
+pub(crate) struct OracleComparison {
+    bootstrap: String,
+    _dir: tempfile::TempDir,
+    pub(crate) broker: krabka_broker::BrokerHandle,
+    oracle: Oracle,
+}
+
+impl OracleComparison {
+    pub(crate) async fn start(label: &'static str) -> Self {
+        let oracle = tokio::task::spawn_blocking(move || Oracle::start(label))
+            .await
+            .expect("oracle boot");
+        let (broker, dir) = crate::jvm_acceptance::start_host_broker().await;
+        crate::jvm_acceptance::nc_check_connectivity();
+        let bootstrap = crate::jvm_acceptance::broker0_advertised().to_owned();
+        Self {
+            bootstrap,
+            _dir: dir,
+            broker,
+            oracle,
+        }
+    }
+
+    pub(crate) fn sides(&self) -> [Side<'_>; 2] {
+        [
+            Side::Oracle(&self.oracle),
+            Side::Krabka {
+                bootstrap: &self.bootstrap,
+            },
+        ]
+    }
+}
+
+/// The two independent CLI sides and their respective optional client properties.
+pub(crate) fn secured_sides<'a, 'b>(
+    oracle: &'a Side<'b>,
+    krabka: &'a Side<'b>,
+    props: &'a str,
+) -> [(&'a Side<'b>, Option<&'a str>); 2] {
+    [(oracle, None), (krabka, Some(props))]
 }

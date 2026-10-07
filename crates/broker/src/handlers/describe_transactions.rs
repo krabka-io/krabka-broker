@@ -24,9 +24,7 @@ use krabka_protocol::owned::{
 };
 
 use crate::{
-    broker::Broker,
     codes,
-    error::BrokerError,
     txn::state::{TxnEntry, TxnState},
 };
 
@@ -86,93 +84,92 @@ pub(crate) fn transaction_state_row(tid: &str, entry: Option<&TxnEntry>) -> Tran
     }
 }
 
-pub(crate) async fn handle(
-    broker: &Broker,
-    req: DescribeTransactionsRequest,
-    _version: i16,
-    ctx: &crate::handlers::RequestContext<'_>,
-) -> Result<DescribeTransactionsResponse, BrokerError> {
-    // Refresh leader-partition view from the current metadata image before
-    // checking coordinator-ness, as EndTxn, AddPartitionsToTxn and
-    // AddOffsetsToTxn do. Otherwise a stale `leader_partitions` cache can
-    // answer TRANSACTIONAL_ID_NOT_FOUND, or stale transaction details, from a
-    // broker that already lost leadership instead of NOT_COORDINATOR.
-    let image = broker.controller.current_image();
-    drop(
-        broker
-            .txn_coordinator
-            .refresh_leader_partitions(&image)
-            .await,
-    );
-
-    let mut rows: Vec<TransactionState> = Vec::with_capacity(req.transactional_ids.len());
-    for tid in &req.transactional_ids {
-        // ACL gate: per-tid `Describe` on `TransactionalId`.
-        if crate::handlers::acl_denied(
-            broker.config.authorizer.as_ref(),
-            &image,
-            ctx,
-            ResourceType::TransactionalId,
-            tid.as_str(),
-            AclOperation::Describe,
-        ) {
-            rows.push(TransactionState {
-                error_code: codes::TRANSACTIONAL_ID_AUTHORIZATION_FAILED,
-                transactional_id: tid.clone(),
-                ..Default::default()
-            });
-            continue;
-        }
-
-        // Kafka `TransactionCoordinator.handleDescribeTransactions` refuses
-        // an empty id, and `getTransactionState` answers the coordinator error
-        // of the partition the id belongs to.
-        if tid.is_empty() {
-            rows.push(TransactionState {
-                error_code: codes::INVALID_REQUEST,
-                transactional_id: tid.clone(),
-                ..Default::default()
-            });
-            continue;
-        }
-        if let Some(error_code) = broker.txn_coordinator.coordinator_error(tid.as_str()).await {
-            rows.push(TransactionState {
-                error_code,
-                transactional_id: tid.clone(),
-                ..Default::default()
-            });
-            continue;
-        }
-
-        // Look up the coordinator's local entry. Unknown → 105.
-        let mut row = match broker.txn_coordinator.get(tid.as_str()) {
-            None => transaction_state_row(tid, None),
-            Some(handle) => {
-                let entry = handle.lock().await;
-                transaction_state_row(tid, Some(&entry))
-            }
-        };
-
-        // Kafka's `handleDescribeTransactionsRequest` removes every topic the
-        // principal may not `Describe`, even though the tid itself is
-        // authorized. Batch-check the row's topics in one pass.
-        let allowed = crate::handlers::allowed_topics(
-            broker.config.authorizer.as_ref(),
-            &image,
-            ctx,
-            AclOperation::Describe,
-            row.topics.iter().map(|t| t.topic.as_str()),
+context_handler! {
+    DescribeTransactionsRequest => DescribeTransactionsResponse,
+    (broker, req, _version, ctx),
+    {
+        // Refresh leader-partition view from the current metadata image before
+        // checking coordinator-ness, as EndTxn, AddPartitionsToTxn and
+        // AddOffsetsToTxn do. Otherwise a stale `leader_partitions` cache can
+        // answer TRANSACTIONAL_ID_NOT_FOUND, or stale transaction details, from a
+        // broker that already lost leadership instead of NOT_COORDINATOR.
+        let image = broker.controller.current_image();
+        drop(
+            broker
+                .txn_coordinator
+                .refresh_leader_partitions(&image)
+                .await,
         );
-        row.topics.retain(|t| allowed.contains(&t.topic));
 
-        rows.push(row);
+        let mut rows: Vec<TransactionState> = Vec::with_capacity(req.transactional_ids.len());
+        for tid in &req.transactional_ids {
+            // ACL gate: per-tid `Describe` on `TransactionalId`.
+            if crate::handlers::acl_denied(
+                broker.config.authorizer.as_ref(),
+                &image,
+                ctx,
+                ResourceType::TransactionalId,
+                tid.as_str(),
+                AclOperation::Describe,
+            ) {
+                rows.push(TransactionState {
+                    error_code: codes::TRANSACTIONAL_ID_AUTHORIZATION_FAILED,
+                    transactional_id: tid.clone(),
+                    ..Default::default()
+                });
+                continue;
+            }
+
+            // Kafka `TransactionCoordinator.handleDescribeTransactions` refuses
+            // an empty id, and `getTransactionState` answers the coordinator error
+            // of the partition the id belongs to.
+            if tid.is_empty() {
+                rows.push(TransactionState {
+                    error_code: codes::INVALID_REQUEST,
+                    transactional_id: tid.clone(),
+                    ..Default::default()
+                });
+                continue;
+            }
+            if let Some(error_code) = broker.txn_coordinator.coordinator_error(tid.as_str()).await {
+                rows.push(TransactionState {
+                    error_code,
+                    transactional_id: tid.clone(),
+                    ..Default::default()
+                });
+                continue;
+            }
+
+            // Look up the coordinator's local entry. Unknown → 105.
+            let mut row = match broker.txn_coordinator.get(tid.as_str()) {
+                None => transaction_state_row(tid, None),
+                Some(handle) => {
+                    let entry = handle.lock().await;
+                    transaction_state_row(tid, Some(&entry))
+                }
+            };
+
+            // Kafka's `handleDescribeTransactionsRequest` removes every topic the
+            // principal may not `Describe`, even though the tid itself is
+            // authorized. Batch-check the row's topics in one pass.
+            let allowed = crate::handlers::allowed_topics(
+                broker.config.authorizer.as_ref(),
+                &image,
+                ctx,
+                AclOperation::Describe,
+                row.topics.iter().map(|t| t.topic.as_str()),
+            );
+            row.topics.retain(|t| allowed.contains(&t.topic));
+
+            rows.push(row);
+        }
+
+        Ok(DescribeTransactionsResponse {
+            throttle_time_ms: 0,
+            transaction_states: rows,
+            ..Default::default()
+        })
     }
-
-    Ok(DescribeTransactionsResponse {
-        throttle_time_ms: 0,
-        transaction_states: rows,
-        ..Default::default()
-    })
 }
 
 #[cfg(test)]
@@ -212,16 +209,14 @@ mod tests {
         let t = topics_for(&e);
         // Alphabetical topics, ascending partitions.
         let expected = vec![
-            TopicData {
+            tagged_wire!(TopicData {
                 topic: "a".to_string(),
                 partitions: vec![1],
-                unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(Vec::new()),
-            },
-            TopicData {
+            }),
+            tagged_wire!(TopicData {
                 topic: "b".to_string(),
                 partitions: vec![0, 2],
-                unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(Vec::new()),
-            },
+            }),
         ];
         assert!(t == expected);
     }
@@ -238,9 +233,7 @@ mod tests {
         use krabka_log::ProducerId;
 
         let version = krabka_protocol::owned::describe_transactions_response::MAX_VERSION;
-        let (broker_handle, _dir) =
-            start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
-        let broker = broker_handle.broker_arc_for_test();
+        broker_fixture!((broker_handle, _dir, broker), allow_all);
         let coordinator = &broker.txn_coordinator;
         test_ctx!(context, "admin");
 
@@ -350,11 +343,12 @@ mod tests {
         use krabka_log::ProducerId;
 
         let version = krabka_protocol::owned::describe_transactions_response::MAX_VERSION;
-        let (broker_handle, _dir) = start_broker(Arc::new(
-            crate::authorizer::SimpleAclAuthorizer::new(std::collections::HashSet::new()),
-        ))
-        .await;
-        let broker = broker_handle.broker_arc_for_test();
+        broker_fixture!(
+            (broker_handle, _dir, broker),
+            start_broker(Arc::new(crate::authorizer::SimpleAclAuthorizer::new(
+                std::collections::HashSet::new()
+            ),))
+        );
         let coordinator = &broker.txn_coordinator;
         let peer = peer();
         let tid = "tx";
@@ -381,16 +375,14 @@ mod tests {
             .await
             .expect("seed the transaction");
 
-        let topic_a = TopicData {
+        let topic_a = tagged_wire!(TopicData {
             topic: "a".to_string(),
             partitions: vec![0],
-            unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(Vec::new()),
-        };
-        let topic_b = TopicData {
+        });
+        let topic_b = tagged_wire!(TopicData {
             topic: "b".to_string(),
             partitions: vec![1],
-            unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(Vec::new()),
-        };
+        });
 
         let cases = [
             TopicFilterCase {

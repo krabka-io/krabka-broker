@@ -9,12 +9,9 @@ use std::sync::Arc;
 
 use assert2::assert;
 use krabka_client_core::Client;
-use krabka_protocol::{
-    owned::offset_fetch_request::{
-        OffsetFetchRequest, OffsetFetchRequestGroup, OffsetFetchRequestTopics,
-    },
-    primitives::uuid::Uuid as WireUuid,
-};
+use krabka_protocol::primitives::uuid::Uuid as WireUuid;
+
+use crate::support::offsets::{offset_fetch_group, offset_fetch_request, offset_fetch_topic};
 
 // ── error codes ──────────────────────────────────────────────────────────────
 pub const ERR_NONE: i16 = 0;
@@ -33,19 +30,10 @@ pub async fn connect(bootstrap: &str) -> Arc<Client> {
 
 pub async fn assert_committed_offset(client: &Client, topic_id: WireUuid, expected: i64) {
     let response = client
-        .send(OffsetFetchRequest {
-            groups: vec![OffsetFetchRequestGroup {
-                group_id: "g".into(),
-                topics: Some(vec![OffsetFetchRequestTopics {
-                    name: "in".into(),
-                    topic_id,
-                    partition_indexes: vec![0],
-                    ..Default::default()
-                }]),
-                ..Default::default()
-            }],
-            ..Default::default()
-        })
+        .send(offset_fetch_request(offset_fetch_group(
+            "g",
+            Some(vec![offset_fetch_topic("in", topic_id, vec![0])]),
+        )))
         .await
         .expect("OffsetFetch");
     let group = response

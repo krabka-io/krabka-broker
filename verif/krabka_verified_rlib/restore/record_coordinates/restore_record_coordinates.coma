@@ -1,23 +1,23 @@
-(* #"/workspace/crates/verified/src/restore/record_coordinates.rs" 197 0 200 23 *)
+(* #"/workspace/crates/verified/src/restore/record_coordinates.rs" 191 0 194 23 *)
 
-let%span sord = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
-let%span sord'0 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
-let%span snum = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 328 20 329 89
-let%span snum'0 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 332 26 332 87
-let%span sconvert = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/convert.rs" 274 26 274 51
-let%span sops = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/ops.rs" 688 18 691 9
-let%span sops'0 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/ops.rs" 702 25 702 33
-let%span sops'1 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/ops.rs" 701 18 701 32
-let%span srecord_coordinates = "/workspace/crates/verified/src/restore/record_coordinates.rs" 201 33 201 34
-let%span srecord_coordinates'0 = "/workspace/crates/verified/src/restore/record_coordinates.rs" 202 33 202 34
-let%span srecord_coordinates'1 = "/workspace/crates/verified/src/restore/record_coordinates.rs" 209 21 209 51
-let%span srecord_coordinates'2 = "/workspace/crates/verified/src/restore/record_coordinates.rs" 207 17 209 52
-let%span srecord_coordinates'3 = "/workspace/crates/verified/src/restore/record_coordinates.rs" 207 17 209 53
-let%span srecord_coordinates'4 = "/workspace/crates/verified/src/restore/record_coordinates.rs" 212 12 212 68
-let%span srecord_coordinates'5 = "/workspace/crates/verified/src/restore/record_coordinates.rs" 212 12 212 69
-let%span srecord_coordinates'6 = "/workspace/crates/verified/src/restore/record_coordinates.rs" 190 10 195 1
-let%span srecord_coordinates'7 = "/workspace/crates/verified/src/restore/record_coordinates.rs" 176 8 181 65
-let%span srecord_coordinates'8 = "/workspace/crates/verified/src/restore/record_coordinates.rs" 161 8 164 9
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span snum = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 328 20 329 89
+let%span snum'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 332 26 332 87
+let%span sconvert = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/convert.rs" 274 26 274 51
+let%span sops = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/ops.rs" 688 18 691 9
+let%span sops'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/ops.rs" 702 25 702 33
+let%span sops'1 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/ops.rs" 701 18 701 32
+let%span srecord_coordinates = "/workspace/crates/verified/src/restore/record_coordinates.rs" 195 33 195 34
+let%span srecord_coordinates'0 = "/workspace/crates/verified/src/restore/record_coordinates.rs" 196 33 196 34
+let%span srecord_coordinates'1 = "/workspace/crates/verified/src/restore/record_coordinates.rs" 203 21 203 51
+let%span srecord_coordinates'2 = "/workspace/crates/verified/src/restore/record_coordinates.rs" 201 17 203 52
+let%span srecord_coordinates'3 = "/workspace/crates/verified/src/restore/record_coordinates.rs" 201 17 203 53
+let%span srecord_coordinates'4 = "/workspace/crates/verified/src/restore/record_coordinates.rs" 206 12 206 68
+let%span srecord_coordinates'5 = "/workspace/crates/verified/src/restore/record_coordinates.rs" 206 12 206 69
+let%span srecord_coordinates'6 = "/workspace/crates/verified/src/restore/record_coordinates.rs" 184 10 189 1
+let%span srecord_coordinates'7 = "/workspace/crates/verified/src/restore/record_coordinates.rs" 169 8 174 65
+let%span srecord_coordinates'8 = "/workspace/crates/verified/src/restore/record_coordinates.rs" 156 8 159 9
 
 use creusot.int.Int32
 use creusot.int.Int64
@@ -123,13 +123,13 @@ predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord'0] oth
 
 meta "rewrite_def" predicate ge_log_Int
 
-function kafka_record_timestamp [#"/workspace/crates/verified/src/restore/record_coordinates.rs" 159 0 159 91] (frame: t_RestoreBatchFrame) (record: t_RestoreRecordDeltas) : int
+function kafka_record_timestamp [#"/workspace/crates/verified/src/restore/record_coordinates.rs" 154 0 154 91] (frame: t_RestoreBatchFrame) (record: t_RestoreRecordDeltas) : int
  = [%#srecord_coordinates'8] match frame.timestamp_type with
     | CreateTime -> Int64.to_int frame.base_timestamp + Int64.to_int record.timestamp_delta
     | LogAppendTime -> Int64.to_int frame.max_timestamp
     end
 
-predicate restore_record_placeable [#"/workspace/crates/verified/src/restore/record_coordinates.rs" 174 0 174 94] (frame: t_RestoreBatchFrame) (record: t_RestoreRecordDeltas) =
+predicate restore_record_placeable [#"/workspace/crates/verified/src/restore/record_coordinates.rs" 167 0 167 94] (frame: t_RestoreBatchFrame) (record: t_RestoreRecordDeltas) =
   [%#srecord_coordinates'7] ge_log_Int (Int32.to_int frame.last_offset_delta) 0
   /\ ge_log_Int (Int32.to_int record.offset_delta) 0
   /\ Int32.to_int record.offset_delta <= Int32.to_int frame.last_offset_delta
@@ -141,7 +141,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let restore_record_coordinates [#"/workspace/crates/verified/src/restore/record_coordinates.rs" 197 0 200 23]
+let restore_record_coordinates [#"/workspace/crates/verified/src/restore/record_coordinates.rs" 191 0 194 23]
   (frame: t_RestoreBatchFrame) (record: t_RestoreRecordDeltas) (return (x: t_Option_tup2_i64_i64)) = (! bb0
   [ bb0 = s0
     [ s0 = [ &_7 <- Int32.lt frame.last_offset_delta ([%#srecord_coordinates] (0: Int32.t)) ] s1

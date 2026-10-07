@@ -4,7 +4,7 @@
     "Coma": {
       "vc_clone_OAuthSessionDecision": {
         "prover": "alt-ergo",
-        "time": 0.014
+        "time": 0.008
       }
     }
   }

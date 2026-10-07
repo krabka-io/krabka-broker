@@ -7,7 +7,8 @@ use krabka_protocol::records::{Record, RecordsError, TimestampType};
 
 use super::{
     test_support::{
-        BASE_TIMESTAMP, batch, decide, header, partition, predicates, record, try_decide,
+        BASE_TIMESTAMP, batch, check_decision, decide, header, keyed_records, partition,
+        predicates, record, timestamped_records, try_decide,
     },
     *,
 };
@@ -17,24 +18,15 @@ use crate::error::RestoreError;
 fn no_predicates_keep_everything() {
     let predicates = predicates(&[]);
     let orders_0 = partition("orders", 0);
-    let owned = batch(
-        1,
-        vec![
-            Record {
-                key: Some(Bytes::from_static(b"k0")),
-                ..record(0)
-            },
-            Record {
-                key: None,
-                ..record(1)
-            },
-        ],
+    let owned = batch(1, keyed_records(&[Some(b"k0"), None]));
+
+    check_decision(
+        &predicates,
+        &orders_0,
+        &owned,
+        BatchDecision::Keep,
+        &[RecordDecision::Keep, RecordDecision::Keep],
     );
-
-    let (batch_decision, records) = decide(&predicates, &orders_0, &owned);
-
-    check!(batch_decision == BatchDecision::Keep);
-    check!(records == [RecordDecision::Keep, RecordDecision::Keep]);
 }
 
 #[test]
@@ -55,16 +47,16 @@ fn to_offset_filters_a_batch_that_straddles_the_inclusive_bound() {
     let orders_0 = partition("orders", 0);
     let owned = batch(1, vec![record(0), record(1), record(2)]);
 
-    let (batch_decision, records) = decide(&predicates, &orders_0, &owned);
-
-    check!(batch_decision == BatchDecision::Filter);
-    check!(
-        records
-            == [
-                RecordDecision::Keep,
-                RecordDecision::Keep,
-                RecordDecision::Drop,
-            ]
+    check_decision(
+        &predicates,
+        &orders_0,
+        &owned,
+        BatchDecision::Filter,
+        &[
+            RecordDecision::Keep,
+            RecordDecision::Keep,
+            RecordDecision::Drop,
+        ],
     );
 
     let (other_decision, other_records) = decide(&predicates, &partition("orders", 1), &owned);
@@ -78,32 +70,19 @@ fn exclude_key_filters_only_matching_records() {
     let orders_0 = partition("orders", 0);
     let owned = batch(
         1,
-        vec![
-            Record {
-                key: Some(Bytes::from_static(b"alpha-1")),
-                ..record(0)
-            },
-            Record {
-                key: Some(Bytes::from_static(b"beta-1")),
-                ..record(1)
-            },
-            Record {
-                key: Some(Bytes::from_static(b"alpha-2")),
-                ..record(2)
-            },
-        ],
+        keyed_records(&[Some(b"alpha-1"), Some(b"beta-1"), Some(b"alpha-2")]),
     );
 
-    let (batch_decision, records) = decide(&predicates, &orders_0, &owned);
-
-    check!(batch_decision == BatchDecision::Filter);
-    check!(
-        records
-            == [
-                RecordDecision::Drop,
-                RecordDecision::Keep,
-                RecordDecision::Drop,
-            ]
+    check_decision(
+        &predicates,
+        &orders_0,
+        &owned,
+        BatchDecision::Filter,
+        &[
+            RecordDecision::Drop,
+            RecordDecision::Keep,
+            RecordDecision::Drop,
+        ],
     );
 }
 
@@ -111,72 +90,45 @@ fn exclude_key_filters_only_matching_records() {
 fn exclude_key_matching_every_record_empties_the_batch() {
     let predicates = predicates(&["--exclude-key", "^k"]);
     let orders_0 = partition("orders", 0);
-    let owned = batch(
-        1,
-        vec![
-            Record {
-                key: Some(Bytes::from_static(b"k1")),
-                ..record(0)
-            },
-            Record {
-                key: Some(Bytes::from_static(b"k2")),
-                ..record(1)
-            },
-        ],
+    let owned = batch(1, keyed_records(&[Some(b"k1"), Some(b"k2")]));
+
+    check_decision(
+        &predicates,
+        &orders_0,
+        &owned,
+        BatchDecision::Empty,
+        &[RecordDecision::Drop, RecordDecision::Drop],
     );
-
-    let (batch_decision, records) = decide(&predicates, &orders_0, &owned);
-
-    check!(batch_decision == BatchDecision::Empty);
-    check!(records == [RecordDecision::Drop, RecordDecision::Drop]);
 }
 
 #[test]
 fn exclude_key_matching_nothing_keeps_the_batch() {
     let predicates = predicates(&["--exclude-key", "^zzz"]);
     let orders_0 = partition("orders", 0);
-    let owned = batch(
-        1,
-        vec![
-            Record {
-                key: Some(Bytes::from_static(b"k1")),
-                ..record(0)
-            },
-            Record {
-                key: Some(Bytes::from_static(b"k2")),
-                ..record(1)
-            },
-        ],
+    let owned = batch(1, keyed_records(&[Some(b"k1"), Some(b"k2")]));
+
+    check_decision(
+        &predicates,
+        &orders_0,
+        &owned,
+        BatchDecision::Keep,
+        &[RecordDecision::Keep, RecordDecision::Keep],
     );
-
-    let (batch_decision, records) = decide(&predicates, &orders_0, &owned);
-
-    check!(batch_decision == BatchDecision::Keep);
-    check!(records == [RecordDecision::Keep, RecordDecision::Keep]);
 }
 
 #[test]
 fn a_keyless_record_never_matches_an_exclude_key_pattern_even_dot_star() {
     let predicates = predicates(&["--exclude-key", ".*"]);
     let orders_0 = partition("orders", 0);
-    let owned = batch(
-        1,
-        vec![
-            Record {
-                key: None,
-                ..record(0)
-            },
-            Record {
-                key: Some(Bytes::from_static(b"anything")),
-                ..record(1)
-            },
-        ],
+    let owned = batch(1, keyed_records(&[None, Some(b"anything")]));
+
+    check_decision(
+        &predicates,
+        &orders_0,
+        &owned,
+        BatchDecision::Filter,
+        &[RecordDecision::Keep, RecordDecision::Drop],
     );
-
-    let (batch_decision, records) = decide(&predicates, &orders_0, &owned);
-
-    check!(batch_decision == BatchDecision::Filter);
-    check!(records == [RecordDecision::Keep, RecordDecision::Drop]);
 }
 
 #[test]
@@ -201,16 +153,16 @@ fn exclude_header_matches_on_name_and_value_not_name_alone() {
         ],
     );
 
-    let (batch_decision, records) = decide(&predicates, &orders_0, &owned);
-
-    check!(batch_decision == BatchDecision::Filter);
-    check!(
-        records
-            == [
-                RecordDecision::Drop,
-                RecordDecision::Keep,
-                RecordDecision::Keep,
-            ]
+    check_decision(
+        &predicates,
+        &orders_0,
+        &owned,
+        BatchDecision::Filter,
+        &[
+            RecordDecision::Drop,
+            RecordDecision::Keep,
+            RecordDecision::Keep,
+        ],
     );
 }
 
@@ -239,17 +191,17 @@ fn exclude_offset_range_is_half_open() {
     let orders_0 = partition("orders", 0);
     let owned = batch(1, vec![record(0), record(1), record(2), record(3)]);
 
-    let (batch_decision, records) = decide(&predicates, &orders_0, &owned);
-
-    check!(batch_decision == BatchDecision::Filter);
-    check!(
-        records
-            == [
-                RecordDecision::Keep,
-                RecordDecision::Drop,
-                RecordDecision::Drop,
-                RecordDecision::Keep,
-            ]
+    check_decision(
+        &predicates,
+        &orders_0,
+        &owned,
+        BatchDecision::Filter,
+        &[
+            RecordDecision::Keep,
+            RecordDecision::Drop,
+            RecordDecision::Drop,
+            RecordDecision::Keep,
+        ],
     );
 }
 
@@ -270,24 +222,15 @@ fn to_timestamp_entirely_before_the_bound_keeps_the_batch() {
     let bound = BASE_TIMESTAMP + 100;
     let predicates = predicates(&["--to-timestamp", &bound.to_string()]);
     let orders_0 = partition("orders", 0);
-    let owned = batch(
-        1,
-        vec![
-            Record {
-                timestamp_delta: 0,
-                ..record(0)
-            },
-            Record {
-                timestamp_delta: 50,
-                ..record(1)
-            },
-        ],
+    let owned = batch(1, timestamped_records(&[0, 50]));
+
+    check_decision(
+        &predicates,
+        &orders_0,
+        &owned,
+        BatchDecision::Keep,
+        &[RecordDecision::Keep, RecordDecision::Keep],
     );
-
-    let (batch_decision, records) = decide(&predicates, &orders_0, &owned);
-
-    check!(batch_decision == BatchDecision::Keep);
-    check!(records == [RecordDecision::Keep, RecordDecision::Keep]);
 }
 
 #[test]
@@ -295,24 +238,15 @@ fn to_timestamp_entirely_at_or_after_the_bound_empties_the_batch() {
     let bound = BASE_TIMESTAMP + 100;
     let predicates = predicates(&["--to-timestamp", &bound.to_string()]);
     let orders_0 = partition("orders", 0);
-    let owned = batch(
-        1,
-        vec![
-            Record {
-                timestamp_delta: 100,
-                ..record(0)
-            },
-            Record {
-                timestamp_delta: 200,
-                ..record(1)
-            },
-        ],
+    let owned = batch(1, timestamped_records(&[100, 200]));
+
+    check_decision(
+        &predicates,
+        &orders_0,
+        &owned,
+        BatchDecision::Empty,
+        &[RecordDecision::Drop, RecordDecision::Drop],
     );
-
-    let (batch_decision, records) = decide(&predicates, &orders_0, &owned);
-
-    check!(batch_decision == BatchDecision::Empty);
-    check!(records == [RecordDecision::Drop, RecordDecision::Drop]);
 }
 
 #[test]
@@ -320,34 +254,18 @@ fn to_timestamp_straddling_the_bound_filters_the_right_split() {
     let bound = BASE_TIMESTAMP + 100;
     let predicates = predicates(&["--to-timestamp", &bound.to_string()]);
     let orders_0 = partition("orders", 0);
-    let owned = batch(
-        1,
-        vec![
-            Record {
-                timestamp_delta: 0,
-                ..record(0)
-            },
-            Record {
-                timestamp_delta: 100,
-                ..record(1)
-            },
-            Record {
-                timestamp_delta: 150,
-                ..record(2)
-            },
+    let owned = batch(1, timestamped_records(&[0, 100, 150]));
+
+    check_decision(
+        &predicates,
+        &orders_0,
+        &owned,
+        BatchDecision::Filter,
+        &[
+            RecordDecision::Keep,
+            RecordDecision::Drop,
+            RecordDecision::Drop,
         ],
-    );
-
-    let (batch_decision, records) = decide(&predicates, &orders_0, &owned);
-
-    check!(batch_decision == BatchDecision::Filter);
-    check!(
-        records
-            == [
-                RecordDecision::Keep,
-                RecordDecision::Drop,
-                RecordDecision::Drop,
-            ]
     );
 }
 
@@ -359,19 +277,7 @@ fn to_timestamp_straddling_the_bound_filters_the_right_split() {
 #[test]
 fn to_timestamp_judges_log_append_time_records_by_the_batch_max_timestamp() {
     let orders_0 = partition("orders", 0);
-    let mut owned = batch(
-        1,
-        vec![
-            Record {
-                timestamp_delta: 0,
-                ..record(0)
-            },
-            Record {
-                timestamp_delta: 50,
-                ..record(1)
-            },
-        ],
-    );
+    let mut owned = batch(1, timestamped_records(&[0, 50]));
     owned.attributes = owned
         .attributes
         .with_timestamp_type(TimestampType::LogAppendTime);
@@ -403,18 +309,15 @@ fn to_timestamp_judges_log_append_time_records_by_the_batch_max_timestamp() {
 fn predicates_that_both_match_one_record_still_drop_it_once() {
     let predicates = predicates(&["--exclude-key", "^bad", "--exclude-producer-id", "9"]);
     let orders_0 = partition("orders", 0);
-    let owned = batch(
-        9,
-        vec![Record {
-            key: Some(Bytes::from_static(b"bad-1")),
-            ..record(0)
-        }],
+    let owned = batch(9, keyed_records(&[Some(b"bad-1")]));
+
+    check_decision(
+        &predicates,
+        &orders_0,
+        &owned,
+        BatchDecision::Empty,
+        &[RecordDecision::Drop],
     );
-
-    let (batch_decision, records) = decide(&predicates, &orders_0, &owned);
-
-    check!(batch_decision == BatchDecision::Empty);
-    check!(records == [RecordDecision::Drop]);
 }
 
 #[test]
@@ -430,10 +333,13 @@ fn non_utf8_key_bytes_never_match_and_do_not_panic() {
         }],
     );
 
-    let (batch_decision, records) = decide(&predicates, &orders_0, &owned);
-
-    check!(batch_decision == BatchDecision::Keep);
-    check!(records == [RecordDecision::Keep]);
+    check_decision(
+        &predicates,
+        &orders_0,
+        &owned,
+        BatchDecision::Keep,
+        &[RecordDecision::Keep],
+    );
 }
 
 #[test]
@@ -470,13 +376,7 @@ fn record_offset_overflow_is_an_integrity_error() {
 fn record_timestamp_overflow_is_an_integrity_error() {
     let predicates = predicates(&["--to-timestamp", "0"]);
     let orders_0 = partition("orders", 0);
-    let mut owned = batch(
-        1,
-        vec![Record {
-            timestamp_delta: 1,
-            ..record(0)
-        }],
-    );
+    let mut owned = batch(1, timestamped_records(&[1]));
     owned.base_timestamp = i64::MAX;
     owned.max_timestamp = i64::MAX;
 

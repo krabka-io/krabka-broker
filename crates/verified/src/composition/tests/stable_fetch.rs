@@ -57,9 +57,7 @@ proptest! {
         } else {
             let (lso, visibility) = stable.unwrap();
             let end = visibility.limit_offset.min(cut);
-            let expected: BTreeSet<_> = remote.iter().chain(local.iter())
-                .filter(|entry| from < end && entry.start_offset < end && entry.last_offset >= from)
-                .map(|entry| (entry.producer_id, entry.start_offset)).collect();
+            let expected = super::abort_union::visible_rows(&remote, &local, from, end);
             let (actual_lso, actual_end, rows) = actual.unwrap();
             assert!(actual_lso == lso && actual_end == end && rows.len() == expected.len());
             assert!(rows.into_iter().collect::<BTreeSet<_>>() == expected);

@@ -33,24 +33,22 @@ mod tests;
 mod unstable;
 
 use self::{groups::handle_groups, legacy::handle_legacy};
-use crate::{broker::Broker, error::BrokerError};
 
-// cargo-mutants: coordinator-backed response projection; integration-tested.
-#[cfg_attr(test, mutants::skip)]
-pub(crate) async fn handle(
-    broker: &Broker,
-    req: OffsetFetchRequest,
-    version: i16,
-    ctx: &crate::handlers::RequestContext<'_>,
-) -> Result<OffsetFetchResponse, BrokerError> {
-    // ── KIP-516 (v8+): per-group `groups[]` request/response shape ──
-    // v8 moved from a single (group_id, topics) pair to an array of
-    // groups, and v10 keys topics by `topic_id`. Internal offset storage
-    // stays name-keyed, so resolve id→name at the boundary and echo the
-    // id back. The legacy v0–v7 single-group path is preserved below.
-    if version >= 8 {
-        return Ok(handle_groups(broker, version, &req, ctx).await);
+context_handler! {
+    // cargo-mutants: coordinator-backed response projection; integration-tested.
+    #[cfg_attr(test, mutants::skip)]
+    OffsetFetchRequest => OffsetFetchResponse,
+    (broker, req, version, ctx),
+    {
+        // ── KIP-516 (v8+): per-group `groups[]` request/response shape ──
+        // v8 moved from a single (group_id, topics) pair to an array of
+        // groups, and v10 keys topics by `topic_id`. Internal offset storage
+        // stays name-keyed, so resolve id→name at the boundary and echo the
+        // id back. The legacy v0–v7 single-group path is preserved below.
+        if version >= 8 {
+            return Ok(handle_groups(broker, version, &req, ctx).await);
+        }
+
+        Ok(handle_legacy(broker, &req, ctx).await)
     }
-
-    Ok(handle_legacy(broker, &req, ctx).await)
 }

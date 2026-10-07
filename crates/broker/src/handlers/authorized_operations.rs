@@ -225,6 +225,23 @@ mod tests {
         1_i32 << operation_to_wire(op)
     }
 
+    /// Bind the empty ACL authorizer and Alice's existing test identity before
+    /// calculating one resource's bitfield, retaining their caller lifetimes.
+    macro_rules! alice_acl_bits {
+        (($auth:ident, $principal:ident, $host:ident, $bits:ident), $image:expr, $resource:expr, $name:expr) => {
+            let $auth = SimpleAclAuthorizer::new(HashSet::new());
+            let $principal = principal("alice");
+            let $host = addr();
+            let $bits = authorized_operations_bits(
+                &$auth,
+                $image,
+                &ctx(&$principal, &$host),
+                $resource,
+                $name,
+            );
+        };
+    }
+
     #[test]
     fn supported_operations_topic_matches_kafka() {
         let ops = supported_operations(ResourceType::Topic);
@@ -356,11 +373,7 @@ mod tests {
             "foo",
             "alice",
         )));
-        let auth = SimpleAclAuthorizer::new(HashSet::new());
-        let p = principal("alice");
-        let h = addr();
-        let bits =
-            authorized_operations_bits(&auth, &img, &ctx(&p, &h), ResourceType::Topic, "foo");
+        alice_acl_bits!((auth, p, h, bits), &img, ResourceType::Topic, "foo");
         // Read ACL grants Read directly and Describe via implication.
         // No other supported op should be set.
         let expected = bit(AclOperation::Read) | bit(AclOperation::Describe);
@@ -376,11 +389,7 @@ mod tests {
             "foo",
             "alice",
         )));
-        let auth = SimpleAclAuthorizer::new(HashSet::new());
-        let p = principal("alice");
-        let h = addr();
-        let bits =
-            authorized_operations_bits(&auth, &img, &ctx(&p, &h), ResourceType::Topic, "foo");
+        alice_acl_bits!((auth, p, h, bits), &img, ResourceType::Topic, "foo");
         let expected = bit(AclOperation::Write) | bit(AclOperation::Describe);
         assert!(bits == expected);
     }
@@ -425,11 +434,7 @@ mod tests {
                 "cg",
                 "alice",
             )));
-            let auth = SimpleAclAuthorizer::new(HashSet::new());
-            let p = principal("alice");
-            let h = addr();
-            let bits =
-                authorized_operations_bits(&auth, &img, &ctx(&p, &h), ResourceType::Group, "cg");
+            alice_acl_bits!((auth, p, h, bits), &img, ResourceType::Group, "cg");
             assert!(bits == expected, "{granted:?}");
         }
     }
@@ -447,11 +452,7 @@ mod tests {
             permission_type: PermissionType::Deny,
             ..allow_acl(ResourceType::Topic, AclOperation::Read, "foo", "alice")
         }));
-        let auth = SimpleAclAuthorizer::new(HashSet::new());
-        let p = principal("alice");
-        let h = addr();
-        let bits =
-            authorized_operations_bits(&auth, &img, &ctx(&p, &h), ResourceType::Topic, "foo");
+        alice_acl_bits!((auth, p, h, bits), &img, ResourceType::Topic, "foo");
         // Read itself is denied: both ACL rows match the exact Read request,
         // and DENY wins precedence. But Kafka's operation-implication table
         // only ever widens what an ALLOW ACL matches -- a DENY Read ACL does

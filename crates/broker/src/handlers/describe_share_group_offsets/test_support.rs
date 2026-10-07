@@ -39,18 +39,9 @@ pub(super) async fn register_topic(
                 partitions: 1,
                 replication_factor: 1,
             }),
-            MetadataRecord::V1Partition(krabka_metadata::PartitionRecord {
-                topic: name.into(),
-                partition: 0,
-                leader,
-                replicas: vec![leader],
-                isr: vec![leader],
-                leader_epoch: krabka_metadata::LeaderEpoch(0),
-                adding_replicas: vec![],
-                removing_replicas: vec![],
-                directories: vec![],
-                partition_epoch: 0,
-            }),
+            MetadataRecord::V1Partition(crate::handlers::test_support::single_replica_partition(
+                name, 0, leader,
+            )),
         ])
         .await
         .expect("register topic");

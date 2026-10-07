@@ -86,40 +86,25 @@ pub const EXIT_NO_APPROVAL: i32 = 4;
 /// answer is wrong". KFC-5's verifier draws the same distinction.
 pub const EXIT_BAD_SIGNATURE: i32 = 5;
 
-/// Run the tool from an argv-style iterator, returning its exit code.
-///
-/// `0` means the broker accepted the request. `1` means it refused one, and the
-/// reason is on stderr. `2` means the broker could not be reached, so nothing
-/// is known about the outcome. `3` means the registry names an operator key
-/// this machine does not hold. `4` means the action needs a break-glass
-/// approval that does not exist. `5` means a signature did not verify.
-///
-/// # Panics
-///
-/// Panics if `argv` does not parse, which for a caller passing a literal
-/// argument list is a bug in that list rather than a runtime condition.
-pub async fn run_from_args<I, T>(argv: I) -> i32
-where
-    I: IntoIterator<Item = T>,
-    T: Into<std::ffi::OsString> + Clone,
-{
-    run(Cli::parse_from(argv)).await
-}
+krabka_macros::parsed_cli_entrypoint!({
+    /// Run the tool from an argv-style iterator, returning its exit code.
+    ///
+    /// `0` means the broker accepted the request. `1` means it refused one, and the
+    /// reason is on stderr. `2` means the broker could not be reached, so nothing
+    /// is known about the outcome. `3` means the registry names an operator key
+    /// this machine does not hold. `4` means the action needs a break-glass
+    /// approval that does not exist. `5` means a signature did not verify.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `argv` does not parse, which for a caller passing a literal
+    /// argument list is a bug in that list rather than a runtime condition.
+});
 
 /// Run one parsed command.
 pub async fn run(cli: Cli) -> i32 {
-    let client = match krabka_client_core::Client::builder()
-        .bootstrap(&cli.bootstrap_server)
-        .client_id("krabka-guard")
-        .build()
-        .await
-    {
-        Ok(client) => client,
-        Err(error) => {
-            eprintln!("cannot reach {}: {error}", cli.bootstrap_server);
-            return EXIT_UNREACHABLE;
-        }
-    };
+    let client =
+        krabka_macros::connect_cli_client!(&cli.bootstrap_server, "krabka-guard", EXIT_UNREACHABLE);
     match dispatch(&client, cli.command).await {
         Ok(code) => code,
         Err(failure) => {

@@ -9,10 +9,7 @@ use crate::transaction::{
     transaction_marker_materialization_decision,
 };
 
-// cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
-#[cfg(creusot)]
-#[cfg_attr(test, mutants::skip)]
-#[logic(open)]
+open_logic! {
 pub(super) fn pending_marker_admitted(
     version: i16,
     request: TransactionMarkerRequest,
@@ -23,6 +20,7 @@ pub(super) fn pending_marker_admitted(
     && request.coordinator_epoch@ >= current.coordinator_epoch@
     && (version@ < 2 || request.producer_epoch != current.producer_epoch
         || request.producer_epoch@ == i16::MAX@) }
+}
 }
 
 #[cfg(creusot)]
@@ -43,8 +41,7 @@ type AdmittedMarkerFetch = (Decision, i64, i64, Option<(i64, i64)>);
     && current.coordinator_epoch@ >= -1)]
 #[requires(0 <= pending_start@ && pending_start@ <= span.0@ && 0 <= span.1@
     && span.0@ + span.1@ < i64::MAX@)]
-#[requires(forall<i: Int> 0 <= i && i < other_starts@.len()
-    ==> 0 <= other_starts@[i]@ && other_starts@[i]@ <= span.0@)]
+#[requires(crate::transaction::pending_starts_before_marker(other_starts@, span.0@))]
 #[ensures(result.1@ <= pending_start@ && result.1@ <= result.2@)]
 #[ensures(result.2@ <= bounds.0@ && result.2@ <= bounds.1@
     && result.2@ <= span.0@ + span.1@ + 1)]

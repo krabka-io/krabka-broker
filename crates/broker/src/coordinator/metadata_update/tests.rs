@@ -5,8 +5,8 @@ use std::collections::BTreeMap;
 
 use assert2::check;
 use krabka_metadata::{
-    BrokerRegistrationRecord, DeleteTopicRecord, MetadataImage, MetadataRecord, NodeId,
-    PartitionRecord, TopicConfigRecord, TopicRecord,
+    BrokerRegistrationRecord, DeleteTopicRecord, MetadataRecord, NodeId, PartitionRecord,
+    TopicConfigRecord, TopicRecord,
 };
 use krabka_protocol::owned::{
     common::consumer_group_heartbeat_response::topic_partitions::TopicPartitions,
@@ -16,9 +16,12 @@ use krabka_protocol::owned::{
 use uuid::Uuid;
 
 use super::{changed_topics, on_metadata_update, regex_resolution_may_change};
-use crate::coordinator::unified::{
-    actor::{GroupActorHandle, GroupActorMessage},
-    test_support::{SwitchableMetadata, make_coord_with_metadata, snapshot_of},
+use crate::coordinator::{
+    test_support::metadata_delta_image as image,
+    unified::{
+        actor::test_support::rpc::consumer_request_as_client as heartbeat,
+        test_support::{SwitchableMetadata, make_coord_with_metadata, snapshot_of},
+    },
 };
 
 fn topic(name: &str, id: u128) -> MetadataRecord {
@@ -39,14 +42,6 @@ fn partition(name: &str, index: i32, leader: u64) -> MetadataRecord {
         isr: vec![NodeId(1), NodeId(2)],
         ..Default::default()
     })
-}
-
-fn image(records: &[MetadataRecord]) -> MetadataImage {
-    let mut image = MetadataImage::new(Uuid::from_u128(1));
-    for record in records {
-        image.apply(record);
-    }
-    image
 }
 
 /// Kafka's `TopicsDelta.changedTopics` holds every topic with a
@@ -214,25 +209,6 @@ fn a_new_topic_or_a_changed_acl_can_change_a_resolution() {
         expected.push((name, may_change));
     }
     check!(found == expected);
-}
-
-async fn heartbeat(
-    handle: &GroupActorHandle,
-    request: ConsumerGroupHeartbeatRequest,
-) -> ConsumerGroupHeartbeatResponse {
-    let (reply, response) = tokio::sync::oneshot::channel();
-    handle
-        .tx
-        .send(GroupActorMessage::Heartbeat {
-            request,
-            client_id: "client".into(),
-            client_host: "host".into(),
-            regex_resolver: crate::coordinator::unified::regex_resolver::no_topic_regex_resolver(),
-            reply,
-        })
-        .await
-        .unwrap();
-    response.await.unwrap()
 }
 
 /// Only the groups whose `__consumer_offsets` partition this broker leads

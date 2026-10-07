@@ -72,16 +72,6 @@ pub async fn drive_elect_all_partitions(
         .collect()
 }
 
-pub async fn drive_elect_leaders(
-    addr: SocketAddr,
-    topic: &str,
-    partitions: Vec<i32>,
-    election_type: i8,
-) -> Vec<(i32, i16)> {
-    let mut stream = TcpStream::connect(addr).await.expect("connect");
-    kafka_wire::elect_leaders(&mut stream, CLIENT_ID, topic, partitions, election_type).await
-}
-
 /// Creates a topic on a PLAINTEXT broker.
 ///
 /// The compat shim of the authorizer lets the request through because there
@@ -90,12 +80,5 @@ pub async fn drive_elect_leaders(
 /// The topic has one partition on `replicas`, in that order, so the tests know
 /// which broker leads it and which one they can elect: an automatic placement
 /// starts at a random broker.
-pub async fn create_topic_plaintext(addr: SocketAddr, name: &str, replicas: &[i32]) {
-    let mut stream = TcpStream::connect(addr).await.expect("connect");
-    kafka_wire::create_topic_on(
-        &mut stream,
-        CLIENT_ID,
-        crate::support::topic_on(name, &[replicas]),
-    )
-    .await;
-}
+pub use crate::kafka_wire::create_assigned_topic_plaintext as create_topic_plaintext;
+pub use crate::kafka_wire::elect_leaders_plaintext as drive_elect_leaders;

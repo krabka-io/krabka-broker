@@ -5,20 +5,17 @@ use super::{
     restore_batch_step, scheduled_delivery_visible,
 };
 use crate::broker::FetchVisibility;
-
-// cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
 #[cfg(creusot)]
-#[cfg_attr(test, mutants::skip)]
-#[logic(open)]
+use crate::broker::committed_fetch_response;
+
+open_logic! {
 pub(super) fn scheduled_activation_due(activation: Int, uncertainty: Int, now: Int) -> bool {
     pearlite! { uncertainty >= 0 && activation + uncertainty <= i64::MAX@
     && activation + uncertainty <= now }
 }
+}
 
-// cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
-#[cfg(creusot)]
-#[cfg_attr(test, mutants::skip)]
-#[logic(open)]
+open_logic! {
 pub(super) fn scheduled_batches_valid(batches: Seq<(i64, i32)>, start: Int, end: Int) -> bool {
     pearlite! {
         (forall<i: Int> 0 <= i && i < batches.len() ==> batches[i].1@ >= 0
@@ -27,6 +24,7 @@ pub(super) fn scheduled_batches_valid(batches: Seq<(i64, i32)>, start: Int, end:
         && if batches.len() == 0 { start == end }
             else { batches[batches.len() - 1].0@ + batches[batches.len() - 1].1@ + 1 == end }
     }
+}
 }
 
 /// The maximum over actual batch activation times is due iff every batch is
@@ -52,8 +50,7 @@ type ScheduledPrefix = (i64, FetchVisibility, FetchVisibility);
 /// Reject any malformed or incomplete batch walk; compaction gaps are allowed.
 /// Recompute from the start rather than validating a cached cursor. Complete
 /// decoded batches and activation stamps from one log are host obligations.
-#[requires(batches@.len() == activations@.len())]
-#[requires(0 <= w.log_start@ && w.log_start@ <= w.log_end@)]
+#[requires(scheduled_inputs_coherent(batches@, activations@, w.log_start@, w.log_end@))]
 #[ensures(match result {
     None => !scheduled_batches_valid(batches@, w.log_start@, w.log_end@),
     Some((frontier, consumer, follower)) => scheduled_batches_valid(batches@, w.log_start@, w.log_end@)
@@ -65,9 +62,7 @@ type ScheduledPrefix = (i64, FetchVisibility, FetchVisibility);
             && frontier@ == batches@[i].0@
             && !scheduled_activation_due(activations@[i]@, uncertainty@, now@))
         && consumer.limit_offset@ == w.hw@.min(w.lso@).min(frontier@)
-        && consumer.response_hw == w.hw && consumer.response_lso@ == w.hw@.min(w.lso@)
-        && consumer.effective_lso@ == w.hw@.min(w.lso@) && consumer.read_committed_aborts
-        && !consumer.out_of_range && consumer.empty == (w.log_start@ >= w.hw@.min(frontier@))
+        && committed_fetch_response(consumer, w.hw, w.lso, frontier, w.log_start@)
         && follower.limit_offset == w.log_end && follower.response_hw == w.hw
         && follower.response_lso@ == w.hw@.min(w.lso@) && follower.effective_lso == w.lso
         && !follower.read_committed_aborts && !follower.out_of_range
@@ -122,4 +117,16 @@ pub(super) fn scheduled_prefix_bounds_fetch(
     let consumer = fetch_visibility(false, true, bounded, w.log_start);
     let follower = fetch_visibility(true, true, bounded, w.log_start);
     Some((deliverable, consumer, follower))
+}
+
+open_logic! {
+/// Scheduled batches and activation times have equal length, and log bounds are coherent.
+pub(super) fn scheduled_inputs_coherent(
+    batches: Seq<(i64, i32)>,
+    activations: Seq<i64>,
+    start: Int,
+    end: Int,
+) -> bool {
+    pearlite! { batches.len() == activations.len() && super::offset_range_valid(start, end) }
+}
 }

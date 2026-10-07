@@ -12,7 +12,7 @@ use krabka_metadata::{LeaderEpoch, PartitionElrRecord};
 use super::*;
 use crate::{
     config_keys::{ELIGIBLE_LEADER_REPLICAS, MIN_INSYNC_REPLICAS},
-    leader_election::test_support::{img_with_partition, set_topic_config},
+    leader_election::test_support::{expected_partition, img_with_partition, set_topic_config},
 };
 
 /// Liveness where each of `alive` heartbeated inside the current window.
@@ -58,18 +58,13 @@ async fn a_returning_broker_leaves_the_isr_and_does_not_re_enter_the_elr() {
     assert!(plan.unavailable.is_empty());
     assert!(
         plan.changes
-            == vec![MetadataRecord::V1Partition(PartitionRecord {
-                topic: "t".into(),
-                partition: 0,
-                leader: NodeId(1),
-                replicas: vec![NodeId(1), NodeId(2), NodeId(3)],
-                isr: vec![NodeId(1), NodeId(2)],
-                leader_epoch: LeaderEpoch(5),
-                adding_replicas: vec![],
-                removing_replicas: vec![],
-                directories: vec![],
-                partition_epoch: 1,
-            })]
+            == vec![MetadataRecord::V1Partition(expected_partition(
+                "t",
+                1,
+                &[1, 2],
+                LeaderEpoch(5),
+                vec![]
+            ))]
     );
 }
 
@@ -133,18 +128,13 @@ async fn a_partition_the_returning_broker_leads_is_re_elected() {
 
     assert!(
         plan.changes
-            == vec![MetadataRecord::V1Partition(PartitionRecord {
-                topic: "t".into(),
-                partition: 0,
-                leader: NodeId(1),
-                replicas: vec![NodeId(1), NodeId(2), NodeId(3)],
-                isr: vec![NodeId(1), NodeId(2)],
-                leader_epoch: LeaderEpoch(6),
-                adding_replicas: vec![],
-                removing_replicas: vec![],
-                directories: vec![],
-                partition_epoch: 1,
-            })]
+            == vec![MetadataRecord::V1Partition(expected_partition(
+                "t",
+                1,
+                &[1, 2],
+                LeaderEpoch(6),
+                vec![]
+            ))]
     );
 }
 

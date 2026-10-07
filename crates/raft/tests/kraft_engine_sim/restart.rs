@@ -8,12 +8,9 @@ use krabka_raft::{
     kraft::{KraftController, NodeId, snapshot_fetch::MetadataSnapshotFetchMax},
 };
 
-use crate::{
-    harness::{
-        STAGGERED_TIMEOUTS, await_single_leader, await_until, build_engine, metadata_log,
-        topic_record, voter_set,
-    },
-    sim_net::SimNet,
+use crate::harness::{
+    STAGGERED_TIMEOUTS, await_single_leader, await_until, build_engine, metadata_log, topic_record,
+    voter_set,
 };
 
 /// 4. Restart recovery: commit, snapshot, drop one engine, reopen it over its
@@ -21,8 +18,7 @@ use crate::{
 ///    log.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn restart_recovers_image() {
-    let net = SimNet::new();
-    let ids = [NodeId(1), NodeId(2), NodeId(3)];
+    let (net, ids) = crate::harness::three_voter_network();
     let cid = uuid::Uuid::from_u128(400);
 
     let timeouts = STAGGERED_TIMEOUTS;
@@ -93,9 +89,5 @@ async fn restart_recovers_image() {
     assert2::assert!(reopened.current_image().topic("persistent").is_some());
     net.register(victim, reopened);
 
-    for &id in &ids {
-        if let Some(c) = net.get(id) {
-            c.shutdown().await;
-        }
-    }
+    crate::harness::shutdown_nodes(&net, &ids).await;
 }

@@ -73,12 +73,7 @@ impl LeaderEpochCheckpoint {
         }
         let previous = self.entries.clone();
         assign_to(&mut self.entries, epoch, start_offset);
-        if let Err(error) = self.flush() {
-            // The file still holds `previous`; so must memory.
-            self.entries = previous;
-            return Err(error);
-        }
-        Ok(())
+        self.flush_or_restore(previous)
     }
 
     /// Remove epoch entries that begin at or after `end_offset`. This mirrors
@@ -113,13 +108,17 @@ impl LeaderEpochCheckpoint {
     #[instrument(level = "debug", skip(self), fields(start_offset = start_offset.0), err)]
     pub fn truncate_from_start(&mut self, start_offset: Offset) -> Result<(), LogError> {
         let previous = self.entries.clone();
-        if truncate_start_of(&mut self.entries, start_offset)
-            && let Err(error) = self.flush()
-        {
-            self.entries = previous;
-            return Err(error);
+        if truncate_start_of(&mut self.entries, start_offset) {
+            self.flush_or_restore(previous)?;
         }
         Ok(())
+    }
+
+    fn flush_or_restore(&mut self, previous: Vec<EpochEntry>) -> Result<(), LogError> {
+        self.flush().inspect_err(|_| {
+            // The file still holds `previous`; so must memory.
+            self.entries = previous;
+        })
     }
 
     /// Drop every recorded epoch. This mirrors Kafka's
@@ -193,7 +192,9 @@ fn truncate_start_of(entries: &mut Vec<EpochEntry>, start_offset: Offset) -> boo
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::leader_epoch_checkpoint::test_support::fresh;
+    use crate::leader_epoch_checkpoint::test_support::{
+        check_persisted, checkpoint, checkpoint_entries, entry, fresh,
+    };
 
     #[test]
     fn append_preserves_existing_rows() {
@@ -204,71 +205,33 @@ mod tests {
         }
         let mut c2 = LeaderEpochCheckpoint::open(path).unwrap();
         c2.append(LeaderEpoch(1), Offset(50)).unwrap();
-        assert2::assert!(
-            c2.entries()
-                == &[
-                    EpochEntry {
-                        epoch: LeaderEpoch(0),
-                        start_offset: Offset(0),
-                    },
-                    EpochEntry {
-                        epoch: LeaderEpoch(1),
-                        start_offset: Offset(50),
-                    },
-                ]
-        );
+        assert2::assert!(c2.entries() == &[entry(0, 0), entry(1, 50)]);
     }
 
     #[test]
     fn append_idempotent_for_same_epoch() {
-        let (_d, path) = fresh();
-        let mut c = LeaderEpochCheckpoint::open(path).unwrap();
-        c.append(LeaderEpoch(0), Offset(0)).unwrap();
+        let (_d, mut c) = checkpoint(&[(0, 0)]);
         c.append(LeaderEpoch(0), Offset(999)).unwrap(); // ignored; epoch 0 already recorded
-        assert2::assert!(
-            c.entries()
-                == &[EpochEntry {
-                    epoch: LeaderEpoch(0),
-                    start_offset: Offset(0)
-                }]
-        );
+        assert2::assert!(c.entries() == &[entry(0, 0)]);
     }
 
     #[test]
     fn append_rejects_novel_out_of_order_entries_without_mutating() {
-        let (_d, path) = fresh();
-        let mut c = LeaderEpochCheckpoint::open(path.clone()).unwrap();
-        c.append(LeaderEpoch(0), Offset(0)).unwrap();
-        c.append(LeaderEpoch(5), Offset(100)).unwrap();
-        let before = std::fs::read(&path).unwrap();
+        let (_d, mut c) = checkpoint(&[(0, 0), (5, 100)]);
+        let before = std::fs::read(&c.path).unwrap();
 
         for (epoch, offset) in [(2, 150), (6, 100)] {
             let error = c.append(LeaderEpoch(epoch), Offset(offset)).unwrap_err();
             assert2::assert!(matches!(error, LogError::InvalidArgument(_)));
         }
 
-        assert2::assert!(std::fs::read(&path).unwrap() == before);
-        assert2::assert!(
-            c.entries()
-                == &[
-                    EpochEntry {
-                        epoch: LeaderEpoch(0),
-                        start_offset: Offset(0),
-                    },
-                    EpochEntry {
-                        epoch: LeaderEpoch(5),
-                        start_offset: Offset(100),
-                    },
-                ]
-        );
+        assert2::assert!(std::fs::read(&c.path).unwrap() == before);
+        assert2::assert!(c.entries() == &[entry(0, 0), entry(5, 100)]);
     }
 
     #[test]
     fn append_after_truncation_restores_a_strict_history() {
-        let (_d, path) = fresh();
-        let mut c = LeaderEpochCheckpoint::open(path).unwrap();
-        c.append(LeaderEpoch(0), Offset(0)).unwrap();
-        c.append(LeaderEpoch(5), Offset(100)).unwrap();
+        let (_d, mut c) = checkpoint(&[(0, 0), (5, 100)]);
         c.truncate_from_end(Offset(100)).unwrap();
         c.append(LeaderEpoch(2), Offset(50)).unwrap();
         c.append(LeaderEpoch(4), Offset(80)).unwrap();
@@ -282,10 +245,6 @@ mod tests {
     /// memory and after a reopen of the persisted file.
     #[test]
     fn assign_follows_kafka_leader_epoch_file_cache_assign() {
-        let entry = |epoch, start_offset| EpochEntry {
-            epoch: LeaderEpoch(epoch),
-            start_offset: Offset(start_offset),
-        };
         for (name, recorded, (epoch, start), expected) in [
             ("first entry", &[][..], (2, 6), vec![entry(2, 6)]),
             (
@@ -325,48 +284,31 @@ mod tests {
                 vec![entry(1, 0), entry(2, 7)],
             ),
         ] {
-            let (_d, path) = fresh();
-            let mut c = LeaderEpochCheckpoint::open(path.clone()).unwrap();
-            for &(e, s) in recorded {
-                c.append(LeaderEpoch(e), Offset(s)).unwrap();
-            }
+            let (_d, mut c) = checkpoint(recorded);
             c.assign(LeaderEpoch(epoch), Offset(start)).unwrap();
-            assert2::check!(c.entries() == &expected[..], "{name}");
-            let reopened = LeaderEpochCheckpoint::open(path).unwrap();
-            assert2::check!(reopened.entries() == &expected[..], "{name} (reopened)");
+            check_persisted(&c, &expected, name);
         }
     }
 
     #[test]
     fn assign_rejects_negative_entries_without_mutating() {
-        let (_d, path) = fresh();
-        let mut c = LeaderEpochCheckpoint::open(path).unwrap();
-        c.append(LeaderEpoch(1), Offset(0)).unwrap();
+        let (_d, mut c) = checkpoint(&[(1, 0)]);
         for (epoch, start) in [(-1, 5), (2, -1)] {
             let error = c.assign(LeaderEpoch(epoch), Offset(start)).unwrap_err();
             assert2::assert!(matches!(error, LogError::InvalidArgument(_)));
         }
-        assert2::assert!(
-            c.entries()
-                == &[EpochEntry {
-                    epoch: LeaderEpoch(1),
-                    start_offset: Offset(0),
-                }]
-        );
+        assert2::assert!(c.entries() == &[entry(1, 0)]);
     }
 
     #[test]
     fn truncate_from_end_removes_entries_at_or_after_end_offset() {
-        let (_d, path) = fresh();
-        let mut c = LeaderEpochCheckpoint::open(path.clone()).unwrap();
-        c.append(LeaderEpoch(1), Offset(0)).unwrap();
-        c.append(LeaderEpoch(7), Offset(4)).unwrap();
+        let (_d, mut c) = checkpoint(&[(1, 0), (7, 4)]);
         c.truncate_from_end(Offset(4)).unwrap();
         assert2::assert!(c.latest_epoch() == Some(LeaderEpoch(1)));
         assert2::assert!(c.end_offset_for_epoch(LeaderEpoch(7), Offset(4)) == Offset(-1));
         assert2::assert!(c.end_offset_for_epoch(LeaderEpoch(1), Offset(4)) == Offset(4));
         // Persisted: a reopen sees only epoch 1.
-        let reopened = LeaderEpochCheckpoint::open(path).unwrap();
+        let reopened = LeaderEpochCheckpoint::open(c.path.clone()).unwrap();
         assert2::assert!(reopened.latest_epoch() == Some(LeaderEpoch(1)));
     }
 
@@ -375,10 +317,6 @@ mod tests {
     /// reopen of the persisted file.
     #[test]
     fn truncate_from_start_follows_kafka_leader_epoch_file_cache() {
-        let entry = |epoch, start_offset| EpochEntry {
-            epoch: LeaderEpoch(epoch),
-            start_offset: Offset(start_offset),
-        };
         let history = vec![entry(0, 5), entry(1, 10), entry(2, 15)];
         for (name, recorded, start, expected) in [
             ("an empty cache stays empty", vec![], 7, vec![]),
@@ -413,29 +351,20 @@ mod tests {
                 vec![entry(2, 17)],
             ),
         ] {
-            let (_d, path) = fresh();
-            let mut c = LeaderEpochCheckpoint::open(path.clone()).unwrap();
-            for recorded in &recorded {
-                c.append(recorded.epoch, recorded.start_offset).unwrap();
-            }
+            let (_d, mut c) = checkpoint_entries(&recorded);
             c.truncate_from_start(Offset(start)).unwrap();
-            assert2::check!(c.entries() == &expected[..], "{name}");
-            let reopened = LeaderEpochCheckpoint::open(path).unwrap();
-            assert2::check!(reopened.entries() == &expected[..], "{name} (reopened)");
+            check_persisted(&c, &expected, name);
         }
     }
 
     #[test]
     fn clear_removes_all_entries_and_persists_empty() {
-        let (_d, path) = fresh();
-        let mut c = LeaderEpochCheckpoint::open(path.clone()).unwrap();
-        c.append(LeaderEpoch(1), Offset(0)).unwrap();
-        c.append(LeaderEpoch(2), Offset(50)).unwrap();
+        let (_d, mut c) = checkpoint(&[(1, 0), (2, 50)]);
         c.clear().unwrap();
         assert2::assert!(c.entries() == &[][..]);
         assert2::assert!(c.latest_epoch() == None);
         // Persisted: a reopen sees no entries.
-        let reopened = LeaderEpochCheckpoint::open(path).unwrap();
+        let reopened = LeaderEpochCheckpoint::open(c.path.clone()).unwrap();
         assert2::assert!(reopened.entries().is_empty());
     }
 

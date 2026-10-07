@@ -250,9 +250,7 @@ mod tests {
         // leaves `dirty` set so the sweeper or the next request retries.
         let mgr = manager();
         let tid = uuid::Uuid::from_bytes([25; 16]);
-        let mut st = AcquisitionState::new(Offset(0));
-        st.materialize(Offset(4), 100);
-        let _ = st.acquire("m1", 10, Offset(i64::MAX), Instant::now(), LOCK, 5);
+        let mut st = crate::share_partition::state::test_support::acquired_state(4);
 
         let result = mgr.persist_if_dirty("g1", tid, 0, None, &mut st).await;
 
@@ -266,9 +264,7 @@ mod tests {
     async fn a_failed_write_rolls_the_acknowledgement_back() {
         let mgr = manager();
         let tid = uuid::Uuid::from_bytes([26; 16]);
-        let mut st = AcquisitionState::new(Offset(0));
-        st.materialize(Offset(4), 100);
-        let _ = st.acquire("m1", 10, Offset(i64::MAX), Instant::now(), LOCK, 5);
+        let mut st = crate::share_partition::state::test_support::acquired_state(4);
         let before = st.clone();
         // A cell that the cache does not hold: the write fails without fencing.
         let cell = Arc::new(Mutex::new(before.clone()));

@@ -6,15 +6,11 @@
 //! credential file, kept out of the TOML so the secret can be a mounted
 //! `Secret` rather than a config-map value.
 
-use schemars::JsonSchema;
-use serde::Deserialize;
-
 use super::FileConfigError;
 
 /// TOML shape of `[sasl_plain]`. Maps to
 /// [`crate::BrokerConfig::plain_credentials`].
-#[derive(Debug, Clone, Default, Deserialize, JsonSchema, PartialEq)]
-#[serde(deny_unknown_fields)]
+#[krabka_macros::config_table(strict)]
 pub struct FileSaslPlainConfig {
     /// Filesystem path to the SASL/PLAIN credential file: one
     /// `username=password` per line, split at the first `=`, so a password may
@@ -162,9 +158,7 @@ mod tests {
 
     #[test]
     fn absent_section_leaves_the_table_empty() {
-        let file: FileConfig = toml::from_str("").unwrap();
-        let mut cfg = crate::config::BrokerConfig::default();
-        file.apply_to(&mut cfg).unwrap();
+        let cfg = crate::file_config::test_support::configured_unwrap_parse("").unwrap();
 
         assert!(cfg.plain_credentials.is_empty());
     }

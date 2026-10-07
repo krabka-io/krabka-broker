@@ -44,6 +44,19 @@ pub(super) fn task_offsets_to_map(
         .collect()
 }
 
+/// Replace present client tags in wire order, preserving the stored tags when absent.
+pub(super) fn update_client_tags(
+    member: &mut StreamsMemberState,
+    request: &StreamsGroupHeartbeatRequest,
+) {
+    if let Some(tags) = &request.client_tags {
+        member.client_tags = tags
+            .iter()
+            .map(|kv| (kv.key.clone(), kv.value.clone()))
+            .collect();
+    }
+}
+
 pub(super) fn build_member(
     member_id: &str,
     req: &StreamsGroupHeartbeatRequest,
@@ -63,12 +76,7 @@ pub(super) fn build_member(
         .user_endpoint
         .as_ref()
         .map(|ep| (ep.host.clone(), ep.port));
-    if let Some(tags) = &req.client_tags {
-        m.client_tags = tags
-            .iter()
-            .map(|kv| (kv.key.clone(), kv.value.clone()))
-            .collect();
-    }
+    update_client_tags(&mut m, req);
     m.rebalance_timeout_ms = req.rebalance_timeout_ms;
     if let Some(topo) = &req.topology {
         m.topology_epoch = topo.epoch;

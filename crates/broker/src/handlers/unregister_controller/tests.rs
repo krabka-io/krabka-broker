@@ -122,9 +122,12 @@ async fn finalize_metadata_version(broker: &Broker, level: i16) {
         FeatureUpdateKey, MAX_VERSION as UPDATE_FEATURES_VERSION, UpdateFeaturesRequest,
     };
 
-    let principal = crate::test_support::principal("Cluster:Alter");
-    let peer = crate::test_support::peer();
-    let ctx = crate::test_support::request_context(&principal, &peer, "kafka-features");
+    request_identity!(
+        (principal, peer, ctx),
+        crate::test_support::principal("Cluster:Alter"),
+        client_id = "kafka-features",
+        address = crate::test_support::peer()
+    );
     let answer = crate::handlers::update_features::answer(
         broker,
         UpdateFeaturesRequest {
@@ -163,8 +166,11 @@ async fn send(
     principal: &str,
     controller_id: i32,
 ) -> UnregisterControllerResponse {
-    let principal = crate::test_support::principal(principal);
-    let peer = crate::test_support::peer();
+    request_identity!(
+        (principal, peer),
+        crate::test_support::principal(principal),
+        crate::test_support::peer()
+    );
     let ctx = crate::handlers::RequestContext::new(
         &principal,
         &peer,

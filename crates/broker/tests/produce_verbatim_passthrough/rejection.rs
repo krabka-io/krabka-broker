@@ -12,8 +12,11 @@ use krabka_protocol::records::{
     Attributes, CRC_COVERAGE_START, HEADER_LEN, Record, RecordBatch, RecordsPayload,
 };
 
-use crate::harness::{
-    batch, boot, create_topic, encode_batch, produce_one, produce_payload, topic_id_for,
+use crate::{
+    harness::{
+        batch, boot, create_topic, encode_batch, produce_one, produce_payload, topic_id_for,
+    },
+    support::{client::connect_client, records::value_record},
 };
 
 /// Control batches are broker-internal transaction markers. A client-authored
@@ -24,11 +27,7 @@ async fn client_control_batch_is_rejected() {
     let (broker, bootstrap, _dir) = boot().await;
     create_topic(&broker, &bootstrap, "ctrl").await;
 
-    let client = krabka_client_core::Client::builder()
-        .bootstrap(bootstrap.clone())
-        .build()
-        .await
-        .unwrap();
+    let client = connect_client(bootstrap.clone(), None).await;
     let topic_id = topic_id_for(&client, "ctrl").await;
 
     // A (non-compressed) control batch with one marker-shaped record.
@@ -40,10 +39,8 @@ async fn client_control_batch_is_rejected() {
     };
     b.attributes = Attributes::default().with_control(true);
     b.records.push(Record {
-        offset_delta: 0,
         key: Some(Bytes::from_static(&[0, 0, 0, 0])),
-        value: Some(Bytes::from_static(&[0, 0, 0, 0])),
-        ..Default::default()
+        ..value_record(0, Some(Bytes::from_static(&[0, 0, 0, 0])))
     });
 
     let error = produce_one(&client, "ctrl", topic_id, b)
@@ -60,11 +57,7 @@ async fn crc_valid_malformed_record_body_is_rejected() {
     let (broker, bootstrap, _dir) = boot().await;
     create_topic(&broker, &bootstrap, "malformed-body").await;
 
-    let client = krabka_client_core::Client::builder()
-        .bootstrap(bootstrap)
-        .build()
-        .await
-        .unwrap();
+    let client = connect_client(bootstrap, None).await;
     let topic_id = topic_id_for(&client, "malformed-body").await;
     let mut wire = encode_batch(&batch(CompressionType::None, 1, b"valid")).to_vec();
     wire[HEADER_LEN] = 0; // zero-length first record body

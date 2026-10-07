@@ -18,13 +18,10 @@ use super::{
 // A metadata image that holds each group config in `overrides`: a group id
 // and its `share.*` entries.
 use crate::coordinator::unified::test_support::group_config_image as group_image;
-use crate::{
-    codes,
-    coordinator::unified::{
-        GroupCoordinator, config::NextGenConfig, offsets_log::fake::InMemoryOffsetsLog,
-        share::config::ShareGroupConfig, streams::config::StreamsGroupConfig,
-        test_support::fixed_source,
-    },
+use crate::coordinator::unified::{
+    GroupCoordinator, config::NextGenConfig, offsets_log::fake::InMemoryOffsetsLog,
+    share::config::ShareGroupConfig, streams::config::StreamsGroupConfig,
+    test_support::fixed_source,
 };
 
 /// A coordinator over topic `t` with four partitions, whose metadata image
@@ -138,19 +135,11 @@ async fn a_group_expires_a_member_by_its_own_session_timeout() {
             ],
         )],
     );
-    let mut epochs = Vec::new();
-    for group_id in ["brief", "plain"] {
-        let handle = coordinator.get_or_create_share(group_id);
-        let joined = join(&handle, "m1", 0).await;
-        check!(joined.error_code == codes::NONE, "{group_id}");
-        epochs.push((group_id, handle, joined.member_epoch));
-    }
-    tokio::time::sleep(Duration::from_millis(300)).await;
-    let mut answers = Vec::new();
-    for (group_id, handle, epoch) in &epochs {
-        answers.push((*group_id, join(handle, "m1", *epoch).await.error_code));
-    }
-    assert!(answers == [("brief", codes::UNKNOWN_MEMBER_ID), ("plain", codes::NONE)]);
+    crate::coordinator::unified::test_support::check_group_session_timeout(
+        |id| coordinator.get_or_create_share(id),
+        join,
+    )
+    .await;
 }
 
 /// Kafka's `canComputeNextTargetAssignment`: a second member that joins
@@ -170,25 +159,16 @@ async fn a_group_assigns_no_sooner_than_its_own_assignment_interval() {
             ("paced", &[("share.assignment.interval.ms", "300")]),
         ],
     );
-    let mut joined = Vec::new();
-    let mut handles = Vec::new();
-    for group_id in ["slow", "fast", "paced"] {
-        let handle = coordinator.get_or_create_share(group_id);
-        seed_initialized(&handle, topic_id, "t", vec![0, 1, 2, 3]).await;
-        let first = join(&handle, "m1", 0).await;
-        check!(first.member_epoch == 1, "{group_id}");
-        joined.push((group_id, join(&handle, "m2", 0).await.member_epoch));
-        handles.push((group_id, handle));
-    }
-    assert!(joined == [("slow", 1), ("fast", 2), ("paced", 1)]);
-
-    // The paced group's interval elapses; the next heartbeat computes the
-    // assignment that its second member was waiting for.
-    tokio::time::sleep(Duration::from_millis(400)).await;
-    let (_, paced) = &handles[2];
-    check!(join(paced, "m1", 1).await.member_epoch == 2);
-    check!(join(paced, "m2", 1).await.member_epoch == 2);
-    // The slow group still waits for the broker's minute.
-    let (_, slow) = &handles[0];
-    check!(join(slow, "m2", 1).await.member_epoch == 1);
+    crate::coordinator::unified::test_support::check_group_assignment_timing(
+        async |id| {
+            let handle = coordinator.get_or_create_share(id);
+            seed_initialized(&handle, topic_id, "t", vec![0, 1, 2, 3]).await;
+            handle
+        },
+        join,
+        |response| {
+            check!(response.1 == 2);
+        },
+    )
+    .await;
 }

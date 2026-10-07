@@ -159,17 +159,14 @@ mod tests {
 
     use super::*;
     use crate::{
-        core::test_support::{FakeLog, machine, voters},
+        core::test_support::{FakeLog, machine, three_voter_machine, voters},
         event::Event,
     };
 
     /// A follower attached to voter 2 at epoch 4 before it resigns.
     fn following_second_voter() -> (QuorumStateMachine, FakeLog) {
-        let mut m = machine(NodeId(1), &[NodeId(1), NodeId(2), NodeId(3)]);
-        let log = FakeLog {
-            end: 5,
-            last_epoch: 1,
-        };
+        let mut m = three_voter_machine();
+        let log = FakeLog::new(5, 1);
         m.on_event(
             Event::ReceiveBeginQuorumEpoch {
                 leader_id: NodeId(2),
@@ -183,11 +180,8 @@ mod tests {
 
     #[test]
     fn begin_quorum_epoch_makes_us_follower() {
-        let mut m = machine(NodeId(1), &[NodeId(1), NodeId(2), NodeId(3)]);
-        let log = FakeLog {
-            end: 5,
-            last_epoch: 1,
-        };
+        let mut m = three_voter_machine();
+        let log = FakeLog::new(5, 1);
         let actions = m.on_event(
             Event::ReceiveBeginQuorumEpoch {
                 leader_id: NodeId(2),
@@ -243,12 +237,9 @@ mod tests {
 
     #[test]
     fn stale_begin_quorum_epoch_ignored() {
-        let mut m = machine(NodeId(1), &[NodeId(1), NodeId(2), NodeId(3)]);
+        let mut m = three_voter_machine();
         m.force_epoch(7);
-        let log = FakeLog {
-            end: 5,
-            last_epoch: 7,
-        };
+        let log = FakeLog::new(5, 7);
         let actions = m.on_event(
             Event::ReceiveBeginQuorumEpoch {
                 leader_id: NodeId(2),
@@ -264,12 +255,9 @@ mod tests {
     fn begin_quorum_epoch_from_adjacent_voter_view_is_accepted() {
         // KIP-853: a newly elected leader may be absent from our temporarily
         // stale local voter view. Adopt the higher epoch and fetch its log.
-        let mut m = machine(NodeId(1), &[NodeId(1), NodeId(2), NodeId(3)]);
+        let mut m = three_voter_machine();
         let _ = m.apply_voter_set(voters(&[NodeId(1), NodeId(2), NodeId(99)]), SimInstant(0));
-        let log = FakeLog {
-            end: 5,
-            last_epoch: 1,
-        };
+        let log = FakeLog::new(5, 1);
         let actions = m.on_event(
             Event::ReceiveBeginQuorumEpoch {
                 leader_id: NodeId(99), // not a voter
@@ -296,11 +284,8 @@ mod tests {
     #[test]
     fn begin_quorum_epoch_from_voter_leader_still_accepted() {
         // C-2 must not break the legitimate path: a voter leader is adopted.
-        let mut m = machine(NodeId(1), &[NodeId(1), NodeId(2), NodeId(3)]);
-        let log = FakeLog {
-            end: 5,
-            last_epoch: 1,
-        };
+        let mut m = three_voter_machine();
+        let log = FakeLog::new(5, 1);
         let actions = m.on_event(
             Event::ReceiveBeginQuorumEpoch {
                 leader_id: NodeId(2), // a real voter
@@ -405,10 +390,7 @@ mod tests {
 
     #[test]
     fn begin_quorum_epoch_membership_and_duplicate_leader_checks() {
-        let log = FakeLog {
-            end: 5,
-            last_epoch: 1,
-        };
+        let log = FakeLog::new(5, 1);
 
         // 1. When voters known, unknown leader is rejected
         let mut m = machine(NodeId(1), &[NodeId(1), NodeId(2)]);
@@ -451,7 +433,7 @@ mod tests {
         check!(m3.quorum_state().leader_id == Some(NodeId(99)));
 
         // 4. Duplicate leader for same epoch is rejected
-        let mut m4 = machine(NodeId(1), &[NodeId(1), NodeId(2), NodeId(3)]);
+        let mut m4 = three_voter_machine();
         m4.on_event(
             Event::ReceiveBeginQuorumEpoch {
                 leader_id: NodeId(2),
@@ -477,10 +459,7 @@ mod tests {
     fn end_quorum_epoch_ignores_stale_epoch() {
         let mut m = machine(NodeId(1), &[NodeId(1), NodeId(2)]);
         m.force_epoch(4);
-        let log = FakeLog {
-            end: 5,
-            last_epoch: 1,
-        };
+        let log = FakeLog::new(5, 1);
         let actions = m.on_event(
             Event::ReceiveEndQuorumEpoch {
                 leader_id: NodeId(2),

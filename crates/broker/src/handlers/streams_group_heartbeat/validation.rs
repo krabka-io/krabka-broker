@@ -155,17 +155,7 @@ mod tests {
     /// A valid join: a member id, a rebalance timeout, three empty task lists
     /// and a topology.
     fn join() -> StreamsGroupHeartbeatRequest {
-        StreamsGroupHeartbeatRequest {
-            group_id: "g".into(),
-            member_id: "m1".into(),
-            member_epoch: 0,
-            rebalance_timeout_ms: 1_000,
-            active_tasks: Some(vec![]),
-            standby_tasks: Some(vec![]),
-            warmup_tasks: Some(vec![]),
-            topology: Some(topology()),
-            ..Default::default()
-        }
+        crate::handlers::group_heartbeat_test_support::streams_request("g", "m1")
     }
 
     fn heartbeat(member_epoch: i32) -> StreamsGroupHeartbeatRequest {

@@ -1,16 +1,14 @@
 //! Produce batch-header admission.
 
-#[cfg(creusot)]
-use std::clone::Clone;
-
 use creusot_std::prelude::*;
 
-#[cfg_attr(creusot, derive(Clone, Copy, DeepModel))]
-#[cfg_attr(not(creusot), derive(Clone, Copy, Debug, PartialEq, Eq))]
-pub enum ProduceBatchAdmission {
-    Admit,
-    InvalidRecord,
-    InvalidTimestamp,
+model_types! {
+    @proof (derive(std::clone::Clone, Copy, DeepModel));
+    pub enum ProduceBatchAdmission {
+        Admit,
+        InvalidRecord,
+        InvalidTimestamp,
+    }
 }
 
 /// Compute the exclusive durability frontier for an acknowledged Produce
@@ -42,20 +40,10 @@ pub fn produce_durability_frontier(base_offset: i64, last_offset_delta: i32) -> 
         || control_batch
         || (producer_id@ >= 0 && base_sequence@ < 0)))]
 #[ensures((result == ProduceBatchAdmission::InvalidTimestamp) ==
-    (0 <= last_offset_delta@
-        && last_offset_delta@ < i32::MAX@
-        && records_count@ == last_offset_delta@ + 1
-        && records_count@ > 0
-        && !control_batch
-        && (producer_id@ < 0 || base_sequence@ >= 0)
+    (record_header_valid(last_offset_delta@, records_count@, control_batch, producer_id@, base_sequence@)
         && !create_time))]
 #[ensures((result == ProduceBatchAdmission::Admit) ==
-    (0 <= last_offset_delta@
-        && last_offset_delta@ < i32::MAX@
-        && records_count@ == last_offset_delta@ + 1
-        && records_count@ > 0
-        && !control_batch
-        && (producer_id@ < 0 || base_sequence@ >= 0)
+    (record_header_valid(last_offset_delta@, records_count@, control_batch, producer_id@, base_sequence@)
         && create_time))]
 #[must_use]
 pub fn produce_batch_admission(
@@ -79,6 +67,20 @@ pub fn produce_batch_admission(
     } else {
         ProduceBatchAdmission::Admit
     }
+}
+
+open_logic! {
+/// A data batch has a representable successor, exact positive cardinality and a valid producer sequence.
+fn record_header_valid(
+    delta: Int,
+    count: Int,
+    control: bool,
+    producer: Int,
+    sequence: Int,
+) -> bool {
+    pearlite! { 0 <= delta && delta < i32::MAX@ && count == delta + 1 && count > 0
+    && !control && (producer < 0 || sequence >= 0) }
+}
 }
 
 #[cfg(test)]

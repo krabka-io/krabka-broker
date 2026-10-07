@@ -190,17 +190,23 @@ impl ReplicatorSupervisor {
                 log_config: &self.log_config,
                 log_dir_status: &self.log_dir_status,
                 producer_state: &self.producer_state,
-                max_produce_group: self.max_produce_group,
-                partition_writer_queue_depth: self.partition_writer_queue_depth,
-                diskless_wal_local_replica_count: self.diskless_wal_local_replica_count,
-                diskless,
-                hot_tail: Some(self.hot_tail.clone()),
-                wal_shards: Some(self.wal_shards.clone()),
-                sequencer: diskless.then(|| {
-                    Arc::new(crate::wal::ControllerSequencer::new(
-                        self.controller.clone(),
-                    )) as Arc<dyn crate::wal::OffsetSequencer>
-                }),
+                runtime: crate::partition::PartitionRuntimeConfig::new(
+                    (
+                        self.max_produce_group,
+                        self.partition_writer_queue_depth,
+                        self.diskless_wal_local_replica_count,
+                    ),
+                    diskless,
+                    (
+                        Some(self.hot_tail.clone()),
+                        Some(self.wal_shards.clone()),
+                        diskless.then(|| {
+                            Arc::new(crate::wal::ControllerSequencer::new(
+                                self.controller.clone(),
+                            )) as Arc<dyn crate::wal::OffsetSequencer>
+                        }),
+                    ),
+                ),
             },
             initial_target,
         )
@@ -212,28 +218,21 @@ mod tests {
     use std::sync::atomic::Ordering;
 
     use assert2::assert;
-    use krabka_metadata::{MetadataRecord, TopicRecord};
+    use krabka_metadata::MetadataRecord;
     use krabka_raft::NodeId;
     use uuid::Uuid;
 
     use super::*;
     use crate::replicator_supervisor::test_support::{
-        follower_promotion_images, image_with, partition_record, supervisor_fixture, topic_record,
+        follower_promotion_images, image_with, partition_record, reconciled_partition,
+        supervisor_fixture, three_replica_image, topic_record,
     };
 
     #[tokio::test]
     async fn reconcile_materializes_leader_partition_and_installs_isr() {
-        let img = image_with(&[
-            topic_record("t", 1),
-            partition_record("t", 0, NodeId(2), vec![NodeId(1), NodeId(2), NodeId(3)], 7),
-        ]);
-        let (supervisor, partitions, _reporter, _dir) = supervisor_fixture(img.clone());
-
-        supervisor.reconcile(&img).await;
-
-        let part = partitions
-            .get("t", PartitionIndex(0))
-            .expect("local leader materialized");
+        let img = three_replica_image(NodeId(2), 7);
+        let ((_supervisor, _partitions, _reporter, _dir), part) =
+            reconciled_partition(&img, "local leader materialized").await;
         assert!(
             part.current_leader
                 .load(std::sync::atomic::Ordering::Acquire)
@@ -256,11 +255,8 @@ mod tests {
     #[tokio::test]
     async fn reconcile_records_a_promoted_leader_epoch_at_the_log_end() {
         let (as_follower, as_leader) = follower_promotion_images();
-        let (supervisor, partitions, _reporter, _dir) = supervisor_fixture(as_follower.clone());
-        supervisor.reconcile(&as_follower).await;
-        let part = partitions
-            .get("t", PartitionIndex(0))
-            .expect("local follower materialized");
+        let ((supervisor, _partitions, _reporter, _dir), part) =
+            reconciled_partition(&as_follower, "local follower materialized").await;
         for _ in 0..2 {
             let mut batch = krabka_protocol::records::RecordBatch {
                 partition_leader_epoch: 3,
@@ -269,16 +265,7 @@ mod tests {
             };
             part.log.lock().unwrap().append(&mut batch).unwrap();
         }
-        let history = || -> Vec<(i32, i64)> {
-            part.log
-                .lock()
-                .unwrap()
-                .epoch_checkpoint()
-                .entries()
-                .iter()
-                .map(|entry| (entry.epoch.0, entry.start_offset.0))
-                .collect()
-        };
+        let history = || part.epoch_history();
         assert!(
             history() == [(3, 0)],
             "a follower records only what it wrote"
@@ -295,24 +282,8 @@ mod tests {
         }
     }
 
-    /// A disk that refuses every write to the leader-epoch checkpoint.
-    #[derive(Debug)]
-    struct EpochCheckpointFull;
-
-    impl krabka_log::LogIo for EpochCheckpointFull {
-        fn write_at(
-            &self,
-            target: krabka_log::IoTarget,
-            file: &std::fs::File,
-            buf: &[u8],
-        ) -> std::io::Result<usize> {
-            use std::io::Write as _;
-            if target == krabka_log::IoTarget::LeaderEpochCheckpoint {
-                return Err(std::io::ErrorKind::PermissionDenied.into());
-            }
-            (&*file).write(buf)
-        }
-    }
+    // A disk that refuses every write to the leader-epoch checkpoint.
+    krabka_macros::epoch_checkpoint_failure!(EpochCheckpointFull, PermissionDenied);
 
     /// Kafka's `LeaderEpochFileCache` reports a checkpoint write that fails to
     /// `LogDirFailureChannel`, so a promotion that cannot record its epoch
@@ -321,11 +292,8 @@ mod tests {
     #[tokio::test]
     async fn a_promotion_that_cannot_record_its_epoch_takes_the_log_directory_offline() {
         let (as_follower, as_leader) = follower_promotion_images();
-        let (supervisor, partitions, _reporter, dir) = supervisor_fixture(as_follower.clone());
-        supervisor.reconcile(&as_follower).await;
-        let part = partitions
-            .get("t", PartitionIndex(0))
-            .expect("local follower materialized");
+        let ((supervisor, _partitions, _reporter, dir), part) =
+            reconciled_partition(&as_follower, "local follower materialized").await;
         part.log
             .lock()
             .unwrap()
@@ -378,17 +346,9 @@ mod tests {
 
     #[tokio::test]
     async fn reconcile_materializes_follower_but_does_not_install_isr() {
-        let img = image_with(&[
-            topic_record("t", 1),
-            partition_record("t", 0, NodeId(1), vec![NodeId(1), NodeId(2), NodeId(3)], 7),
-        ]);
-        let (supervisor, partitions, _reporter, _dir) = supervisor_fixture(img.clone());
-
-        supervisor.reconcile(&img).await;
-
-        let part = partitions
-            .get("t", PartitionIndex(0))
-            .expect("local follower materialized");
+        let img = three_replica_image(NodeId(1), 7);
+        let ((_supervisor, _partitions, _reporter, _dir), part) =
+            reconciled_partition(&img, "local follower materialized").await;
         let state = part.replica_state.lock().await;
         assert!(state.isr.is_empty());
     }
@@ -409,12 +369,7 @@ mod tests {
     async fn non_diskless_materialization_installs_target_before_registry_visibility() {
         let topic_id = Uuid::new_v4();
         let img = image_with(&[
-            MetadataRecord::V1Topic(TopicRecord {
-                name: "t".into(),
-                topic_id,
-                partitions: 1,
-                replication_factor: 1,
-            }),
+            MetadataRecord::V1Topic(crate::test_support::single_partition_topic("t", topic_id)),
             partition_record("t", 0, NodeId(2), vec![NodeId(2)], 7),
         ]);
         let (supervisor, partitions, _reporter, _dir) = supervisor_fixture(img.clone());
@@ -443,12 +398,9 @@ mod tests {
     async fn diskless_materialization_keeps_leader_unpublished_until_hydration() {
         let topic_id = Uuid::new_v4();
         let img = image_with(&[
-            MetadataRecord::V1Topic(TopicRecord {
-                name: "diskless".into(),
-                topic_id,
-                partitions: 1,
-                replication_factor: 1,
-            }),
+            MetadataRecord::V1Topic(crate::test_support::single_partition_topic(
+                "diskless", topic_id,
+            )),
             partition_record("diskless", 0, NodeId(2), vec![NodeId(2)], 7),
             MetadataRecord::V1TopicConfig(krabka_metadata::TopicConfigRecord {
                 topic: "diskless".into(),

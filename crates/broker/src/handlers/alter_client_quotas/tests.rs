@@ -23,6 +23,25 @@ use crate::{
 
 crate::test_support::context_helper!(client_id = "admin-client");
 
+fn expected_entry(
+    entity: (&str, Option<&str>),
+    error_code: i16,
+    error_message: Option<String>,
+) -> RespEntry {
+    tagged_wire!(RespEntry {
+        error_code,
+        error_message,
+        entity: vec![tagged_wire!(RespEntity {
+            entity_type: entity.0.into(),
+            entity_name: entity.1.map(str::to_owned),
+        })],
+    })
+}
+
+fn expected_response(entries: Vec<RespEntry>) -> AlterClientQuotasResponse {
+    unthrottled_wire!(AlterClientQuotasResponse { entries })
+}
+
 fn quota_value(handle: &BrokerHandle, user: &str, quota_key: &str) -> Option<f64> {
     let key: krabka_metadata::EntityKey = vec![("user".into(), Some(user.into()))];
     handle
@@ -44,41 +63,29 @@ fn whole_request_error_answers_every_entry() {
 
     let resp = whole_request_error(&req, CLUSTER_AUTHORIZATION_FAILED, "denied");
 
-    let expected = AlterClientQuotasResponse {
-        throttle_time_ms: 0,
-        entries: vec![
-            RespEntry {
-                error_code: CLUSTER_AUTHORIZATION_FAILED,
-                error_message: Some("denied".into()),
-                entity: vec![RespEntity {
-                    entity_type: "user".into(),
-                    entity_name: Some("alice".into()),
-                    unknown_tagged_fields: UnknownTaggedFields::default(),
-                }],
-                unknown_tagged_fields: UnknownTaggedFields::default(),
-            },
-            RespEntry {
-                error_code: CLUSTER_AUTHORIZATION_FAILED,
-                error_message: Some("denied".into()),
-                entity: vec![RespEntity {
-                    entity_type: "client-id".into(),
-                    entity_name: Some("app".into()),
-                    unknown_tagged_fields: UnknownTaggedFields::default(),
-                }],
-                unknown_tagged_fields: UnknownTaggedFields::default(),
-            },
-        ],
-        unknown_tagged_fields: UnknownTaggedFields::default(),
-    };
+    let expected = expected_response(vec![
+        expected_entry(
+            ("user", Some("alice")),
+            CLUSTER_AUTHORIZATION_FAILED,
+            Some("denied".into()),
+        ),
+        expected_entry(
+            ("client-id", Some("app")),
+            CLUSTER_AUTHORIZATION_FAILED,
+            Some("denied".into()),
+        ),
+    ]);
     assert!(resp == expected);
 }
 
 #[tokio::test]
 async fn handle_denies_cluster_alter_for_each_entry() {
     let version = 1;
-    let (broker_handle, _dir) = start_broker(Arc::new(DenyAll)).await;
-    let broker = broker_handle.broker_arc_for_test();
-    test_ctx!(ctx, "alice");
+    broker_fixture!(
+        (broker_handle, _dir, broker),
+        deny_all,
+        context(ctx, "alice")
+    );
     let req = request(
         vec![entry(
             vec![("user", Some("alice"))],
@@ -89,20 +96,11 @@ async fn handle_denies_cluster_alter_for_each_entry() {
 
     let resp = handle(&broker, req, version, &ctx).await.expect("handle");
 
-    let expected = AlterClientQuotasResponse {
-        throttle_time_ms: 0,
-        entries: vec![RespEntry {
-            error_code: CLUSTER_AUTHORIZATION_FAILED,
-            error_message: Some("Cluster authorization failed.".into()),
-            entity: vec![RespEntity {
-                entity_type: "user".into(),
-                entity_name: Some("alice".into()),
-                unknown_tagged_fields: UnknownTaggedFields::default(),
-            }],
-            unknown_tagged_fields: UnknownTaggedFields::default(),
-        }],
-        unknown_tagged_fields: UnknownTaggedFields::default(),
-    };
+    let expected = expected_response(vec![expected_entry(
+        ("user", Some("alice")),
+        CLUSTER_AUTHORIZATION_FAILED,
+        Some("Cluster authorization failed.".into()),
+    )]);
     assert!(resp == expected);
     assert!(quota_value(&broker_handle, "alice", "producer_byte_rate") == None);
     broker_handle.shutdown().await;
@@ -114,11 +112,12 @@ async fn handle_denies_cluster_alter_for_each_entry() {
 #[tokio::test]
 async fn cluster_alter_configs_gates_the_quota_write() {
     let version = 1;
-    let (broker_handle, _dir) = start_broker(Arc::new(
-        crate::authorizer::SimpleAclAuthorizer::new(std::collections::HashSet::new()),
-    ))
-    .await;
-    let broker = broker_handle.broker_arc_for_test();
+    broker_fixture!(
+        (broker_handle, _dir, broker),
+        start_broker(Arc::new(crate::authorizer::SimpleAclAuthorizer::new(
+            std::collections::HashSet::new()
+        ),))
+    );
     let peer = peer();
 
     for (user, grant, allowed) in [
@@ -155,20 +154,11 @@ async fn cluster_alter_configs_gates_the_quota_write() {
                 Some("Cluster authorization failed.".to_string()),
             )
         };
-        let expected = AlterClientQuotasResponse {
-            throttle_time_ms: 0,
-            entries: vec![RespEntry {
-                error_code,
-                error_message,
-                entity: vec![RespEntity {
-                    entity_type: "user".into(),
-                    entity_name: Some(user.into()),
-                    unknown_tagged_fields: UnknownTaggedFields::default(),
-                }],
-                unknown_tagged_fields: UnknownTaggedFields::default(),
-            }],
-            unknown_tagged_fields: UnknownTaggedFields::default(),
-        };
+        let expected = expected_response(vec![expected_entry(
+            ("user", Some(user)),
+            error_code,
+            error_message,
+        )]);
         assert2::check!(resp == expected, "user {user} with grant {grant:?}");
         let stored = allowed.then_some(1024.0);
         assert2::check!(
@@ -182,9 +172,11 @@ async fn cluster_alter_configs_gates_the_quota_write() {
 #[tokio::test]
 async fn handle_returns_entry_results_and_submits_valid_changes() {
     let version = 1;
-    let (broker_handle, _dir) = start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
-    let broker = broker_handle.broker_arc_for_test();
-    test_ctx!(ctx, "admin");
+    broker_fixture!(
+        (broker_handle, _dir, broker),
+        allow_all,
+        context(ctx, "admin")
+    );
     let req = request(
         vec![
             entry(
@@ -201,32 +193,14 @@ async fn handle_returns_entry_results_and_submits_valid_changes() {
 
     let resp = handle(&broker, req, version, &ctx).await.expect("handle");
 
-    let expected = AlterClientQuotasResponse {
-        throttle_time_ms: 0,
-        entries: vec![
-            RespEntry {
-                error_code: 0,
-                error_message: None,
-                entity: vec![RespEntity {
-                    entity_type: "user".into(),
-                    entity_name: Some("alice".into()),
-                    unknown_tagged_fields: UnknownTaggedFields::default(),
-                }],
-                unknown_tagged_fields: UnknownTaggedFields::default(),
-            },
-            RespEntry {
-                error_code: INVALID_REQUEST,
-                error_message: Some("Invalid configuration key unknown_quota_key".into()),
-                entity: vec![RespEntity {
-                    entity_type: "user".into(),
-                    entity_name: Some("bob".into()),
-                    unknown_tagged_fields: UnknownTaggedFields::default(),
-                }],
-                unknown_tagged_fields: UnknownTaggedFields::default(),
-            },
-        ],
-        unknown_tagged_fields: UnknownTaggedFields::default(),
-    };
+    let expected = expected_response(vec![
+        expected_entry(("user", Some("alice")), 0, None),
+        expected_entry(
+            ("user", Some("bob")),
+            INVALID_REQUEST,
+            Some("Invalid configuration key unknown_quota_key".into()),
+        ),
+    ]);
     assert!(resp == expected);
     for (user, quota_key, want) in [
         ("alice", "producer_byte_rate", Some(1024.0)),
@@ -243,9 +217,11 @@ async fn handle_returns_entry_results_and_submits_valid_changes() {
 #[tokio::test]
 async fn handle_validate_only_reports_success_without_submitting() {
     let version = 1;
-    let (broker_handle, _dir) = start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
-    let broker = broker_handle.broker_arc_for_test();
-    test_ctx!(ctx, "admin");
+    broker_fixture!(
+        (broker_handle, _dir, broker),
+        allow_all,
+        context(ctx, "admin")
+    );
     let req = request(
         vec![entry(
             vec![("user", Some("carol"))],
@@ -256,20 +232,7 @@ async fn handle_validate_only_reports_success_without_submitting() {
 
     let resp = handle(&broker, req, version, &ctx).await.expect("handle");
 
-    let expected = AlterClientQuotasResponse {
-        throttle_time_ms: 0,
-        entries: vec![RespEntry {
-            error_code: 0,
-            error_message: None,
-            entity: vec![RespEntity {
-                entity_type: "user".into(),
-                entity_name: Some("carol".into()),
-                unknown_tagged_fields: UnknownTaggedFields::default(),
-            }],
-            unknown_tagged_fields: UnknownTaggedFields::default(),
-        }],
-        unknown_tagged_fields: UnknownTaggedFields::default(),
-    };
+    let expected = expected_response(vec![expected_entry(("user", Some("carol")), 0, None)]);
     assert!(resp == expected);
     assert!(quota_value(&broker_handle, "carol", "producer_byte_rate") == None);
     broker_handle.shutdown().await;
@@ -282,33 +245,20 @@ async fn handle_validate_only_reports_success_without_submitting() {
 async fn repeated_entity_answers_one_row_with_and_without_validate_only() {
     let version = 1;
     test_ctx!(ctx, "admin");
-    let row = |name: &str, code: i16, message: Option<&str>| RespEntry {
-        error_code: code,
-        error_message: message.map(Into::into),
-        entity: vec![RespEntity {
-            entity_type: "user".into(),
-            entity_name: Some(name.into()),
-            unknown_tagged_fields: UnknownTaggedFields::default(),
-        }],
-        unknown_tagged_fields: UnknownTaggedFields::default(),
+    let row = |name: &str, code: i16, message: Option<&str>| {
+        expected_entry(("user", Some(name)), code, message.map(Into::into))
     };
-    let expected = AlterClientQuotasResponse {
-        throttle_time_ms: 0,
-        entries: vec![
-            row(
-                "dave",
-                INVALID_REQUEST,
-                Some("Ignoring duplicate entity ClientQuotaEntity(entries={user=dave})"),
-            ),
-            row("erin", 0, None),
-        ],
-        unknown_tagged_fields: UnknownTaggedFields::default(),
-    };
+    let expected = expected_response(vec![
+        row(
+            "dave",
+            INVALID_REQUEST,
+            Some("Ignoring duplicate entity ClientQuotaEntity(entries={user=dave})"),
+        ),
+        row("erin", 0, None),
+    ]);
 
     for (validate_only, stored) in [(true, [None, None]), (false, [Some(1024.0), Some(4.0)])] {
-        let (broker_handle, _dir) =
-            start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
-        let broker = broker_handle.broker_arc_for_test();
+        broker_fixture!((broker_handle, _dir, broker), allow_all);
         let req = request(
             vec![
                 entry(

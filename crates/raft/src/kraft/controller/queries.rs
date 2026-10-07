@@ -19,6 +19,7 @@ use crate::{
     error::RaftError,
     kraft::{
         core::QuorumStateMachine,
+        log::KraftLog,
         role::{ReplicaProgress, Role},
         transport::{MetadataFetchSlice, ObserverReplica, QuorumStateSnapshot},
         types::{NodeId, SimInstant},
@@ -44,6 +45,38 @@ fn observer_session_expired(progress: &ReplicaProgress, now: SimInstant) -> bool
 /// snapshot, before the loop runs).
 pub fn initial_state_voters(core: &QuorumStateMachine) -> Vec<NodeId> {
     core.quorum_state().voters.ids().into_iter().collect()
+}
+
+/// Consensus snapshot published before the engine has tracked any replica progress.
+pub fn initial_quorum_snapshot(
+    core: &QuorumStateMachine,
+    log: &KraftLog,
+    high_watermark: i64,
+) -> QuorumStateSnapshot {
+    QuorumStateSnapshot {
+        leader_id: core.quorum_state().leader_id,
+        leader_epoch: core.quorum_state().leader_epoch,
+        high_watermark,
+        quorum_high_watermark: high_watermark,
+        log_end_offset: log.log_end_offset().0,
+        log_start_offset: log.log_start_offset().0,
+        voters: core.quorum_state().voters.clone(),
+        voted_directory_id: core
+            .quorum_state()
+            .voted_key
+            .as_ref()
+            .map(|key| key.directory_id),
+        observers: Vec::new(),
+        per_replica_fetch_offset: std::collections::BTreeMap::new(),
+        per_replica_last_fetch_ms: std::collections::BTreeMap::new(),
+        per_replica_last_caught_up_ms: std::collections::BTreeMap::new(),
+        is_leader: core.role().is_leader(),
+        current_state: if core.role().is_leader() {
+            "leader"
+        } else {
+            "follower"
+        },
+    }
 }
 
 impl Engine {

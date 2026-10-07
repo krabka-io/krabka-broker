@@ -1,51 +1,43 @@
 //! Break-glass proposal admission and deterministic selection.
 
-#[cfg(creusot)]
-use std::clone::Clone;
-
 use creusot_std::prelude::*;
 
-/// First fail-closed reason that prevents a proposal from being spent.
-#[cfg_attr(creusot, derive(Clone, Copy, DeepModel))]
-#[cfg_attr(not(creusot), derive(Clone, Copy, Debug, PartialEq, Eq))]
-pub enum BreakGlassAdmission {
-    Withdrawn,
-    Consumed,
-    Expired,
-    NotEnoughApprovals,
-    Unsigned,
-    Usable,
-}
+model_types! {
+    @proof (derive(std::clone::Clone, Copy, DeepModel));
+    /// First fail-closed reason that prevents a proposal from being spent.
+    pub enum BreakGlassAdmission {
+        Withdrawn,
+        Consumed,
+        Expired,
+        NotEnoughApprovals,
+        Unsigned,
+        Usable,
+    }
 
-/// Whether the configured policy requires signed approvals for the action.
-#[cfg_attr(creusot, derive(Clone, Copy, DeepModel))]
-#[cfg_attr(not(creusot), derive(Clone, Copy, Debug, PartialEq, Eq))]
-pub enum BreakGlassSignaturePolicy {
-    Optional,
-    Required,
-}
+    /// Whether the configured policy requires signed approvals for the action.
+    pub enum BreakGlassSignaturePolicy {
+        Optional,
+        Required,
+    }
 
-/// Whether the proposal carries at least one approval and every approval
-/// carries a key id and a signature.
-#[cfg_attr(creusot, derive(Clone, Copy, DeepModel))]
-#[cfg_attr(not(creusot), derive(Clone, Copy, Debug, PartialEq, Eq))]
-pub enum BreakGlassApprovalSigning {
-    AllSigned,
-    NotAllSigned,
-}
+    /// Whether the proposal carries at least one approval and every approval
+    /// carries a key id and a signature.
+    pub enum BreakGlassApprovalSigning {
+        AllSigned,
+        NotAllSigned,
+    }
 
-/// The independent lifecycle and approval facts of one covering proposal.
-#[cfg_attr(creusot, derive(Clone, Copy, DeepModel))]
-#[cfg_attr(not(creusot), derive(Clone, Copy, Debug, PartialEq, Eq))]
-pub struct BreakGlassProposalFacts {
-    pub withdrawn: bool,
-    pub consumed: bool,
-    pub expired: bool,
-    /// Distinct approving principals.
-    pub held_approvals: usize,
-    pub required_approvals: usize,
-    pub signature_policy: BreakGlassSignaturePolicy,
-    pub signing: BreakGlassApprovalSigning,
+    /// The independent lifecycle and approval facts of one covering proposal.
+    pub struct BreakGlassProposalFacts {
+        pub withdrawn: bool,
+        pub consumed: bool,
+        pub expired: bool,
+        /// Distinct approving principals.
+        pub held_approvals: usize,
+        pub required_approvals: usize,
+        pub signature_policy: BreakGlassSignaturePolicy,
+        pub signing: BreakGlassApprovalSigning,
+    }
 }
 
 /// Apply the break-glass lifecycle and approval checks in reporting order:

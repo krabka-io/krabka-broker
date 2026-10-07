@@ -13,15 +13,13 @@ use std::time::{Duration, Instant};
 use assert2::{assert, check};
 use krabka_broker::BrokerHandle;
 use krabka_client_core::Client;
-use krabka_protocol::owned::{
-    create_topics_request::{CreatableTopic, CreatableTopicConfig, CreateTopicsRequest},
-    list_offsets_request::{ListOffsetsPartition, ListOffsetsRequest, ListOffsetsTopic},
-};
+use krabka_protocol::owned::list_offsets_request::ListOffsetsRequest;
 
 use crate::{
     rlmm_cluster::{await_activation, build_client, start_broker_with_topic_rlmm},
     rlmm_round_trip::remote_log_files,
     run_broker_test,
+    support::offsets::{list_offset_partition, single_partition_list_offsets},
 };
 
 const TOPIC: &str = "tiered-idle-partition-itest";
@@ -78,34 +76,16 @@ async fn an_idle_tiered_partition_leaves_local_disk_through_its_last_record_case
 // newest timestamp is 0. `retention.ms=-1` keeps the remote tier from
 // deleting them for the same reason.
 async fn create_idle_tiered_topic(client: &Client) {
-    let config = |name: &str, value: &str| CreatableTopicConfig {
-        name: name.into(),
-        value: Some(value.into()),
-        ..Default::default()
-    };
-    let resp = client
-        .send(CreateTopicsRequest {
-            topics: vec![CreatableTopic {
-                name: TOPIC.into(),
-                num_partitions: 1,
-                replication_factor: 1,
-                configs: vec![
-                    config("remote.storage.enable", "true"),
-                    config("local.retention.ms", "1000"),
-                    config("retention.ms", "-1"),
-                ],
-                ..Default::default()
-            }],
-            timeout_ms: 5_000,
-            ..Default::default()
-        })
-        .await
-        .expect("CreateTopics");
-    assert!(
-        resp.topics[0].error_code == 0,
-        "CreateTopics failed: {:?}",
-        resp.topics[0].error_message
-    );
+    crate::topic_fixture::create_configured_topic(
+        client,
+        TOPIC,
+        crate::support::topics::topic_configs([
+            ("remote.storage.enable", "true"),
+            ("local.retention.ms", "1000"),
+            ("retention.ms", "-1"),
+        ]),
+    )
+    .await;
 }
 
 // intentional: the reconcile loop applies the topic config to the partition's
@@ -135,17 +115,8 @@ async fn list_offset(client: &Client, timestamp: i64) -> i64 {
     let mut resp = client
         .send(ListOffsetsRequest {
             replica_id: -1,
-            topics: vec![ListOffsetsTopic {
-                name: TOPIC.into(),
-                partitions: vec![ListOffsetsPartition {
-                    partition_index: 0,
-                    timestamp,
-                    ..Default::default()
-                }],
-                ..Default::default()
-            }],
             timeout_ms: 5_000,
-            ..Default::default()
+            ..single_partition_list_offsets(TOPIC, list_offset_partition(0, timestamp))
         })
         .await
         .expect("ListOffsets");

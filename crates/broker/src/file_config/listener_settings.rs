@@ -381,8 +381,6 @@ mod tests {
 
     #[test]
     fn apply_to_populates_listeners() {
-        use crate::config::BrokerConfig;
-
         let src = r#"
 inter_broker_listener_name = "PLAIN"
 
@@ -392,9 +390,7 @@ bind_addr = "0.0.0.0:9092"
 advertised = "demo-0:9092"
 protocol = "Plaintext"
 "#;
-        let file: FileConfig = toml::from_str(src).unwrap();
-        let mut cfg = BrokerConfig::default();
-        file.apply_to(&mut cfg).unwrap();
+        let cfg = crate::file_config::test_support::configured_unwrap_parse(src).unwrap();
 
         check!(cfg.listeners.len() == 1);
         check!(cfg.listeners[0].name.as_str() == "PLAIN");
@@ -939,16 +935,12 @@ connections_max_idle = "5s"
     fn apply_to_reads_quota_window_properties() {
         use krabka_units::secs;
 
-        use crate::config::BrokerConfig;
-
         let toml = r#"
 [server_properties]
 "quota.window.num" = "6"
 "quota.window.size.seconds" = "2"
 "#;
-        let file: FileConfig = toml::from_str(toml).unwrap();
-        let mut cfg = BrokerConfig::default();
-        file.apply_to(&mut cfg).unwrap();
+        let cfg = crate::file_config::test_support::configured_unwrap_parse(toml).unwrap();
         // The request-quota bound is one window: size = 2s.
         assert!(cfg.quota_throttle_max == secs(2));
         // size * num = 2 * 6 = 12s
@@ -964,9 +956,7 @@ key_path = "/k"
 client_ca_path = "/ca"
 client_auth = "Required"
 "#;
-        let file: FileConfig = toml::from_str(src).expect("parse");
-        let mut cfg = crate::config::BrokerConfig::default();
-        file.apply_to(&mut cfg).unwrap();
+        let cfg = crate::file_config::test_support::configured(src, "parse").unwrap();
         assert!(cfg.controller_listener_protocol == krabka_security::ListenerProtocol::Ssl);
         let tls = cfg.tls_config.expect("tls_config propagated");
         assert!(tls.cert_chain_path == std::path::PathBuf::from("/c"));
@@ -985,9 +975,7 @@ trust_roots_path = "/etc/krabka/cluster-ca/ca.crt"
 client_ca_path = "/etc/krabka/cluster-ca/ca.crt"
 client_auth = "Required"
 "#;
-        let file: FileConfig = toml::from_str(src).expect("parse");
-        let mut cfg = crate::config::BrokerConfig::default();
-        file.apply_to(&mut cfg).unwrap();
+        let cfg = crate::file_config::test_support::configured(src, "parse").unwrap();
         assert!(
             cfg.controller_server_name.as_deref()
                 == Some("demo-broker-headless.default.svc.cluster.local")
@@ -1022,9 +1010,9 @@ key_path = "/etc/krabka/tls/node.key"
             ),
         ];
         for (name, rules, expected) in cases {
-            let file: FileConfig = toml::from_str(&format!("{base}{rules}")).expect("parse");
-            let mut cfg = crate::config::BrokerConfig::default();
-            file.apply_to(&mut cfg).unwrap();
+            let cfg =
+                crate::file_config::test_support::configured(&format!("{base}{rules}"), "parse")
+                    .unwrap();
             check!(
                 cfg.tls_principal_mapper.apply(dn).as_deref() == expected,
                 "{name}"
@@ -1057,8 +1045,6 @@ key_path = "/etc/krabka/tls/node.key"
     }
     #[test]
     fn apply_to_syncs_advertised_listener_from_inter_broker_listener() {
-        use crate::config::BrokerConfig;
-
         // Two listeners; the inter-broker one ("PLAIN") is NOT declared first.
         // `advertised_listener` (used by FindCoordinator + broker
         // self-registration) must be taken from the inter-broker listener's
@@ -1079,9 +1065,7 @@ bind_addr = "0.0.0.0:9092"
 advertised = "demo-0.demo-broker-headless.default.svc.cluster.local:9092"
 protocol = "Plaintext"
 "#;
-        let file: FileConfig = toml::from_str(toml).expect("parse");
-        let mut cfg = BrokerConfig::default();
-        file.apply_to(&mut cfg).unwrap();
+        let cfg = crate::file_config::test_support::configured(toml, "parse").unwrap();
 
         assert!(
             cfg.advertised_listener == "demo-0.demo-broker-headless.default.svc.cluster.local:9092"

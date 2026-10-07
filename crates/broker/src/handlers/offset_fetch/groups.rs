@@ -7,9 +7,6 @@
 //! echoes the id back on the response. The legacy single-group shape lives in
 //! `legacy`.
 
-use std::collections::BTreeMap;
-
-use krabka_metadata::AclOperation;
 use krabka_protocol::{
     owned::{
         offset_fetch_request::OffsetFetchRequest,
@@ -21,11 +18,15 @@ use krabka_protocol::{
     primitives::uuid::Uuid as WireUuid,
 };
 
-use super::{authz::group_authorized, committed::fetch_offsets, unstable};
+use super::{
+    authz::{group_error, topic_decisions, visible_topics},
+    committed::{
+        committed_topics, fetch_offsets, missing_group_row as missing_offset_row, stable_group_row,
+    },
+    unstable,
+};
 use crate::{
-    authorizer::{AuthorizationResult, authorize_topics},
-    broker::Broker,
-    codes,
+    authorizer::AuthorizationResult, broker::Broker, codes,
     coordinator::unified::group::GroupOffsets,
 };
 
@@ -52,26 +53,8 @@ pub(super) async fn handle_groups(
     let mut groups_out: Vec<OffsetFetchResponseGroup> = Vec::with_capacity(req.groups.len());
 
     for grp in &req.groups {
-        // ── ACL: `Describe` on `Group(group_id)` ────────────────
-        {
-            if !group_authorized(broker, ctx, &grp.group_id) {
-                groups_out.push(OffsetFetchResponseGroup {
-                    group_id: grp.group_id.clone(),
-                    topics: Vec::new(),
-                    error_code: codes::GROUP_AUTHORIZATION_FAILED,
-                    ..Default::default()
-                });
-                continue;
-            }
-        }
-
-        if let Some(error_code) = crate::handlers::group_coordinator_error(broker, &grp.group_id) {
-            groups_out.push(OffsetFetchResponseGroup {
-                group_id: grp.group_id.clone(),
-                topics: Vec::new(),
-                error_code,
-                ..Default::default()
-            });
+        if let Some(error_code) = group_error(broker, ctx, &grp.group_id) {
+            groups_out.push(refused_group(&grp.group_id, error_code));
             continue;
         }
 
@@ -90,12 +73,7 @@ pub(super) async fn handle_groups(
         {
             Ok(offsets) => offsets,
             Err(error_code) => {
-                groups_out.push(OffsetFetchResponseGroup {
-                    group_id: grp.group_id.clone(),
-                    topics: Vec::new(),
-                    error_code,
-                    ..Default::default()
-                });
+                groups_out.push(refused_group(&grp.group_id, error_code));
                 continue;
             }
         };
@@ -131,6 +109,15 @@ pub(super) async fn handle_groups(
         error_code: codes::NONE,
         throttle_time_ms: 0,
         groups: groups_out,
+        ..Default::default()
+    }
+}
+
+fn refused_group(group_id: &str, error_code: i16) -> OffsetFetchResponseGroup {
+    OffsetFetchResponseGroup {
+        group_id: group_id.to_owned(),
+        topics: Vec::new(),
+        error_code,
         ..Default::default()
     }
 }
@@ -171,12 +158,10 @@ fn group_named_topics(
             (topic, name)
         })
         .collect();
-    let decisions = authorize_topics(
-        broker.config.authorizer.as_ref(),
+    let decisions = topic_decisions(
+        broker,
         image,
-        context.principal,
-        context.peer,
-        AclOperation::Describe,
+        context,
         resolved
             .iter()
             .filter(|(_, name)| !(use_topic_ids && name.is_empty()))
@@ -240,30 +225,10 @@ fn group_fetch_all(
     require_stable: bool,
 ) -> Vec<OffsetFetchResponseTopics> {
     let use_topic_ids = version >= FIRST_TOPIC_ID_VERSION;
-    let mut by_topic: BTreeMap<&str, Vec<OffsetFetchResponsePartitions>> = BTreeMap::new();
-    for (topic, partition) in offsets.committed.keys() {
-        by_topic
-            .entry(topic.as_str())
-            .or_default()
-            .push(committed_row(
-                topic,
-                *partition,
-                None,
-                offsets,
-                require_stable,
-            ));
-    }
-    let decisions = authorize_topics(
-        broker.config.authorizer.as_ref(),
-        image,
-        context.principal,
-        context.peer,
-        AclOperation::Describe,
-        by_topic.keys().copied(),
-    );
-    by_topic
-        .into_iter()
-        .filter(|(name, _)| decisions.get(name).copied() == Some(AuthorizationResult::Allow))
+    let by_topic = committed_topics(offsets, |topic, partition| {
+        committed_row(topic, partition, None, offsets, require_stable)
+    });
+    visible_topics(broker, image, context, by_topic)
         .filter_map(|(name, mut partitions)| {
             let topic_id = image
                 .topic(name)
@@ -308,14 +273,7 @@ fn committed_row(
         .filter(|entry| !is_mismatched_topic_id(entry.topic_id, requested_topic_id))
         .map_or_else(
             || missing_offset_row(partition_index, codes::NONE),
-            |entry| OffsetFetchResponsePartitions {
-                partition_index,
-                committed_offset: entry.offset.0,
-                committed_leader_epoch: entry.leader_epoch,
-                metadata: Some(entry.metadata.clone()),
-                error_code: codes::NONE,
-                ..Default::default()
-            },
+            |entry| stable_group_row(partition_index, entry),
         )
 }
 
@@ -324,24 +282,6 @@ fn committed_row(
 /// either side, `None` here, matches anything.
 fn is_mismatched_topic_id(stored: Option<uuid::Uuid>, requested: Option<uuid::Uuid>) -> bool {
     matches!((stored, requested), (Some(stored), Some(requested)) if stored != requested)
-}
-
-/// A partition row that carries no committed offset.
-///
-/// Kafka's `OffsetMetadataManager.fetchOffsets` builds this row for a
-/// partition with no offset, and `KafkaApis.fetchOffsetsForGroup` builds it
-/// for a refused topic: offset -1, leader epoch -1, and the empty metadata
-/// string. The empty string is the schema default of `Metadata`, so the row
-/// carries it, not null.
-fn missing_offset_row(partition_index: i32, error_code: i16) -> OffsetFetchResponsePartitions {
-    OffsetFetchResponsePartitions {
-        partition_index,
-        committed_offset: -1,
-        committed_leader_epoch: -1,
-        metadata: Some(String::new()),
-        error_code,
-        ..Default::default()
-    }
 }
 
 #[cfg(test)]

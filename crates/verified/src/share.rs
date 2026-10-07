@@ -1,34 +1,31 @@
 //! Share-group state pruning and offset-mutation decisions.
 
-#[cfg(creusot)]
-use std::clone::Clone;
-
 use creusot_std::prelude::ensures;
 #[cfg(creusot)]
 use creusot_std::prelude::{DeepModel, Int, invariant};
 
-/// Admission result for an administrative share-offset mutation.
-#[cfg_attr(creusot, derive(Clone, Copy, DeepModel))]
-#[cfg_attr(not(creusot), derive(Debug, Clone, Copy, PartialEq, Eq))]
-pub enum ShareOffsetMutationDecision {
-    NotCoordinator,
-    NonEmptyGroup,
-    Unrequested,
-    FencedLeaderEpoch,
-    StateEpochOverflow,
-    ExactRetry,
-    Apply { next_state_epoch: i32 },
-}
+model_types! {
+    @derives (derive(std::clone::Clone, Copy, DeepModel))
+        (derive(Debug, Clone, Copy, PartialEq, Eq));
+    /// Admission result for an administrative share-offset mutation.
+    pub enum ShareOffsetMutationDecision {
+        NotCoordinator,
+        NonEmptyGroup,
+        Unrequested,
+        FencedLeaderEpoch,
+        StateEpochOverflow,
+        ExactRetry,
+        Apply { next_state_epoch: i32 },
+    }
 
-/// The ordered coordinator, membership, request, and retry gate established
-/// by the host before the epoch checks.
-#[cfg_attr(creusot, derive(Clone, Copy, DeepModel))]
-#[cfg_attr(not(creusot), derive(Debug, Clone, Copy, PartialEq, Eq))]
-pub enum ShareOffsetMutationGate {
-    NotCoordinator,
-    NonEmptyGroup,
-    Unrequested,
-    Admissible { exact_retry: bool },
+    /// The ordered coordinator, membership, request, and retry gate established
+    /// by the host before the epoch checks.
+    pub enum ShareOffsetMutationGate {
+        NotCoordinator,
+        NonEmptyGroup,
+        Unrequested,
+        Admissible { exact_retry: bool },
+    }
 }
 
 /// Admit a requested share-offset mutation and choose its next state epoch.

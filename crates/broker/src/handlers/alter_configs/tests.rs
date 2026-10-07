@@ -7,12 +7,9 @@
 use std::sync::Arc;
 
 use assert2::{assert, check};
-use krabka_protocol::{
-    UnknownTaggedFields,
-    owned::{
-        alter_configs_request::AlterableConfig,
-        alter_configs_response::{AlterConfigsResourceResponse, AlterConfigsResponse},
-    },
+use krabka_protocol::owned::{
+    alter_configs_request::AlterableConfig,
+    alter_configs_response::{AlterConfigsResourceResponse, AlterConfigsResponse},
 };
 
 use super::{
@@ -23,6 +20,15 @@ use super::{
 };
 use crate::{codes, test_support::DenyAll};
 
+macro_rules! invalid_config_row {
+    (($response:ident, $row:ident), $request:expr) => {
+        let $response = Box::pin(drive_one(Arc::new(DenyAll), $request)).await;
+        assert!($response.responses.len() == 1);
+        let $row = &$response.responses[0];
+        assert!($row.error_code == codes::INVALID_REQUEST);
+    };
+}
+
 #[tokio::test]
 async fn handle_preserves_resource_identity_for_unsupported_type() {
     let resp = Box::pin(drive_one(
@@ -31,17 +37,14 @@ async fn handle_preserves_resource_identity_for_unsupported_type() {
     ))
     .await;
 
-    let expected = AlterConfigsResponse {
-        throttle_time_ms: 0,
-        responses: vec![AlterConfigsResourceResponse {
+    let expected = unthrottled_wire!(AlterConfigsResponse {
+        responses: vec![tagged_wire!(AlterConfigsResourceResponse {
             error_code: codes::INVALID_REQUEST,
             error_message: Some("Unknown resource type 77".to_string()),
             resource_type: 77,
             resource_name: "mystery".to_string(),
-            unknown_tagged_fields: UnknownTaggedFields::default(),
-        }],
-        unknown_tagged_fields: UnknownTaggedFields::default(),
-    };
+        })],
+    });
     assert!(resp == expected);
 }
 
@@ -53,17 +56,14 @@ async fn topic_resource_denial_uses_topic_authorization_error() {
     ))
     .await;
 
-    let expected = AlterConfigsResponse {
-        throttle_time_ms: 0,
-        responses: vec![AlterConfigsResourceResponse {
+    let expected = unthrottled_wire!(AlterConfigsResponse {
+        responses: vec![tagged_wire!(AlterConfigsResourceResponse {
             error_code: codes::TOPIC_AUTHORIZATION_FAILED,
             error_message: Some("Topic authorization failed.".to_string()),
             resource_type: RESOURCE_TYPE_TOPIC,
             resource_name: "orders".to_string(),
-            unknown_tagged_fields: UnknownTaggedFields::default(),
-        }],
-        unknown_tagged_fields: UnknownTaggedFields::default(),
-    };
+        })],
+    });
     assert!(resp == expected);
 }
 
@@ -77,17 +77,14 @@ async fn group_resource_denial_uses_group_authorization_error() {
     ))
     .await;
 
-    let expected = AlterConfigsResponse {
-        throttle_time_ms: 0,
-        responses: vec![AlterConfigsResourceResponse {
+    let expected = unthrottled_wire!(AlterConfigsResponse {
+        responses: vec![tagged_wire!(AlterConfigsResourceResponse {
             error_code: codes::GROUP_AUTHORIZATION_FAILED,
             error_message: Some("Group authorization failed.".to_string()),
             resource_type: RESOURCE_TYPE_GROUP,
             resource_name: "streams-app".to_string(),
-            unknown_tagged_fields: UnknownTaggedFields::default(),
-        }],
-        unknown_tagged_fields: UnknownTaggedFields::default(),
-    };
+        })],
+    });
     assert!(resp == expected);
 }
 
@@ -101,17 +98,14 @@ async fn client_metrics_resource_denial_uses_cluster_authorization_error_with_me
     ))
     .await;
 
-    let expected = AlterConfigsResponse {
-        throttle_time_ms: 0,
-        responses: vec![AlterConfigsResourceResponse {
+    let expected = unthrottled_wire!(AlterConfigsResponse {
+        responses: vec![tagged_wire!(AlterConfigsResourceResponse {
             error_code: codes::CLUSTER_AUTHORIZATION_FAILED,
             error_message: Some("Cluster authorization failed.".to_string()),
             resource_type: RESOURCE_TYPE_CLIENT_METRICS,
             resource_name: "sub-a".to_string(),
-            unknown_tagged_fields: UnknownTaggedFields::default(),
-        }],
-        unknown_tagged_fields: UnknownTaggedFields::default(),
-    };
+        })],
+    });
     assert!(resp == expected);
 }
 
@@ -129,17 +123,14 @@ async fn authorized_group_resource_is_applied() {
     ))
     .await;
 
-    let expected = AlterConfigsResponse {
-        throttle_time_ms: 0,
-        responses: vec![AlterConfigsResourceResponse {
+    let expected = unthrottled_wire!(AlterConfigsResponse {
+        responses: vec![tagged_wire!(AlterConfigsResourceResponse {
             error_code: codes::NONE,
             error_message: None,
             resource_type: RESOURCE_TYPE_GROUP,
             resource_name: "streams-app".to_string(),
-            unknown_tagged_fields: UnknownTaggedFields::default(),
-        }],
-        unknown_tagged_fields: UnknownTaggedFields::default(),
-    };
+        })],
+    });
     assert!(resp == expected);
 }
 
@@ -151,17 +142,14 @@ async fn authorized_client_metrics_resource_is_applied() {
     ))
     .await;
 
-    let expected = AlterConfigsResponse {
-        throttle_time_ms: 0,
-        responses: vec![AlterConfigsResourceResponse {
+    let expected = unthrottled_wire!(AlterConfigsResponse {
+        responses: vec![tagged_wire!(AlterConfigsResourceResponse {
             error_code: codes::NONE,
             error_message: None,
             resource_type: RESOURCE_TYPE_CLIENT_METRICS,
             resource_name: "sub-a".to_string(),
-            unknown_tagged_fields: UnknownTaggedFields::default(),
-        }],
-        unknown_tagged_fields: UnknownTaggedFields::default(),
-    };
+        })],
+    });
     assert!(resp == expected);
 }
 
@@ -196,11 +184,7 @@ async fn duplicate_config_key_is_a_validation_error_even_when_unauthorized() {
     let mut duplicated = resource(RESOURCE_TYPE_TOPIC, "orders");
     duplicated.configs.push(duplicated.configs[0].clone());
 
-    let resp = Box::pin(drive_one(Arc::new(DenyAll), duplicated)).await;
-
-    assert!(resp.responses.len() == 1);
-    let row = &resp.responses[0];
-    assert!(row.error_code == codes::INVALID_REQUEST);
+    invalid_config_row!((resp, row), duplicated);
     assert!(row.error_message.as_deref() == Some("Error due to duplicate config keys"));
 }
 
@@ -219,11 +203,7 @@ async fn null_config_value_is_a_validation_error_even_when_unauthorized() {
         })
         .collect();
 
-    let resp = Box::pin(drive_one(Arc::new(DenyAll), resource)).await;
-
-    assert!(resp.responses.len() == 1);
-    let row = &resp.responses[0];
-    assert!(row.error_code == codes::INVALID_REQUEST);
+    invalid_config_row!((resp, row), resource);
     // Kafka joins the names with `String.join(", ", ...)`.
     assert!(
         row.error_message.as_deref()
@@ -272,17 +252,14 @@ async fn broker_resource_denial_uses_cluster_authorization_error() {
     ))
     .await;
 
-    let expected = AlterConfigsResponse {
-        throttle_time_ms: 0,
-        responses: vec![AlterConfigsResourceResponse {
+    let expected = unthrottled_wire!(AlterConfigsResponse {
+        responses: vec![tagged_wire!(AlterConfigsResourceResponse {
             error_code: codes::CLUSTER_AUTHORIZATION_FAILED,
             error_message: Some("Cluster authorization failed.".to_string()),
             resource_type: RESOURCE_TYPE_BROKER,
             resource_name: "1".to_string(),
-            unknown_tagged_fields: UnknownTaggedFields::default(),
-        }],
-        unknown_tagged_fields: UnknownTaggedFields::default(),
-    };
+        })],
+    });
     assert!(resp == expected);
 }
 
@@ -294,17 +271,14 @@ async fn authorized_broker_resource_is_applied() {
     ))
     .await;
 
-    let expected = AlterConfigsResponse {
-        throttle_time_ms: 0,
-        responses: vec![AlterConfigsResourceResponse {
+    let expected = unthrottled_wire!(AlterConfigsResponse {
+        responses: vec![tagged_wire!(AlterConfigsResourceResponse {
             error_code: codes::NONE,
             error_message: None,
             resource_type: RESOURCE_TYPE_BROKER,
             resource_name: "1".to_string(),
-            unknown_tagged_fields: UnknownTaggedFields::default(),
-        }],
-        unknown_tagged_fields: UnknownTaggedFields::default(),
-    };
+        })],
+    });
     assert!(resp == expected);
 }
 

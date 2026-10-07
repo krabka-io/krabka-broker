@@ -187,7 +187,6 @@ mod tests {
 
     use assert2::assert;
     use krabka_metadata::{BrokerRegistrationRecord, MetadataImage, MetadataRecord, TopicRecord};
-    use krabka_protocol::UnknownTaggedFields;
     use uuid::Uuid;
 
     use super::*;
@@ -246,10 +245,11 @@ mod tests {
     fn rows(expected: &[(i8, &str)]) -> Vec<ConfigResource> {
         expected
             .iter()
-            .map(|&(resource_type, name)| ConfigResource {
-                resource_name: name.to_string(),
-                resource_type,
-                unknown_tagged_fields: UnknownTaggedFields::default(),
+            .map(|&(resource_type, name)| {
+                tagged_wire!(ConfigResource {
+                    resource_name: name.to_string(),
+                    resource_type,
+                })
             })
             .collect()
     }
@@ -259,6 +259,16 @@ mod tests {
     /// fixed order `GROUP`, `CLIENT_METRICS`, `BROKER_LOGGER`, `BROKER`,
     /// `TOPIC`, and broker rows come from `getBrokerNodes(listenerName)`, so
     /// broker 3 (SSL only) is absent. v0 lists client metrics only.
+    macro_rules! listing_fixture {
+        (($handle:ident, $directory:ident, $broker:ident, $context:ident), $topic:expr) => {
+            let ($handle, $directory) =
+                start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
+            seed_topic(&$handle, $topic).await;
+            let $broker = $handle.broker_arc_for_test();
+            test_ctx!($context, "admin");
+        };
+    }
+
     #[test]
     fn collect_resources_matches_kafka_filter_and_order() {
         let img = populated_image();
@@ -349,18 +359,12 @@ mod tests {
     /// past every type KIP-1142 defines.
     #[tokio::test]
     async fn v1_unsupported_resource_type_fails_the_whole_request() {
-        let (broker_handle, _dir) =
-            start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
-        seed_topic(&broker_handle, "t-a").await;
-        let broker = broker_handle.broker_arc_for_test();
-        test_ctx!(ctx, "admin");
+        listing_fixture!((broker_handle, _dir, broker, ctx), "t-a");
 
-        let unsupported = ListConfigResourcesResponse {
-            throttle_time_ms: 0,
+        let unsupported = unthrottled_wire!(ListConfigResourcesResponse {
             error_code: codes::UNSUPPORTED_VERSION,
             config_resources: vec![],
-            unknown_tagged_fields: UnknownTaggedFields::default(),
-        };
+        });
 
         for (name, resource_types) in [
             ("unsupported type alone", vec![64]),
@@ -391,11 +395,7 @@ mod tests {
     /// pattern as `cluster_describe_configs_gates_the_enumeration`.
     #[tokio::test]
     async fn v1_all_supported_types_still_succeed() {
-        let (broker_handle, _dir) =
-            start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
-        seed_topic(&broker_handle, "t-a").await;
-        let broker = broker_handle.broker_arc_for_test();
-        test_ctx!(ctx, "admin");
+        listing_fixture!((broker_handle, _dir, broker, ctx), "t-a");
 
         let req = ListConfigResourcesRequest {
             resource_types: vec![RESOURCE_TYPE_TOPIC],
@@ -410,21 +410,21 @@ mod tests {
             LISTENER,
         );
         assert!(topics.iter().any(|r| r.resource_name == "t-a"));
-        let expected = ListConfigResourcesResponse {
-            throttle_time_ms: 0,
+        let expected = unthrottled_wire!(ListConfigResourcesResponse {
             error_code: codes::NONE,
             config_resources: topics,
-            unknown_tagged_fields: UnknownTaggedFields::default(),
-        };
+        });
         assert!(resp == expected);
         broker_handle.shutdown().await;
     }
 
     #[tokio::test]
     async fn denied_handler_response_preserves_error_fields() {
-        let (broker_handle, _dir) = start_broker(Arc::new(DenyAll)).await;
-        let broker = broker_handle.broker_arc_for_test();
-        test_ctx!(ctx, "alice");
+        broker_fixture!(
+            (broker_handle, _dir, broker),
+            deny_all,
+            context(ctx, "alice")
+        );
         let req = ListConfigResourcesRequest {
             resource_types: vec![RESOURCE_TYPE_TOPIC],
             ..Default::default()
@@ -432,12 +432,10 @@ mod tests {
 
         let resp = handle(&broker, &req, VERSION, &ctx);
 
-        let expected = ListConfigResourcesResponse {
-            throttle_time_ms: 0,
+        let expected = unthrottled_wire!(ListConfigResourcesResponse {
             error_code: codes::CLUSTER_AUTHORIZATION_FAILED,
             config_resources: vec![],
-            unknown_tagged_fields: UnknownTaggedFields::default(),
-        };
+        });
         assert!(resp == expected);
         broker_handle.shutdown().await;
     }
@@ -465,18 +463,14 @@ mod tests {
             LISTENER,
         );
         assert!(topics.iter().any(|r| r.resource_name == "orders"));
-        let allowed = ListConfigResourcesResponse {
-            throttle_time_ms: 0,
+        let allowed = unthrottled_wire!(ListConfigResourcesResponse {
             error_code: codes::NONE,
             config_resources: topics,
-            unknown_tagged_fields: UnknownTaggedFields::default(),
-        };
-        let denied = ListConfigResourcesResponse {
-            throttle_time_ms: 0,
+        });
+        let denied = unthrottled_wire!(ListConfigResourcesResponse {
             error_code: codes::CLUSTER_AUTHORIZATION_FAILED,
             config_resources: vec![],
-            unknown_tagged_fields: UnknownTaggedFields::default(),
-        };
+        });
 
         for (user, grant, expected) in [
             ("no-grant", None, &denied),
@@ -505,11 +499,7 @@ mod tests {
 
     #[tokio::test]
     async fn successful_handler_response_preserves_resource_fields() {
-        let (broker_handle, _dir) =
-            start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
-        seed_topic(&broker_handle, "orders").await;
-        let broker = broker_handle.broker_arc_for_test();
-        test_ctx!(ctx, "admin");
+        listing_fixture!((broker_handle, _dir, broker, ctx), "orders");
         let req = ListConfigResourcesRequest {
             resource_types: vec![RESOURCE_TYPE_TOPIC],
             ..Default::default()

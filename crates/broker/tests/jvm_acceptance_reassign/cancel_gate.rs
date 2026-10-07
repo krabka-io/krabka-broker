@@ -48,15 +48,10 @@
 
 use assert2::{assert, check};
 use krabka_broker::{BootstrapMode, Broker, BrokerConfig, BrokerHandle};
-use krabka_protocol::krabka::break_glass::{ApproveBreakGlassRequest, ProposeBreakGlassRequest};
 
 use crate::{
-    jvm_acceptance::{
-        broker0_advertised, nc_check_connectivity, plain_jaas,
-        start_three_broker_sasl_plaintext_jvm_cluster_with_users, wait_three_brokers_registered,
-    },
+    jvm_acceptance::{broker0_advertised, wait_three_brokers_registered},
     oracle::{CliRun, Side, ToolFile},
-    support,
     tool_output::{Assignment, TopicPartition, parse_cancelled, reassignment_json},
 };
 
@@ -200,27 +195,21 @@ async fn restart(configs: [BrokerConfig; 3]) -> [BrokerHandle; 3] {
 /// every partition of it for the actions that name one, and a cancel is one of
 /// those, so this also checks that widening on the way through.
 async fn approve_a_cancel(bootstrap: &str) {
-    let proposer = support::sasl_client(bootstrap, PROPOSER.0, PROPOSER.1).await;
-    let opened = proposer
-        .send(ProposeBreakGlassRequest {
-            action: WIRE_CANCEL_REASSIGNMENT,
-            target: TOPIC.to_owned(),
-            reason: "the move is making the incident worse".to_owned(),
-            ttl_ms: 0,
-            ..ProposeBreakGlassRequest::default()
-        })
-        .await
-        .expect("ProposeBreakGlass");
-    let code = opened.error_code;
-    let message = opened.error_message;
-    assert!(code == 0, "propose: code={code} message={message:?}");
+    let proposal_id = crate::jvm_acceptance::break_glass::propose(
+        bootstrap,
+        PROPOSER,
+        WIRE_CANCEL_REASSIGNMENT,
+        TOPIC,
+        "the move is making the incident worse",
+    )
+    .await;
 
-    let first = approve(bootstrap, APPROVER_ONE, opened.proposal_id).await;
+    let first = approve(bootstrap, APPROVER_ONE, proposal_id).await;
     check!(
         first.0 == 1 && first.0 < first.1,
         "one approval is one distinct principal and must not be enough: {first:?}",
     );
-    let second = approve(bootstrap, APPROVER_TWO, opened.proposal_id).await;
+    let second = approve(bootstrap, APPROVER_TWO, proposal_id).await;
     check!(
         second.0 == second.1,
         "two distinct principals must satisfy the rule: {second:?}",
@@ -233,23 +222,7 @@ async fn approve(
     operator: (&str, &str),
     proposal_id: krabka_protocol::primitives::uuid::Uuid,
 ) -> (i32, i32) {
-    let client = support::sasl_client(bootstrap, operator.0, operator.1).await;
-    let response = client
-        .send(ApproveBreakGlassRequest {
-            proposal_id,
-            withdraw: false,
-            ..ApproveBreakGlassRequest::default()
-        })
-        .await
-        .expect("ApproveBreakGlass");
-    let code = response.error_code;
-    let message = response.error_message;
-    let who = operator.0;
-    assert!(
-        code == 0,
-        "approve as {who}: code={code} message={message:?}"
-    );
-    (response.approvals_held, response.approvals_required)
+    crate::jvm_acceptance::break_glass::approve(bootstrap, operator, proposal_id).await
 }
 
 /// The gate off, then on and unapproved, then on and approved -- the same
@@ -258,76 +231,31 @@ async fn approve(
 #[ignore = "requires Docker"]
 async fn reassign_partitions_cancel_reports_the_break_glass_gate_to_the_jvm_tool() {
     let (h1, h2, h3, cfg1, cfg2, cfg3, _d1, _d2, _d3) =
-        start_three_broker_sasl_plaintext_jvm_cluster_with_users(
+        Box::pin(crate::jvm_acceptance::start_registered_sasl_cluster(
             ADMIN.0,
             ADMIN.1,
             &[PROPOSER, APPROVER_ONE, APPROVER_TWO],
-        )
+        ))
         .await;
-    nc_check_connectivity();
-    wait_three_brokers_registered(&h1, &h2, &h3, 3).await;
 
-    let props = format!(
-        "security.protocol=SASL_PLAINTEXT\n\
-         sasl.mechanism=PLAIN\n\
-         sasl.jaas.config={}\n",
-        plain_jaas(ADMIN.0, ADMIN.1),
-    );
+    let props = crate::jvm_acceptance::plain_client_properties(ADMIN.0, ADMIN.1);
     let advertised = broker0_advertised().to_owned();
     let side = Side::Krabka {
         bootstrap: &advertised,
     };
 
-    side.run_with_files(
-        "kafka-topics",
-        &[
-            "--bootstrap-server",
-            side.bootstrap(),
-            "--create",
-            "--if-not-exists",
-            "--topic",
-            TOPIC,
-            // One partition on broker 1, the bootstrap broker: an automatic
-            // placement would pick a random broker, and the test needs a
-            // non-bootstrap broker that hosts nothing.
-            "--replica-assignment",
-            "1",
-            "--command-config",
-            CLIENT_PROPS,
-        ],
+    side.create_assigned_topic(
+        TOPIC,
+        "1",
+        CLIENT_PROPS,
         &[ToolFile::new(CLIENT_PROPS, &props)],
-        None,
-    )
-    .expect_success();
+    );
     h1.wait_until_partition_present(TOPIC, 0).await;
 
     // Keep one valid target offline so every cancel below observes a real
     // in-flight reassignment instead of racing replica catch-up.
-    let current = h1
-        .partition_record_for_test(TOPIC, 0)
-        .expect("partition record");
-    let controller_leader = h1.wait_until_controller_leader().await.0;
-    let offline_node = (2_u64..=3)
-        .find(|node| {
-            *node != controller_leader && !current.replicas.iter().any(|replica| replica.0 == *node)
-        })
-        .expect("a non-bootstrap target broker");
-    let mut handles = [Some(h1), Some(h2), Some(h3)];
-    handles[usize::try_from(offline_node - 1).unwrap()]
-        .take()
-        .expect("offline target handle")
-        .shutdown()
-        .await;
-    let h1 = handles[0].as_ref().expect("bootstrap broker stays live");
-
-    // ── 1. the gate off ────────────────────────────────────────────────────
-    let plan = start_a_reassignment(
-        h1,
-        &side,
-        &props,
-        i32::try_from(offline_node).expect("a node id fits"),
-    )
-    .await;
+    let (handles, plan) =
+        offline_reassignment([h1, h2, h3], &side, &props, "partition record").await;
     let ungated = reassign(&side, &props, &["--cancel", "--preserve-throttles"], &plan);
     check!(
         ungated.succeeded(),
@@ -375,29 +303,14 @@ async fn reassign_partitions_cancel_reports_the_break_glass_gate_to_the_jvm_tool
     wait_three_brokers_registered(&h1, &h2, &h3, 3).await;
 
     // ── 2. the gate on, with no proposal ───────────────────────────────────
-    let current = h1
-        .partition_record_for_test(TOPIC, 0)
-        .expect("partition record after restart");
-    let controller_leader = h1.wait_until_controller_leader().await.0;
-    let target = (2_u64..=3)
-        .find(|node| {
-            *node != controller_leader && !current.replicas.iter().any(|replica| replica.0 == *node)
-        })
-        .expect("a non-bootstrap target broker");
-    let mut handles = [Some(h1), Some(h2), Some(h3)];
-    handles[usize::try_from(target - 1).unwrap()]
-        .take()
-        .expect("offline target handle")
-        .shutdown()
-        .await;
-    let h1 = handles[0].as_ref().expect("bootstrap broker stays live");
-    let plan = start_a_reassignment(
-        h1,
+    let (handles, plan) = offline_reassignment(
+        [h1, h2, h3],
         &side,
         &props,
-        i32::try_from(target).expect("a node id fits"),
+        "partition record after restart",
     )
     .await;
+    let h1 = handles[0].as_ref().expect("bootstrap broker stays live");
     let refused = reassign(&side, &props, &["--cancel", "--preserve-throttles"], &plan);
     check!(
         !refused.succeeded(),
@@ -443,4 +356,23 @@ async fn reassign_partitions_cancel_reports_the_break_glass_gate_to_the_jvm_tool
     for handle in handles.into_iter().flatten() {
         handle.shutdown().await;
     }
+}
+
+async fn offline_reassignment(
+    brokers: [BrokerHandle; 3],
+    side: &Side<'_>,
+    props: &str,
+    context: &str,
+) -> ([Option<BrokerHandle>; 3], String) {
+    let (target, handles, _current) =
+        crate::cluster::offline_for_partition(brokers, TOPIC, context).await;
+    let handle = handles[0].as_ref().expect("bootstrap broker stays live");
+    let plan = start_a_reassignment(
+        handle,
+        side,
+        props,
+        i32::try_from(target).expect("a node id fits"),
+    )
+    .await;
+    (handles, plan)
 }

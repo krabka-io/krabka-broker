@@ -1,85 +1,90 @@
-(* #"/workspace/crates/verified/src/composition/completed_eviction.rs" 39 0 46 20 *)
+(* #"/workspace/crates/verified/src/composition/completed_eviction.rs" 40 0 47 20 *)
 
-let%span sord = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
-let%span sord'0 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
-let%span soption = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/option.rs" 137 19 137 23
-let%span soption'0 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/option.rs" 138 34 138 38
-let%span sconvert = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/convert.rs" 274 26 274 51
-let%span swell_founded = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/well_founded.rs" 43 8 43 33
-let%span sslice = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 331 18 331 22
-let%span sslice'0 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 151 20 151 37
-let%span sslice'1 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 156 20 156 37
-let%span svec = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 104 18 104 36
-let%span svec'0 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 18 14 18 41
-let%span svec'1 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 114 18 114 40
-let%span svec'2 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 195 19 195 38
-let%span svec'3 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 196 18 196 46
-let%span svec'4 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 118 18 118 48
-let%span sproduce = "/workspace/crates/verified/src/produce.rs" 18 10 26 1
-let%span sreplay_start = "/workspace/crates/verified/src/producer_snapshot/replay_start.rs" 19 8 24 65
-let%span ssequence_decision = "/workspace/crates/verified/src/producer/sequence_decision.rs" 41 10 41 65
-let%span ssequence_decision'0 = "/workspace/crates/verified/src/producer/sequence_decision.rs" 11 16 11 47
-let%span ssnapshot_transaction_valid = "/workspace/crates/verified/src/producer_snapshot/snapshot_transaction_valid.rs" 203 8 208 56
-let%span ssnapshot_transaction_valid'0 = "/workspace/crates/verified/src/producer_snapshot/snapshot_transaction_valid.rs" 220 8 223 73
-let%span smetadata_record_offset_deltas = "/workspace/crates/verified/src/raft/metadata_record_offset_deltas.rs" 131 28 131 60
-let%span scompleted_producer = "/workspace/crates/verified/src/composition/completed_producer.rs" 49 11 49 53
-let%span scompleted_producer'0 = "/workspace/crates/verified/src/composition/completed_producer.rs" 50 11 50 109
-let%span scompleted_producer'1 = "/workspace/crates/verified/src/composition/completed_producer.rs" 51 11 51 81
-let%span scompleted_producer'2 = "/workspace/crates/verified/src/composition/completed_producer.rs" 52 11 54 95
-let%span scompleted_producer'3 = "/workspace/crates/verified/src/composition/completed_producer.rs" 55 11 55 118
-let%span scompleted_producer'4 = "/workspace/crates/verified/src/composition/completed_producer.rs" 56 10 56 105
-let%span scompleted_producer'5 = "/workspace/crates/verified/src/composition/completed_producer.rs" 57 10 57 68
-let%span scompleted_producer'6 = "/workspace/crates/verified/src/composition/completed_producer.rs" 58 10 60 155
-let%span scompleted_producer'7 = "/workspace/crates/verified/src/composition/completed_producer.rs" 61 10 71 96
-let%span scompleted_producer'8 = "/workspace/crates/verified/src/composition/completed_producer.rs" 72 10 73 72
-let%span scompleted_producer'9 = "/workspace/crates/verified/src/composition/completed_producer.rs" 74 10 75 108
-let%span scompleted_producer'10 = "/workspace/crates/verified/src/composition/completed_producer.rs" 76 10 85 1
-let%span scompleted_producer'11 = "/workspace/crates/verified/src/composition/completed_producer.rs" 86 10 90 95
-let%span scompleted_producer'12 = "/workspace/crates/verified/src/composition/completed_producer.rs" 91 10 93 77
-let%span scompleted_producer'13 = "/workspace/crates/verified/src/composition/completed_producer.rs" 18 16 18 72
-let%span scompleted_producer'14 = "/workspace/crates/verified/src/composition/completed_producer.rs" 31 16 31 63
-let%span scompletion = "/workspace/crates/verified/src/producer/completion.rs" 19 10 19 91
-let%span scompleted_eviction = "/workspace/crates/verified/src/composition/completed_eviction.rs" 47 20 47 32
-let%span scompleted_eviction'0 = "/workspace/crates/verified/src/composition/completed_eviction.rs" 49 32 49 65
-let%span scompleted_eviction'1 = "/workspace/crates/verified/src/composition/completed_eviction.rs" 49 8 49 65
-let%span scompleted_eviction'2 = "/workspace/crates/verified/src/composition/completed_eviction.rs" 48 19 51 5
-let%span scompleted_eviction'3 = "/workspace/crates/verified/src/composition/completed_eviction.rs" 48 19 52 13
-let%span scompleted_eviction'4 = "/workspace/crates/verified/src/composition/completed_eviction.rs" 53 16 53 47
-let%span scompleted_eviction'5 = "/workspace/crates/verified/src/composition/completed_eviction.rs" 62 12 62 79
-let%span scompleted_eviction'6 = "/workspace/crates/verified/src/composition/completed_eviction.rs" 54 30 65 5
-let%span scompleted_eviction'7 = "/workspace/crates/verified/src/composition/completed_eviction.rs" 66 48 66 58
-let%span scompleted_eviction'8 = "/workspace/crates/verified/src/composition/completed_eviction.rs" 67 22 67 27
-let%span scompleted_eviction'9 = "/workspace/crates/verified/src/composition/completed_eviction.rs" 68 16 68 22
-let%span scompleted_eviction'10 = "/workspace/crates/verified/src/composition/completed_eviction.rs" 75 14 75 34
-let%span scompleted_eviction'11 = "/workspace/crates/verified/src/composition/completed_eviction.rs" 76 14 76 28
-let%span scompleted_eviction'12 = "/workspace/crates/verified/src/composition/completed_eviction.rs" 71 16 74 54
-let%span scompleted_eviction'13 = "/workspace/crates/verified/src/composition/completed_eviction.rs" 70 16 70 86
-let%span scompleted_eviction'14 = "/workspace/crates/verified/src/composition/completed_eviction.rs" 69 16 69 62
-let%span scompleted_eviction'15 = "/workspace/crates/verified/src/composition/completed_eviction.rs" 77 29 77 32
-let%span scompleted_eviction'16 = "/workspace/crates/verified/src/composition/completed_eviction.rs" 78 31 78 41
-let%span scompleted_eviction'17 = "/workspace/crates/verified/src/composition/completed_eviction.rs" 81 12 81 24
-let%span scompleted_eviction'18 = "/workspace/crates/verified/src/composition/completed_eviction.rs" 84 30 84 57
-let%span scompleted_eviction'19 = "/workspace/crates/verified/src/composition/completed_eviction.rs" 84 12 84 57
-let%span scompleted_eviction'20 = "/workspace/crates/verified/src/composition/completed_eviction.rs" 83 21 86 9
-let%span scompleted_eviction'21 = "/workspace/crates/verified/src/composition/completed_eviction.rs" 83 21 87 17
-let%span scompleted_eviction'22 = "/workspace/crates/verified/src/composition/completed_eviction.rs" 88 39 88 68
-let%span scompleted_eviction'23 = "/workspace/crates/verified/src/composition/completed_eviction.rs" 88 8 88 70
-let%span scompleted_eviction'24 = "/workspace/crates/verified/src/composition/completed_eviction.rs" 89 18 89 45
-let%span scompleted_eviction'25 = "/workspace/crates/verified/src/composition/completed_eviction.rs" 90 13 90 14
-let%span scompleted_eviction'26 = "/workspace/crates/verified/src/composition/completed_eviction.rs" 90 8 90 14
-let%span scompleted_eviction'27 = "/workspace/crates/verified/src/composition/completed_eviction.rs" 18 11 18 78
-let%span scompleted_eviction'28 = "/workspace/crates/verified/src/composition/completed_eviction.rs" 19 11 19 109
-let%span scompleted_eviction'29 = "/workspace/crates/verified/src/composition/completed_eviction.rs" 20 11 20 45
-let%span scompleted_eviction'30 = "/workspace/crates/verified/src/composition/completed_eviction.rs" 21 11 23 87
-let%span scompleted_eviction'31 = "/workspace/crates/verified/src/composition/completed_eviction.rs" 24 11 24 118
-let%span scompleted_eviction'32 = "/workspace/crates/verified/src/composition/completed_eviction.rs" 25 10 25 92
-let%span scompleted_eviction'33 = "/workspace/crates/verified/src/composition/completed_eviction.rs" 26 10 26 41
-let%span scompleted_eviction'34 = "/workspace/crates/verified/src/composition/completed_eviction.rs" 27 10 27 53
-let%span scompleted_eviction'35 = "/workspace/crates/verified/src/composition/completed_eviction.rs" 28 10 28 97
-let%span scompleted_eviction'36 = "/workspace/crates/verified/src/composition/completed_eviction.rs" 29 10 33 50
-let%span scompleted_eviction'37 = "/workspace/crates/verified/src/composition/completed_eviction.rs" 34 10 35 37
-let%span scompleted_eviction'38 = "/workspace/crates/verified/src/composition/completed_eviction.rs" 36 10 37 65
-let%span scompleted_eviction'39 = "/workspace/crates/verified/src/composition/completed_eviction.rs" 38 10 38 102
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span soption = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/option.rs" 137 19 137 23
+let%span soption'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/option.rs" 138 34 138 38
+let%span sconvert = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/convert.rs" 274 26 274 51
+let%span swell_founded = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/well_founded.rs" 43 8 43 33
+let%span sslice = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 331 18 331 22
+let%span sslice'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 151 20 151 37
+let%span sslice'1 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 156 20 156 37
+let%span svec = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 104 18 104 36
+let%span svec'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 18 14 18 41
+let%span svec'1 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 114 18 114 40
+let%span svec'2 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 195 19 195 38
+let%span svec'3 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 196 18 196 46
+let%span svec'4 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 118 18 118 48
+let%span sproduce = "/workspace/crates/verified/src/produce.rs" 16 10 24 1
+let%span sreplay_start = "/workspace/crates/verified/src/producer_snapshot/replay_start.rs" 16 8 21 65
+let%span ssequence_decision = "/workspace/crates/verified/src/producer/sequence_decision.rs" 39 10 39 65
+let%span ssequence_decision'0 = "/workspace/crates/verified/src/producer/sequence_decision.rs" 8 16 8 47
+let%span ssnapshot_transaction_valid = "/workspace/crates/verified/src/producer_snapshot/snapshot_transaction_valid.rs" 192 8 197 56
+let%span ssnapshot_transaction_valid'0 = "/workspace/crates/verified/src/producer_snapshot/snapshot_transaction_valid.rs" 207 8 210 73
+let%span sproducer_snapshot = "/workspace/crates/verified/src/producer_snapshot.rs" 23 8 24 37
+let%span sproducer_snapshot'0 = "/workspace/crates/verified/src/producer_snapshot.rs" 132 16 132 120
+let%span sproducer_snapshot'1 = "/workspace/crates/verified/src/producer_snapshot.rs" 33 8 34 88
+let%span smetadata_record_offset_deltas = "/workspace/crates/verified/src/raft/metadata_record_offset_deltas.rs" 127 28 127 60
+let%span scompleted_producer = "/workspace/crates/verified/src/composition/completed_producer.rs" 46 11 46 53
+let%span scompleted_producer'0 = "/workspace/crates/verified/src/composition/completed_producer.rs" 47 11 47 109
+let%span scompleted_producer'1 = "/workspace/crates/verified/src/composition/completed_producer.rs" 48 11 48 81
+let%span scompleted_producer'2 = "/workspace/crates/verified/src/composition/completed_producer.rs" 49 11 50 107
+let%span scompleted_producer'3 = "/workspace/crates/verified/src/composition/completed_producer.rs" 51 11 51 68
+let%span scompleted_producer'4 = "/workspace/crates/verified/src/composition/completed_producer.rs" 52 10 52 99
+let%span scompleted_producer'5 = "/workspace/crates/verified/src/composition/completed_producer.rs" 53 10 53 73
+let%span scompleted_producer'6 = "/workspace/crates/verified/src/composition/completed_producer.rs" 54 10 56 155
+let%span scompleted_producer'7 = "/workspace/crates/verified/src/composition/completed_producer.rs" 57 10 67 96
+let%span scompleted_producer'8 = "/workspace/crates/verified/src/composition/completed_producer.rs" 68 10 69 72
+let%span scompleted_producer'9 = "/workspace/crates/verified/src/composition/completed_producer.rs" 70 10 71 108
+let%span scompleted_producer'10 = "/workspace/crates/verified/src/composition/completed_producer.rs" 72 10 81 1
+let%span scompleted_producer'11 = "/workspace/crates/verified/src/composition/completed_producer.rs" 82 10 86 95
+let%span scompleted_producer'12 = "/workspace/crates/verified/src/composition/completed_producer.rs" 87 10 89 77
+let%span scompleted_producer'13 = "/workspace/crates/verified/src/composition/completed_producer.rs" 17 16 17 72
+let%span scompleted_producer'14 = "/workspace/crates/verified/src/composition/completed_producer.rs" 28 16 28 63
+let%span scompletion = "/workspace/crates/verified/src/producer/completion.rs" 128 16 128 88
+let%span scompletion'0 = "/workspace/crates/verified/src/producer/completion.rs" 135 16 135 72
+let%span scompletion'1 = "/workspace/crates/verified/src/producer/completion.rs" 17 10 17 91
+let%span scompleted_eviction = "/workspace/crates/verified/src/composition/completed_eviction.rs" 48 20 48 32
+let%span scompleted_eviction'0 = "/workspace/crates/verified/src/composition/completed_eviction.rs" 50 32 50 65
+let%span scompleted_eviction'1 = "/workspace/crates/verified/src/composition/completed_eviction.rs" 50 8 50 65
+let%span scompleted_eviction'2 = "/workspace/crates/verified/src/composition/completed_eviction.rs" 49 19 52 5
+let%span scompleted_eviction'3 = "/workspace/crates/verified/src/composition/completed_eviction.rs" 49 19 53 13
+let%span scompleted_eviction'4 = "/workspace/crates/verified/src/composition/completed_eviction.rs" 54 16 54 47
+let%span scompleted_eviction'5 = "/workspace/crates/verified/src/composition/completed_eviction.rs" 63 12 63 79
+let%span scompleted_eviction'6 = "/workspace/crates/verified/src/composition/completed_eviction.rs" 55 30 66 5
+let%span scompleted_eviction'7 = "/workspace/crates/verified/src/composition/completed_eviction.rs" 67 48 67 58
+let%span scompleted_eviction'8 = "/workspace/crates/verified/src/composition/completed_eviction.rs" 68 22 68 27
+let%span scompleted_eviction'9 = "/workspace/crates/verified/src/composition/completed_eviction.rs" 69 16 69 22
+let%span scompleted_eviction'10 = "/workspace/crates/verified/src/composition/completed_eviction.rs" 76 14 76 34
+let%span scompleted_eviction'11 = "/workspace/crates/verified/src/composition/completed_eviction.rs" 77 14 77 28
+let%span scompleted_eviction'12 = "/workspace/crates/verified/src/composition/completed_eviction.rs" 72 16 75 54
+let%span scompleted_eviction'13 = "/workspace/crates/verified/src/composition/completed_eviction.rs" 71 16 71 86
+let%span scompleted_eviction'14 = "/workspace/crates/verified/src/composition/completed_eviction.rs" 70 16 70 62
+let%span scompleted_eviction'15 = "/workspace/crates/verified/src/composition/completed_eviction.rs" 78 29 78 32
+let%span scompleted_eviction'16 = "/workspace/crates/verified/src/composition/completed_eviction.rs" 79 31 79 41
+let%span scompleted_eviction'17 = "/workspace/crates/verified/src/composition/completed_eviction.rs" 82 12 82 24
+let%span scompleted_eviction'18 = "/workspace/crates/verified/src/composition/completed_eviction.rs" 85 30 85 57
+let%span scompleted_eviction'19 = "/workspace/crates/verified/src/composition/completed_eviction.rs" 85 12 85 57
+let%span scompleted_eviction'20 = "/workspace/crates/verified/src/composition/completed_eviction.rs" 84 21 87 9
+let%span scompleted_eviction'21 = "/workspace/crates/verified/src/composition/completed_eviction.rs" 84 21 88 17
+let%span scompleted_eviction'22 = "/workspace/crates/verified/src/composition/completed_eviction.rs" 89 39 89 68
+let%span scompleted_eviction'23 = "/workspace/crates/verified/src/composition/completed_eviction.rs" 89 8 89 70
+let%span scompleted_eviction'24 = "/workspace/crates/verified/src/composition/completed_eviction.rs" 90 18 90 45
+let%span scompleted_eviction'25 = "/workspace/crates/verified/src/composition/completed_eviction.rs" 91 13 91 14
+let%span scompleted_eviction'26 = "/workspace/crates/verified/src/composition/completed_eviction.rs" 91 8 91 14
+let%span scompleted_eviction'27 = "/workspace/crates/verified/src/composition/completed_eviction.rs" 20 11 20 78
+let%span scompleted_eviction'28 = "/workspace/crates/verified/src/composition/completed_eviction.rs" 21 11 21 109
+let%span scompleted_eviction'29 = "/workspace/crates/verified/src/composition/completed_eviction.rs" 22 11 22 45
+let%span scompleted_eviction'30 = "/workspace/crates/verified/src/composition/completed_eviction.rs" 23 11 24 99
+let%span scompleted_eviction'31 = "/workspace/crates/verified/src/composition/completed_eviction.rs" 25 11 25 68
+let%span scompleted_eviction'32 = "/workspace/crates/verified/src/composition/completed_eviction.rs" 26 10 26 92
+let%span scompleted_eviction'33 = "/workspace/crates/verified/src/composition/completed_eviction.rs" 27 10 27 41
+let%span scompleted_eviction'34 = "/workspace/crates/verified/src/composition/completed_eviction.rs" 28 10 28 53
+let%span scompleted_eviction'35 = "/workspace/crates/verified/src/composition/completed_eviction.rs" 29 10 29 97
+let%span scompleted_eviction'36 = "/workspace/crates/verified/src/composition/completed_eviction.rs" 30 10 34 50
+let%span scompleted_eviction'37 = "/workspace/crates/verified/src/composition/completed_eviction.rs" 35 10 36 37
+let%span scompleted_eviction'38 = "/workspace/crates/verified/src/composition/completed_eviction.rs" 37 10 38 65
+let%span scompleted_eviction'39 = "/workspace/crates/verified/src/composition/completed_eviction.rs" 39 10 39 102
 
 use creusot.slice.Slice64
 use creusot.int.UInt64
@@ -144,7 +149,7 @@ let frontier_reaches (frontier: Int64.t) (target: Int64.t) (return (x: bool)) = 
 
 type t_Option_i16 = None'0 | Some'0 Int16.t
 
-function sequence_modulo_2_31 [#"/workspace/crates/verified/src/producer/sequence_decision.rs" 10 0 10 49] (sequence: int) : int
+function sequence_modulo_2_31 [#"/workspace/crates/verified/src/producer/sequence_decision.rs" 7 0 7 49] (sequence: int) : int
  = [%#ssequence_decision'0] EuclideanDivision.mod sequence 2147483648
 
 let decrement_sequence (sequence: Int32.t) (decrement: Int32.t) (return (x: Int32.t)) = any
@@ -169,7 +174,7 @@ type tup4_bool_Vec_usize_Global_ProducerDecision_Option_tup4_usize_i64_i64_bool 
   f2'1: t_ProducerDecision;
   f3'1: t_Option_tup4_usize_i64_i64_bool }
 
-predicate snapshot_last_record_valid [#"/workspace/crates/verified/src/producer_snapshot/snapshot_transaction_valid.rs" 201 0 201 98] (snapshot_offset: int) (entry: t_ProducerSnapshotEntryFacts) =
+predicate snapshot_last_record_valid [#"/workspace/crates/verified/src/producer_snapshot/snapshot_transaction_valid.rs" 190 0 190 98] (snapshot_offset: int) (entry: t_ProducerSnapshotEntryFacts) =
   [%#ssnapshot_transaction_valid] Int64.to_int entry.last_offset = - 1
     /\ Int32.to_int entry.last_sequence = - 1 /\ Int32.to_int entry.offset_delta = 0
   \/ ge_log_Int (Int64.to_int entry.last_offset) 0
@@ -178,18 +183,35 @@ predicate snapshot_last_record_valid [#"/workspace/crates/verified/src/producer_
   /\ ge_log_Int (Int64.to_int entry.last_offset) (Int32.to_int entry.offset_delta)
   /\ Int64.to_int entry.last_offset < snapshot_offset
 
-predicate snapshot_transaction_valid [#"/workspace/crates/verified/src/producer_snapshot/snapshot_transaction_valid.rs" 218 0 218 98] (snapshot_offset: int) (entry: t_ProducerSnapshotEntryFacts) =
+predicate snapshot_transaction_valid [#"/workspace/crates/verified/src/producer_snapshot/snapshot_transaction_valid.rs" 205 0 205 98] (snapshot_offset: int) (entry: t_ProducerSnapshotEntryFacts) =
   [%#ssnapshot_transaction_valid'0] Int64.to_int entry.current_txn_first_offset = - 1
   \/ ge_log_Int (Int64.to_int entry.current_txn_first_offset) 0
   /\ Int64.to_int entry.current_txn_first_offset < snapshot_offset
   /\ Int64.to_int entry.current_txn_first_offset <= Int64.to_int entry.last_offset
 
-predicate snapshot_entry_valid_model [#"/workspace/crates/verified/src/producer_snapshot/replay_start.rs" 17 0 17 98] (snapshot_offset: int) (entry: t_ProducerSnapshotEntryFacts) =
+predicate snapshot_entry_valid_model [#"/workspace/crates/verified/src/producer_snapshot/replay_start.rs" 14 0 14 98] (snapshot_offset: int) (entry: t_ProducerSnapshotEntryFacts) =
   [%#sreplay_start] ge_log_Int snapshot_offset 0
   /\ ge_log_Int (Int64.to_int entry.producer_id) 0
   /\ ge_log_Int (Int16.to_int entry.producer_epoch) 0
   /\ ge_log_Int (Int32.to_int entry.coordinator_epoch) (- 1)
   /\ snapshot_last_record_valid snapshot_offset entry /\ snapshot_transaction_valid snapshot_offset entry
+
+predicate retained_producer_row [#"/workspace/crates/verified/src/producer_snapshot.rs" 21 0 21 96] (end': int) (row: t_ProducerSnapshotEntryFacts) (pid: Int64.t) =
+  [%#sproducer_snapshot] snapshot_entry_valid_model end' row
+  /\ ge_log_Int (Int64.to_int row.last_offset) 0 /\ row.producer_id = pid
+
+predicate producer_offsets_ordered [#"/workspace/crates/verified/src/producer_snapshot.rs" 131 0 131 85] (rows: Seq.seq t_ProducerSnapshotEntryFacts) =
+  [%#sproducer_snapshot'0] forall i: int, j: int. 0 <= i /\ i < j /\ j < Seq.length rows
+    -> Int64.to_int (Seq.get rows i).last_offset < Int64.to_int (Seq.get rows j).last_offset
+
+predicate completion_epoch_accepts [#"/workspace/crates/verified/src/producer/completion.rs" 127 0 127 83] (current': t_Option_i16) (incoming: Int16.t) =
+  [%#scompletion] match current' with
+    | None'0 -> true
+    | Some'0 previous -> Int16.to_int previous <= Int16.to_int incoming
+    end
+
+predicate completion_window_bounded [#"/workspace/crates/verified/src/producer/completion.rs" 134 0 134 85] (selected: Seq.seq UInt64.t) (accepted: bool) =
+  [%#scompletion'0] Seq.length selected <= 5 /\ (accepted -> gt_log_Int (Seq.length selected) 0)
 
 constant const_MAX'0: UInt64.t = (18446744073709551615: UInt64.t)
 
@@ -199,19 +221,22 @@ axiom view_Vec_usize_Global_spec:
   forall self: t_Vec_usize_Global [view_Vec_usize_Global self]. [%#svec'0] Seq.length (view_Vec_usize_Global self)
     <= UInt64.t'int const_MAX'0
 
-function completed_row [#"/workspace/crates/verified/src/composition/completed_producer.rs" 13 0 17 31] (rows: Seq.seq t_ProducerSnapshotEntryFacts) (incoming: t_ProducerSnapshotEntryFacts) (index: int) : t_ProducerSnapshotEntryFacts
+function completed_row [#"/workspace/crates/verified/src/composition/completed_producer.rs" 12 0 16 31] (rows: Seq.seq t_ProducerSnapshotEntryFacts) (incoming: t_ProducerSnapshotEntryFacts) (index: int) : t_ProducerSnapshotEntryFacts
  = [%#scompleted_producer'13] if index = Seq.length rows then incoming else Seq.get rows index
 
-predicate completion_source_selected [#"/workspace/crates/verified/src/producer/completion.rs" 20 0 20 76] (selected: Seq.seq UInt64.t) (source: int)
+predicate completion_source_selected [#"/workspace/crates/verified/src/producer/completion.rs" 18 0 18 76] (selected: Seq.seq UInt64.t) (source: int)
 
 axiom completion_source_selected_spec:
-  forall selected: Seq.seq UInt64.t, source: int [completion_source_selected selected source]. [%#scompletion] completion_source_selected selected source
+  forall selected: Seq.seq UInt64.t, source: int [completion_source_selected selected source]. [%#scompletion'1] completion_source_selected selected source
     = (exists j: int. 0 <= j /\ j < Seq.length selected /\ UInt64.t'int (Seq.get selected j) = source)
 
-predicate matches_retry [#"/workspace/crates/verified/src/composition/completed_producer.rs" 25 0 30 9] (rows: Seq.seq t_ProducerSnapshotEntryFacts) (incoming: t_ProducerSnapshotEntryFacts) (index: int) (request: tup3_i16_i32_i32) =
+predicate snapshot_sequence_matches [#"/workspace/crates/verified/src/producer_snapshot.rs" 31 0 31 96] (row: t_ProducerSnapshotEntryFacts) (base: int) (delta: int) =
+  [%#sproducer_snapshot'1] base = sequence_modulo_2_31 (Int32.to_int row.last_sequence - Int32.to_int row.offset_delta)
+  /\ Int32.to_int row.last_sequence = sequence_modulo_2_31 (base + delta)
+
+predicate matches_retry [#"/workspace/crates/verified/src/composition/completed_producer.rs" 22 0 27 9] (rows: Seq.seq t_ProducerSnapshotEntryFacts) (incoming: t_ProducerSnapshotEntryFacts) (index: int) (request: tup3_i16_i32_i32) =
   [%#scompleted_producer'14] let row = completed_row rows incoming index in request.f0 = row.producer_epoch
-  /\ Int32.to_int request.f1 = sequence_modulo_2_31 (Int32.to_int row.last_sequence - Int32.to_int row.offset_delta)
-  /\ Int32.to_int row.last_sequence = sequence_modulo_2_31 (Int32.to_int request.f1 + Int32.to_int request.f2)
+  /\ snapshot_sequence_matches row (Int32.to_int request.f1) (Int32.to_int request.f2)
 
 let completed_batches_preserve_first_retry (end': Int64.t) (hwm: Int64.t) (current': t_Option_i16)
   (rows: Slice64.slice t_ProducerSnapshotEntryFacts) (incoming: t_ProducerSnapshotEntryFacts)
@@ -228,25 +253,14 @@ let completed_batches_preserve_first_retry (end': Int64.t) (hwm: Int64.t) (curre
   /\ ([@stop_split] [@expl:completed_batches_preserve_first_retry requires #3] [%#scompleted_producer'2] forall i: int. 0
           <= i
         /\ i < Seq.length (Slice64.view rows)
-      -> snapshot_entry_valid_model (Int64.to_int end') (Seq.get (Slice64.view rows) i)
-      /\ ge_log_Int (Int64.to_int (Seq.get (Slice64.view rows) i).last_offset) 0
-      /\ (Seq.get (Slice64.view rows) i).producer_id = incoming.producer_id
+      -> retained_producer_row (Int64.to_int end') (Seq.get (Slice64.view rows) i) incoming.producer_id
       /\ current' = Some'0 ((Seq.get (Slice64.view rows) i).producer_epoch))
-  /\ ([@stop_split] [@expl:completed_batches_preserve_first_retry requires #4] [%#scompleted_producer'3] forall i: int, j: int. 0
-        <= i
-      /\ i < j /\ j < Seq.length (Slice64.view rows)
-    -> Int64.to_int (Seq.get (Slice64.view rows) i).last_offset
-    < Int64.to_int (Seq.get (Slice64.view rows) j).last_offset)}
+  /\ ([@stop_split] [@expl:completed_batches_preserve_first_retry requires #4] [%#scompleted_producer'3] producer_offsets_ordered (Slice64.view rows))}
   any
   [ return (result: tup4_bool_Vec_usize_Global_ProducerDecision_Option_tup4_usize_i64_i64_bool) ->
   {[@stop_split] [@expl:completed_batches_preserve_first_retry ensures] ([@stop_split] [@expl:completed_batches_preserve_first_retry ensures #0] [%#scompleted_producer'4] result.f0'1
-      = match current' with
-        | None'0 -> true
-        | Some'0 epoch -> Int16.to_int epoch <= Int16.to_int incoming.producer_epoch
-        end)
-    /\ ([@stop_split] [@expl:completed_batches_preserve_first_retry ensures #1] [%#scompleted_producer'5] Seq.length (view_Vec_usize_Global result.f1'1)
-        <= 5
-      /\ (result.f0'1 -> gt_log_Int (Seq.length (view_Vec_usize_Global result.f1'1)) 0))
+      = completion_epoch_accepts current' incoming.producer_epoch)
+    /\ ([@stop_split] [@expl:completed_batches_preserve_first_retry ensures #1] [%#scompleted_producer'5] completion_window_bounded (view_Vec_usize_Global result.f1'1) result.f0'1)
     /\ ([@stop_split] [@expl:completed_batches_preserve_first_retry ensures #2] [%#scompleted_producer'6] forall j: int. 0
             <= j
           /\ j < Seq.length (view_Vec_usize_Global result.f1'1)
@@ -419,7 +433,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let completed_eviction_bounds_waiters [#"/workspace/crates/verified/src/composition/completed_eviction.rs" 39 0 46 20]
+let completed_eviction_bounds_waiters [#"/workspace/crates/verified/src/composition/completed_eviction.rs" 40 0 47 20]
   (end': Int64.t) (hwm: Int64.t) (epoch: Int16.t) (rows: Slice64.slice t_ProducerSnapshotEntryFacts)
   (incoming: t_ProducerSnapshotEntryFacts) (origin: UInt64.t)
   (return (x: tup4_bool_i64_bool_Vec_tup3_usize_i64_bool_Global)) =
@@ -434,15 +448,9 @@ let completed_eviction_bounds_waiters [#"/workspace/crates/verified/src/composit
   /\ ([@stop_split] [@expl:completed_eviction_bounds_waiters requires #3] [%#scompleted_eviction'30] forall i: int. 0
           <= i
         /\ i < Seq.length (Slice64.view rows)
-      -> snapshot_entry_valid_model (Int64.to_int end') (Seq.get (Slice64.view rows) i)
-      /\ ge_log_Int (Int64.to_int (Seq.get (Slice64.view rows) i).last_offset) 0
-      /\ (Seq.get (Slice64.view rows) i).producer_id = incoming.producer_id
+      -> retained_producer_row (Int64.to_int end') (Seq.get (Slice64.view rows) i) incoming.producer_id
       /\ (Seq.get (Slice64.view rows) i).producer_epoch = epoch)
-  /\ ([@stop_split] [@expl:completed_eviction_bounds_waiters requires #4] [%#scompleted_eviction'31] forall i: int, j: int. 0
-        <= i
-      /\ i < j /\ j < Seq.length (Slice64.view rows)
-    -> Int64.to_int (Seq.get (Slice64.view rows) i).last_offset
-    < Int64.to_int (Seq.get (Slice64.view rows) j).last_offset)}
+  /\ ([@stop_split] [@expl:completed_eviction_bounds_waiters requires #4] [%#scompleted_eviction'31] producer_offsets_ordered (Slice64.view rows))}
   (! bb0
   [ bb0 = s0
     [ s0 = [ &_43 <- origin ] s1

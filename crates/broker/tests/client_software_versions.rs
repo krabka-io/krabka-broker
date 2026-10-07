@@ -15,16 +15,12 @@ mod support;
 use std::{io, net::SocketAddr};
 
 use assert2::assert;
-use bytes::{Buf, BufMut, BytesMut};
+use bytes::BytesMut;
 use krabka_broker::Broker;
-use krabka_protocol::{
-    Decode, Encode,
-    owned::{api_versions_request::ApiVersionsRequest, api_versions_response::ApiVersionsResponse},
-};
-use tokio::{
-    io::{AsyncReadExt, AsyncWriteExt},
-    net::TcpStream,
-};
+use krabka_protocol::{Encode, owned::api_versions_response::ApiVersionsResponse};
+use tokio::net::TcpStream;
+
+use crate::support::discovery::api_versions_request_for;
 
 const INVALID_REQUEST: i16 = 42;
 
@@ -56,11 +52,7 @@ async fn send_api_versions(
     software_name: &str,
     software_version: &str,
 ) -> io::Result<ApiVersionsResponse> {
-    let req = ApiVersionsRequest {
-        client_software_name: software_name.to_string(),
-        client_software_version: software_version.to_string(),
-        ..Default::default()
-    };
+    let req = api_versions_request_for(software_name.to_string(), software_version.to_string());
     let mut body = BytesMut::new();
     req.encode(&mut body, version)
         .map_err(|e| io::Error::other(format!("ApiVersions encode: {e}")))?;
@@ -71,35 +63,20 @@ async fn send_api_versions(
     // parse the error code on negotiated downgrade.
     let flexible = version >= 3;
 
-    let mut frame = BytesMut::with_capacity(16 + body.len());
-    frame.put_i16(18); // api_key = ApiVersions
-    frame.put_i16(version);
-    frame.put_i32(99); // correlation_id
-    let client_id = "krabka-kip-511-test";
-    frame.put_i16(i16::try_from(client_id.len()).unwrap());
-    frame.put_slice(client_id.as_bytes());
-    if flexible {
-        frame.put_u8(0); // header tagged-fields byte
-    }
-    frame.put_slice(&body);
+    let frame = crate::support::wire::request_frame(
+        (18, version, 99, flexible),
+        "krabka-kip-511-test",
+        &body,
+        Some(16 + body.len()),
+        None,
+    );
 
     let mut stream = TcpStream::connect(addr).await?;
-    stream
-        .write_u32(u32::try_from(frame.len()).unwrap())
-        .await?;
-    stream.write_all(&frame).await?;
-    stream.flush().await?;
+    crate::support::wire::write_frame(&mut stream, &frame, None).await?;
 
-    let resp_len = stream.read_u32().await?;
-    let mut resp = vec![0u8; resp_len as usize];
-    stream.read_exact(&mut resp).await?;
-    let mut cur: &[u8] = &resp;
-    let _corr = cur.get_i32();
-    // ApiVersionsResponse uses the v0 response header (no tagged byte)
-    // even on flexible versions — the request decodes the response body
-    // directly at the negotiated version.
-    ApiVersionsResponse::decode(&mut cur, version)
-        .map_err(|e| io::Error::other(format!("ApiVersionsResponse decode: {e}")))
+    let resp = crate::support::wire::read_frame(&mut stream).await?;
+    // ApiVersions keeps a non-flexible response header, including on flexible versions.
+    crate::support::wire::decode_response_frame(&resp, version, false, "ApiVersionsResponse decode")
 }
 
 async fn scrape(addr: SocketAddr) -> String {

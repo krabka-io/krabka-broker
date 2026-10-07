@@ -16,6 +16,8 @@ use krabka_protocol::owned::{
     metadata_request::MetadataRequest,
 };
 
+use crate::support::discovery::topic_metadata_request;
+
 /// `retry.backoff.ms`: the first wait of a Kafka admin client before a retry.
 const RETRY_BACKOFF: Duration = Duration::from_millis(100);
 /// `retry.backoff.max.ms`: the admin client doubles the wait up to this bound.
@@ -103,10 +105,7 @@ pub(super) async fn delete_topic_as_admin_client(bootstrap: &Client, name: &str)
 /// `Metadata` names.
 async fn delete_through_controller(bootstrap: &Client, name: &str) -> Result<i16, ClientError> {
     let metadata = bootstrap
-        .send(MetadataRequest {
-            topics: Some(Vec::new()),
-            ..MetadataRequest::default()
-        })
+        .send(topic_metadata_request(Some(Vec::new())))
         .await?;
     let controller = metadata
         .brokers
@@ -124,9 +123,8 @@ pub(super) async fn topic_exists(client: &Client, name: &str) -> bool {
         // Null topics is "every topic", the request `kafka-topics --list`
         // sends; an empty list would ask for none.
         .send(MetadataRequest {
-            topics: None,
             allow_auto_topic_creation: false,
-            ..MetadataRequest::default()
+            ..topic_metadata_request(None)
         })
         .await
         .expect("Metadata")

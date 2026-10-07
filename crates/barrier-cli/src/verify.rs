@@ -92,20 +92,14 @@ pub(crate) async fn verify(
                 partition.offset,
             )
             .await;
-            match batch {
-                Ok(batch) => match check_batch(batch.as_ref(), group, epoch, partition.offset) {
-                    Ok(()) => outcome.checked.push((
-                        topic.topic.clone(),
-                        partition.partition,
-                        partition.offset,
-                    )),
-                    Err(reason) => outcome.mismatches.push(Mismatch {
-                        topic: topic.topic.clone(),
-                        partition: partition.partition,
-                        offset: partition.offset,
-                        reason,
-                    }),
-                },
+            match batch
+                .and_then(|batch| check_batch(batch.as_ref(), group, epoch, partition.offset))
+            {
+                Ok(()) => outcome.checked.push((
+                    topic.topic.clone(),
+                    partition.partition,
+                    partition.offset,
+                )),
                 Err(reason) => outcome.mismatches.push(Mismatch {
                     topic: topic.topic.clone(),
                     partition: partition.partition,

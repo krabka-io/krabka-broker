@@ -191,14 +191,18 @@ mod tests {
         assert2::assert!(matches!(err, LegacyRecordsError::Truncated { .. }));
     }
 
+    fn check_truncated_frame(magic: u8, trailing: &[u8], needed: usize) {
+        let frame = frame_with_body(magic, 0, trailing);
+        let err = Message::decode_from(&mut &frame[..], frame.len()).unwrap_err();
+        assert2::assert!(
+            matches!(err, LegacyRecordsError::Truncated { needed: actual } if actual == needed)
+        );
+    }
+
     #[test]
     fn decode_v1_truncated_timestamp_reports_needed() {
         // magic+attrs then only 4 of the 8 timestamp bytes: needed = 8 - 4 = 4.
-        let frame = frame_with_body(1, 0, &[0u8; 4]);
-        let fs = frame.len();
-        let mut cur: &[u8] = &frame;
-        let err = Message::decode_from(&mut cur, fs).unwrap_err();
-        assert2::assert!(matches!(err, LegacyRecordsError::Truncated { needed: 4 }));
+        check_truncated_frame(1, &[0u8; 4], 4);
     }
 
     #[test]
@@ -206,22 +210,14 @@ mod tests {
         // Full 8 timestamp bytes but no key/value: clears the `< 8` timestamp
         // guard (8 < 8 false) and fails on the missing key length (needed 4),
         // not the guard's own needed (0). Distinguishes `<` from `<=`.
-        let frame = frame_with_body(1, 0, &[0u8; 8]);
-        let fs = frame.len();
-        let mut cur: &[u8] = &frame;
-        let err = Message::decode_from(&mut cur, fs).unwrap_err();
-        assert2::assert!(matches!(err, LegacyRecordsError::Truncated { needed: 4 }));
+        check_truncated_frame(1, &[0u8; 8], 4);
     }
 
     #[test]
     fn decode_truncated_key_length_reports_needed() {
         // V0 frame with only 1 byte where the 4-byte key length is expected:
         // needed = 4 - 1 = 3.
-        let frame = frame_with_body(0, 0, &[0xAA]);
-        let fs = frame.len();
-        let mut cur: &[u8] = &frame;
-        let err = Message::decode_from(&mut cur, fs).unwrap_err();
-        assert2::assert!(matches!(err, LegacyRecordsError::Truncated { needed: 3 }));
+        check_truncated_frame(0, &[0xAA], 3);
     }
 
     #[test]
@@ -230,10 +226,6 @@ mod tests {
         // needed = 5 - 2 = 3.
         let mut trailing = 5i32.to_be_bytes().to_vec();
         trailing.extend_from_slice(&[0xAA, 0xBB]);
-        let frame = frame_with_body(0, 0, &trailing);
-        let fs = frame.len();
-        let mut cur: &[u8] = &frame;
-        let err = Message::decode_from(&mut cur, fs).unwrap_err();
-        assert2::assert!(matches!(err, LegacyRecordsError::Truncated { needed: 3 }));
+        check_truncated_frame(0, &trailing, 3);
     }
 }

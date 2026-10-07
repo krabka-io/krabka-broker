@@ -2,11 +2,8 @@ use creusot_std::prelude::*;
 
 use super::LocalRetentionSegment;
 
+open_logic! {
 /// Mathematical bytes in an oldest prefix; totals can exceed `u64::MAX`.
-// cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
-#[cfg(creusot)]
-#[cfg_attr(test, mutants::skip)]
-#[logic(open)]
 #[variant(count)]
 pub fn local_prefix_bytes(segments: Seq<LocalRetentionSegment>, count: Int) -> Int {
     pearlite! {
@@ -14,6 +11,7 @@ pub fn local_prefix_bytes(segments: Seq<LocalRetentionSegment>, count: Int) -> I
             local_prefix_bytes(segments, count - 1) + segments[count - 1].size@
         }
     }
+}
 }
 
 /// Extending a prefix cannot lower its byte cost, including zero-byte rows.

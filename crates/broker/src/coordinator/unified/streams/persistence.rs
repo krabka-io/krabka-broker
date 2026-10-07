@@ -32,9 +32,6 @@ mod partition_metadata;
 mod pending;
 mod topology;
 
-#[cfg(test)]
-mod test_support;
-
 pub use self::{
     assignment::{
         StreamsGroupCurrentMemberAssignmentValue, StreamsGroupTargetAssignmentMemberValue,

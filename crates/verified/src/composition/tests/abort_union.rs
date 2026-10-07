@@ -3,6 +3,20 @@ use std::{collections::BTreeSet, vec};
 use super::*;
 use crate::transaction::unique_aborted_transaction_rows;
 
+pub(super) fn visible_rows(
+    remote: &[RestoreAbortedTxn],
+    local: &[RestoreAbortedTxn],
+    from: i64,
+    end: i64,
+) -> BTreeSet<(i64, i64)> {
+    remote
+        .iter()
+        .chain(local)
+        .filter(|entry| from < end && entry.start_offset < end && entry.last_offset >= from)
+        .map(|entry| (entry.producer_id, entry.start_offset))
+        .collect()
+}
+
 pub(super) fn index(
     rows: std::collections::BTreeMap<i64, (i64, i64)>,
 ) -> (Vec<RestoreAbortedTxn>, RestoreSegmentExtent) {
@@ -39,9 +53,7 @@ proptest! {
             prop_assert_eq!(result, None);
         } else {
             let end = hw.min(lso).min(deliverable).min(cut);
-            let expected: BTreeSet<_> = remote.iter().chain(local.iter())
-                .filter(|entry| from < end && entry.start_offset < end && entry.last_offset >= from)
-                .map(|entry| (entry.producer_id, entry.start_offset)).collect();
+            let expected = visible_rows(&remote, &local, from, end);
             let actual = result.unwrap();
             prop_assert_eq!(actual.len(), expected.len());
             prop_assert_eq!(actual.into_iter().collect::<BTreeSet<_>>(), expected);

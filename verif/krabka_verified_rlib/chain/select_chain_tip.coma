@@ -1,33 +1,34 @@
-(* #"/workspace/crates/verified/src/chain.rs" 39 0 39 73 *)
+(* #"/workspace/crates/verified/src/chain.rs" 44 0 44 73 *)
 
 let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
 let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
 let%span swell_founded = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/well_founded.rs" 43 8 43 33
 let%span sslice = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 331 18 331 22
-let%span schain = "/workspace/crates/verified/src/chain.rs" 41 16 41 22
-let%span schain'0 = "/workspace/crates/verified/src/chain.rs" 56 14 56 36
-let%span schain'1 = "/workspace/crates/verified/src/chain.rs" 57 14 57 30
-let%span schain'2 = "/workspace/crates/verified/src/chain.rs" 43 16 55 5
-let%span schain'3 = "/workspace/crates/verified/src/chain.rs" 42 16 42 39
-let%span schain'4 = "/workspace/crates/verified/src/chain.rs" 58 11 58 24
-let%span schain'5 = "/workspace/crates/verified/src/chain.rs" 58 11 58 26
-let%span schain'6 = "/workspace/crates/verified/src/chain.rs" 62 32 62 45
-let%span schain'7 = "/workspace/crates/verified/src/chain.rs" 62 32 62 47
-let%span schain'8 = "/workspace/crates/verified/src/chain.rs" 62 50 62 69
-let%span schain'9 = "/workspace/crates/verified/src/chain.rs" 62 50 62 71
-let%span schain'10 = "/workspace/crates/verified/src/chain.rs" 62 32 64 71
-let%span schain'11 = "/workspace/crates/verified/src/chain.rs" 63 28 63 41
-let%span schain'12 = "/workspace/crates/verified/src/chain.rs" 63 28 63 43
-let%span schain'13 = "/workspace/crates/verified/src/chain.rs" 63 47 63 66
-let%span schain'14 = "/workspace/crates/verified/src/chain.rs" 63 47 63 68
-let%span schain'15 = "/workspace/crates/verified/src/chain.rs" 64 31 64 44
-let%span schain'16 = "/workspace/crates/verified/src/chain.rs" 64 31 64 46
-let%span schain'17 = "/workspace/crates/verified/src/chain.rs" 64 49 64 68
-let%span schain'18 = "/workspace/crates/verified/src/chain.rs" 64 49 64 70
-let%span schain'19 = "/workspace/crates/verified/src/chain.rs" 63 27 64 71
-let%span schain'20 = "/workspace/crates/verified/src/chain.rs" 71 13 71 14
-let%span schain'21 = "/workspace/crates/verified/src/chain.rs" 71 8 71 14
-let%span schain'22 = "/workspace/crates/verified/src/chain.rs" 25 10 37 1
+let%span schain = "/workspace/crates/verified/src/chain.rs" 46 16 46 22
+let%span schain'0 = "/workspace/crates/verified/src/chain.rs" 57 14 57 36
+let%span schain'1 = "/workspace/crates/verified/src/chain.rs" 58 14 58 30
+let%span schain'2 = "/workspace/crates/verified/src/chain.rs" 48 16 56 5
+let%span schain'3 = "/workspace/crates/verified/src/chain.rs" 47 16 47 39
+let%span schain'4 = "/workspace/crates/verified/src/chain.rs" 59 11 59 24
+let%span schain'5 = "/workspace/crates/verified/src/chain.rs" 59 11 59 26
+let%span schain'6 = "/workspace/crates/verified/src/chain.rs" 63 32 63 45
+let%span schain'7 = "/workspace/crates/verified/src/chain.rs" 63 32 63 47
+let%span schain'8 = "/workspace/crates/verified/src/chain.rs" 63 50 63 69
+let%span schain'9 = "/workspace/crates/verified/src/chain.rs" 63 50 63 71
+let%span schain'10 = "/workspace/crates/verified/src/chain.rs" 63 32 65 71
+let%span schain'11 = "/workspace/crates/verified/src/chain.rs" 64 28 64 41
+let%span schain'12 = "/workspace/crates/verified/src/chain.rs" 64 28 64 43
+let%span schain'13 = "/workspace/crates/verified/src/chain.rs" 64 47 64 66
+let%span schain'14 = "/workspace/crates/verified/src/chain.rs" 64 47 64 68
+let%span schain'15 = "/workspace/crates/verified/src/chain.rs" 65 31 65 44
+let%span schain'16 = "/workspace/crates/verified/src/chain.rs" 65 31 65 46
+let%span schain'17 = "/workspace/crates/verified/src/chain.rs" 65 49 65 68
+let%span schain'18 = "/workspace/crates/verified/src/chain.rs" 65 49 65 70
+let%span schain'19 = "/workspace/crates/verified/src/chain.rs" 64 27 65 71
+let%span schain'20 = "/workspace/crates/verified/src/chain.rs" 72 13 72 14
+let%span schain'21 = "/workspace/crates/verified/src/chain.rs" 72 8 72 14
+let%span schain'22 = "/workspace/crates/verified/src/chain.rs" 34 10 42 1
+let%span schain'23 = "/workspace/crates/verified/src/chain.rs" 23 16 24 70
 
 use creusot.int.UInt64
 use seq.Seq
@@ -58,6 +59,15 @@ let len_tup3_i64_u64_bool (self_: Slice64.slice tup3_i64_u64_bool) (return (x: U
     = UInt64.t'int result}
     (! return {result}) ]
 
+predicate chain_rank_precedes [#"/workspace/crates/verified/src/chain.rs" 22 0 22 97] (left: tup3_i64_u64_bool) (right: tup3_i64_u64_bool) (allow_ties: bool) =
+  [%#schain'23] Int64.to_int left.f0 < Int64.to_int right.f0
+  \/ Int64.to_int left.f0 = Int64.to_int right.f0
+  /\ (if allow_ties then
+    UInt64.t'int left.f1 <= UInt64.t'int right.f1
+  else
+    UInt64.t'int left.f1 < UInt64.t'int right.f1
+  )
+
 let elim_Some (_x: t_Option_usize) (return (f0'0: UInt64.t)) = any
   [ _k (f0'0: UInt64.t) -> {Some f0'0 = _x} (! return {f0'0})
   | _chk -> (! {[@expl:elim Some] match _x with
@@ -70,7 +80,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let select_chain_tip [#"/workspace/crates/verified/src/chain.rs" 39 0 39 73]
+let select_chain_tip [#"/workspace/crates/verified/src/chain.rs" 44 0 44 73]
   (candidates: Slice64.slice tup3_i64_u64_bool) (return (x: t_Option_usize)) = (! bb0
   [ bb0 = s0 [ s0 = [ &best <- None ] s1 | s1 = [ &i <- [%#schain] (0: UInt64.t) ] s2 | s2 = bb1 ]
   | bb1 = bb1invariant
@@ -84,19 +94,9 @@ let select_chain_tip [#"/workspace/crates/verified/src/chain.rs" 39 0 39 73]
         | Some index -> UInt64.t'int index < UInt64.t'int i
         /\ (Seq.get (Slice64.view candidates) (UInt64.t'int index)).f2
         /\ (forall j: int. 0 <= j /\ j < UInt64.t'int i /\ (Seq.get (Slice64.view candidates) j).f2
-            -> Int64.to_int (Seq.get (Slice64.view candidates) j).f0
-              < Int64.to_int (Seq.get (Slice64.view candidates) (UInt64.t'int index)).f0
-            \/ Int64.to_int (Seq.get (Slice64.view candidates) j).f0
-              = Int64.to_int (Seq.get (Slice64.view candidates) (UInt64.t'int index)).f0
-            /\ UInt64.t'int (Seq.get (Slice64.view candidates) j).f1
-            <= UInt64.t'int (Seq.get (Slice64.view candidates) (UInt64.t'int index)).f1)
+            -> chain_rank_precedes (Seq.get (Slice64.view candidates) j) (Seq.get (Slice64.view candidates) (UInt64.t'int index)) true)
         /\ (forall j: int. 0 <= j /\ j < UInt64.t'int index /\ (Seq.get (Slice64.view candidates) j).f2
-          -> Int64.to_int (Seq.get (Slice64.view candidates) j).f0
-            < Int64.to_int (Seq.get (Slice64.view candidates) (UInt64.t'int index)).f0
-          \/ Int64.to_int (Seq.get (Slice64.view candidates) j).f0
-            = Int64.to_int (Seq.get (Slice64.view candidates) (UInt64.t'int index)).f0
-          /\ UInt64.t'int (Seq.get (Slice64.view candidates) j).f1
-          < UInt64.t'int (Seq.get (Slice64.view candidates) (UInt64.t'int index)).f1)
+          -> chain_rank_precedes (Seq.get (Slice64.view candidates) j) (Seq.get (Slice64.view candidates) (UInt64.t'int index)) false)
         end}
       (! [ &variant_old_bb1 <- [%#schain'0] Seq.length (Slice64.view candidates) - UInt64.t'int i ] s0)
       [ s0 = len_tup3_i64_u64_bool [%#schain'1] {candidates} (fun (_x: UInt64.t) -> [ &_21 <- _x ] s1)
@@ -213,18 +213,8 @@ let select_chain_tip [#"/workspace/crates/verified/src/chain.rs" 39 0 39 73]
       | Some index -> UInt64.t'int index < Seq.length (Slice64.view candidates)
       /\ (Seq.get (Slice64.view candidates) (UInt64.t'int index)).f2
       /\ (forall i: int. 0 <= i /\ i < Seq.length (Slice64.view candidates) /\ (Seq.get (Slice64.view candidates) i).f2
-          -> Int64.to_int (Seq.get (Slice64.view candidates) i).f0
-            < Int64.to_int (Seq.get (Slice64.view candidates) (UInt64.t'int index)).f0
-          \/ Int64.to_int (Seq.get (Slice64.view candidates) i).f0
-            = Int64.to_int (Seq.get (Slice64.view candidates) (UInt64.t'int index)).f0
-          /\ UInt64.t'int (Seq.get (Slice64.view candidates) i).f1
-          <= UInt64.t'int (Seq.get (Slice64.view candidates) (UInt64.t'int index)).f1)
+          -> chain_rank_precedes (Seq.get (Slice64.view candidates) i) (Seq.get (Slice64.view candidates) (UInt64.t'int index)) true)
       /\ (forall i: int. 0 <= i /\ i < UInt64.t'int index /\ (Seq.get (Slice64.view candidates) i).f2
-        -> Int64.to_int (Seq.get (Slice64.view candidates) i).f0
-          < Int64.to_int (Seq.get (Slice64.view candidates) (UInt64.t'int index)).f0
-        \/ Int64.to_int (Seq.get (Slice64.view candidates) i).f0
-          = Int64.to_int (Seq.get (Slice64.view candidates) (UInt64.t'int index)).f0
-        /\ UInt64.t'int (Seq.get (Slice64.view candidates) i).f1
-        < UInt64.t'int (Seq.get (Slice64.view candidates) (UInt64.t'int index)).f1)
+        -> chain_rank_precedes (Seq.get (Slice64.view candidates) i) (Seq.get (Slice64.view candidates) (UInt64.t'int index)) false)
       end}
     (! return {result}) ]

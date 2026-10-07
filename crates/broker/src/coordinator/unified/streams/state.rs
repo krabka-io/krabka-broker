@@ -41,7 +41,6 @@ use std::{
 };
 
 use self::current_assignment::{TaskOwners, next_member_state};
-use super::super::expired_member_ids;
 
 mod current_assignment;
 mod member;
@@ -145,16 +144,11 @@ impl StreamsGroupState {
         }
     }
 
-    /// Increments the group epoch. This mirrors the share and consumer state
-    /// machines: a fresh epoch makes the assignment stale, so the method marks
-    /// the group dirty.
-    pub fn bump_epoch(&mut self) -> bool {
-        let Some(group_epoch) = crate::metadata_epoch::next_i32(self.group_epoch) else {
-            return false;
-        };
-        self.group_epoch = group_epoch;
-        self.dirty = true;
-        true
+    crate::coordinator::unified::member_helpers::bump_group_epoch! {
+        /// Increments the group epoch. This mirrors the share and consumer state
+        /// machines: a fresh epoch makes the assignment stale, so the method marks
+        /// the group dirty.
+        self; self.dirty = true;
     }
 
     /// Inserts or replaces a member.
@@ -186,21 +180,10 @@ impl StreamsGroupState {
         m
     }
 
-    /// Removes members whose `last_seen` is older than `session_timeout` and
-    /// returns the evicted member ids. The method marks the group dirty if it
-    /// removed any member.
-    pub fn evict_expired(&mut self, now: Instant, session_timeout: Duration) -> Vec<String> {
-        let evicted = expired_member_ids(
-            self.members
-                .iter()
-                .map(|(id, member)| (id.as_str(), member.last_seen)),
-            now,
-            session_timeout,
-        );
-        for id in &evicted {
-            self.remove_member(id);
-        }
-        evicted
+    crate::coordinator::unified::member_helpers::evict_expired! {
+        /// Removes members whose `last_seen` is older than `session_timeout` and
+        /// returns the evicted member ids. The method marks the group dirty if it
+        /// removed any member.
     }
 
     /// Records `member_id` as the member that asked the application to shut

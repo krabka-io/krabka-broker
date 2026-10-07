@@ -54,48 +54,41 @@ async fn grant(
 
 #[tokio::test]
 async fn disabled_feature_returns_requested_group_error_rows() {
-    let (broker_handle, _dir) = start_broker(true).await;
-    let broker = broker_handle.broker_arc_for_test();
+    broker_fixture!((broker_handle, _dir, broker), start_broker(true));
     unfinalize_streams_version(&broker).await;
 
     let resp = describe(&broker, &["g-disabled-a", "g-disabled-b"]).await;
 
-    let expected = StreamsGroupDescribeResponse {
-        throttle_time_ms: 0,
+    let expected = unthrottled_wire!(StreamsGroupDescribeResponse {
         groups: vec![
             error_group("g-disabled-a", codes::UNSUPPORTED_VERSION),
             error_group("g-disabled-b", codes::UNSUPPORTED_VERSION),
         ],
-        unknown_tagged_fields: UnknownTaggedFields(Vec::new()),
-    };
+    });
     assert!(resp == expected);
     broker_handle.shutdown().await;
 }
 
 #[tokio::test]
 async fn enabled_missing_group_returns_not_found_rows() {
-    let (broker_handle, _dir) = start_broker(true).await;
-    let broker = broker_handle.broker_arc_for_test();
+    broker_fixture!((broker_handle, _dir, broker), start_broker(true));
     finalize_streams_version(&broker).await;
 
     let resp = describe(&broker, &["missing-a", "missing-b"]).await;
 
-    let expected = StreamsGroupDescribeResponse {
-        throttle_time_ms: 0,
+    let expected = unthrottled_wire!(StreamsGroupDescribeResponse {
         groups: vec![
             error_group("missing-a", codes::GROUP_ID_NOT_FOUND),
             error_group("missing-b", codes::GROUP_ID_NOT_FOUND),
         ],
-        unknown_tagged_fields: UnknownTaggedFields(Vec::new()),
-    };
+    });
     assert!(resp == expected);
     broker_handle.shutdown().await;
 }
 
 #[tokio::test]
 async fn closed_streams_actor_returns_load_in_progress_row() {
-    let (broker_handle, _dir) = start_broker(true).await;
-    let broker = broker_handle.broker_arc_for_test();
+    broker_fixture!((broker_handle, _dir, broker), start_broker(true));
     finalize_streams_version(&broker).await;
 
     let actor = broker.group_coordinator.get_or_create_streams("stopped");
@@ -116,11 +109,9 @@ async fn closed_streams_actor_returns_load_in_progress_row() {
 
     let resp = describe(&broker, &["stopped"]).await;
 
-    let expected = StreamsGroupDescribeResponse {
-        throttle_time_ms: 0,
+    let expected = unthrottled_wire!(StreamsGroupDescribeResponse {
         groups: vec![error_group("stopped", codes::COORDINATOR_LOAD_IN_PROGRESS)],
-        unknown_tagged_fields: UnknownTaggedFields(Vec::new()),
-    };
+    });
     assert!(resp == expected);
     broker_handle.shutdown().await;
 }
@@ -132,21 +123,18 @@ async fn closed_streams_actor_returns_load_in_progress_row() {
 async fn disabled_protocol_answers_every_requested_group_with_unsupported_version() {
     let cases: [&[&str]; 2] = [&["solo"], &["g-a", "g-b", "g-c"]];
     for group_ids in cases {
-        let (broker_handle, _dir) = start_broker(true).await;
-        let broker = broker_handle.broker_arc_for_test();
+        broker_fixture!((broker_handle, _dir, broker), start_broker(true));
         // `streams.version` is unfinalized, so the protocol gate is off.
         unfinalize_streams_version(&broker).await;
 
         let resp = describe(&broker, group_ids).await;
 
-        let expected = StreamsGroupDescribeResponse {
-            throttle_time_ms: 0,
+        let expected = unthrottled_wire!(StreamsGroupDescribeResponse {
             groups: group_ids
                 .iter()
                 .map(|gid| error_group(gid, codes::UNSUPPORTED_VERSION))
                 .collect(),
-            unknown_tagged_fields: UnknownTaggedFields(Vec::new()),
-        };
+        });
         assert!(resp == expected, "{group_ids:?}");
         broker_handle.shutdown().await;
     }
@@ -158,19 +146,19 @@ async fn disabled_protocol_answers_every_requested_group_with_unsupported_versio
 /// the protocol is off.
 #[tokio::test]
 async fn protocol_gate_runs_before_the_group_acl_check() {
-    let (broker_handle, _dir) = start_broker_with_authorizer(Arc::new(DenyAll)).await;
-    let broker = broker_handle.broker_arc_for_test();
+    broker_fixture!(
+        (broker_handle, _dir, broker),
+        start_broker_with_authorizer(Arc::new(DenyAll))
+    );
     // Unfinalized: the protocol is off regardless of the authorizer.
     unfinalize_streams_version(&broker).await;
     let alice = principal("alice");
 
     let resp = describe_as(&broker, &alice, &["g1"], false).await;
 
-    let expected = StreamsGroupDescribeResponse {
-        throttle_time_ms: 0,
+    let expected = unthrottled_wire!(StreamsGroupDescribeResponse {
         groups: vec![error_group("g1", codes::UNSUPPORTED_VERSION)],
-        unknown_tagged_fields: UnknownTaggedFields(Vec::new()),
-    };
+    });
     assert!(resp == expected);
     broker_handle.shutdown().await;
 }
@@ -180,9 +168,10 @@ async fn protocol_gate_runs_before_the_group_acl_check() {
 /// in the response even though it was requested second.
 #[tokio::test]
 async fn denied_group_rows_sort_first_regardless_of_request_order() {
-    let (broker_handle, _dir) =
-        start_broker_with_authorizer(Arc::new(SimpleAclAuthorizer::new(HashSet::new()))).await;
-    let broker = broker_handle.broker_arc_for_test();
+    broker_fixture!(
+        (broker_handle, _dir, broker),
+        start_broker_with_authorizer(Arc::new(SimpleAclAuthorizer::new(HashSet::new())))
+    );
     finalize_streams_version(&broker).await;
     grant(
         &broker_handle,
@@ -197,14 +186,12 @@ async fn denied_group_rows_sort_first_regardless_of_request_order() {
     // Requested in ["allowed", "denied"] order; "denied" has no ACL grant.
     let resp = describe_as(&broker, &alice, &["allowed", "denied"], false).await;
 
-    let expected = StreamsGroupDescribeResponse {
-        throttle_time_ms: 0,
+    let expected = unthrottled_wire!(StreamsGroupDescribeResponse {
         groups: vec![
             error_group("denied", codes::GROUP_AUTHORIZATION_FAILED),
             error_group("allowed", codes::GROUP_ID_NOT_FOUND),
         ],
-        unknown_tagged_fields: UnknownTaggedFields(Vec::new()),
-    };
+    });
     assert!(resp == expected, "{resp:?}");
     broker_handle.shutdown().await;
 }
@@ -215,9 +202,10 @@ async fn denied_group_rows_sort_first_regardless_of_request_order() {
 /// only an authorized topic is unaffected.
 #[tokio::test]
 async fn topology_topic_denied_for_describe_hides_only_that_group() {
-    let (broker_handle, _dir) =
-        start_broker_with_authorizer(Arc::new(SimpleAclAuthorizer::new(HashSet::new()))).await;
-    let broker = broker_handle.broker_arc_for_test();
+    broker_fixture!(
+        (broker_handle, _dir, broker),
+        start_broker_with_authorizer(Arc::new(SimpleAclAuthorizer::new(HashSet::new())))
+    );
     finalize_streams_version(&broker).await;
     grant(
         &broker_handle,
@@ -288,8 +276,10 @@ async fn topology_topic_denied_for_describe_hides_only_that_group() {
 #[tokio::test]
 async fn include_authorized_operations_fills_the_bitfield_only_on_opt_in() {
     let authorizer = Arc::new(AllowAllAuthorizer);
-    let (broker_handle, _dir) = start_broker_with_authorizer(authorizer.clone() as _).await;
-    let broker = broker_handle.broker_arc_for_test();
+    broker_fixture!(
+        (broker_handle, _dir, broker),
+        start_broker_with_authorizer(authorizer.clone() as _)
+    );
     finalize_streams_version(&broker).await;
     seed_streams_group_topology(&broker, "g1", topology_with_source_topic("t")).await;
     let alice = principal("alice");
@@ -340,7 +330,7 @@ async fn ready_group_describes_the_configured_topology_and_every_member_field() 
             streams_group_heartbeat_request as hb,
         },
         streams_group_describe_response::{Member, Subtopology, Topology},
-        streams_group_heartbeat_request::{self as hb_req, StreamsGroupHeartbeatRequest},
+        streams_group_heartbeat_request::StreamsGroupHeartbeatRequest,
     };
 
     use super::test_support::{create_topic, expected_task_ids, heartbeat};
@@ -358,10 +348,6 @@ async fn ready_group_describes_the_configured_topology_and_every_member_field() 
     create_topic(&broker, "in", 2).await;
     create_topic(&broker, "app-store-changelog", 2).await;
     let join = StreamsGroupHeartbeatRequest {
-        group_id: "app".into(),
-        member_id: "m1".into(),
-        member_epoch: 0,
-        rebalance_timeout_ms: 1_000,
         process_id: Some("process-1".into()),
         user_endpoint: Some(hb::endpoint::Endpoint {
             host: "localhost".into(),
@@ -373,23 +359,15 @@ async fn ready_group_describes_the_configured_topology_and_every_member_field() 
             value: "z1".into(),
             ..Default::default()
         }]),
-        active_tasks: Some(vec![]),
-        standby_tasks: Some(vec![]),
-        warmup_tasks: Some(vec![]),
-        topology: Some(hb_req::Topology {
-            epoch: 1,
-            subtopologies: vec![hb_req::Subtopology {
-                subtopology_id: "0".into(),
-                source_topics: vec!["in".into()],
-                state_changelog_topics: vec![hb::topic_info::TopicInfo {
-                    name: "app-store-changelog".into(),
-                    ..Default::default()
-                }],
+        ..crate::handlers::group_heartbeat_test_support::streams_request_with_topology(
+            "app",
+            "m1",
+            "in",
+            vec![hb::topic_info::TopicInfo {
+                name: "app-store-changelog".into(),
                 ..Default::default()
             }],
-            ..Default::default()
-        }),
-        ..Default::default()
+        )
     };
     let joined = heartbeat(&broker, &join).await;
     check!(joined.error_code == codes::NONE, "{joined:?}");
@@ -503,38 +481,23 @@ async fn ready_group_describes_the_configured_topology_and_every_member_field() 
 async fn empty_group_is_empty_and_another_group_type_is_not_found() {
     use krabka_protocol::owned::{
         common::streams_group_heartbeat_request as hb,
-        streams_group_heartbeat_request::{self as hb_req, StreamsGroupHeartbeatRequest},
+        streams_group_heartbeat_request::StreamsGroupHeartbeatRequest,
     };
 
     use super::test_support::heartbeat;
 
-    let (broker_handle, _dir) = start_broker(true).await;
-    let broker = broker_handle.broker_arc_for_test();
+    broker_fixture!((broker_handle, _dir, broker), start_broker(true));
     finalize_streams_version(&broker).await;
     broker.group_coordinator.mark_share("share");
-    let join = StreamsGroupHeartbeatRequest {
-        group_id: "left".into(),
-        member_id: "m1".into(),
-        member_epoch: 0,
-        rebalance_timeout_ms: 1_000,
-        active_tasks: Some(vec![]),
-        standby_tasks: Some(vec![]),
-        warmup_tasks: Some(vec![]),
-        topology: Some(hb_req::Topology {
-            epoch: 1,
-            subtopologies: vec![hb_req::Subtopology {
-                subtopology_id: "0".into(),
-                source_topics: vec!["absent".into()],
-                state_changelog_topics: vec![hb::topic_info::TopicInfo {
-                    name: "left-changelog".into(),
-                    ..Default::default()
-                }],
-                ..Default::default()
-            }],
+    let join = crate::handlers::group_heartbeat_test_support::streams_request_with_topology(
+        "left",
+        "m1",
+        "absent",
+        vec![hb::topic_info::TopicInfo {
+            name: "left-changelog".into(),
             ..Default::default()
-        }),
-        ..Default::default()
-    };
+        }],
+    );
     check!(heartbeat(&broker, &join).await.error_code == codes::NONE);
     let leave = StreamsGroupHeartbeatRequest {
         group_id: "left".into(),
@@ -583,8 +546,7 @@ async fn empty_group_is_empty_and_another_group_type_is_not_found() {
 /// error row carries neither at any version.
 #[tokio::test]
 async fn version_1_names_the_assignor_and_the_topology_description_status() {
-    let (broker_handle, _dir) = start_broker(true).await;
-    let broker = broker_handle.broker_arc_for_test();
+    broker_fixture!((broker_handle, _dir, broker), start_broker(true));
     finalize_streams_version(&broker).await;
     seed_streams_group_topology(&broker, "app", topology_with_source_topic("in")).await;
     let baseline = describe_at(&broker, 0, false, &["app", "missing"]).await;

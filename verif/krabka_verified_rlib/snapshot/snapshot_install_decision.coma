@@ -1,11 +1,11 @@
-(* #"/workspace/crates/verified/src/snapshot.rs" 46 0 51 28 *)
+(* #"/workspace/crates/verified/src/snapshot.rs" 40 0 45 28 *)
 
 let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
 let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
-let%span ssnapshot = "/workspace/crates/verified/src/snapshot.rs" 52 43 52 44
-let%span ssnapshot'0 = "/workspace/crates/verified/src/snapshot.rs" 52 65 52 66
-let%span ssnapshot'1 = "/workspace/crates/verified/src/snapshot.rs" 52 80 52 81
-let%span ssnapshot'2 = "/workspace/crates/verified/src/snapshot.rs" 29 10 44 1
+let%span ssnapshot = "/workspace/crates/verified/src/snapshot.rs" 46 43 46 44
+let%span ssnapshot'0 = "/workspace/crates/verified/src/snapshot.rs" 46 65 46 66
+let%span ssnapshot'1 = "/workspace/crates/verified/src/snapshot.rs" 46 80 46 81
+let%span ssnapshot'2 = "/workspace/crates/verified/src/snapshot.rs" 23 10 38 1
 
 use creusot.int.Int64
 use creusot.int.Int32
@@ -26,7 +26,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let snapshot_install_decision [#"/workspace/crates/verified/src/snapshot.rs" 46 0 51 28] (downgrade_pending: bool)
+let snapshot_install_decision [#"/workspace/crates/verified/src/snapshot.rs" 40 0 45 28] (downgrade_pending: bool)
   (snapshot_end: Int64.t) (snapshot_epoch: Int32.t) (log_end: Int64.t) (return (x: t_SnapshotInstallDecision)) = (! bb0
   [ bb0 = any [ br0 -> {downgrade_pending = false} (! bb1) | br1 -> {downgrade_pending} (! bb7) ]
   | bb1 = s0

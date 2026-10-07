@@ -85,7 +85,7 @@ mod tests {
 
     use super::*;
     use crate::{
-        authorizer::{AuthorizationRequest, AuthorizationResult, Authorizer},
+        authorizer::AuthorizationResult,
         test_support::test_ctx,
         txn::{
             handlers::add_partitions_to_txn::{
@@ -106,17 +106,7 @@ mod tests {
     const UNFROZEN_TOPIC: &str = "events";
 
     fn freeze_record(scope: &str, pattern_type: PatternType) -> TopicFreezeRecord {
-        TopicFreezeRecord {
-            scope: scope.to_owned(),
-            pattern_type,
-            frozen: true,
-            reason: "DR cutover".to_owned(),
-            set_by: "User:alice".to_owned(),
-            set_at_ms: 1_770_000_000_000,
-            proposal_id: Uuid::nil(),
-            key_id: String::new(),
-            signature: Vec::new(),
-        }
+        crate::test_support::topic_freeze_record(scope, pattern_type, true, "DR cutover")
     }
 
     fn image_with_freezes(scopes: &[(&str, PatternType)]) -> MetadataImage {
@@ -213,19 +203,13 @@ mod tests {
     #[derive(Debug)]
     struct DenyTopicWrites;
 
-    impl Authorizer for DenyTopicWrites {
-        fn authorize(
-            &self,
-            _source: &dyn krabka_authz::AclSource,
-            req: &AuthorizationRequest<'_>,
-        ) -> AuthorizationResult {
-            if req.resource_type == ResourceType::Topic && req.operation == AclOperation::Write {
-                AuthorizationResult::Deny
-            } else {
-                AuthorizationResult::Allow
-            }
+    krabka_macros::test_authorizer! { DenyTopicWrites, req; {
+        if req.resource_type == ResourceType::Topic && req.operation == AclOperation::Write {
+            AuthorizationResult::Deny
+        } else {
+            AuthorizationResult::Allow
         }
-    }
+    }}
 
     async fn wait_until(label: &str, mut ready: impl FnMut() -> bool) {
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
@@ -245,9 +229,7 @@ mod tests {
         freeze: (&str, PatternType),
     ) -> (crate::broker::BrokerHandle, tempfile::TempDir) {
         let (handle, dir) = crate::test_support::start_broker_no_audit_with(move |cfg| {
-            cfg.authorizer = authorizer;
-            cfg.transaction_state_num_partitions = 1;
-            cfg.transaction_state_replication_factor = 1;
+            crate::test_support::configure_single_partition_transactions(cfg, authorizer);
         })
         .await;
         let broker = handle.broker_arc_for_test();

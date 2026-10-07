@@ -70,7 +70,7 @@ pub(super) fn success(request: &UpdateFeaturesRequest, version: i16) -> UpdateFe
 #[cfg(test)]
 mod tests {
     use assert2::assert;
-    use krabka_protocol::{UnknownTaggedFields, owned::update_features_request::FeatureUpdateKey};
+    use krabka_protocol::owned::update_features_request::FeatureUpdateKey;
 
     use super::*;
 
@@ -89,12 +89,11 @@ mod tests {
     }
 
     fn none_row(feature: &str) -> UpdatableFeatureResult {
-        UpdatableFeatureResult {
+        tagged_wire!(UpdatableFeatureResult {
             feature: feature.into(),
             error_code: codes::NONE,
             error_message: Some("NONE".into()),
-            unknown_tagged_fields: UnknownTaggedFields(Vec::new()),
-        }
+        })
     }
 
     #[test]
@@ -106,13 +105,11 @@ mod tests {
             (2, vec![]),
         ];
         for (version, results) in cases {
-            let expected = UpdateFeaturesResponse {
-                throttle_time_ms: 0,
+            let expected = unthrottled_wire!(UpdateFeaturesResponse {
                 error_code: codes::NONE,
                 error_message: None,
                 results,
-                unknown_tagged_fields: UnknownTaggedFields(Vec::new()),
-            };
+            });
             assert!(
                 success(&request(&features), version) == expected,
                 "v{version}"
@@ -128,8 +125,7 @@ mod tests {
                       only supports versions 0-1"
                 .into(),
         };
-        let expected = UpdateFeaturesResponse {
-            throttle_time_ms: 0,
+        let expected = unthrottled_wire!(UpdateFeaturesResponse {
             error_code: codes::INVALID_UPDATE_VERSION,
             error_message: Some(
                 "The update failed for all features since the following feature had an error: \
@@ -138,20 +134,17 @@ mod tests {
                     .into(),
             ),
             results: vec![],
-            unknown_tagged_fields: UnknownTaggedFields(Vec::new()),
-        };
+        });
         assert!(feature_error(&error) == expected);
     }
 
     #[test]
     fn top_level_error_has_no_rows() {
-        let expected = UpdateFeaturesResponse {
-            throttle_time_ms: 0,
+        let expected = unthrottled_wire!(UpdateFeaturesResponse {
             error_code: codes::NOT_CONTROLLER,
             error_message: Some("not the controller".into()),
             results: vec![],
-            unknown_tagged_fields: UnknownTaggedFields(Vec::new()),
-        };
+        });
         assert!(top_level_error(codes::NOT_CONTROLLER, "not the controller") == expected);
     }
 }

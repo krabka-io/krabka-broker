@@ -159,17 +159,9 @@ async fn tick_all_skips_a_partition_below_its_dirty_ratio_until_the_max_lag() {
 fn image_with_freezes(scopes: &[(&str, PatternType)]) -> MetadataImage {
     let mut image = MetadataImage::new(Uuid::from_u128(0x5150));
     for &(scope, pattern_type) in scopes {
-        image.apply(&MetadataRecord::V1TopicFreeze(TopicFreezeRecord {
-            scope: scope.to_owned(),
-            pattern_type,
-            frozen: true,
-            reason: "DR cutover".to_owned(),
-            set_by: "User:alice".to_owned(),
-            set_at_ms: 1_770_000_000_000,
-            proposal_id: Uuid::nil(),
-            key_id: String::new(),
-            signature: Vec::new(),
-        }));
+        image.apply(&MetadataRecord::V1TopicFreeze(
+            crate::test_support::topic_freeze_record(scope, pattern_type, true, "DR cutover"),
+        ));
     }
     image
 }

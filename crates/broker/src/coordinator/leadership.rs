@@ -24,7 +24,6 @@ use std::{
 
 use krabka_ids::{LeaderEpoch, PartitionIndex};
 use krabka_metadata::{MetadataImage, NodeId};
-use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
 
 use super::{
@@ -36,7 +35,10 @@ use super::{
         streams::actor::StreamsGroupActorMessage,
     },
 };
-use crate::{metadata_source::MetadataSource, partition_registry::PartitionRegistry};
+use crate::{
+    metadata_source::MetadataSource, partition_registry::PartitionRegistry,
+    task_util::shutdown_actor,
+};
 
 pub(crate) fn spawn(
     node_id: NodeId,
@@ -317,37 +319,13 @@ async fn unload_partition(
         .collect();
     for group_id in group_ids {
         if let Some((_, handle)) = coordinator.groups.remove(&group_id) {
-            let (reply, ack) = oneshot::channel();
-            if handle
-                .tx
-                .send(GroupActorMessage::Shutdown(reply))
-                .await
-                .is_ok()
-            {
-                let _ = tokio::time::timeout(timeout, ack).await;
-            }
+            shutdown_actor(&handle.tx, GroupActorMessage::Shutdown, timeout).await;
         }
         if let Some((_, handle)) = coordinator.share_groups.remove(&group_id) {
-            let (reply, ack) = oneshot::channel();
-            if handle
-                .tx
-                .send(ShareGroupActorMessage::Shutdown(reply))
-                .await
-                .is_ok()
-            {
-                let _ = tokio::time::timeout(timeout, ack).await;
-            }
+            shutdown_actor(&handle.tx, ShareGroupActorMessage::Shutdown, timeout).await;
         }
         if let Some((_, handle)) = coordinator.streams_groups.remove(&group_id) {
-            let (reply, ack) = oneshot::channel();
-            if handle
-                .tx
-                .send(StreamsGroupActorMessage::Shutdown(reply))
-                .await
-                .is_ok()
-            {
-                let _ = tokio::time::timeout(timeout, ack).await;
-            }
+            shutdown_actor(&handle.tx, StreamsGroupActorMessage::Shutdown, timeout).await;
         }
         coordinator.seeds.remove(&group_id);
         coordinator.seeds_cache.remove(&group_id);
@@ -422,15 +400,12 @@ mod tests {
                 .leader(Some(NodeId(1)))
                 .build(),
         );
-        let coordinator = Arc::new(GroupCoordinator::new(
-            crate::coordinator::unified::config::NextGenConfig::default(),
-            crate::coordinator::unified::share::config::ShareGroupConfig::default(),
+        let coordinator = crate::coordinator::test_support::default_coordinator(
             Arc::new(crate::coordinator::unified::ImageMetadataProvider {
                 controller: Arc::clone(&metadata),
             }),
             Arc::new(crate::coordinator::unified::offsets_log::fake::InMemoryOffsetsLog::default()),
-            crate::coordinator::unified::streams::config::StreamsGroupConfig::default(),
-        ));
+        );
         let metrics = crate::metrics::BrokerMetrics::new();
         coordinator.set_metrics(metrics.clone());
         (coordinator, image, metrics)
@@ -760,15 +735,12 @@ mod tests {
     /// mark of the load that replaced it.
     #[test]
     fn a_stale_load_does_not_clear_the_newer_mark() {
-        let coordinator = Arc::new(GroupCoordinator::new(
-            crate::coordinator::unified::config::NextGenConfig::default(),
-            crate::coordinator::unified::share::config::ShareGroupConfig::default(),
+        let coordinator = crate::coordinator::test_support::default_coordinator(
             Arc::new(crate::coordinator::unified::ImageMetadataProvider {
                 controller: Arc::new(crate::test_support::FakeMetadataSource::builder().build()),
             }),
             Arc::new(crate::coordinator::unified::offsets_log::fake::InMemoryOffsetsLog::default()),
-            crate::coordinator::unified::streams::config::StreamsGroupConfig::default(),
-        ));
+        );
         let stale = LoadGuard::begin(Arc::clone(&coordinator), PartitionIndex(3), LeaderEpoch(1));
         coordinator.end_any_load(PartitionIndex(3));
         let current = LoadGuard::begin(Arc::clone(&coordinator), PartitionIndex(3), LeaderEpoch(2));

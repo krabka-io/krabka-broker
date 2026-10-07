@@ -1,55 +1,55 @@
-(* #"/workspace/crates/verified/src/composition/schema_walk.rs" 93 0 98 15 *)
+(* #"/workspace/crates/verified/src/composition/schema_walk.rs" 89 0 94 15 *)
 
-let%span sord = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
-let%span sord'0 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
-let%span soption = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/option.rs" 40 18 40 43
-let%span swell_founded = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/well_founded.rs" 43 8 43 33
-let%span sslice = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 331 18 331 22
-let%span svec = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 104 18 104 36
-let%span svec'0 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 18 14 18 41
-let%span svec'1 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 118 18 118 48
-let%span sschema_walk = "/workspace/crates/verified/src/composition/schema_walk.rs" 99 64 99 74
-let%span sschema_walk'0 = "/workspace/crates/verified/src/composition/schema_walk.rs" 100 25 100 29
-let%span sschema_walk'1 = "/workspace/crates/verified/src/composition/schema_walk.rs" 101 23 101 27
-let%span sschema_walk'2 = "/workspace/crates/verified/src/composition/schema_walk.rs" 102 16 102 22
-let%span sschema_walk'3 = "/workspace/crates/verified/src/composition/schema_walk.rs" 116 14 116 32
-let%span sschema_walk'4 = "/workspace/crates/verified/src/composition/schema_walk.rs" 117 14 117 26
-let%span sschema_walk'5 = "/workspace/crates/verified/src/composition/schema_walk.rs" 114 16 115 68
-let%span sschema_walk'6 = "/workspace/crates/verified/src/composition/schema_walk.rs" 107 16 113 105
-let%span sschema_walk'7 = "/workspace/crates/verified/src/composition/schema_walk.rs" 105 16 106 59
-let%span sschema_walk'8 = "/workspace/crates/verified/src/composition/schema_walk.rs" 104 16 104 61
-let%span sschema_walk'9 = "/workspace/crates/verified/src/composition/schema_walk.rs" 103 16 103 56
-let%span sschema_walk'10 = "/workspace/crates/verified/src/composition/schema_walk.rs" 118 21 118 30
-let%span sschema_walk'11 = "/workspace/crates/verified/src/composition/schema_walk.rs" 118 20 118 30
-let%span sschema_walk'12 = "/workspace/crates/verified/src/composition/schema_walk.rs" 119 21 119 89
-let%span sschema_walk'13 = "/workspace/crates/verified/src/composition/schema_walk.rs" 121 27 121 31
-let%span sschema_walk'14 = "/workspace/crates/verified/src/composition/schema_walk.rs" 123 26 123 27
-let%span sschema_walk'15 = "/workspace/crates/verified/src/composition/schema_walk.rs" 123 12 123 27
-let%span sschema_walk'16 = "/workspace/crates/verified/src/composition/schema_walk.rs" 126 25 126 59
-let%span sschema_walk'17 = "/workspace/crates/verified/src/composition/schema_walk.rs" 128 27 128 39
-let%span sschema_walk'18 = "/workspace/crates/verified/src/composition/schema_walk.rs" 132 28 132 71
-let%span sschema_walk'19 = "/workspace/crates/verified/src/composition/schema_walk.rs" 128 27 135 21
-let%span sschema_walk'20 = "/workspace/crates/verified/src/composition/schema_walk.rs" 138 28 138 29
-let%span sschema_walk'21 = "/workspace/crates/verified/src/composition/schema_walk.rs" 138 16 138 29
-let%span sschema_walk'22 = "/workspace/crates/verified/src/composition/schema_walk.rs" 141 8 141 41
-let%span sschema_walk'23 = "/workspace/crates/verified/src/composition/schema_walk.rs" 142 13 142 14
-let%span sschema_walk'24 = "/workspace/crates/verified/src/composition/schema_walk.rs" 142 8 142 14
-let%span sschema_walk'25 = "/workspace/crates/verified/src/composition/schema_walk.rs" 146 8 146 67
-let%span sschema_walk'26 = "/workspace/crates/verified/src/composition/schema_walk.rs" 78 11 78 37
-let%span sschema_walk'27 = "/workspace/crates/verified/src/composition/schema_walk.rs" 79 10 79 42
-let%span sschema_walk'28 = "/workspace/crates/verified/src/composition/schema_walk.rs" 80 10 81 85
-let%span sschema_walk'29 = "/workspace/crates/verified/src/composition/schema_walk.rs" 82 10 87 101
-let%span sschema_walk'30 = "/workspace/crates/verified/src/composition/schema_walk.rs" 88 10 89 68
-let%span sschema_walk'31 = "/workspace/crates/verified/src/composition/schema_walk.rs" 90 10 92 72
-let%span sschema_walk'32 = "/workspace/crates/verified/src/composition/schema_walk.rs" 58 16 64 5
-let%span sschema_walk'33 = "/workspace/crates/verified/src/composition/schema_walk.rs" 44 16 49 10
-let%span sschema_walk'34 = "/workspace/crates/verified/src/composition/schema_walk.rs" 28 16 30 5
-let%span sschema = "/workspace/crates/verified/src/schema.rs" 95 10 96 63
-let%span sschema'0 = "/workspace/crates/verified/src/schema.rs" 97 10 98 67
-let%span sschema'1 = "/workspace/crates/verified/src/schema.rs" 99 10 102 62
-let%span sschema'2 = "/workspace/crates/verified/src/schema.rs" 76 10 80 1
-let%span sschema'3 = "/workspace/crates/verified/src/schema.rs" 34 10 35 61
-let%span sschema'4 = "/workspace/crates/verified/src/schema.rs" 122 10 123 48
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span soption = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/option.rs" 40 18 40 43
+let%span swell_founded = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/well_founded.rs" 43 8 43 33
+let%span sslice = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 331 18 331 22
+let%span svec = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 104 18 104 36
+let%span svec'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 18 14 18 41
+let%span svec'1 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 118 18 118 48
+let%span sschema_walk = "/workspace/crates/verified/src/composition/schema_walk.rs" 95 64 95 74
+let%span sschema_walk'0 = "/workspace/crates/verified/src/composition/schema_walk.rs" 96 25 96 29
+let%span sschema_walk'1 = "/workspace/crates/verified/src/composition/schema_walk.rs" 97 23 97 27
+let%span sschema_walk'2 = "/workspace/crates/verified/src/composition/schema_walk.rs" 98 16 98 22
+let%span sschema_walk'3 = "/workspace/crates/verified/src/composition/schema_walk.rs" 112 14 112 32
+let%span sschema_walk'4 = "/workspace/crates/verified/src/composition/schema_walk.rs" 113 14 113 26
+let%span sschema_walk'5 = "/workspace/crates/verified/src/composition/schema_walk.rs" 110 16 111 68
+let%span sschema_walk'6 = "/workspace/crates/verified/src/composition/schema_walk.rs" 103 16 109 105
+let%span sschema_walk'7 = "/workspace/crates/verified/src/composition/schema_walk.rs" 101 16 102 59
+let%span sschema_walk'8 = "/workspace/crates/verified/src/composition/schema_walk.rs" 100 16 100 61
+let%span sschema_walk'9 = "/workspace/crates/verified/src/composition/schema_walk.rs" 99 16 99 56
+let%span sschema_walk'10 = "/workspace/crates/verified/src/composition/schema_walk.rs" 114 21 114 30
+let%span sschema_walk'11 = "/workspace/crates/verified/src/composition/schema_walk.rs" 114 20 114 30
+let%span sschema_walk'12 = "/workspace/crates/verified/src/composition/schema_walk.rs" 115 21 115 89
+let%span sschema_walk'13 = "/workspace/crates/verified/src/composition/schema_walk.rs" 117 27 117 31
+let%span sschema_walk'14 = "/workspace/crates/verified/src/composition/schema_walk.rs" 119 26 119 27
+let%span sschema_walk'15 = "/workspace/crates/verified/src/composition/schema_walk.rs" 119 12 119 27
+let%span sschema_walk'16 = "/workspace/crates/verified/src/composition/schema_walk.rs" 122 25 122 59
+let%span sschema_walk'17 = "/workspace/crates/verified/src/composition/schema_walk.rs" 124 27 124 39
+let%span sschema_walk'18 = "/workspace/crates/verified/src/composition/schema_walk.rs" 128 28 128 71
+let%span sschema_walk'19 = "/workspace/crates/verified/src/composition/schema_walk.rs" 124 27 131 21
+let%span sschema_walk'20 = "/workspace/crates/verified/src/composition/schema_walk.rs" 134 28 134 29
+let%span sschema_walk'21 = "/workspace/crates/verified/src/composition/schema_walk.rs" 134 16 134 29
+let%span sschema_walk'22 = "/workspace/crates/verified/src/composition/schema_walk.rs" 137 8 137 41
+let%span sschema_walk'23 = "/workspace/crates/verified/src/composition/schema_walk.rs" 138 13 138 14
+let%span sschema_walk'24 = "/workspace/crates/verified/src/composition/schema_walk.rs" 138 8 138 14
+let%span sschema_walk'25 = "/workspace/crates/verified/src/composition/schema_walk.rs" 142 8 142 67
+let%span sschema_walk'26 = "/workspace/crates/verified/src/composition/schema_walk.rs" 74 11 74 37
+let%span sschema_walk'27 = "/workspace/crates/verified/src/composition/schema_walk.rs" 75 10 75 42
+let%span sschema_walk'28 = "/workspace/crates/verified/src/composition/schema_walk.rs" 76 10 77 85
+let%span sschema_walk'29 = "/workspace/crates/verified/src/composition/schema_walk.rs" 78 10 83 101
+let%span sschema_walk'30 = "/workspace/crates/verified/src/composition/schema_walk.rs" 84 10 85 68
+let%span sschema_walk'31 = "/workspace/crates/verified/src/composition/schema_walk.rs" 86 10 88 72
+let%span sschema_walk'32 = "/workspace/crates/verified/src/composition/schema_walk.rs" 53 16 59 5
+let%span sschema_walk'33 = "/workspace/crates/verified/src/composition/schema_walk.rs" 41 16 46 10
+let%span sschema_walk'34 = "/workspace/crates/verified/src/composition/schema_walk.rs" 27 16 29 5
+let%span sschema = "/workspace/crates/verified/src/schema.rs" 88 10 89 63
+let%span sschema'0 = "/workspace/crates/verified/src/schema.rs" 90 10 91 67
+let%span sschema'1 = "/workspace/crates/verified/src/schema.rs" 92 10 95 62
+let%span sschema'2 = "/workspace/crates/verified/src/schema.rs" 69 10 73 1
+let%span sschema'3 = "/workspace/crates/verified/src/schema.rs" 30 10 31 61
+let%span sschema'4 = "/workspace/crates/verified/src/schema.rs" 115 10 116 48
 
 use seq.Seq
 use creusot.int.UInt32
@@ -120,14 +120,14 @@ let len_SchemaWalkField (self_: Slice64.slice t_SchemaWalkField) (return (x: UIn
 
 type tup2_Option_tup5_u8_u8_u8_u8_u8_Option_u32 = { f0'1: t_Option_tup5_u8_u8_u8_u8_u8; f1'1: t_Option_u32 }
 
-predicate required [#"/workspace/crates/verified/src/composition/schema_walk.rs" 27 0 27 71] (field: t_SchemaWalkField) (key: bool) (value: bool) =
+predicate required [#"/workspace/crates/verified/src/composition/schema_walk.rs" 26 0 26 71] (field: t_SchemaWalkField) (key: bool) (value: bool) =
   [%#sschema_walk'34] field.present
   /\ match field.role with
     | Key -> key
     | Value -> value
     end
 
-predicate decoded_id [#"/workspace/crates/verified/src/composition/schema_walk.rs" 57 0 57 97] (field: t_SchemaWalkField) (key: bool) (value: bool) (id: t_Option_u32) =
+predicate decoded_id [#"/workspace/crates/verified/src/composition/schema_walk.rs" 52 0 52 97] (field: t_SchemaWalkField) (key: bool) (value: bool) (id: t_Option_u32) =
   [%#sschema_walk'32] match { f0'1 = field.prefix; f1'1 = id } with
     | {f0'1 = Some'0 {f0'0 = magic; f1'0 = a; f2'0 = b; f3'0 = c; f4'0 = d}; f1'1 = Some id'0} -> required field key value
     /\ not field.empty
@@ -144,7 +144,7 @@ predicate decoded_id [#"/workspace/crates/verified/src/composition/schema_walk.r
 
 type tup2_bool_bool = { f0'2: bool; f1'2: bool }
 
-predicate field_admitted [#"/workspace/crates/verified/src/composition/schema_walk.rs" 38 0 43 9] (field: t_SchemaWalkField) (key: bool) (value: bool) (fail_open: bool) =
+predicate field_admitted [#"/workspace/crates/verified/src/composition/schema_walk.rs" 35 0 40 9] (field: t_SchemaWalkField) (key: bool) (value: bool) (fail_open: bool) =
   [%#sschema_walk'33] not required field key value
   \/ field.empty
   \/ match field.prefix with
@@ -233,7 +233,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let framed_schema_walk_admission [#"/workspace/crates/verified/src/composition/schema_walk.rs" 93 0 98 15]
+let framed_schema_walk_admission [#"/workspace/crates/verified/src/composition/schema_walk.rs" 89 0 94 15]
   (fields: Slice64.slice t_SchemaWalkField) (enabled: tup2_bool_bool) (fail_open: bool) (walk_complete: bool)
   (return (x: tup2_Vec_tup3_SchemaFieldAction_Option_u32_bool_Global_SchemaBatchAdmission)) =
 {[@stop_split] [@expl:framed_schema_walk_admission requires] [%#sschema_walk'26] Seq.length (Slice64.view fields)

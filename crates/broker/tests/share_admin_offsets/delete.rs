@@ -8,17 +8,13 @@
 use std::time::Duration;
 
 use assert2::{assert, check};
-use krabka_broker::{BootstrapMode, Broker};
 use krabka_protocol::owned::delete_share_group_offsets_request::{
     DeleteShareGroupOffsetsRequest, DeleteShareGroupOffsetsRequestTopic,
 };
 
 use crate::{
     describe::{describe_all_offsets, describe_until},
-    harness::{
-        NONE, bootstrap_share_state, broker_config, broker_test_permit, connect,
-        fetch_until_acquired, leave,
-    },
+    harness::{NONE, broker_test_permit, fetch_until_acquired, leave},
 };
 
 /// Delete removes the durable share-state for a topic of an empty group.
@@ -27,8 +23,8 @@ use crate::{
 /// `start_offset` -1.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn delete_removes_topic() {
-    let _permit = broker_test_permit().await;
-    let (broker, client, _dir, tid) = crate::support::share::topic_fixture("t", 1, |_| {}).await;
+    let (_permit, broker, client, _dir, tid) =
+        crate::support::share::permitted_topic_fixture("t", 1, |_| {}).await;
     let (member, _epoch) = crate::harness::initialize_consumption(&broker, &client, tid, 3).await;
     let _ = fetch_until_acquired(&client, "g1", &member, tid, 0, 0).await;
     leave(&client, "g1", &member).await;
@@ -94,22 +90,15 @@ async fn delete_rewrites_metadata_topic_absent_after_restart() {
 
     let tid;
     {
-        let (broker, client, topic) =
-            crate::support::share::start_topic(broker_config(log_dir.clone()), "t", 1).await;
+        let (broker, client, topic, member) =
+            crate::harness::initialized_topic(log_dir.clone(), 3).await;
         tid = topic;
-        let (member, _epoch) =
-            crate::harness::initialize_consumption(&broker, &client, tid, 3).await;
         let _ = fetch_until_acquired(&client, "g1", &member, tid, 0, 0).await;
 
         // Sanity: a describe with no topic list enumerates the initialized
         // partitions for "t" — partition [0] is present before the delete.
         let before = describe_all_offsets(&client, "g1").await;
-        let before_parts: Vec<i32> = before
-            .topics
-            .iter()
-            .find(|t| t.topic_name == "t")
-            .map(|t| t.partitions.iter().map(|p| p.partition_index).collect())
-            .unwrap_or_default();
+        let before_parts: Vec<i32> = crate::describe::initialized_partitions(&before, "t");
         assert!(
             before_parts == vec![0],
             "describe must enumerate initialized partition [0] before delete, got {before_parts:?}"
@@ -144,12 +133,7 @@ async fn delete_rewrites_metadata_topic_absent_after_restart() {
         let mut absent = false;
         for _ in 0..40 {
             let g = describe_all_offsets(&client, "g1").await;
-            let parts: Vec<i32> = g
-                .topics
-                .iter()
-                .find(|t| t.topic_name == "t")
-                .map(|t| t.partitions.iter().map(|p| p.partition_index).collect())
-                .unwrap_or_default();
+            let parts: Vec<i32> = crate::describe::initialized_partitions(&g, "t");
             if parts.is_empty() {
                 absent = true;
                 break;
@@ -172,11 +156,7 @@ async fn delete_rewrites_metadata_topic_absent_after_restart() {
     }
 
     {
-        let mut cfg = broker_config(log_dir);
-        cfg.bootstrap_mode = BootstrapMode::Rejoin;
-        let broker = Broker::start(cfg).await.unwrap();
-        let client = connect(&broker.listen_addr().to_string()).await;
-        bootstrap_share_state(&broker, &client, "g1").await;
+        let (_broker, client) = crate::support::share::rejoin_group(log_dir, "g1").await;
 
         // After restart, the v14 seed no longer lists "t" (the rewrite removed
         // it), so the describe with no topic list must STILL
@@ -185,12 +165,7 @@ async fn delete_rewrites_metadata_topic_absent_after_restart() {
         let deadline = std::time::Instant::now() + Duration::from_secs(8);
         loop {
             let g = describe_all_offsets(&client, "g1").await;
-            let parts: Vec<i32> = g
-                .topics
-                .iter()
-                .find(|t| t.topic_name == "t")
-                .map(|t| t.partitions.iter().map(|p| p.partition_index).collect())
-                .unwrap_or_default();
+            let parts: Vec<i32> = crate::describe::initialized_partitions(&g, "t");
             assert!(
                 parts.is_empty(),
                 "deleted topic must remain un-initialized after restart (v14 rewrite), got {parts:?}"

@@ -48,40 +48,18 @@ pub(super) fn exact_filter(entry: &AclEntry) -> AclEntryFilter {
 #[cfg(test)]
 mod tests {
     use assert2::{assert, check};
-    use krabka_metadata::{AclOperation, PatternType, PermissionType, ResourceType};
+    use krabka_metadata::{AclOperation, PatternType, PermissionType};
 
     use super::*;
-    use crate::handlers::{
-        acl_wire::binding_filter::{AxisFilter, PatternTypeFilter},
-        delete_acls::test_support::{
-            OPERATION_ANY, PATTERN_TYPE_MATCH, PERMISSION_ANY, RESOURCE_TYPE_TOPIC, acl, filter,
-        },
-    };
+    use crate::handlers::delete_acls::test_support::{acl, filter};
 
     #[test]
     fn build_filter_keeps_empty_strings_and_decodes_axes() {
-        let f = DeleteAclsFilter {
-            resource_type_filter: RESOURCE_TYPE_TOPIC,
-            resource_name_filter: Some(String::new()),
-            pattern_type_filter: PATTERN_TYPE_MATCH,
-            principal_filter: Some(String::new()),
-            host_filter: None,
-            operation: OPERATION_ANY,
-            permission_type: PERMISSION_ANY,
-            ..Default::default()
-        };
+        let f = empty_match_acl_filter!(DeleteAclsFilter);
 
         let built = build_filter(&f).expect("filter");
 
-        let expected = AclBindingFilter {
-            resource_type: AxisFilter::Exact(ResourceType::Topic),
-            resource_name: Some(String::new()),
-            pattern_type: PatternTypeFilter::Match,
-            principal: Some(String::new()),
-            host: None,
-            operation: AxisFilter::Any,
-            permission_type: AxisFilter::Any,
-        };
+        let expected = crate::handlers::acl_test_support::expected_empty_match_filter();
         assert!(built == expected);
     }
 

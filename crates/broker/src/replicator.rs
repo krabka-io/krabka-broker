@@ -36,6 +36,23 @@ use krabka_security::ListenerProtocol;
 use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 
+/// Hold the current replication target through a mutation, or reject the stale row.
+macro_rules! lock_local_target {
+    ($part:ident, $cfg:ident, $message:literal) => {
+        match $part
+            .lock_replication_target(crate::replicator::task_replication_target($cfg))
+            .await
+        {
+            Ok(guard) => guard,
+            Err(error) => {
+                tracing::warn!(topic = %$cfg.topic, partition = $cfg.partition.get(), %error,
+                    $message);
+                return crate::replicator::response::RowAction::Drop;
+            }
+        }
+    };
+}
+
 pub(crate) mod connection;
 mod fetch_loop;
 mod follower_throttle;
@@ -56,6 +73,21 @@ use crate::{
     broker::spawn_partition_with_replication_target, config::ReplicationRuntimeConfig,
     partition::ReplicationTarget, partition_registry::PartitionRegistry, throttle::ThrottleState,
 };
+
+/// Outbound dialer and pacing policy shared by the two replication loops.
+#[derive(Clone)]
+pub(crate) struct ReplicationConnectionConfig {
+    /// Shared outbound dialer.
+    ///
+    /// The dialer connects through TLS and SASL when the inter-broker listener
+    /// needs them. It falls back to raw TCP for PLAINTEXT. The fetcher's own
+    /// connection carries the Fetch rounds; this one is for the
+    /// `OffsetForLeaderEpoch` lookup a fenced partition makes on its own.
+    pub inter_broker_client: Arc<crate::network::client::InterBrokerClient>,
+    pub inter_broker_listener_protocol: ListenerProtocol,
+    pub inter_broker_server_name: String,
+    pub replication: ReplicationRuntimeConfig,
+}
 
 /// Configuration handed to a single replicator task.
 pub(crate) struct Config {
@@ -89,16 +121,7 @@ pub(crate) struct Config {
     pub log_dirs: Vec<PathBuf>,
     pub log_settings: LogConfig,
     pub client_id: String,
-    /// Shared outbound dialer.
-    ///
-    /// The dialer connects through TLS and SASL when the inter-broker listener
-    /// needs them. It falls back to raw TCP for PLAINTEXT. The fetcher's own
-    /// connection carries the Fetch rounds; this one is for the
-    /// `OffsetForLeaderEpoch` lookup a fenced partition makes on its own.
-    pub inter_broker_client: Arc<crate::network::client::InterBrokerClient>,
-    pub inter_broker_listener_protocol: ListenerProtocol,
-    pub inter_broker_server_name: String,
-    pub replication: ReplicationRuntimeConfig,
+    pub connection: ReplicationConnectionConfig,
     /// KIP-73 broker-wide throttle state.
     ///
     /// The follower-in bucket gates the outbound Fetch bytes while this
@@ -228,12 +251,7 @@ pub(crate) struct FetcherConfig {
     pub leader_port: u16,
     pub client_id: String,
     pub shutdown: CancellationToken,
-    /// Shared outbound dialer. It runs TLS and SASL when the inter-broker
-    /// listener needs them, and falls back to raw TCP for PLAINTEXT.
-    pub inter_broker_client: Arc<crate::network::client::InterBrokerClient>,
-    pub inter_broker_listener_protocol: ListenerProtocol,
-    pub inter_broker_server_name: String,
-    pub replication: ReplicationRuntimeConfig,
+    pub connection: ReplicationConnectionConfig,
     /// The partitions this fetcher follows right now.
     pub followed: FollowedPartitions,
 }

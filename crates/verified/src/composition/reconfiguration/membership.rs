@@ -1,11 +1,10 @@
 use creusot_std::prelude::*;
 
 #[cfg(creusot)]
-use super::spec::single_change_shape;
-#[cfg(creusot)]
-use super::spec::{expected_member, has_node, membership_coherent, prefix_node_extend, valid_old};
-#[cfg(creusot)]
-use crate::reconfiguration::{admitted_plan, may_reconfigure, voter_reconfiguration_rejection};
+use super::spec::{
+    admitted_membership, has_node, prefix_node_extend, reconfiguration_admitted,
+    single_change_shape,
+};
 use crate::{
     reconfiguration::{
         CurrentVoterSet, ReconfigurationLeadership, TargetMembership, TargetVoter, VoterChangeKind,
@@ -22,15 +21,9 @@ use crate::{
 /// facts remain host obligations; unknown-directory binding is not proof of
 /// physical storage continuity.
 #[requires(context.voter_count@ == old@.len())]
-#[ensures((match result { None => false, Some(_) => true }) == (valid_old(old@)
-    && membership_coherent(old@, node, target.membership, request.kind)
-    && match voter_reconfiguration_rejection(leadership, context, request, target) {
-        None => true, Some(_) => false,
-    }))]
+#[ensures((result != None) == (reconfiguration_admitted(old@, node, leadership, context, request, target)))]
 #[ensures(match result { None => true, Some((plan, next)) =>
-    admitted_plan(context, request.kind, plan) && may_reconfigure(leadership, context)
-    &&
-    next@.len() == plan.next_voter_count@ && next@.len() > 0
+    admitted_membership(context, request.kind, plan, leadership, next@)
     && single_change_shape(old@, next@, request.kind, node)
     && match request.kind {
         VoterChangeKind::Add => next@.len() == old@.len() + 1,
@@ -78,8 +71,7 @@ pub(crate) fn constructed_voter_reconfiguration(
     #[invariant(next@.len() == i@ - if remove && has_node(old@, i@, node) { 1 } else { 0 })]
     #[invariant(forall<id: u64> has_node(next@, next@.len(), id)
         == (has_node(old@, i@, id) && (!remove || id != node)))]
-    #[invariant(forall<j: Int, k: Int> 0 <= j && j < k && k < next@.len()
-        ==> next@[j] != next@[k])]
+    #[invariant(crate::sequence::distinct(next@))]
     #[variant(old@.len() - i@)]
     while i < old.len() {
         proof_assert!({ prefix_node_extend(old@, i@); true });

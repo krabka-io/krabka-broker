@@ -17,12 +17,7 @@ use krabka_protocol::owned::{
 };
 
 use crate::{
-    broker::Broker,
-    codes,
-    coordinator::unified::streams::actor::StreamsGroupActorMessage,
-    error::BrokerError,
-    handlers::group_read_denied,
-    task_util::{AskError, ask},
+    codes, coordinator::unified::streams::actor::StreamsGroupActorMessage, task_util::ask,
     time_util::now_ms,
 };
 
@@ -30,115 +25,116 @@ mod creation;
 pub(super) mod topic_authz;
 mod validation;
 
-pub(crate) async fn handle(
-    broker: &Broker,
-    req: StreamsGroupHeartbeatRequest,
-    version: i16,
-    ctx: &crate::handlers::RequestContext<'_>,
-) -> Result<StreamsGroupHeartbeatResponse, BrokerError> {
-    let image = broker.controller.current_image();
-    let ng = broker.group_coordinator.clone();
-
-    // KafkaApis answers UNSUPPORTED_VERSION before the group ACL when the
-    // streams protocol is off: KIP-1071 gates it on a finalized
-    // streams.version >= 1 (early access, default-disabled), and krabka
-    // also on the `streams_group.enable` config kill-switch.
-    if !crate::handlers::streams_protocol_enabled(broker, &image) {
-        return Ok(reply(codes::UNSUPPORTED_VERSION, None));
-    }
-
-    // ── ACL preamble ────────────────────────────────────────────
-    // `Read` on `Group(group_id)`. On Deny → whole-response
-    // `error_code = GROUP_AUTHORIZATION_FAILED (30)`.
-    if group_read_denied(
-        broker.config.authorizer.as_ref(),
-        &image,
-        ctx,
-        &req.group_id,
-    ) {
-        return Ok(reply(codes::GROUP_AUTHORIZATION_FAILED, None));
-    }
-
-    // Kafka's `KafkaApis.handleStreamsGroupHeartbeat` reads the topology
-    // straight off the wire, before the group coordinator ever sees the
-    // request: a topology that names a Kafka internal topic or an
-    // invalid topic name is `STREAMS_INVALID_TOPOLOGY`, and a required
-    // topic (source, repartition sink, repartition source or changelog)
-    // that `Describe` denies fails the whole request with
-    // `TOPIC_AUTHORIZATION_FAILED` -- no partial disclosure, and the
-    // group coordinator never runs.
-    if let Some(topology) = req.topology.as_ref() {
-        let required = topic_authz::required_topics(topology);
-        if let Some(message) = topic_authz::invalid_topology_message(broker, &required) {
-            return Ok(reply(codes::STREAMS_INVALID_TOPOLOGY, Some(message)));
-        }
-        if !required.is_empty()
-            && crate::handlers::any_topic_describe_denied(
-                broker.config.authorizer.as_ref(),
-                &image,
-                ctx,
-                &required,
-            )
-        {
-            return Ok(reply(codes::TOPIC_AUTHORIZATION_FAILED, None));
-        }
-    }
-
-    // Kafka's `GroupCoordinatorService` checks the request before it
-    // schedules the write on the coordinator, so a refused request changes
-    // no group and never gets NOT_COORDINATOR.
-    if let Some((error_code, message)) =
-        validation::request_error(&req, broker.config.features.unstable_api_versions)
+context_handler! {
+    StreamsGroupHeartbeatRequest => StreamsGroupHeartbeatResponse,
+    (broker, req, version, ctx),
     {
-        return Ok(reply(error_code, Some(message)));
-    }
+        let image = broker.controller.current_image();
+        let ng = broker.group_coordinator.clone();
 
-    if let Some(error_code) = crate::handlers::group_coordinator_error(broker, &req.group_id) {
-        return Ok(reply(error_code, None));
-    }
+        // KafkaApis answers UNSUPPORTED_VERSION before the group ACL when the
+        // streams protocol is off: KIP-1071 gates it on a finalized
+        // streams.version >= 1 (early access, default-disabled), and krabka
+        // also on the `streams_group.enable` config kill-switch.
 
-    // Kafka creates a streams group only on a join, in place of nothing or of
-    // an empty classic group (a KIP-1071 cold upgrade converts it here), and
-    // answers GROUP_ID_NOT_FOUND to anything else.
-    if let Some(message) = ng
-        .streams_group_lookup_error(&req.group_id, req.member_epoch, now_ms())
-        .await?
-    {
-        return Ok(reply(codes::GROUP_ID_NOT_FOUND, Some(message)));
-    }
-
-    let group_id = req.group_id.clone();
-    ng.mark_streams(&group_id);
-    let handle = ng.get_or_create_streams(&group_id);
-    let asked = ask(&handle.tx, |reply| StreamsGroupActorMessage::Heartbeat {
-        request: Box::new(req),
-        version,
-        client_id: ctx.client_id.unwrap_or_default().to_owned(),
-        client_host: ctx.client_host(),
-        reply,
-    })
-    .await;
-    let result = match asked {
-        Ok(result) => result,
-        Err(AskError::Closed) => return Ok(reply(codes::COORDINATOR_LOAD_IN_PROGRESS, None)),
-        Err(AskError::Dropped) => return Ok(reply(codes::UNKNOWN_SERVER_ERROR, None)),
-    };
-    let mut resp = result.response;
-    // KafkaApis hands the internal topics that the coordinator asks for to
-    // `AutoTopicCreationManager.createStreamsInternalTopics`, with the
-    // principal of the caller.
-    if !result.creatable_topics.is_empty() {
-        creation::create_internal_topics(
+        // ── ACL preamble ────────────────────────────────────────────
+        // `Read` on `Group(group_id)`. On Deny → whole-response
+        // `error_code = GROUP_AUTHORIZATION_FAILED (30)`.
+        if let Some(error_code) = crate::handlers::acl_gates::group_protocol_refusal(
+            crate::handlers::streams_protocol_enabled(broker, &image),
             broker,
-            &creation::Heartbeat {
-                ctx,
-                group_id: &group_id,
-            },
-            &mut resp,
-            &result.creatable_topics,
-        );
+            &image,
+            ctx,
+            &req.group_id,
+        ) {
+            return Ok(reply(error_code, None));
+        }
+
+        // Kafka's `KafkaApis.handleStreamsGroupHeartbeat` reads the topology
+        // straight off the wire, before the group coordinator ever sees the
+        // request: a topology that names a Kafka internal topic or an
+        // invalid topic name is `STREAMS_INVALID_TOPOLOGY`, and a required
+        // topic (source, repartition sink, repartition source or changelog)
+        // that `Describe` denies fails the whole request with
+        // `TOPIC_AUTHORIZATION_FAILED` -- no partial disclosure, and the
+        // group coordinator never runs.
+        if let Some(topology) = req.topology.as_ref() {
+            let required = topic_authz::required_topics(topology);
+            if let Some(message) = topic_authz::invalid_topology_message(broker, &required) {
+                return Ok(reply(codes::STREAMS_INVALID_TOPOLOGY, Some(message)));
+            }
+            if !required.is_empty()
+                && crate::handlers::any_topic_describe_denied(
+                    broker.config.authorizer.as_ref(),
+                    &image,
+                    ctx,
+                    &required,
+                )
+            {
+                return Ok(reply(codes::TOPIC_AUTHORIZATION_FAILED, None));
+            }
+        }
+
+        // Kafka's `GroupCoordinatorService` checks the request before it
+        // schedules the write on the coordinator, so a refused request changes
+        // no group and never gets NOT_COORDINATOR.
+        if let Some((error_code, message)) =
+            validation::request_error(&req, broker.config.features.unstable_api_versions)
+        {
+            return Ok(reply(error_code, Some(message)));
+        }
+
+        if let Some(error_code) = crate::handlers::group_coordinator_error(broker, &req.group_id) {
+            return Ok(reply(error_code, None));
+        }
+
+        // Kafka creates a streams group only on a join, in place of nothing or of
+        // an empty classic group (a KIP-1071 cold upgrade converts it here), and
+        // answers GROUP_ID_NOT_FOUND to anything else.
+        if let Some(message) = ng
+            .streams_group_lookup_error(&req.group_id, req.member_epoch, now_ms())
+            .await?
+        {
+            return Ok(reply(codes::GROUP_ID_NOT_FOUND, Some(message)));
+        }
+
+        let group_id = req.group_id.clone();
+        ng.mark_streams(&group_id);
+        let handle = ng.get_or_create_streams(&group_id);
+        let asked = ask(&handle.tx, |reply| StreamsGroupActorMessage::Heartbeat {
+            request: Box::new(req),
+            version,
+            client_id: ctx.client_id.unwrap_or_default().to_owned(),
+            client_host: ctx.client_host(),
+            reply,
+        })
+        .await;
+        let result = match asked {
+            Ok(result) => result,
+            Err(error) => {
+                return Ok(reply(
+                    crate::handlers::coordinator_routing::group_actor_error_code(error),
+                    None,
+                ));
+            }
+        };
+        let mut resp = result.response;
+        // KafkaApis hands the internal topics that the coordinator asks for to
+        // `AutoTopicCreationManager.createStreamsInternalTopics`, with the
+        // principal of the caller.
+        if !result.creatable_topics.is_empty() {
+            creation::create_internal_topics(
+                broker,
+                &creation::Heartbeat {
+                    ctx,
+                    group_id: &group_id,
+                },
+                &mut resp,
+                &result.creatable_topics,
+            );
+        }
+        Ok(resp)
     }
-    Ok(resp)
 }
 
 /// Kafka's error response: the code, message and generated defaults.
@@ -151,13 +147,31 @@ mod tests {
     use std::{net::SocketAddr, sync::Arc};
 
     use assert2::assert;
-    use krabka_metadata::{FeatureLevelRecord, MetadataRecord};
+    use krabka_metadata::MetadataRecord;
     use krabka_protocol::{Decode, owned::streams_group_heartbeat_response};
 
     use crate::{
-        handlers::group_heartbeat_test_support::acl_authorizer,
+        broker::Broker,
+        handlers::{group_heartbeat_test_support::acl_authorizer, group_read_denied},
         test_support::{peer, principal},
     };
+
+    /// Dispatch every version through its wire codec so omitted fields stay observable.
+    async fn wire_heartbeat(
+        broker: &Broker,
+        ctx: &crate::handlers::RequestContext<'_>,
+        req: StreamsGroupHeartbeatRequest,
+        version: i16,
+    ) -> StreamsGroupHeartbeatResponse {
+        crate::test_support::dispatch_wire(
+            broker,
+            krabka_protocol::api_key::ApiKey::StreamsGroupHeartbeat as i16,
+            version,
+            &req,
+            ctx,
+        )
+        .await
+    }
 
     /// A valid join of member `m1` with a one-subtopology topology.
     fn request(group_id: &str) -> StreamsGroupHeartbeatRequest {
@@ -210,9 +224,7 @@ mod tests {
         broker_handle.wait_until_group_coordinator_ready().await;
         let broker = broker_handle.broker_arc_for_test();
         set_streams_version(&broker, 1).await;
-        let principal = principal("alice");
-        let peer = peer();
-        let ctx = test_context(&principal, &peer);
+        request_identity!((principal, peer, ctx), principal("alice"), test_context);
         let config = |name: &str, value: &str| KeyValue {
             key: name.into(),
             value: value.into(),
@@ -319,6 +331,20 @@ mod tests {
         broker_handle.shutdown().await;
     }
 
+    /// Joining streams cases share the active protocol version and Alice's identity.
+    macro_rules! streams_join_fixture {
+        (($version:ident, $handle:ident, $directory:ident, $broker:ident), ($principal:ident, $peer:ident, $context:ident)) => {
+            let $version = streams_group_heartbeat_response::MAX_VERSION;
+            broker_fixture!(($handle, $directory, $broker), start_broker(true));
+            set_streams_version(&$broker, 1).await;
+            request_identity!(
+                ($principal, $peer, $context),
+                principal("alice"),
+                test_context
+            );
+        };
+    }
+
     /// The status details of `response`, in order.
     fn status_details(response: &StreamsGroupHeartbeatResponse) -> Vec<String> {
         response
@@ -330,15 +356,7 @@ mod tests {
     }
 
     /// Waits until no creation of `topic` is in flight on `broker`.
-    async fn wait_until_creation_ends(broker: &Broker, topic: &str) {
-        tokio::time::timeout(std::time::Duration::from_secs(30), async {
-            while broker.auto_topic_creation.is_in_flight(topic) {
-                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-            }
-        })
-        .await
-        .expect("the creation ends");
-    }
+    use crate::handlers::test_support::wait_until_creation_ends;
 
     /// Kafka's `handleStreamsGroupHeartbeat` reads the topology straight off
     /// the wire before the group coordinator sees it: a required topic (here,
@@ -347,13 +365,10 @@ mod tests {
     /// and no group is created.
     #[tokio::test]
     async fn handle_refuses_a_topology_naming_a_prohibited_or_invalid_topic() {
-        let version = streams_group_heartbeat_response::MAX_VERSION;
-        let (broker_handle, _dir) = start_broker(true).await;
-        let broker = broker_handle.broker_arc_for_test();
-        set_streams_version(&broker, 1).await;
-        let principal = principal("alice");
-        let peer = peer();
-        let ctx = test_context(&principal, &peer);
+        streams_join_fixture!(
+            (version, broker_handle, _dir, broker),
+            (principal, peer, ctx)
+        );
 
         // (group id, source topic, the expected error message)
         let rows = [
@@ -496,13 +511,10 @@ mod tests {
             actor::GroupKindTag, streams::actor::response::error_resp,
         };
 
-        let version = streams_group_heartbeat_response::MAX_VERSION;
-        let (broker_handle, _dir) = start_broker(true).await;
-        let broker = broker_handle.broker_arc_for_test();
-        set_streams_version(&broker, 1).await;
-        let principal = principal("alice");
-        let peer = peer();
-        let ctx = test_context(&principal, &peer);
+        streams_join_fixture!(
+            (version, broker_handle, _dir, broker),
+            (principal, peer, ctx)
+        );
         broker.group_coordinator.mark_share("share");
         let _consumer = broker
             .group_coordinator
@@ -566,13 +578,10 @@ mod tests {
     /// group is not created.
     #[tokio::test]
     async fn handle_refuses_an_invalid_request_and_creates_no_group() {
-        let version = streams_group_heartbeat_response::MAX_VERSION;
-        let (broker_handle, _dir) = start_broker(true).await;
-        let broker = broker_handle.broker_arc_for_test();
-        set_streams_version(&broker, 1).await;
-        let principal = principal("alice");
-        let peer = peer();
-        let ctx = test_context(&principal, &peer);
+        streams_join_fixture!(
+            (version, broker_handle, _dir, broker),
+            (principal, peer, ctx)
+        );
         let req = StreamsGroupHeartbeatRequest {
             member_id: String::new(),
             ..request("invalid-join")
@@ -613,13 +622,10 @@ mod tests {
         use crate::coordinator::unified::streams::actor::response::error_resp;
 
         let version = streams_group_heartbeat_response::MAX_VERSION;
-        let (broker_handle, _dir) = start_broker(true).await;
-        let broker = broker_handle.broker_arc_for_test();
+        broker_fixture!((broker_handle, _dir, broker), start_broker(true));
         set_streams_version(&broker, 1).await;
         create_source_topic(&broker, "in").await;
-        let principal = principal("alice");
-        let peer = peer();
-        let ctx = test_context(&principal, &peer);
+        request_identity!((principal, peer, ctx), principal("alice"), test_context);
         let with_subtopology = |group_id: &str, subtopology: Subtopology| {
             let mut req = request(group_id);
             req.topology
@@ -721,33 +727,7 @@ mod tests {
 
     /// Writes a `streams.version` `FeatureLevelRecord` at `level` and waits
     /// until the image shows it. Level 0 removes the feature, as in Kafka.
-    async fn set_streams_version(broker: &Broker, level: i16) {
-        broker
-            .controller
-            .submit_change(vec![MetadataRecord::V1FeatureLevel(FeatureLevelRecord {
-                name: crate::features::STREAMS_VERSION.into(),
-                level,
-            })])
-            .await
-            .expect("submit streams.version");
-
-        let want = (level != 0).then_some(level);
-        tokio::time::timeout(std::time::Duration::from_secs(5), async {
-            loop {
-                if broker
-                    .controller
-                    .current_image()
-                    .finalized_feature(crate::features::STREAMS_VERSION)
-                    == want
-                {
-                    break;
-                }
-                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-            }
-        })
-        .await
-        .expect("streams.version visible");
-    }
+    use crate::handlers::test_support::set_streams_version;
 
     /// `StreamsGroupHeartbeat` v1 changes only the response. Trunk's
     /// `GroupMetadataManager` sets the int64 `AcceptableRecoveryLag` from the
@@ -770,23 +750,10 @@ mod tests {
         broker_handle.wait_until_group_coordinator_ready().await;
         let broker = broker_handle.broker_arc_for_test();
         set_streams_version(&broker, 1).await;
-        let principal = principal("alice");
-        let peer = peer();
-        let ctx = test_context(&principal, &peer);
+        request_identity!((principal, peer, ctx), principal("alice"), test_context);
         // Through the dispatch registry: v0 drops the int64 lag on the wire.
         let heartbeat = |req: StreamsGroupHeartbeatRequest, version: i16| {
-            let broker = &broker;
-            let ctx = &ctx;
-            async move {
-                crate::test_support::dispatch_wire::<StreamsGroupHeartbeatResponse>(
-                    broker,
-                    krabka_protocol::api_key::ApiKey::StreamsGroupHeartbeat as i16,
-                    version,
-                    &req,
-                    ctx,
-                )
-                .await
-            }
+            wire_heartbeat(&broker, &ctx, req, version)
         };
 
         let v0 = heartbeat(request("streams-app-v0"), 0).await;
@@ -857,24 +824,11 @@ mod tests {
             )])
             .await
             .expect("store the group override");
-        let principal = principal("alice");
-        let peer = peer();
-        let ctx = test_context(&principal, &peer);
+        request_identity!((principal, peer, ctx), principal("alice"), test_context);
         // Through the dispatch registry: v0 drops the status the v1 adds.
         let heartbeat = |group_id: &str, version: i16| {
             let req = request(group_id);
-            let broker = &broker;
-            let ctx = &ctx;
-            async move {
-                crate::test_support::dispatch_wire::<StreamsGroupHeartbeatResponse>(
-                    broker,
-                    krabka_protocol::api_key::ApiKey::StreamsGroupHeartbeat as i16,
-                    version,
-                    &req,
-                    ctx,
-                )
-                .await
-            }
+            wire_heartbeat(&broker, &ctx, req, version)
         };
         let v0 = heartbeat("baseline-v0", 0).await;
         assert!(v0.error_code == codes::NONE, "{v0:?}");
@@ -908,12 +862,9 @@ mod tests {
     #[tokio::test]
     async fn handle_unfinalized_feature_returns_unsupported_version_with_read_allowed() {
         let version = streams_group_heartbeat_response::MAX_VERSION;
-        let (broker_handle, _dir) = start_broker(true).await;
-        let broker = broker_handle.broker_arc_for_test();
+        broker_fixture!((broker_handle, _dir, broker), start_broker(true));
         set_streams_version(&broker, 0).await;
-        let principal = principal("alice");
-        let peer = peer();
-        let ctx = test_context(&principal, &peer);
+        request_identity!((principal, peer, ctx), principal("alice"), test_context);
         let resp = handle(
             &broker,
             request("streams-app-disabled-feature"),
@@ -930,12 +881,9 @@ mod tests {
     #[tokio::test]
     async fn handle_disabled_config_returns_unsupported_version_when_feature_finalized() {
         let version = streams_group_heartbeat_response::MAX_VERSION;
-        let (broker_handle, _dir) = start_broker(false).await;
-        let broker = broker_handle.broker_arc_for_test();
+        broker_fixture!((broker_handle, _dir, broker), start_broker(false));
         set_streams_version(&broker, 1).await;
-        let principal = principal("alice");
-        let peer = peer();
-        let ctx = test_context(&principal, &peer);
+        request_identity!((principal, peer, ctx), principal("alice"), test_context);
         let resp = handle(
             &broker,
             request("streams-app-disabled-config"),
@@ -951,13 +899,10 @@ mod tests {
 
     #[tokio::test]
     async fn handle_persists_request_client_identity() {
-        let version = streams_group_heartbeat_response::MAX_VERSION;
-        let (broker_handle, _dir) = start_broker(true).await;
-        let broker = broker_handle.broker_arc_for_test();
-        set_streams_version(&broker, 1).await;
-        let principal = principal("alice");
-        let peer = peer();
-        let ctx = test_context(&principal, &peer);
+        streams_join_fixture!(
+            (version, broker_handle, _dir, broker),
+            (principal, peer, ctx)
+        );
 
         let resp = handle(&broker, request("identity-group"), version, &ctx)
             .await
@@ -1009,9 +954,11 @@ mod tests {
 
         let authorizer = acl_authorizer();
         let image = krabka_metadata::MetadataImage::new(uuid::Uuid::nil());
-        let principal = crate::test_support::principal("ANONYMOUS");
-        let peer = peer();
-        let ctx = crate::test_support::request_context(&principal, &peer, "streams-client");
+        request_identity!(
+            (principal, peer, ctx),
+            crate::test_support::principal("ANONYMOUS"),
+            client_id = "streams-client"
+        );
 
         assert!(group_read_denied(&authorizer, &image, &ctx, "g"));
 

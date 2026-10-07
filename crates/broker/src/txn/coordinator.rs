@@ -20,6 +20,7 @@ use tokio::sync::{Mutex, Notify, RwLock};
 
 use crate::{
     partition_registry::PartitionRegistry,
+    task_util::cloned_registry_values,
     txn::{partitioner::partition_for_tid, state::TxnEntry},
 };
 
@@ -303,8 +304,7 @@ impl TxnCoordinator {
     pub(crate) async fn snapshot(&self) -> Vec<TxnEntry> {
         // Collect the `Arc<Mutex<_>>` handles first so we don't hold the
         // DashMap shard locks while taking the inner async mutex.
-        let handles: Vec<Arc<Mutex<TxnEntry>>> =
-            self.state.iter().map(|e| e.value().clone()).collect();
+        let handles = cloned_registry_values(&self.state);
         let mut out = Vec::with_capacity(handles.len());
         for h in handles {
             let entry = h.lock().await;

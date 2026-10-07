@@ -122,12 +122,11 @@ mod tests {
     }
     #[test]
     fn runtime_file_config_accepts_positive_diskless_wal_trim_lag() {
-        let file: FileConfig = toml::from_str("[runtime]\ndiskless_wal_trim_safety_lag = 7\n")
-            .expect("parse runtime config");
-        let mut config = crate::config::BrokerConfig::default();
-
-        file.apply_to(&mut config)
-            .expect("accept positive trim lag");
+        let config = crate::file_config::test_support::configured(
+            "[runtime]\ndiskless_wal_trim_safety_lag = 7\n",
+            "parse runtime config",
+        )
+        .expect("accept positive trim lag");
 
         assert!(config.diskless_wal_trim_safety_lag == 7);
     }
@@ -135,12 +134,11 @@ mod tests {
     fn log_delivery_clock_uncertainty_round_trips_into_the_log_config() {
         // KFC-1's clock bound reaches every partition through
         // `BrokerConfig::log_config`, and it is a TOML-only key.
-        let file: FileConfig =
-            toml::from_str("[runtime]\nlog_delivery_clock_uncertainty = \"750ms\"\n")
-                .expect("parse runtime config");
-        let mut cfg = crate::config::BrokerConfig::default();
-
-        file.apply_to(&mut cfg).expect("apply runtime config");
+        let cfg = crate::file_config::test_support::configured(
+            "[runtime]\nlog_delivery_clock_uncertainty = \"750ms\"\n",
+            "parse runtime config",
+        )
+        .expect("apply runtime config");
 
         assert!(cfg.log_config.delivery_clock_uncertainty == millis(750));
         assert!(cfg.log_config.delivery_clock_uncertainty.millis_i64() == 750);
@@ -150,11 +148,11 @@ mod tests {
         // Kafka's broker-wide `message.max.bytes` is the default behind every
         // topic's `max.message.bytes`, and in krabka that default is the base
         // `LogConfig` the produce gate reads when a topic sets none.
-        let file: FileConfig = toml::from_str("[runtime]\nmessage_max_bytes = \"2KiB\"\n")
-            .expect("parse runtime config");
-        let mut cfg = crate::config::BrokerConfig::default();
-
-        file.apply_to(&mut cfg).expect("apply runtime config");
+        let cfg = crate::file_config::test_support::configured(
+            "[runtime]\nmessage_max_bytes = \"2KiB\"\n",
+            "parse runtime config",
+        )
+        .expect("apply runtime config");
 
         assert!(cfg.log_config.max_message_size.bytes_u64() == 2048);
     }
@@ -196,20 +194,18 @@ mod tests {
 
     #[test]
     fn omitted_message_max_bytes_keeps_kafkas_1048588() {
-        let file: FileConfig = toml::from_str("[runtime]\n").expect("parse runtime config");
-        let mut cfg = crate::config::BrokerConfig::default();
-
-        file.apply_to(&mut cfg).expect("apply runtime config");
+        let cfg =
+            crate::file_config::test_support::configured("[runtime]\n", "parse runtime config")
+                .expect("apply runtime config");
 
         assert!(cfg.log_config.max_message_size.bytes_u64() == 1_048_588);
     }
 
     #[test]
     fn omitted_log_delivery_clock_uncertainty_keeps_the_quarter_second_default() {
-        let file: FileConfig = toml::from_str("[runtime]\n").expect("parse runtime config");
-        let mut cfg = crate::config::BrokerConfig::default();
-
-        file.apply_to(&mut cfg).expect("apply runtime config");
+        let cfg =
+            crate::file_config::test_support::configured("[runtime]\n", "parse runtime config")
+                .expect("apply runtime config");
 
         assert!(cfg.log_config.delivery_clock_uncertainty == millis(250));
     }
@@ -236,9 +232,8 @@ record_decompression_max_ratio = "50"
 record_decompression_output_floor = "8MiB"
 record_decompression_output_ceiling = "512MiB"
 "#;
-        let file: FileConfig = toml::from_str(source).expect("parse runtime config");
-        let mut cfg = crate::config::BrokerConfig::default();
-        file.apply_to(&mut cfg).expect("apply runtime config");
+        let cfg = crate::file_config::test_support::configured(source, "parse runtime config")
+            .expect("apply runtime config");
 
         let policy = cfg
             .record_decompression_policy()

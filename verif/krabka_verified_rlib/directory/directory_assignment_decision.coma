@@ -1,8 +1,8 @@
-(* #"/workspace/crates/verified/src/directory.rs" 27 0 30 32 *)
+(* #"/workspace/crates/verified/src/directory.rs" 23 0 26 32 *)
 
-let%span sdirectory = "/workspace/crates/verified/src/directory.rs" 21 10 21 83
-let%span sdirectory'0 = "/workspace/crates/verified/src/directory.rs" 22 10 23 46
-let%span sdirectory'1 = "/workspace/crates/verified/src/directory.rs" 24 10 25 53
+let%span sdirectory = "/workspace/crates/verified/src/directory.rs" 17 10 17 83
+let%span sdirectory'0 = "/workspace/crates/verified/src/directory.rs" 18 10 19 46
+let%span sdirectory'1 = "/workspace/crates/verified/src/directory.rs" 20 10 21 53
 
 use creusot.int.UInt64
 use creusot.prelude.Any
@@ -23,7 +23,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let directory_assignment_decision [#"/workspace/crates/verified/src/directory.rs" 27 0 30 32]
+let directory_assignment_decision [#"/workspace/crates/verified/src/directory.rs" 23 0 26 32]
   (replica_slot: t_Option_usize) (already_assigned: bool) (return (x: t_DirectoryAssignmentDecision)) = (! bb0
   [ bb0 = any [ br0 -> {replica_slot = None} (! bb6) | br1 (x0: UInt64.t) -> {replica_slot = Some x0} (! bb5) ]
   | bb5 = any [ br0 -> {already_assigned = false} (! bb4) | br1 -> {already_assigned} (! bb7) ]

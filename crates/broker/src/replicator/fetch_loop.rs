@@ -62,6 +62,7 @@ struct Round {
 }
 
 pub(super) async fn run_fetcher_loop(fetcher: &FetcherConfig) -> Result<(), String> {
+    let replication = &fetcher.connection.replication;
     let mut session = FollowerFetchSession::default();
     // The partitions whose on-disk log this fetcher has already opened. A
     // reconcile adds a partition to a running fetcher, and the first round
@@ -137,9 +138,9 @@ pub(super) async fn run_fetcher_loop(fetcher: &FetcherConfig) -> Result<(), Stri
             // every partition it follows is out of throttle budget. Wait, and
             // let the next reconcile or the next refill decide.
             let idle = if round.all_throttled {
-                fetcher.replication.throttle_exhausted_backoff
+                replication.throttle_exhausted_backoff
             } else {
-                fetcher.replication.fetch_max_wait
+                replication.fetch_max_wait
             };
             if sleep_or_cancel(&fetcher.shutdown, idle).await.is_err() {
                 return Ok(());
@@ -183,7 +184,7 @@ pub(super) async fn run_fetcher_loop(fetcher: &FetcherConfig) -> Result<(), Stri
                 client = None;
                 session.reset();
                 dirty = followed.keys().cloned().collect();
-                if sleep_or_cancel(&fetcher.shutdown, fetcher.replication.send_error_backoff)
+                if sleep_or_cancel(&fetcher.shutdown, replication.send_error_backoff)
                     .await
                     .is_err()
                 {
@@ -221,8 +222,7 @@ pub(super) async fn run_fetcher_loop(fetcher: &FetcherConfig) -> Result<(), Stri
                          the metadata image settles");
                     delayed.insert(
                         key.clone(),
-                        tokio::time::Instant::now()
-                            + fetcher.replication.epoch_fence_backoff.to_std(),
+                        tokio::time::Instant::now() + replication.epoch_fence_backoff.to_std(),
                     );
                     if let Some(cfg) = followed.get(&key) {
                         forgotten.push(session_key(cfg));
@@ -391,6 +391,7 @@ fn build_fetch_request(
     wanted: WantedRows,
     forgotten: &[SessionKey],
 ) -> FetchRequest {
+    let replication = &fetcher.connection.replication;
     let session_request = if session.is_full() {
         session.build(wanted)
     } else {
@@ -404,8 +405,8 @@ fn build_fetch_request(
     // Truncate rather than round: `max_wait_ms` is a wire field, and a
     // fractional millisecond rounded up would ask the leader to hold the Fetch
     // open past the configured budget. A negative budget means "do not wait".
-    let max_wait_ms = i32::try_from(fetcher.replication.fetch_max_wait.millis_i64_trunc().max(0))
-        .unwrap_or(i32::MAX);
+    let max_wait_ms =
+        i32::try_from(replication.fetch_max_wait.millis_i64_trunc().max(0)).unwrap_or(i32::MAX);
     FetchRequest {
         replica_id: rid,
         replica_state: ReplicaState {
@@ -413,8 +414,8 @@ fn build_fetch_request(
             ..ReplicaState::default()
         },
         max_wait_ms,
-        min_bytes: fetcher.replication.fetch_min.bytes_i32(),
-        max_bytes: fetcher.replication.fetch_max.bytes_i32(),
+        min_bytes: replication.fetch_min.bytes_i32(),
+        max_bytes: replication.fetch_max.bytes_i32(),
         session_id: session_request.session_id,
         session_epoch: session_request.session_epoch,
         topics: session_request.topics,
@@ -459,10 +460,7 @@ mod tests {
             leader_port: cfg.leader_port,
             client_id: cfg.client_id.clone(),
             shutdown: tokio_util::sync::CancellationToken::new(),
-            inter_broker_client: cfg.inter_broker_client.clone(),
-            inter_broker_listener_protocol: cfg.inter_broker_listener_protocol,
-            inter_broker_server_name: cfg.inter_broker_server_name.clone(),
-            replication: cfg.replication.clone(),
+            connection: cfg.connection.clone(),
             followed,
         }
     }
@@ -494,9 +492,9 @@ mod tests {
     #[test]
     fn the_first_request_carries_every_partition_and_the_configured_envelope() {
         let (mut cfg, _log_dir) = test_config(image_with_leader(LEADER_ID));
-        cfg.replication.fetch_max = bytes(2_345_678);
-        cfg.replication.fetch_max_wait = millis(321);
-        cfg.replication.fetch_min = bytes(17);
+        cfg.connection.replication.fetch_max = bytes(2_345_678);
+        cfg.connection.replication.fetch_max_wait = millis(321);
+        cfg.connection.replication.fetch_min = bytes(17);
         let fetcher = test_fetcher(&cfg, FollowedPartitions::default());
         let mut session = FollowerFetchSession::default();
         let wanted: WantedRows = [

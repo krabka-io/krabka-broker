@@ -58,15 +58,11 @@
 //! builds live in `gate`, the ISR departures in `leave`, and the
 //! wrong-controller refusal in `wire`.
 
-use bytes::Bytes;
 use krabka_audit::PrivilegedPhase;
 use krabka_metadata::{BreakGlassAction, NodeId};
-use krabka_protocol::{
-    Decode,
-    owned::{
-        unregister_broker_request::{self, UnregisterBrokerRequest},
-        unregister_broker_response::UnregisterBrokerResponse,
-    },
+use krabka_protocol::owned::{
+    unregister_broker_request::{self, UnregisterBrokerRequest},
+    unregister_broker_response::UnregisterBrokerResponse,
 };
 
 use self::{
@@ -74,17 +70,11 @@ use self::{
     wire::not_controller_refusal,
 };
 use crate::{
-    break_glass::{
-        handlers::audit::{GatedTransition, audit_transition, require_transition},
-        metrics as break_glass_metrics,
-    },
-    broker::Broker,
+    break_glass::handlers::audit::{GatedTransition, audit_transition, require_transition},
     codes,
     controller_admin::CONTROLLER_ADMIN_CONNECTION_ID,
-    error::BrokerError,
     handlers::{
-        ErrorResponse as _, RequestContext, cluster_alter_denied,
-        forward_to_controller::to_active_controller,
+        ErrorResponse as _, cluster_alter_denied, forward_to_controller::to_active_controller,
     },
     time_util::now_ms,
 };
@@ -96,170 +86,161 @@ mod wire;
 #[cfg(test)]
 mod tests;
 
-pub(crate) async fn handle(
-    broker: &Broker,
-    version: i16,
-    req_bytes: &[u8],
-    ctx: &RequestContext<'_>,
-) -> Result<Bytes, BrokerError> {
-    let mut cur: &[u8] = req_bytes;
-    let req = UnregisterBrokerRequest::decode(&mut cur, version)?;
+wire_handler! {
+    async (broker, version, req_bytes, ctx), {
+        let req = crate::handlers::decode_request::<UnregisterBrokerRequest>(req_bytes, version)?;
 
-    // A broker listener forwards the request untouched, as `KafkaApis` does
-    // with `forwardToController`, and the controller authorizes the principal
-    // the `Envelope` names. A node that is itself the active controller has
-    // nowhere to forward to and answers in place.
-    if ctx.connection_id != CONTROLLER_ADMIN_CONNECTION_ID
-        && let Some(answer) = to_active_controller(
-            broker,
-            unregister_broker_request::API_KEY,
-            req_bytes,
-            version,
+        // A broker listener forwards the request untouched, as `KafkaApis` does
+        // with `forwardToController`, and the controller authorizes the principal
+        // the `Envelope` names. A node that is itself the active controller has
+        // nowhere to forward to and answers in place.
+        if ctx.connection_id != CONTROLLER_ADMIN_CONNECTION_ID
+            && let Some(answer) = to_active_controller(
+                broker,
+                unregister_broker_request::API_KEY,
+                req_bytes,
+                version,
+                ctx,
+                |error_code, message| {
+                    crate::handlers::encode_response(
+                        &UnregisterBrokerResponse::error(error_code, message.map(str::to_owned)),
+                        version,
+                    )
+                },
+            )
+            .await
+        {
+            return answer;
+        }
+
+        let image = broker.controller.current_image();
+
+        // Cluster:Alter gate.
+        if cluster_alter_denied(broker.config.authorizer.as_ref(), &image, ctx) {
+            let resp = UnregisterBrokerResponse::error(
+                codes::CLUSTER_AUTHORIZATION_FAILED,
+                Some("unregister-broker denied".into()),
+            );
+            return crate::handlers::encode_response(&resp, version);
+        }
+
+        // Only the active controller unregisters a broker, as
+        // `ControllerWriteEvent.run` says. The records below are built from the
+        // image this node holds, and that image is only current on the leader: a
+        // follower's or an observer's can trail it, and a partition record built
+        // from a trailing image would roll back the leader, epoch and ISR that the
+        // leader has committed since.
+        let leader = *broker.controller.watch_leader().borrow();
+        if let Some(refusal) = not_controller_refusal(leader, broker.config.node_id) {
+            return crate::handlers::encode_response(&refusal, version);
+        }
+
+        // Existence check, as `ReplicationControlManager.unregisterBroker`: an id
+        // with no registration, a negative one included, answers
+        // `BROKER_ID_NOT_REGISTERED` with Kafka's message. It runs before the
+        // break-glass gate so that a typo in the id does not spend an approval
+        // that a real unregistration still needs.
+        let Some((node_id, broker_epoch)) = u64::try_from(req.broker_id)
+            .ok()
+            .map(NodeId)
+            .and_then(|id| Some((id, image.broker_epoch(id)?)))
+        else {
+            let resp = UnregisterBrokerResponse::error(
+                codes::BROKER_ID_NOT_REGISTERED,
+                Some(format!(
+                    "Broker ID {} is not currently registered",
+                    req.broker_id
+                )),
+            );
+            return crate::handlers::encode_response(&resp, version);
+        };
+
+        // KFC-9: the two-person rule, and the records it makes this append carry.
+        let target = broker_target(node_id);
+        let records = match unregister_records(
+            &image,
+            &broker.config.break_glass,
+            node_id,
+            broker_epoch,
+            now_ms(),
+        ) {
+            Ok(records) => records,
+            Err(denial) => {
+                let message = denial.to_string();
+                crate::handlers::partition_transition::audit_refusal(
+                    broker,
+                    ctx,
+                    BreakGlassAction::UnregisterBroker,
+                    || &target,
+                    &denial,
+                    &message,
+                );
+                let resp = UnregisterBrokerResponse::error(codes::POLICY_VIOLATION, Some(message));
+                return crate::handlers::encode_response(&resp, version);
+            }
+        };
+        let proposal_id = records.first().and_then(consumed_proposal_id);
+        if let Err(error) = require_transition(
+            &broker.audit_log,
+            &broker.config.break_glass,
             ctx,
-            |error_code, message| {
-                crate::handlers::encode_response(
-                    &UnregisterBrokerResponse::error(error_code, message.map(str::to_owned)),
-                    version,
-                )
+            &GatedTransition {
+                action: BreakGlassAction::UnregisterBroker,
+                target: &target,
+                phase: PrivilegedPhase::Applied,
+                proposal_id,
+                reason: "broker unregistration admitted",
             },
         )
         .await
-    {
-        return answer;
-    }
-
-    let image = broker.controller.current_image();
-
-    // Cluster:Alter gate.
-    if cluster_alter_denied(broker.config.authorizer.as_ref(), &image, ctx) {
-        let resp = UnregisterBrokerResponse::error(
-            codes::CLUSTER_AUTHORIZATION_FAILED,
-            Some("unregister-broker denied".into()),
-        );
-        return crate::handlers::encode_response(&resp, version);
-    }
-
-    // Only the active controller unregisters a broker, as
-    // `ControllerWriteEvent.run` says. The records below are built from the
-    // image this node holds, and that image is only current on the leader: a
-    // follower's or an observer's can trail it, and a partition record built
-    // from a trailing image would roll back the leader, epoch and ISR that the
-    // leader has committed since.
-    let leader = *broker.controller.watch_leader().borrow();
-    if let Some(refusal) = not_controller_refusal(leader, broker.config.node_id) {
-        return crate::handlers::encode_response(&refusal, version);
-    }
-
-    // Existence check, as `ReplicationControlManager.unregisterBroker`: an id
-    // with no registration, a negative one included, answers
-    // `BROKER_ID_NOT_REGISTERED` with Kafka's message. It runs before the
-    // break-glass gate so that a typo in the id does not spend an approval
-    // that a real unregistration still needs.
-    let Some((node_id, broker_epoch)) = u64::try_from(req.broker_id)
-        .ok()
-        .map(NodeId)
-        .and_then(|id| Some((id, image.broker_epoch(id)?)))
-    else {
-        let resp = UnregisterBrokerResponse::error(
-            codes::BROKER_ID_NOT_REGISTERED,
-            Some(format!(
-                "Broker ID {} is not currently registered",
-                req.broker_id
-            )),
-        );
-        return crate::handlers::encode_response(&resp, version);
-    };
-
-    // KFC-9: the two-person rule, and the records it makes this append carry.
-    let target = broker_target(node_id);
-    let records = match unregister_records(
-        &image,
-        &broker.config.break_glass,
-        node_id,
-        broker_epoch,
-        now_ms(),
-    ) {
-        Ok(records) => records,
-        Err(denial) => {
-            let message = denial.to_string();
-            break_glass_metrics::record_refusal(&broker.metrics, denial.action);
-            audit_transition(
-                &broker.audit_log,
-                &broker.config.break_glass,
-                ctx,
-                &GatedTransition {
-                    action: BreakGlassAction::UnregisterBroker,
-                    target: &target,
-                    phase: PrivilegedPhase::Refused,
-                    proposal_id: denial.proposal_id(),
-                    reason: &message,
-                },
+        {
+            let resp = UnregisterBrokerResponse::error(
+                codes::POLICY_VIOLATION,
+                Some(format!("privileged action refused: {error}")),
             );
-            let resp = UnregisterBrokerResponse::error(codes::POLICY_VIOLATION, Some(message));
             return crate::handlers::encode_response(&resp, version);
         }
-    };
-    let proposal_id = records.first().and_then(consumed_proposal_id);
-    if let Err(error) = require_transition(
-        &broker.audit_log,
-        &broker.config.break_glass,
-        ctx,
-        &GatedTransition {
-            action: BreakGlassAction::UnregisterBroker,
-            target: &target,
-            phase: PrivilegedPhase::Applied,
-            proposal_id,
-            reason: "broker unregistration admitted",
-        },
-    )
-    .await
-    {
-        let resp = UnregisterBrokerResponse::error(
-            codes::POLICY_VIOLATION,
-            Some(format!("privileged action refused: {error}")),
+
+        // The broker leaves every ISR and every leadership in the same append that
+        // drops its registration, as `ReplicationControlManager.unregisterBroker`
+        // writes them: the partitions never name a broker that is no longer
+        // registered.
+        let leaves = leave::leave_isrs(broker, &broker.controller.current_image(), node_id).await;
+        let records = with_leaves(records, leaves);
+
+        // Submit the change through Raft. The image apply of the unregister record
+        // is idempotent (the `apply` arm calls `brokers.remove`).
+        if let Err(e) = broker.controller.submit_change(records).await {
+            let resp = UnregisterBrokerResponse::error(
+                crate::handlers::submit_failure_code(&e, codes::UNKNOWN_SERVER_ERROR),
+                Some(format!("controller submit failed: {e}")),
+            );
+            return crate::handlers::encode_response(&resp, version);
+        }
+        audit_transition(
+            &broker.audit_log,
+            &broker.config.break_glass,
+            ctx,
+            &GatedTransition {
+                action: BreakGlassAction::UnregisterBroker,
+                target: &target,
+                phase: PrivilegedPhase::Applied,
+                proposal_id,
+                reason: "broker registration removed",
+            },
         );
-        return crate::handlers::encode_response(&resp, version);
-    }
 
-    // The broker leaves every ISR and every leadership in the same append that
-    // drops its registration, as `ReplicationControlManager.unregisterBroker`
-    // writes them: the partitions never name a broker that is no longer
-    // registered.
-    let leaves = leave::leave_isrs(broker, &broker.controller.current_image(), node_id).await;
-    let records = with_leaves(records, leaves);
-
-    // Submit the change through Raft. The image apply of the unregister record
-    // is idempotent (the `apply` arm calls `brokers.remove`).
-    if let Err(e) = broker.controller.submit_change(records).await {
-        let resp = UnregisterBrokerResponse::error(
-            crate::handlers::submit_failure_code(&e, codes::UNKNOWN_SERVER_ERROR),
-            Some(format!("controller submit failed: {e}")),
+        crate::handlers::audit_admin_success(
+            broker.audit_log.as_ref(),
+            ctx,
+            "UnregisterBroker",
+            vec![crate::handlers::audit_resource(
+                "Broker",
+                node_id.to_string(),
+            )],
         );
-        return crate::handlers::encode_response(&resp, version);
+
+        let resp = UnregisterBrokerResponse::error(codes::NONE, None);
+        crate::handlers::encode_response(&resp, version)
     }
-    audit_transition(
-        &broker.audit_log,
-        &broker.config.break_glass,
-        ctx,
-        &GatedTransition {
-            action: BreakGlassAction::UnregisterBroker,
-            target: &target,
-            phase: PrivilegedPhase::Applied,
-            proposal_id,
-            reason: "broker registration removed",
-        },
-    );
-
-    crate::handlers::audit_admin_success(
-        broker.audit_log.as_ref(),
-        ctx,
-        "UnregisterBroker",
-        vec![crate::handlers::audit_resource(
-            "Broker",
-            node_id.to_string(),
-        )],
-    );
-
-    let resp = UnregisterBrokerResponse::error(codes::NONE, None);
-    crate::handlers::encode_response(&resp, version)
 }

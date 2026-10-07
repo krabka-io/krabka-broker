@@ -56,14 +56,14 @@
 //! sibling model bounds it, so the state graph stays exhaustive.
 
 use krabka_metadata::BreakGlassAction;
-use krabka_units::millis;
 use stateright::Checker;
 
 use self::{
     transitions::CrossSpendModel,
     universe::{EXPIRES_AT, ProposalSpec, Request},
 };
-use crate::{config::BreakGlassConfig, model_check::run_bfs};
+use super::state_model::config;
+use crate::model_check::run_bfs;
 
 mod properties;
 mod transitions;
@@ -84,26 +84,16 @@ const PINNED_UNIQUE_STATES_TWO_TOPICS: usize = 432;
 const PINNED_UNIQUE_STATES_PARTITION_LOOKALIKE: usize = 432;
 const PINNED_UNIQUE_STATES_BOTH_COVER: usize = 432;
 
-fn config(approvers: &[&str], required_approvals: usize) -> BreakGlassConfig {
-    BreakGlassConfig {
-        approvers: approvers.iter().map(|name| (*name).to_owned()).collect(),
-        required_approvals,
-        proposal_ttl: millis(u32::try_from(EXPIRES_AT).expect("a small logical expiry")),
-        signed_actions: Vec::new(),
-        ..BreakGlassConfig::default()
-    }
-}
-
 fn run(model: CrossSpendModel, label: &str, pinned_unique_states: usize) {
     let checker = run_bfs(model, label, MAX_DEPTH, TARGET_STATE_COUNT);
     assert2::assert!(
         checker.unique_state_count() < MAX_UNIQUE_STATES,
         "[{label}] unique-state bound exceeded"
     );
-    // Pin: a changed count is a changed model, not a retuning knob.
-    assert2::assert!(
-        checker.unique_state_count() == pinned_unique_states,
-        "[{label}] unique-state count moved: the reachable set of this model changed"
+    crate::model_check::assert_pinned_count(
+        checker.unique_state_count(),
+        pinned_unique_states,
+        label,
     );
     checker.assert_properties();
 }
@@ -121,7 +111,7 @@ const APPROVERS: [&str; 3] = ["User:alice", "User:bob", "User:carol"];
 fn one_action_on_two_topics() {
     run(
         CrossSpendModel {
-            config: config(&APPROVERS, 2),
+            config: config(&APPROVERS, 2, EXPIRES_AT),
             proposals: [
                 ProposalSpec {
                     id: 1,
@@ -165,7 +155,7 @@ fn one_action_on_two_topics() {
 fn a_topic_that_looks_like_a_partition_of_another() {
     run(
         CrossSpendModel {
-            config: config(&APPROVERS, 2),
+            config: config(&APPROVERS, 2, EXPIRES_AT),
             proposals: [
                 ProposalSpec {
                     id: 1,
@@ -210,7 +200,7 @@ fn a_topic_that_looks_like_a_partition_of_another() {
 fn two_proposals_that_both_cover_one_partition() {
     run(
         CrossSpendModel {
-            config: config(&APPROVERS, 2),
+            config: config(&APPROVERS, 2, EXPIRES_AT),
             proposals: [
                 ProposalSpec {
                     id: 1,

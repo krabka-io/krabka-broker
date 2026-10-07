@@ -206,6 +206,18 @@ mod tests {
         .expect("decode control")
     }
 
+    fn check_header(cursor: &mut &[u8], expected: SnapshotHeaderRecord) {
+        let header = RecordBatch::decode(cursor).expect("header batch");
+        check!(
+            (
+                header.base_offset,
+                header.attributes.is_control_batch(),
+                header.records.len()
+            ) == (0, true, 1)
+        );
+        assert2::assert!(decode_single_control(&header) == ControlRecord::SnapshotHeader(expected));
+    }
+
     #[test]
     fn writer_emits_canonical_header_data_offsets_and_footer() {
         let cid = Uuid::new_v4();
@@ -216,21 +228,13 @@ mod tests {
         let bytes = SnapshotWriter::serialize(&image, timestamp).unwrap();
         let mut cur: &[u8] = &bytes;
 
-        let header = RecordBatch::decode(&mut cur).expect("header batch");
-        check!(
-            (
-                header.base_offset,
-                header.attributes.is_control_batch(),
-                header.records.len()
-            ) == (0, true, 1)
-        );
-        assert2::assert!(
-            decode_single_control(&header)
-                == ControlRecord::SnapshotHeader(SnapshotHeaderRecord {
-                    version: 0,
-                    last_contained_log_timestamp: timestamp,
-                    unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(vec![]),
-                })
+        check_header(
+            &mut cur,
+            SnapshotHeaderRecord {
+                version: 0,
+                last_contained_log_timestamp: timestamp,
+                unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(vec![]),
+            },
         );
 
         let kraft_version = RecordBatch::decode(&mut cur).expect("kraft.version batch");
@@ -298,21 +302,13 @@ mod tests {
         let bytes = SnapshotWriter::serialize(&image, 99).unwrap();
         let mut cur: &[u8] = &bytes;
 
-        let header = RecordBatch::decode(&mut cur).expect("header batch");
-        check!(
-            (
-                header.base_offset,
-                header.attributes.is_control_batch(),
-                header.records.len()
-            ) == (0, true, 1)
-        );
-        assert2::assert!(
-            decode_single_control(&header)
-                == ControlRecord::SnapshotHeader(SnapshotHeaderRecord {
-                    version: 0,
-                    last_contained_log_timestamp: 99,
-                    ..Default::default()
-                })
+        check_header(
+            &mut cur,
+            SnapshotHeaderRecord {
+                version: 0,
+                last_contained_log_timestamp: 99,
+                ..Default::default()
+            },
         );
 
         let kraft_version = RecordBatch::decode(&mut cur).expect("kraft.version batch");

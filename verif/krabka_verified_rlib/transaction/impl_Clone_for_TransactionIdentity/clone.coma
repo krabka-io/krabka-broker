@@ -1,4 +1,4 @@
-(* #"/workspace/crates/verified/src/transaction.rs" 185 27 185 32 *)
+(* #"/workspace/crates/verified/src/transaction.rs" 156 19 156 36 *)
 
 (* <transaction::TransactionIdentity as std::clone::Clone> *)
 
@@ -12,7 +12,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let clone_TransactionIdentity [#"/workspace/crates/verified/src/transaction.rs" 185 27 185 32]
+let clone_TransactionIdentity [#"/workspace/crates/verified/src/transaction.rs" 156 19 156 36]
   (self: t_TransactionIdentity) (return (x: t_TransactionIdentity)) = (! bb0
   [ bb0 = s0 [ s0 = [ &_ret <- self ] s1 | s1 = return {_ret} ] ]
   [ & _ret: t_TransactionIdentity = Any.any_l () | & self: t_TransactionIdentity = self ])

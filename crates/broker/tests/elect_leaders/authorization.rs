@@ -9,10 +9,8 @@
 use std::time::{Duration, Instant};
 
 use assert2::assert;
-use krabka_broker::{Broker, authorizer::SimpleAclAuthorizer};
-use krabka_metadata::{
-    AclEntry, AclOperation, MetadataRecord, PatternType, PermissionType, ResourceType,
-};
+use krabka_broker::Broker;
+use krabka_metadata::AclOperation;
 use krabka_security::SaslMechanism;
 
 use crate::{
@@ -29,13 +27,10 @@ use crate::{
 /// `CLUSTER_AUTHORIZATION_FAILED (31)`.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn non_super_user_without_acl_denied() {
-    let log_dir = tempfile::tempdir().unwrap();
-
     // Build a single-broker SASL_PLAINTEXT config.
     // admin is the super-user so the compat shim stays off once an ACL
     // exists; alice has credentials but no ACLs.
-    let mut cfg = crate::support::sasl_plaintext_config(log_dir.path().to_path_buf());
-    cfg.enabled_sasl_mechanisms = vec![SaslMechanism::Plain];
+    let (_log_dir, mut cfg) = crate::support::sasl::sasl_temp_config(vec![SaslMechanism::Plain]);
     cfg.plain_credentials
         .insert("admin".to_string(), "admin-secret".to_string());
     cfg.plain_credentials
@@ -48,7 +43,7 @@ async fn non_super_user_without_acl_denied() {
         .collect();
     // Install `SimpleAclAuthorizer` so the cluster-Alter gate
     // fires for non-super principals; default is `AllowAllAuthorizer`.
-    cfg.authorizer = std::sync::Arc::new(SimpleAclAuthorizer::new(cfg.super_users.clone()));
+    crate::support::acl::use_simple_acl_authorizer(&mut cfg);
 
     let handle = Broker::start(cfg).await.expect("broker must start");
     let addr = handle.listen_addr();
@@ -61,15 +56,11 @@ async fn non_super_user_without_acl_denied() {
     // is irrelevant — any non-empty `image.acls` flips the shim off and
     // forces the authorizer to evaluate every request.
     handle
-        .submit_metadata_record_for_test(MetadataRecord::V1AccessControlEntry(AclEntry {
-            resource_type: ResourceType::Topic,
-            resource_name: "__compat_shim_disable__".to_string(),
-            pattern_type: PatternType::Literal,
-            principal: "User:admin".to_string(),
-            host: "*".to_string(),
-            operation: AclOperation::Read,
-            permission_type: PermissionType::Allow,
-        }))
+        .submit_metadata_record_for_test(crate::support::acl::topic_acl_record(
+            "__compat_shim_disable__",
+            "User:admin",
+            AclOperation::Read,
+        ))
         .await
         .expect("seed dummy ACL");
 

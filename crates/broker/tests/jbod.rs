@@ -64,17 +64,7 @@ async fn wait_all_partitions(handle: &BrokerHandle, topic: &str, n: i32) {
 
 /// Count `topic-partition` subdirs for `topic` directly under `dir`.
 fn count_topic_dirs(dir: &std::path::Path, topic: &str) -> usize {
-    let prefix = format!("{topic}-");
-    std::fs::read_dir(dir)
-        .unwrap()
-        .filter_map(Result::ok)
-        .filter(|e| e.file_type().is_ok_and(|t| t.is_dir()))
-        .filter(|e| {
-            e.file_name()
-                .to_str()
-                .is_some_and(|n| n.starts_with(&prefix))
-        })
-        .count()
+    crate::support::storage::count_partition_dirs(std::fs::read_dir(dir).unwrap(), topic, true)
 }
 
 #[tokio::test]

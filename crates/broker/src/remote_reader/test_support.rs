@@ -10,12 +10,11 @@
 // `LocalTieredStorage` and `InmemoryRemoteLogMetadataManager`, using the
 // copy path's `copy_eligible` to populate the tier from a real `Log`.
 
-use std::{collections::BTreeMap, fmt::Write as _, sync::Arc};
+use std::{fmt::Write as _, sync::Arc};
 
 use assert2::assert;
 use krabka_ids::LeaderEpoch;
 use krabka_log::{Log, LogConfig};
-use krabka_protocol::records::Record;
 use krabka_remote_storage::{
     InmemoryRemoteLogMetadataManager, LocalTieredStorage, RemoteLogMetadataManager,
     RemoteLogSegmentMetadata, RemoteLogSegmentState, RemoteStorageError, RemoteStorageManager,
@@ -30,22 +29,7 @@ pub fn tp() -> TopicIdPartition {
     TopicIdPartition::new(Uuid::from_u128(1), "orders", 0)
 }
 
-fn batch_of(n: i32, value_size: usize) -> krabka_protocol::records::RecordBatch {
-    use bytes::Bytes;
-    let mut b = krabka_protocol::records::RecordBatch {
-        last_offset_delta: n - 1,
-        ..krabka_protocol::records::RecordBatch::default()
-    };
-    for i in 0..n {
-        b.records.push(Record {
-            offset_delta: i,
-            key: Some(Bytes::from(format!("k{i}"))),
-            value: Some(Bytes::from(vec![b'x'; value_size])),
-            ..Default::default()
-        });
-    }
-    b
-}
+use crate::test_support::keyed_records_batch as batch_of;
 
 krabka_macros::timestamped_batch!(timestamped_batch_at);
 
@@ -387,14 +371,7 @@ fn copy_log_to_reader(log: &Log, remote_dir: &std::path::Path) -> RemoteReader {
         let id = krabka_remote_storage::RemoteLogSegmentId::new(tp(), Uuid::new_v4());
         // Unwrap the log-layer `Offset`s into the remote-storage metadata's
         // `i64` world at the seam.
-        let epochs: BTreeMap<LeaderEpoch, i64> = if ex.leader_epochs.is_empty() {
-            maplit::btreemap! {LeaderEpoch(0) => ex.base_offset.0}
-        } else {
-            ex.leader_epochs
-                .iter()
-                .map(|&(epoch, off)| (epoch, off.0))
-                .collect()
-        };
+        let epochs = crate::remote_log_manager::export_epoch_map(ex, LeaderEpoch(0));
         let md = RemoteLogSegmentMetadata::new(
             id.clone(),
             ex.base_offset.0,
@@ -417,14 +394,9 @@ fn copy_log_to_reader(log: &Log, remote_dir: &std::path::Path) -> RemoteReader {
         for (e, st) in &epochs {
             let _ = writeln!(s, "{e} {st}");
         }
-        let data = krabka_remote_storage::LogSegmentData {
-            log_segment: ex.log_path.clone(),
-            offset_index: ex.offset_index_path.clone(),
-            time_index: ex.time_index_path.clone(),
-            transaction_index: ex.transaction_index_path.clone(),
-            producer_snapshot_index: None,
-            leader_epoch_index: bytes::Bytes::from(s.into_bytes()),
-        };
+        let data = crate::remote_log_manager::export_segment_data(ex, false, || {
+            bytes::Bytes::from(s.into_bytes())
+        });
         rsm.copy_log_segment_data(&md, &data).unwrap();
         rlmm.update_remote_log_segment_metadata(
             krabka_remote_storage::RemoteLogSegmentMetadataUpdate {
@@ -530,4 +502,33 @@ impl RemoteLogMetadataManager for NotReadyRlmm {
     ) -> Result<(), RemoteStorageError> {
         Ok(())
     }
+}
+
+/// Build the reader while retaining its directory guards and source log in the caller.
+macro_rules! populated_reader_fixture {
+    ($local:ident, $remote:ident, $reader:ident, $log:ident $(, $exports:ident)?) => {
+        let $local = tempfile::tempdir().unwrap();
+        let $remote = tempfile::tempdir().unwrap();
+        let ($reader, $log) = crate::remote_reader::test_support::populated_reader($local.path(), $remote.path());
+        $(let $exports = $log.tierable_segments();)?
+    };
+}
+pub(crate) use populated_reader_fixture;
+
+pub fn reader_with_metadata(
+    make_metadata: impl FnOnce() -> Arc<dyn RemoteLogMetadataManager>,
+) -> (tempfile::TempDir, RemoteReader) {
+    let remote_dir = tempfile::tempdir().unwrap();
+    let rsm: Arc<dyn RemoteStorageManager> = Arc::new(LocalTieredStorage::new(remote_dir.path()));
+    let rlmm = make_metadata();
+    let reader = RemoteReader::new(rsm, rlmm);
+    (remote_dir, reader)
+}
+
+pub fn empty_reader() -> (tempfile::TempDir, RemoteReader) {
+    reader_with_metadata(|| Arc::new(InmemoryRemoteLogMetadataManager::new()))
+}
+
+pub fn not_ready_reader() -> (tempfile::TempDir, RemoteReader) {
+    reader_with_metadata(|| Arc::new(NotReadyRlmm))
 }

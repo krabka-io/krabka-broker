@@ -267,35 +267,10 @@ fn read_u16(r: &mut Reader<'_>) -> Result<u16, CodecError> {
 #[cfg(test)]
 mod tests {
     use assert2::assert;
-    use krabka_ids::LeaderEpoch;
-    use krabka_remote_storage::{
-        RemoteLogSegmentId, RemoteLogSegmentMetadata, RemoteLogSegmentState,
-        RemotePartitionDeleteState, TopicIdPartition,
-    };
-    use uuid::Uuid;
+    use krabka_remote_storage::RemotePartitionDeleteState;
 
     use super::*;
-
-    fn tp() -> TopicIdPartition {
-        TopicIdPartition::new(Uuid::from_u128(1), "orders", 0)
-    }
-
-    fn started(id: u128, start: i64, end: i64) -> RemoteLogSegmentMetadata {
-        RemoteLogSegmentMetadata::new(
-            RemoteLogSegmentId::new(tp(), Uuid::from_u128(id)),
-            start,
-            end,
-            end + 1,
-            1,
-            100,
-            krabka_remote_storage::RemoteLogSegmentDetails::new(
-                2048,
-                RemoteLogSegmentState::CopySegmentStarted,
-                maplit::btreemap! {LeaderEpoch(0) => start},
-            ),
-        )
-        .unwrap()
-    }
+    use crate::manager::test_support::{started, tp};
 
     fn sample_snapshot() -> Snapshot {
         let dump = RlmmCacheDump {

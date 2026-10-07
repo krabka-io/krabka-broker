@@ -81,6 +81,7 @@ mod tests {
     use assert2::assert;
 
     use super::*;
+    use crate::coordinator::unified::streams::topology::test_support::example_subtopology;
 
     #[test]
     fn to_stored_topology_maps_all_fields() {
@@ -129,32 +130,7 @@ mod tests {
             stored
                 == StreamsGroupTopologyValue {
                     epoch: 9,
-                    subtopologies: vec![StoredSubtopology {
-                        subtopology_id: "0".to_string(),
-                        source_topics: vec!["in-a".to_string(), "in-b".to_string()],
-                        source_topic_regex: vec!["^orders-.*".to_string()],
-                        repartition_sink_topics: vec!["rp-1".to_string()],
-                        state_changelog_topics: vec![StoredTopicInfo {
-                            name: "store-changelog".to_string(),
-                            partitions: 4,
-                            replication_factor: 3,
-                            topic_configs: vec![(
-                                "cleanup.policy".to_string(),
-                                "compact".to_string()
-                            )],
-                        }],
-                        repartition_source_topics: vec![StoredTopicInfo {
-                            name: "rp-1".to_string(),
-                            partitions: 4,
-                            replication_factor: 3,
-                            topic_configs: vec![],
-                        }],
-                        copartition_groups: vec![StoredCopartitionGroup {
-                            source_topics: vec![0, 1],
-                            source_topic_regex: vec![0],
-                            repartition_source_topics: vec![0],
-                        }],
-                    }],
+                    subtopologies: vec![example_subtopology()],
                 }
         );
     }

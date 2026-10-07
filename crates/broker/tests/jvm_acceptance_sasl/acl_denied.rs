@@ -6,12 +6,10 @@
 //! refuses them, so each case asserts on the exception name the client logs to
 //! stderr.
 
-use std::process::Stdio;
-
 use assert2::assert;
 
 use crate::jvm_acceptance::{
-    KAFKA_IMAGE_TXN, broker0_advertised, nc_check_connectivity, plain_jaas,
+    ADMIN, ADMIN_PASS, ALICE, ALICE_PASS, KAFKA_IMAGE_TXN, nc_check_connectivity, plain_jaas,
     start_sasl_plaintext_broker_with_super_user, write_client_props,
 };
 
@@ -33,10 +31,6 @@ use crate::jvm_acceptance::{
 #[ignore = "requires Docker"]
 async fn jvm_unauthorized_produce_fails() {
     const TOPIC: &str = "foo";
-    const ADMIN: &str = "admin";
-    const ADMIN_PASS: &str = "admin-secret";
-    const ALICE: &str = "alice";
-    const ALICE_PASS: &str = "alice-secret";
     const BOB: &str = "bob";
     const BOB_PASS: &str = "bob-secret";
 
@@ -114,53 +108,21 @@ async fn jvm_unauthorized_produce_fails() {
 async fn jvm_unauthorized_consumer_fails_group_check() {
     const TOPIC: &str = "foo";
     const GROUP: &str = "cg-other";
-    const ALICE: &str = "alice";
-    const ALICE_PASS: &str = "alice-secret";
 
-    let (broker, _dir, admin_props) =
-        crate::jvm_acceptance::start_plain_acl_topic(TOPIC, ALICE, ALICE_PASS).await;
-    let admin_mount = admin_props.mount_str();
-
-    // alice: Read on Topic foo (Describe implied by Read). Deliberately
-    // no group ACL so the consumer hits GroupAuthorizationException.
-    crate::jvm_acceptance::add_console_acl(
-        KAFKA_IMAGE_TXN,
-        &[&admin_mount],
-        "User:alice",
-        &["Read"],
-        "--topic",
-        TOPIC,
-    );
+    let (broker, _dir, _admin_props) =
+        crate::jvm_acceptance::start_plain_acl_topic_with_ops(TOPIC, ALICE, ALICE_PASS, &["Read"])
+            .await;
 
     // ---- Alice consumer using --group cg-other. Expect group-denied stderr.
     let alice_props = crate::jvm_acceptance::write_plain_props(ALICE, ALICE_PASS);
     let alice_mount = alice_props.mount_str();
 
-    let out = crate::support::jvm_docker_command(
-        KAFKA_IMAGE_TXN,
-        &[&alice_mount],
-        &[
-            "kafka-console-consumer",
-            "--bootstrap-server",
-            broker0_advertised(),
-            "--topic",
-            TOPIC,
-            "--group",
-            GROUP,
-            "--from-beginning",
-            "--max-messages",
-            "1",
-            "--timeout-ms",
-            "15000",
-            "--consumer.config",
-            "/client.properties",
-        ],
-        false,
-    )
-    .stderr(Stdio::piped())
-    .stdout(Stdio::piped())
-    .output()
-    .expect("spawn alice consumer");
+    let out = crate::jvm_acceptance::denied_console_consumer(
+        &alice_mount,
+        TOPIC,
+        GROUP,
+        "spawn alice consumer",
+    );
     let stderr = String::from_utf8_lossy(&out.stderr);
     let stdout = String::from_utf8_lossy(&out.stdout);
     eprintln!(

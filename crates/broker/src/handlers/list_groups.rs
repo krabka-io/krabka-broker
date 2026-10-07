@@ -42,7 +42,6 @@ use crate::{
         GroupType, actor::GroupActorMessage, share::actor::ShareGroupActorMessage,
         streams::actor::StreamsGroupActorMessage,
     },
-    error::BrokerError,
     handlers::{
         cluster_describe_denied, coordinator_routing::any_group_partition_loading,
         group_describe_denied,
@@ -66,39 +65,38 @@ const SHARE_PROTOCOL_TYPE: &str = "share";
 /// Kafka's `StreamsGroup.PROTOCOL_TYPE`.
 const STREAMS_PROTOCOL_TYPE: &str = "streams";
 
-pub(crate) async fn handle(
-    broker: &Broker,
-    req: ListGroupsRequest,
-    _version: i16,
-    ctx: &crate::handlers::RequestContext<'_>,
-) -> Result<ListGroupsResponse, BrokerError> {
-    // Kafka's `GroupCoordinatorService.listGroups` reads every local shard and
-    // answers the load error of one that is still loading, with no groups.
-    if any_group_partition_loading(broker) {
-        let resp = ListGroupsResponse {
-            error_code: codes::COORDINATOR_LOAD_IN_PROGRESS,
-            ..Default::default()
+context_handler! {
+    ListGroupsRequest => ListGroupsResponse,
+    (broker, req, _version, ctx),
+    {
+        // Kafka's `GroupCoordinatorService.listGroups` reads every local shard and
+        // answers the load error of one that is still loading, with no groups.
+        if any_group_partition_loading(broker) {
+            let resp = ListGroupsResponse {
+                error_code: codes::COORDINATOR_LOAD_IN_PROGRESS,
+                ..Default::default()
+            };
+            return Ok(resp);
+        }
+        let candidates = collect_groups(broker).await;
+
+        let image = broker.controller.current_image();
+        let authorizer = broker.config.authorizer.as_ref();
+        // Kafka checks `Describe` on the cluster once. A principal that has it
+        // sees every group; any other principal sees only the groups it may
+        // `Describe`, and a denied group is silently omitted.
+        let cluster_describe = !cluster_describe_denied(authorizer, &image, ctx);
+        let may_describe = |group_id: &str| {
+            cluster_describe || !group_describe_denied(authorizer, &image, ctx, group_id)
         };
-        return Ok(resp);
+
+        Ok(ListGroupsResponse {
+            error_code: codes::NONE,
+            groups: filter_groups(candidates, &req, &may_describe),
+            throttle_time_ms: 0,
+            ..Default::default()
+        })
     }
-    let candidates = collect_groups(broker).await;
-
-    let image = broker.controller.current_image();
-    let authorizer = broker.config.authorizer.as_ref();
-    // Kafka checks `Describe` on the cluster once. A principal that has it
-    // sees every group; any other principal sees only the groups it may
-    // `Describe`, and a denied group is silently omitted.
-    let cluster_describe = !cluster_describe_denied(authorizer, &image, ctx);
-    let may_describe = |group_id: &str| {
-        cluster_describe || !group_describe_denied(authorizer, &image, ctx, group_id)
-    };
-
-    Ok(ListGroupsResponse {
-        error_code: codes::NONE,
-        groups: filter_groups(candidates, &req, &may_describe),
-        throttle_time_ms: 0,
-        ..Default::default()
-    })
 }
 
 /// Every group the coordinator hosts, as Kafka's `asListedGroup` renders it,
@@ -305,16 +303,14 @@ mod tests {
             .await
             .expect("handle");
 
-        let expected = ListGroupsResponse {
-            throttle_time_ms: 0,
+        let expected = unthrottled_wire!(ListGroupsResponse {
             error_code: codes::NONE,
             groups: vec![
                 group("classic-a", "", "Empty", "classic"),
                 group("consumer-a", "consumer", "Empty", "consumer"),
                 group("share-a", "share", "Empty", "share"),
             ],
-            unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(Vec::new()),
-        };
+        });
         let resp = ListGroupsResponse {
             groups: sorted(resp.groups),
             ..resp

@@ -94,8 +94,5 @@ fn isr_maintenance_keeps_caught_up_followers_and_drops_the_rest() {
     ] {
         assert2::check!(isr_maintenance_selected(member) == expected, "{label}");
     }
-    assert2::check!(!isr_proposal_changed(0, 0));
-    assert2::check!(isr_proposal_changed(1, 0));
-    assert2::check!(isr_proposal_changed(0, 1));
-    assert2::check!(isr_proposal_changed(usize::MAX, usize::MAX));
+    check_proposal_changes();
 }

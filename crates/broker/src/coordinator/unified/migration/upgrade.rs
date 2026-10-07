@@ -178,9 +178,7 @@ pub(crate) fn upgrade_pending_records(state: &ConsumerState) -> PendingRecords {
         plan.classic_group == GroupMigrationRecordAction::Tombstone;
     assert2::debug_assert!(pending.group_metadata.is_some());
     assert2::debug_assert!(pending.target_metadata.is_some());
-    assert2::debug_assert!(pending.member_metadata.len() == plan.member_count);
-    assert2::debug_assert!(pending.target_per_member.len() == plan.member_count);
-    assert2::debug_assert!(pending.current_per_member.len() == plan.member_count);
+    super::super::persistence::assert_member_record_count!(pending, plan.member_count);
     pending
 }
 
@@ -189,25 +187,13 @@ mod tests {
     use std::time::Duration;
 
     use assert2::{assert, check};
-    use bytes::{BufMut, Bytes, BytesMut};
-    use krabka_protocol::Encode;
+    use bytes::Bytes;
 
     use super::*;
-    use crate::coordinator::unified::classic_state::{ClassicGroup, Member};
-
-    /// Encodes a `ConsumerProtocolSubscription` with the leading version
-    /// prefix, as a real classic consumer client sends it in its `JoinGroup`
-    /// protocol metadata.
-    fn subscription_blob(topics: &[&str]) -> Bytes {
-        let sub = ConsumerProtocolSubscription {
-            topics: topics.iter().map(|s| (*s).to_string()).collect(),
-            ..Default::default()
-        };
-        let mut out = BytesMut::new();
-        out.put_i16(0); // protocol version-negotiation prefix
-        sub.encode(&mut out, 0).unwrap();
-        out.freeze()
-    }
+    use crate::coordinator::unified::{
+        actor::test_support::subscription_blob,
+        classic_state::{ClassicGroup, Member},
+    };
 
     fn consumer_member(id: &str, metadata: Bytes) -> Member {
         let mut m = Member::new(

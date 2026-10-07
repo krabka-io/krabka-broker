@@ -40,6 +40,58 @@ pub(super) fn give_back(
 }
 
 impl AcquisitionState {
+    /// Archive eligible runs, retaining the caller's range predicate and
+    /// choice of whether to clear acquisition. Dirty marking and SPSO movement
+    /// stay with the operation, including its behavior when no run changes.
+    pub(super) fn archive_matching(
+        &mut self,
+        mut eligible: impl FnMut(&InFlightBatch) -> bool,
+        clear_acquisition: bool,
+    ) -> bool {
+        let mut changed = false;
+        for batch in &mut self.batches {
+            if eligible(batch) {
+                batch.archive_terminal(&mut self.delivery_complete_count);
+                if clear_acquisition {
+                    batch.acquired_by = None;
+                    batch.lock_deadline = None;
+                }
+                changed = true;
+            }
+        }
+        changed
+    }
+
+    /// Split before archiving, then apply the caller's unchanged-run coalescing policy.
+    pub(super) fn archive_range(
+        &mut self,
+        first: Offset,
+        last: Offset,
+        eligible: impl FnMut(&InFlightBatch) -> bool,
+        clear_acquisition: bool,
+        coalesce_unchanged: bool,
+    ) {
+        if !self.split_valid_range(first, last) {
+            return;
+        }
+        if self.archive_matching(eligible, clear_acquisition) {
+            self.dirty = true;
+            self.advance_spso();
+        } else if coalesce_unchanged {
+            self.coalesce();
+        }
+    }
+
+    /// Carve an inclusive nonempty range without changing its delivery state.
+    pub(super) fn split_valid_range(&mut self, first: Offset, last: Offset) -> bool {
+        if first > last {
+            return false;
+        }
+        self.split_at_offset(first);
+        self.split_at_offset(last + 1);
+        true
+    }
+
     /// One past the last offset that was ever handed out: the end of the last
     /// run that is not a never-delivered `Available` or `Deferred` run.
     ///
@@ -83,6 +135,30 @@ impl AcquisitionState {
             return Err(crate::codes::INVALID_REQUEST);
         }
         Ok(Some((first.max(self.start_offset), last)))
+    }
+
+    /// Validates an acquired acknowledgement range and carves out its boundaries.
+    ///
+    /// # Errors
+    /// Returns the acknowledgement range error or `INVALID_RECORD_STATE` for another owner.
+    pub(super) fn split_acquired_range(
+        &mut self,
+        member: &str,
+        first: Offset,
+        last: Offset,
+    ) -> Result<Option<(Offset, Offset)>, i16> {
+        if first > last {
+            return Err(crate::codes::INVALID_RECORD_STATE);
+        }
+        let Some((first, last)) = self.ack_bounds(first, last)? else {
+            return Ok(None);
+        };
+        if !self.range_acquired_by(member, first, last) {
+            return Err(crate::codes::INVALID_RECORD_STATE);
+        }
+        self.split_at_offset(first);
+        self.split_at_offset(last + 1);
+        Ok(Some((first, last)))
     }
 
     /// True if and only if `member` currently holds every offset in

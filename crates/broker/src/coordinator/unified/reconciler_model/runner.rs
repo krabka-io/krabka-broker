@@ -3,10 +3,8 @@
 //! The bounds sit next to the assertions that prove a run was exhaustive,
 //! because a truncated search proves nothing and the two must move together.
 
-use stateright::Checker;
-
 use super::config::ReconModel;
-use crate::model_check::run_bfs;
+use crate::coordinator::unified::actor::reconciliation_model_support::pinned_model_runner;
 
 const MAX_STATES: usize = 200_000;
 const MAX_DEPTH: usize = 60;
@@ -21,12 +19,6 @@ const MAX_DEPTH: usize = 60;
 pub(super) const PINNED_UNIQUE_STATES_BASIC: usize = 509;
 pub(super) const PINNED_UNIQUE_STATES_WIDE: usize = 3_727;
 
-pub(super) fn run(model: ReconModel, label: &str, pinned_unique_states: usize) {
-    let checker = run_bfs(model, label, MAX_DEPTH, MAX_STATES);
-    // Pin: a changed count is a changed model, not a retuning knob.
-    assert2::assert!(
-        checker.unique_state_count() == pinned_unique_states,
-        "[{label}] unique-state count moved: the reachable set of this model changed"
-    );
-    checker.assert_properties();
+pinned_model_runner! {
+    pub(super) fn run(ReconModel); MAX_DEPTH, MAX_STATES; properties_last
 }

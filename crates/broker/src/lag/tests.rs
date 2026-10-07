@@ -36,6 +36,29 @@ const LEADER: NodeId = NodeId(1);
 const FOLLOWER: NodeId = NodeId(2);
 const OTHER_BROKER: NodeId = NodeId(3);
 
+fn lag_metadata(image: MetadataImage) -> Arc<dyn MetadataSource> {
+    Arc::new(
+        FakeMetadataSource::builder()
+            .image(image)
+            .leader(Some(LEADER))
+            .build(),
+    )
+}
+
+fn image_with_remote_leader(topic: &str) -> MetadataImage {
+    let mut image = coordinator_image();
+    image.apply(&MetadataRecord::V1Partition(PartitionRecord {
+        topic: topic.into(),
+        partition: 0,
+        leader: OTHER_BROKER,
+        replicas: vec![OTHER_BROKER],
+        isr: vec![OTHER_BROKER],
+        leader_epoch: LeaderEpoch(2),
+        ..Default::default()
+    }));
+    image
+}
+
 /// A partition backed by a real log under `dir`, registered as led by
 /// `LEADER` with `FOLLOWER` as its one in-sync follower.
 fn led_partition(dir: &Path, topic: &str, partition: i32) -> Arc<Partition> {
@@ -118,12 +141,7 @@ async fn classic_group_poller(
     high_watermark: i64,
     committed: i64,
 ) -> (LagPoller, BrokerMetrics) {
-    let metadata: Arc<dyn MetadataSource> = Arc::new(
-        FakeMetadataSource::builder()
-            .image(coordinator_image())
-            .leader(Some(LEADER))
-            .build(),
-    );
+    let metadata: Arc<dyn MetadataSource> = lag_metadata(coordinator_image());
     let partitions = partition_at_high_watermark(dir, high_watermark).await;
     let coordinator = coordinator(Arc::clone(&metadata));
     let handle = coordinator.get_or_create_classic("billing");
@@ -293,12 +311,9 @@ async fn evicting_the_worst_follower_lowers_the_max_rollup() {
 fn coordinator_image() -> MetadataImage {
     let mut image = MetadataImage::new(uuid::Uuid::nil());
     for (name, topic_id) in [(TOPIC, 1_u128), (OFFSETS_TOPIC, 2_u128)] {
-        image.apply(&MetadataRecord::V1Topic(TopicRecord {
-            name: name.into(),
-            topic_id: uuid::Uuid::from_u128(topic_id),
-            partitions: 1,
-            replication_factor: 1,
-        }));
+        image.apply(&MetadataRecord::V1Topic(
+            crate::test_support::single_partition_topic(name, uuid::Uuid::from_u128(topic_id)),
+        ));
         image.apply(&MetadataRecord::V1Partition(PartitionRecord {
             topic: name.into(),
             partition: 0,
@@ -411,12 +426,7 @@ async fn group_lag_is_the_high_watermark_minus_the_committed_offset() {
     ];
     for (group_id, kind, high_watermark, committed, expected_lag) in cases {
         let dir = tempfile::tempdir().expect("tempdir");
-        let metadata: Arc<dyn MetadataSource> = Arc::new(
-            FakeMetadataSource::builder()
-                .image(coordinator_image())
-                .leader(Some(LEADER))
-                .build(),
-        );
+        let metadata: Arc<dyn MetadataSource> = lag_metadata(coordinator_image());
         let partitions = partition_at_high_watermark(dir.path(), high_watermark).await;
         let coordinator = coordinator(Arc::clone(&metadata));
         let handle = coordinator.get_or_create_group(group_id, kind);
@@ -443,12 +453,7 @@ async fn group_lag_is_the_high_watermark_minus_the_committed_offset() {
 #[tokio::test]
 async fn deleting_a_group_releases_its_lag_series() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let metadata: Arc<dyn MetadataSource> = Arc::new(
-        FakeMetadataSource::builder()
-            .image(coordinator_image())
-            .leader(Some(LEADER))
-            .build(),
-    );
+    let metadata: Arc<dyn MetadataSource> = lag_metadata(coordinator_image());
     let partitions = partition_at_high_watermark(dir.path(), 40).await;
     let coordinator = coordinator(Arc::clone(&metadata));
     let metrics = BrokerMetrics::new();
@@ -477,23 +482,9 @@ async fn deleting_a_group_releases_its_lag_series() {
 #[tokio::test]
 async fn a_group_this_broker_does_not_coordinate_gets_no_series() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let mut image = coordinator_image();
     // The offsets partition that hosts every group moves to another broker.
-    image.apply(&MetadataRecord::V1Partition(PartitionRecord {
-        topic: OFFSETS_TOPIC.into(),
-        partition: 0,
-        leader: OTHER_BROKER,
-        replicas: vec![OTHER_BROKER],
-        isr: vec![OTHER_BROKER],
-        leader_epoch: LeaderEpoch(2),
-        ..Default::default()
-    }));
-    let metadata: Arc<dyn MetadataSource> = Arc::new(
-        FakeMetadataSource::builder()
-            .image(image)
-            .leader(Some(LEADER))
-            .build(),
-    );
+    let image = image_with_remote_leader(OFFSETS_TOPIC);
+    let metadata: Arc<dyn MetadataSource> = lag_metadata(image);
     let partitions = partition_at_high_watermark(dir.path(), 40).await;
     let coordinator = coordinator(Arc::clone(&metadata));
     let handle = coordinator.get_or_create_classic("billing");
@@ -606,24 +597,10 @@ fn a_probe_for_a_partition_the_image_dropped_has_nothing_to_ask() {
 /// carries no address for, which is the shape a probe failure takes.
 #[tokio::test]
 async fn a_watermark_this_broker_cannot_read_yields_no_series() {
-    let mut image = coordinator_image();
     // The topic's partition moves to a broker the image holds no record for,
     // so the probe cannot even be addressed.
-    image.apply(&MetadataRecord::V1Partition(PartitionRecord {
-        topic: TOPIC.into(),
-        partition: 0,
-        leader: OTHER_BROKER,
-        replicas: vec![OTHER_BROKER],
-        isr: vec![OTHER_BROKER],
-        leader_epoch: LeaderEpoch(2),
-        ..Default::default()
-    }));
-    let metadata: Arc<dyn MetadataSource> = Arc::new(
-        FakeMetadataSource::builder()
-            .image(image)
-            .leader(Some(LEADER))
-            .build(),
-    );
+    let image = image_with_remote_leader(TOPIC);
+    let metadata: Arc<dyn MetadataSource> = lag_metadata(image);
     let coordinator = coordinator(Arc::clone(&metadata));
     let handle = coordinator.get_or_create_classic("billing");
     commit_offset(&handle, 7).await;

@@ -403,16 +403,23 @@ mod tests {
         }
     }
 
+    macro_rules! filter_single_topic {
+        (($cached:ident, $responses:ident, $sent:ident), ($name:expr, $id:expr, $watermark:expr), $response_watermark:expr) => {
+            let $cached: std::collections::HashMap<_, _> =
+                [cached_entry($name, $id, 0, $watermark)]
+                    .into_iter()
+                    .collect();
+            let mut $responses = vec![topic_response("orders", 7, $response_watermark)];
+            let $sent = filter_incremental_response(&mut $responses, &$cached);
+        };
+    }
+
     /// A Fetch v13 request names topics by id alone, so the cached key it
     /// created has no name -- while the response row the broker built carries
     /// the name it resolved. The unchanged partition still has to drop out.
     #[test]
     fn an_unchanged_partition_cached_by_id_alone_is_not_resent() {
-        let cached: std::collections::HashMap<_, _> =
-            [cached_entry("", 7, 0, 42)].into_iter().collect();
-        let mut responses = vec![topic_response("orders", 7, 42)];
-
-        let sent = filter_incremental_response(&mut responses, &cached);
+        filter_single_topic!((cached, responses, sent), ("", 7, 42), 42);
 
         assert!(responses.is_empty());
         assert!(sent.is_empty());
@@ -423,11 +430,7 @@ mod tests {
     /// `finalize_incremental` would not find.
     #[test]
     fn a_changed_partition_reports_the_key_the_cache_holds() {
-        let cached: std::collections::HashMap<_, _> =
-            [cached_entry("", 7, 0, 42)].into_iter().collect();
-        let mut responses = vec![topic_response("orders", 7, 43)];
-
-        let sent = filter_incremental_response(&mut responses, &cached);
+        filter_single_topic!((cached, responses, sent), ("", 7, 42), 43);
 
         assert!(
             sent == vec![(
@@ -445,11 +448,7 @@ mod tests {
     /// carries both. The name half has to match on its own.
     #[test]
     fn a_partition_cached_by_name_alone_still_matches() {
-        let cached: std::collections::HashMap<_, _> =
-            [cached_entry("orders", 0, 0, 42)].into_iter().collect();
-        let mut responses = vec![topic_response("orders", 7, 42)];
-
-        let sent = filter_incremental_response(&mut responses, &cached);
+        filter_single_topic!((cached, responses, sent), ("orders", 0, 42), 42);
 
         assert!(responses.is_empty());
         assert!(sent.is_empty());

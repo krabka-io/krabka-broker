@@ -163,14 +163,7 @@ impl BacklogPoller {
         let broker = image
             .broker(leader)
             .ok_or_else(|| format!("unknown leader broker {leader}"))?;
-        let endpoint = broker
-            .endpoints
-            .iter()
-            .find(|endpoint| endpoint.name == self.listener_name);
-        let (host, port) = endpoint.map_or_else(
-            || (broker.host.as_str(), broker.port),
-            |e| (e.host.as_str(), e.port),
-        );
+        let (host, port) = crate::broker::registered_listener_endpoint(broker, &self.listener_name);
         let options = ConnectionOptions {
             client_id: format!("krabka-share-backlog-{}", self.node_id),
             ..ConnectionOptions::default()

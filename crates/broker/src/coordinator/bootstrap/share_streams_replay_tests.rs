@@ -60,12 +60,10 @@ async fn share_group_records_replay_into_seed() {
             .encode(),
         ),
     ];
-    let batch = RecordBatch::default();
-    let mut acc = Replayed::default();
-    for (k, v) in recs {
-        let key = persistence::parse_key(&k).unwrap();
-        apply_record(&coord, &mut acc, key, &v, &batch).unwrap();
-    }
+    super::test_support::replay_stream(
+        &coord,
+        recs.into_iter().map(|(key, value)| (key, Some(value))),
+    );
 
     // Type locked + seed reconstructed.
     assert!(coord.group_type("sg") == Some(crate::coordinator::unified::GroupType::Share));
@@ -96,8 +94,6 @@ async fn share_group_records_replay_into_seed() {
 /// seed.
 #[tokio::test]
 async fn streams_group_records_replay_into_seed() {
-    use std::collections::BTreeMap;
-
     use crate::coordinator::unified::streams::persistence as sp;
 
     let coord = super::test_support::bare_coordinator();
@@ -145,26 +141,17 @@ async fn streams_group_records_replay_into_seed() {
                 member_id: "m1".into(),
             })
             .unwrap(),
-            sp::StreamsGroupCurrentMemberAssignmentValue {
-                member_epoch: 7,
-                previous_member_epoch: 6,
-                state: sp::StreamsMemberWireState::Stable,
-                active: maplit::btreemap! {"0".to_string() => vec![0, 1]},
-                standby: BTreeMap::new(),
-                warmup: BTreeMap::new(),
-                active_pending_revocation: BTreeMap::new(),
-                standby_pending_revocation: BTreeMap::new(),
-                warmup_pending_revocation: BTreeMap::new(),
-            }
+            crate::coordinator::unified::test_support::stable_streams_assignment(
+                (7, 6),
+                maplit::btreemap! {"0".to_string() => vec![0, 1]},
+            )
             .encode(),
         ),
     ];
-    let batch = RecordBatch::default();
-    let mut acc = Replayed::default();
-    for (k, v) in recs {
-        let key = persistence::parse_key(&k).unwrap();
-        apply_record(&coord, &mut acc, key, &v, &batch).unwrap();
-    }
+    super::test_support::replay_stream(
+        &coord,
+        recs.into_iter().map(|(key, value)| (key, Some(value))),
+    );
 
     // Type locked to Streams + seed reconstructed.
     assert!(coord.group_type("stg") == Some(crate::coordinator::unified::GroupType::Streams));

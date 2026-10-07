@@ -2,18 +2,18 @@
 //! breached active segment, and the pass that applies both to a real log.
 
 use assert2::{assert, check};
-use krabka_ids::{LeaderEpoch, PartitionIndex};
+use krabka_ids::PartitionIndex;
 use krabka_log::Log;
-use krabka_remote_storage::{InmemoryRemoteLogMetadataManager, RemoteStorageManager};
 use krabka_units::{bytes, millis};
 
 use super::*;
 use crate::{
     remote_log_manager::{
-        ArchiveMode, copy_eligible,
+        ArchiveMode, test_support as fixtures,
         test_support::{
-            FakeWormArchive, archived_backends, batch, leading_partition_over, local_backends,
-            partition_snapshot, rolled_tiered_partition_with_config, synth_export, tier, tp,
+            archived_backends, batch, copy_exports, leading_partition_over, local_backends,
+            partition_log_fixture, partition_snapshot, rolled_tiered_partition_with_config,
+            synth_export, three_exports, tier, tp,
         },
     },
     time_util::now_ms,
@@ -117,45 +117,36 @@ fn the_walk_rolls_a_breached_active_segment_only_where_kafka_would() {
                 roll_active: false,
             },
         },
-        RollCase {
-            label: "copied, breached sealed segments go and the active one rolls",
-            sealed: two_sealed(),
-            covered_through: Some(19),
-            active: Some((300, 50)),
-            retention: Some(millis(1_000)),
-            retention_size: None,
-            expected: LocalRetentionDecision {
+        timed_active_case(
+            "copied, breached sealed segments go and the active one rolls",
+            two_sealed(),
+            Some(19),
+            LocalRetentionDecision {
                 delete_through: Some(20),
                 roll_active: true,
             },
-        },
-        RollCase {
-            label: "a sealed segment the tier does not hold stops the walk",
-            sealed: two_sealed(),
-            covered_through: Some(9),
-            active: Some((300, 50)),
-            retention: Some(millis(1_000)),
-            retention_size: None,
-            expected: LocalRetentionDecision {
+        ),
+        timed_active_case(
+            "a sealed segment the tier does not hold stops the walk",
+            two_sealed(),
+            Some(9),
+            LocalRetentionDecision {
                 delete_through: Some(10),
                 roll_active: false,
             },
-        },
-        RollCase {
-            label: "a sealed segment inside the window stops the walk",
-            sealed: vec![
+        ),
+        timed_active_case(
+            "a sealed segment inside the window stops the walk",
+            vec![
                 synth_export(0, 9, 100, 100),
                 synth_export(10, 19, 9_500, 100),
             ],
-            covered_through: Some(19),
-            active: Some((300, 50)),
-            retention: Some(millis(1_000)),
-            retention_size: None,
-            expected: LocalRetentionDecision {
+            Some(19),
+            LocalRetentionDecision {
                 delete_through: Some(10),
                 roll_active: false,
             },
-        },
+        ),
         RollCase {
             label: "a size debt that covers the active segment rolls it",
             sealed: two_sealed(),
@@ -217,7 +208,7 @@ fn the_walk_rolls_a_breached_active_segment_only_where_kafka_would() {
 
 #[test]
 fn local_retention_target_returns_none_when_no_finished_segments() {
-    let exports = vec![synth_export(0, 9, 100, 64), synth_export(10, 19, 200, 64)];
+    let exports = fixtures::two_exports();
     // Big enough time-pressure to delete everything, but the remote tier
     // covers nothing.
     assert!(
@@ -373,11 +364,7 @@ fn local_retention_target_equal_size_budget_keeps_all_segments() {
 
 #[test]
 fn local_retention_target_skips_unfinished_segments_and_stops() {
-    let exports = vec![
-        synth_export(0, 9, 100, 64),
-        synth_export(10, 19, 200, 64),
-        synth_export(20, 29, 300, 64),
-    ];
+    let exports = three_exports();
     // The tier holds 0..=9 and 20..=29 but not 10..=19, so its unbroken
     // cover ends at 9 and the walk stops at seg1.
     let covered = remote_covered_through(&[(0, 9), (20, 29)], 0);
@@ -510,7 +497,7 @@ fn local_retention_target_uses_already_resolved_effective_ms() {
     // pins that contract: when caller passes effective_local_ms equal to
     // the topic's `retention` (the fallback), the helper deletes the
     // same set as if `local_retention` had been set directly.
-    let exports = vec![synth_export(0, 9, 100, 64), synth_export(10, 19, 200, 64)];
+    let exports = fixtures::two_exports();
     // Caller resolved effective_local = retention = 250ms; now=1000.
     let target = local_retention_target(
         &exports,
@@ -555,8 +542,7 @@ fn local_retention_drive(
 
 #[tokio::test]
 async fn local_retention_drive_deletes_copied_segments() {
-    let log_dir = tempfile::tempdir().unwrap();
-    let remote_dir = tempfile::tempdir().unwrap();
+    let (log_dir, remote_dir) = fixtures::temporary_dirs();
     let mut log = Log::open(
         log_dir.path(),
         LogConfig {
@@ -567,10 +553,7 @@ async fn local_retention_drive_deletes_copied_segments() {
         },
     )
     .unwrap();
-    for _ in 0..12 {
-        let mut b = batch(2);
-        log.append(&mut b).unwrap();
-    }
+    fixtures::append_fixture_batches(&mut log, 12);
     log.sync().expect("flush sealed segments before archiving");
     let exports = log.tierable_segments();
     assert!(exports.len() >= 2, "test needs multiple sealed segments");
@@ -579,13 +562,10 @@ async fn local_retention_drive_deletes_copied_segments() {
     let (_rsm, rlmm) = archived_backends(remote_dir.path(), &exports).await;
 
     // Gather finished ranges the same way `local_retention_pass` would.
-    let finished: Vec<(i64, i64)> = rlmm
-        .list_remote_log_segments(&tp())
-        .unwrap()
-        .iter()
-        .filter(|md| md.state() == RemoteLogSegmentState::CopySegmentFinished)
-        .map(|md| (md.start_offset(), md.end_offset()))
-        .collect();
+    let finished: Vec<(i64, i64)> =
+        crate::remote_log_manager::local_retention::finished_segment_ranges(
+            &rlmm.list_remote_log_segments(&tp()).unwrap(),
+        );
     assert!(finished.len() == exports.len());
 
     // Drive retention with `now_ms` far in the future so every sealed
@@ -609,80 +589,61 @@ async fn local_retention_drive_deletes_copied_segments() {
     assert!(removed_again == 0);
 }
 
+// Keep the three eviction/roll oracles together while preserving each test's
+// original aborting `assert!` or accumulating `check!` behavior.
+macro_rules! evicted_local_segments {
+    ($assertion:ident, $removed:expr, $exports:expr, $partition:expr) => {{
+        $assertion!($removed == $exports.len());
+        let mut log = fixtures::partition_log_guard($partition);
+        let active_base = $exports.last().unwrap().last_offset + 1;
+        $assertion!(log.local_log_start_offset() == active_base);
+        let sealed = sealed_ranges(&mut log);
+        $assertion!(sealed == vec![(active_base, log.log_end_offset() - 1)]);
+    }};
+}
+
 #[tokio::test]
 async fn local_retention_pass_deletes_finished_segments_and_returns_count() {
-    let log_dir = tempfile::tempdir().unwrap();
-    let remote_dir = tempfile::tempdir().unwrap();
+    let (log_dir, remote_dir) = fixtures::temporary_dirs();
     let partition = short_retention_partition(log_dir.path());
-    let (exports, log_config) = partition_snapshot(&partition);
-    assert!(exports.len() >= 2, "test needs multiple sealed segments");
-
-    let (_rsm, rlmm) = archived_backends(remote_dir.path(), &exports).await;
-
-    let removed = local_retention_pass(
-        &tp(),
+    let (exports, _rsm, _rlmm, removed) = fixtures::archived_local_retention(
         &partition,
-        &exports,
-        &log_config,
-        &rlmm,
-        LocalRetentionBounds {
-            now_ms: now_ms() + 1_000_000,
-            high_watermark: partition.high_watermark().await,
-        },
+        remote_dir.path(),
         crate::api_catalog::UnstableApiVersions::Disabled,
-    );
+    )
+    .await;
 
-    assert!(removed == exports.len());
-    let mut log = partition.log.lock().expect("partition log mutex poisoned");
-    let active_base = exports.last().unwrap().last_offset + 1;
-    assert!(log.local_log_start_offset() == active_base);
     // The active segment breached the window as well, so the pass rolled
     // it for the next copy.
-    let sealed = sealed_ranges(&mut log);
-    assert!(sealed == vec![(active_base, log.log_end_offset() - 1)]);
+    evicted_local_segments!(assert, removed, exports, &partition);
 }
 
 #[tokio::test]
 async fn local_retention_still_evicts_under_a_write_once_archive() {
     let log_dir = tempfile::tempdir().unwrap();
     let partition = short_retention_partition(log_dir.path());
-    let (exports, log_config) = partition_snapshot(&partition);
-    assert!(exports.len() >= 2, "test needs multiple sealed segments");
+    let (exports, log_config) = fixtures::multiple_segment_snapshot(&partition);
 
-    let rsm: Arc<dyn RemoteStorageManager> = Arc::new(FakeWormArchive::new());
-    let rlmm: Arc<dyn RemoteLogMetadataManager> = Arc::new(InmemoryRemoteLogMetadataManager::new());
-    let copied = copy_eligible(
-        &tier(ArchiveMode::WriteOnce, &rsm, &rlmm),
-        &tp(),
-        1,
-        LeaderEpoch(0),
-        exports.clone(),
-    )
-    .await;
+    let (rsm, rlmm) = fixtures::write_once_backends();
+    let copied = copy_exports(&tier(ArchiveMode::WriteOnce, &rsm, &rlmm), exports.clone()).await;
     check!(copied == exports.len());
 
     // Archiving a segment is exactly what makes its local copy droppable.
     // A write-once remote tier does not change that: local retention
     // deletes local files and never touches the archive.
-    let removed = local_retention_pass(
-        &tp(),
+    let removed = fixtures::local_retention_at(
         &partition,
         &exports,
         &log_config,
         &rlmm,
-        LocalRetentionBounds {
-            now_ms: now_ms() + 1_000_000,
-            high_watermark: partition.high_watermark().await,
-        },
-        crate::api_catalog::UnstableApiVersions::Disabled,
-    );
+        (
+            crate::api_catalog::UnstableApiVersions::Disabled,
+            now_ms() + 1_000_000,
+        ),
+    )
+    .await;
 
-    check!(removed == exports.len());
-    let mut log = partition.log.lock().expect("partition log mutex poisoned");
-    let active_base = exports.last().unwrap().last_offset + 1;
-    check!(log.local_log_start_offset() == active_base);
-    let sealed = sealed_ranges(&mut log);
-    check!(sealed == vec![(active_base, log.log_end_offset() - 1)]);
+    evicted_local_segments!(check, removed, exports, &partition);
 }
 
 /// A tiered topic whose producers stamp records far in the future keeps
@@ -715,12 +676,10 @@ async fn future_stamped_segments_leave_the_disk_only_under_trunks_rule() {
             false,
         ),
     ] {
-        let log_dir = tempfile::tempdir().unwrap();
-        let remote_dir = tempfile::tempdir().unwrap();
-        let part_dir = crate::log_dir::partition_dir(log_dir.path(), "orders", 0);
-        std::fs::create_dir_all(&part_dir).unwrap();
-        let mut log = Log::open(
-            &part_dir,
+        partition_log_fixture!(
+            log_dir,
+            remote_dir,
+            log,
             LogConfig {
                 segment_size: bytes(256),
                 remote_storage_enable: true,
@@ -730,9 +689,8 @@ async fn future_stamped_segments_leave_the_disk_only_under_trunks_rule() {
                     ..krabka_log::RemoteTierFlags::DEFAULT
                 },
                 ..LogConfig::default()
-            },
-        )
-        .unwrap();
+            }
+        );
         // Every record claims a timestamp a million seconds ahead.
         let future = now_ms() + 1_000_000_000;
         for _ in 0..12 {
@@ -743,23 +701,8 @@ async fn future_stamped_segments_leave_the_disk_only_under_trunks_rule() {
         }
         log.sync().unwrap();
         let partition = leading_partition_over(PartitionIndex(0), log_dir.path(), log);
-        let (exports, log_config) = partition_snapshot(&partition);
-        assert!(exports.len() >= 2, "test needs multiple sealed segments");
-
-        let (_rsm, rlmm) = archived_backends(remote_dir.path(), &exports).await;
-
-        let removed = local_retention_pass(
-            &tp(),
-            &partition,
-            &exports,
-            &log_config,
-            &rlmm,
-            LocalRetentionBounds {
-                now_ms: now_ms() + 1_000_000,
-                high_watermark: partition.high_watermark().await,
-            },
-            unstable,
-        );
+        let (exports, _rsm, _rlmm, removed) =
+            fixtures::archived_local_retention(&partition, remote_dir.path(), unstable).await;
 
         check!(
             removed == if evicted { exports.len() } else { 0 },
@@ -799,7 +742,7 @@ async fn pass_over(
         },
         UnstableApiVersions::Disabled,
     );
-    let mut log = partition.log.lock().expect("partition log mutex poisoned");
+    let mut log = fixtures::partition_log_guard(partition);
     PassOutcome {
         removed,
         sealed: sealed_ranges(&mut log),
@@ -819,20 +762,17 @@ async fn pass_over(
 // idle.
 #[tokio::test]
 async fn a_breached_active_segment_rolls_then_tiers_then_leaves_the_disk() {
-    let log_dir = tempfile::tempdir().unwrap();
-    let remote_dir = tempfile::tempdir().unwrap();
-    let part_dir = crate::log_dir::partition_dir(log_dir.path(), "orders", 0);
-    std::fs::create_dir_all(&part_dir).unwrap();
-    let mut log = Log::open(
-        &part_dir,
+    partition_log_fixture!(
+        log_dir,
+        remote_dir,
+        log,
         LogConfig {
             remote_storage_enable: true,
             local_retention: Some(millis(1)),
             retention: None,
             ..LogConfig::default()
-        },
-    )
-    .unwrap();
+        }
+    );
     for _ in 0..3 {
         log.append(&mut batch(2)).unwrap();
     }
@@ -851,18 +791,11 @@ async fn a_breached_active_segment_rolls_then_tiers_then_leaves_the_disk() {
     );
 
     let exports = {
-        let mut log = partition.log.lock().expect("partition log mutex poisoned");
+        let mut log = fixtures::partition_log_guard(&partition);
         log.sync().expect("flush the rolled segment");
         log.tierable_segments()
     };
-    let copied = copy_eligible(
-        &tier(ArchiveMode::Mutable, &rsm, &rlmm),
-        &tp(),
-        1,
-        LeaderEpoch(0),
-        exports,
-    )
-    .await;
+    let copied = copy_exports(&tier(ArchiveMode::Mutable, &rsm, &rlmm), exports).await;
     check!(copied == 1, "the next copy uploads the rolled segment");
 
     check!(
@@ -899,8 +832,7 @@ async fn the_roll_waits_for_the_high_watermark_and_for_the_walk_to_reach_it() {
             false,
         ),
     ] {
-        let log_dir = tempfile::tempdir().unwrap();
-        let remote_dir = tempfile::tempdir().unwrap();
+        let (log_dir, remote_dir) = fixtures::temporary_dirs();
         let partition = rolled_tiered_partition_with_config(
             log_dir.path(),
             LogConfig {
@@ -914,7 +846,7 @@ async fn the_roll_waits_for_the_high_watermark_and_for_the_walk_to_reach_it() {
         let (exports, log_config) = partition_snapshot(&partition);
         let (_rsm, rlmm) = archived_backends(remote_dir.path(), &exports).await;
         let active_before = {
-            let mut log = partition.log.lock().expect("partition log mutex poisoned");
+            let mut log = fixtures::partition_log_guard(&partition);
             if rolled_since {
                 assert!(log.roll().unwrap());
                 log.append(&mut batch(2)).unwrap();
@@ -952,5 +884,22 @@ async fn the_roll_waits_for_the_high_watermark_and_for_the_walk_to_reach_it() {
             (active_after != active_before) == rolls,
             "{name}: active segment {active_before:?} -> {active_after:?}"
         );
+    }
+}
+
+fn timed_active_case(
+    label: &'static str,
+    sealed: Vec<SegmentExport>,
+    covered_through: Option<i64>,
+    expected: LocalRetentionDecision,
+) -> RollCase {
+    RollCase {
+        label,
+        sealed,
+        covered_through,
+        active: Some((300, 50)),
+        retention: Some(millis(1_000)),
+        retention_size: None,
+        expected,
     }
 }

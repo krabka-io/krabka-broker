@@ -711,7 +711,10 @@ mod tests {
             PrivilegedPhase,
         },
         ocsf::ProductInfo,
-        spool::test_support::{ROOMY_CAP, chained_record},
+        spool::test_support::{
+            ROOMY_CAP, chained_record, check_empty_file, reopen_after_losses, seeded_spool,
+            spool_with_losses,
+        },
     };
 
     #[test]
@@ -804,12 +807,7 @@ mod tests {
                 .unwrap()
         );
         check!((spool.bytes.0, spool.count.0) == (u64::MAX, 0));
-        check!(
-            std::fs::metadata(dir.path().join(SPOOL_FILE))
-                .unwrap()
-                .len()
-                == 0
-        );
+        check_empty_file(dir.path());
     }
 
     #[test]
@@ -872,12 +870,9 @@ mod tests {
     #[test]
     fn open_heals_torn_tail_frame() {
         use std::io::Write;
-        let dir = tempfile::tempdir().unwrap();
-        let r0 = chained_record(0, &GENESIS_HEAD, b"good");
-        {
-            let mut s = Spool::open(dir.path(), ROOMY_CAP).unwrap();
-            s.append(&r0).unwrap();
-        }
+        let (dir, r0, spool) = seeded_spool(b"good");
+        drop(spool);
+
         // Simulate a crash mid-append: a length prefix claiming 100 bytes, only 3 follow.
         {
             let mut f = std::fs::OpenOptions::new()
@@ -901,13 +896,9 @@ mod tests {
     #[test]
     fn open_reports_whether_it_healed_a_torn_tail() {
         use std::io::Write;
-        let dir = tempfile::tempdir().unwrap();
+        let (dir, _r0, spool) = seeded_spool(b"good");
+        drop(spool);
         let spool_file = dir.path().join(SPOOL_FILE);
-        let r0 = chained_record(0, &GENESIS_HEAD, b"good");
-        {
-            let mut s = Spool::open(dir.path(), ROOMY_CAP).unwrap();
-            s.append(&r0).unwrap();
-        }
 
         let intact_len = std::fs::metadata(&spool_file).unwrap().len();
         {
@@ -1009,10 +1000,7 @@ mod tests {
 
     #[test]
     fn pending_loss_survives_reopen_and_reconciles_a_durable_marker() {
-        let dir = tempfile::tempdir().unwrap();
-        let spool = Spool::open(dir.path(), ByteSize::from_bytes(0)).unwrap();
-        let losses = spool.pending_losses();
-        losses.add(3);
+        let (dir, spool, losses) = spool_with_losses(ByteSize::from_bytes(0), 3);
         losses.persist().unwrap();
         let batch = losses.snapshot().unwrap();
         drop(losses);
@@ -1058,10 +1046,7 @@ mod tests {
 
     #[test]
     fn commit_and_persist_pending_losses() {
-        let dir = tempfile::tempdir().unwrap();
-        let spool = Spool::open(dir.path(), ROOMY_CAP).unwrap();
-        let losses = spool.pending_losses();
-        losses.add(5);
+        let (dir, spool, losses) = spool_with_losses(ROOMY_CAP, 5);
         losses.persist().unwrap();
         let batch = losses.snapshot().unwrap();
         let wrong_batch = AuditLosses {
@@ -1074,18 +1059,13 @@ mod tests {
         losses.commit(batch);
         check!(losses.count() == 0);
 
-        drop(losses);
-        drop(spool);
-        let reopened = Spool::open(dir.path(), ROOMY_CAP).unwrap();
+        let reopened = reopen_after_losses(dir.path(), spool, losses);
         check!(reopened.pending_losses().count() == 0);
     }
 
     #[test]
     fn reconcile_requires_matching_class_and_generation() {
-        let dir = tempfile::tempdir().unwrap();
-        let spool = Spool::open(dir.path(), ROOMY_CAP).unwrap();
-        let losses = spool.pending_losses();
-        losses.add(4);
+        let (_dir, _spool, losses) = spool_with_losses(ROOMY_CAP, 4);
         let generation = losses.snapshot().unwrap().generation;
 
         let payload =
@@ -1107,10 +1087,7 @@ mod tests {
     /// is neither settled by that marker nor left in its generation.
     #[test]
     fn commit_carries_a_concurrent_loss_into_a_fresh_generation() {
-        let dir = tempfile::tempdir().unwrap();
-        let spool = Spool::open(dir.path(), ROOMY_CAP).unwrap();
-        let losses = spool.pending_losses();
-        losses.add(3);
+        let (dir, spool, losses) = spool_with_losses(ROOMY_CAP, 3);
         let batch = losses.persist_with(Ok).unwrap().unwrap();
         check!(
             losses.state()
@@ -1132,9 +1109,7 @@ mod tests {
         check!(losses.state() == carried);
         check!(losses.snapshot() == Some(carried));
 
-        drop(losses);
-        drop(spool);
-        let reopened = Spool::open(dir.path(), ROOMY_CAP).unwrap();
+        let reopened = reopen_after_losses(dir.path(), spool, losses);
         check!(reopened.pending_losses().state() == carried);
     }
 
@@ -1143,10 +1118,7 @@ mod tests {
     /// and a later reopen does not settle the remainder a second time.
     #[test]
     fn reconcile_settles_only_the_markers_count() {
-        let dir = tempfile::tempdir().unwrap();
-        let mut spool = Spool::open(dir.path(), ROOMY_CAP).unwrap();
-        let losses = spool.pending_losses();
-        losses.add(3);
+        let (dir, mut spool, losses) = spool_with_losses(ROOMY_CAP, 3);
         let batch = losses.snapshot().unwrap();
         losses.persist().unwrap();
         losses.add(1);
@@ -1200,10 +1172,7 @@ mod tests {
 
     #[test]
     fn abort_replay_clears_poison_and_clear_poison_handles_absent() {
-        let dir = tempfile::tempdir().unwrap();
-        let record = chained_record(0, &GENESIS_HEAD, b"data");
-        let mut spool = Spool::open(dir.path(), ROOMY_CAP).unwrap();
-        spool.append(&record).unwrap();
+        let (dir, record, spool) = seeded_spool(b"data");
 
         check!(spool.clear_replay_poison().is_ok());
 
@@ -1233,29 +1202,18 @@ mod tests {
 
     #[test]
     fn replayed_spool_is_truncated_on_reopen() {
-        let dir = tempfile::tempdir().unwrap();
-        let record = chained_record(0, &GENESIS_HEAD, b"hello");
-        let mut spool = Spool::open(dir.path(), ROOMY_CAP).unwrap();
-        spool.append(&record).unwrap();
+        let (dir, record, mut spool) = seeded_spool(b"hello");
         spool.commit_replay(&record).unwrap();
         drop(spool);
 
         let reopened = Spool::open(dir.path(), ROOMY_CAP).unwrap();
         check!(reopened.size() == ByteSize::ZERO);
-        check!(
-            std::fs::metadata(dir.path().join(SPOOL_FILE))
-                .unwrap()
-                .len()
-                == 0
-        );
+        check_empty_file(dir.path());
     }
 
     #[test]
     fn unread_records_rejects_replay_offset_past_valid_bytes() {
-        let dir = tempfile::tempdir().unwrap();
-        let record = chained_record(0, &GENESIS_HEAD, b"valid");
-        let mut spool = Spool::open(dir.path(), ROOMY_CAP).unwrap();
-        spool.append(&record).unwrap();
+        let (dir, _record, spool) = seeded_spool(b"valid");
         let valid_len = spool.size().bytes_u64();
         drop(spool);
 
@@ -1270,10 +1228,7 @@ mod tests {
     #[cfg(unix)]
     fn clear_replay_poison_propagates_permission_denied() {
         use std::os::unix::fs::PermissionsExt;
-        let dir = tempfile::tempdir().unwrap();
-        let record = chained_record(0, &GENESIS_HEAD, b"data");
-        let mut spool = Spool::open(dir.path(), ROOMY_CAP).unwrap();
-        spool.append(&record).unwrap();
+        let (dir, record, spool) = seeded_spool(b"data");
         spool.begin_replay(&record).unwrap();
 
         std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o555)).unwrap();

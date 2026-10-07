@@ -4,14 +4,19 @@ use std::collections::{HashMap, HashSet};
 
 use assert2::check;
 use bytes::Bytes;
-use krabka_log::Offset;
 use tokio::sync::oneshot;
 
-use crate::coordinator::unified::{
-    actor::{GroupActorMessage, test_support::make_coordinator},
-    classic_state::{ClassicGroup, OffsetEntry},
-    group::{CoordinatorGroup, GroupKind},
-    persistence::{Key, parse_key},
+use crate::coordinator::{
+    test_support::{offset_entry, parsed_offset_records},
+    unified::{
+        actor::{
+            GroupActorMessage,
+            test_support::{make_coordinator, rpc},
+        },
+        classic_state::{ClassicGroup, OffsetEntry},
+        group::{CoordinatorGroup, GroupKind},
+        persistence::Key,
+    },
 };
 
 /// The id of the deleted `orders` topic.
@@ -21,12 +26,8 @@ const NEW_ORDERS: uuid::Uuid = uuid::Uuid::from_u128(2);
 
 fn entry(offset: i64, topic_id: Option<uuid::Uuid>) -> OffsetEntry {
     OffsetEntry {
-        offset: Offset(offset),
-        leader_epoch: -1,
-        metadata: String::new(),
-        commit_timestamp_ms: 0,
-        expire_timestamp_ms: None,
         topic_id,
+        ..offset_entry(offset)
     }
 }
 
@@ -133,27 +134,10 @@ async fn deleting_a_topic_tombstones_its_offsets_in_the_group() {
             .unwrap();
         check!(deleted.await.unwrap() == row.expected_reply, "{}", row.name);
 
-        let records: Vec<(Key, Option<Bytes>)> = log
-            .batches()
-            .await
-            .iter()
-            .flat_map(|batch| &batch.records)
-            .map(|record| {
-                (
-                    parse_key(record.key.as_ref().unwrap()).unwrap(),
-                    record.value.clone(),
-                )
-            })
-            .collect();
+        let records = parsed_offset_records(&log.batches().await);
         check!(records == row.expected_records, "{}", row.name);
 
-        let (reply, offsets) = oneshot::channel();
-        handle
-            .tx
-            .send(GroupActorMessage::FetchOffsets { reply })
-            .await
-            .unwrap();
-        let offsets = offsets.await.unwrap();
+        let offsets = rpc::fetch_offsets(&handle).await;
         check!(
             offsets.committed.into_keys().collect::<HashSet<_>>() == row.expected_committed,
             "{}",

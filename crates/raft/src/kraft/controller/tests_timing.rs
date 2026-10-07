@@ -277,13 +277,9 @@ async fn sleep_until_opt_completes_for_past_deadline() {
 /// directory is a third.
 #[test]
 fn inbound_fetch_keys_observers_by_directory_id() {
-    use crate::kraft::{
-        controller::test_support::{build_engine_only, elect_single_voter_engine},
-        transport::wire::PeerRequest,
-    };
+    use crate::kraft::{controller::test_support::build_engine_only, transport::wire::PeerRequest};
 
-    let (mut engine, _dir) = build_engine_only(NodeId(1), &[NodeId(1)]);
-    elect_single_voter_engine(&mut engine);
+    let (mut engine, _dir) = super::test_support::single_voter_leader_engine();
     // A fetch at the engine's very first millisecond would read as "never".
     engine.clock_base = Instant::now() - Duration::from_millis(50);
     let current_leader_epoch = i32::try_from(engine.core.quorum_state().leader_epoch).unwrap();

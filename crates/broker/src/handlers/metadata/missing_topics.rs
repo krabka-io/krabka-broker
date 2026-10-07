@@ -24,9 +24,7 @@
 //! answered 3 among the invalid names.
 
 use krabka_log::topic_name::validate_topic_name;
-use krabka_protocol::{
-    owned::metadata_response::MetadataResponseTopic, primitives::uuid::Uuid as WireUuid,
-};
+use krabka_protocol::owned::metadata_response::MetadataResponseTopic;
 
 use crate::{broker::Broker, codes, handlers::RequestContext, topic_creator::ForwardedIdentity};
 
@@ -49,16 +47,13 @@ pub(super) fn missing_topic_rows(
     }
     names
         .iter()
-        .map(|name| MetadataResponseTopic {
-            error_code: if validate_topic_name(name).is_ok() {
+        .map(|name| {
+            let error_code = if validate_topic_name(name).is_ok() {
                 codes::UNKNOWN_TOPIC_OR_PARTITION
             } else {
                 codes::INVALID_TOPIC_EXCEPTION
-            },
-            name: Some((*name).to_owned()),
-            topic_id: WireUuid::ZERO,
-            is_internal: crate::internal_topics::is_internal_topic(&broker.config, name),
-            ..Default::default()
+            };
+            super::topic_error_row(broker, name, error_code)
         })
         .collect()
 }

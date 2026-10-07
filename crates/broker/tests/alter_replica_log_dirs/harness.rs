@@ -23,18 +23,10 @@ pub(crate) async fn wait_all_partitions(handle: &BrokerHandle, topic: &str, n: i
 }
 
 pub(crate) fn count_topic_dirs(dir: &std::path::Path, topic: &str) -> usize {
-    let prefix = format!("{topic}-");
-    let Ok(rd) = std::fs::read_dir(dir) else {
+    let Ok(entries) = std::fs::read_dir(dir) else {
         return 0;
     };
-    rd.filter_map(Result::ok)
-        .filter(|e| e.file_type().is_ok_and(|t| t.is_dir()))
-        .filter(|e| {
-            e.file_name()
-                .to_str()
-                .is_some_and(|n| n.starts_with(&prefix) && !n.ends_with("-future"))
-        })
-        .count()
+    crate::support::storage::count_partition_dirs(entries, topic, false)
 }
 
 /// Wait until `DescribeLogDirs` reports both partitions of `topic`

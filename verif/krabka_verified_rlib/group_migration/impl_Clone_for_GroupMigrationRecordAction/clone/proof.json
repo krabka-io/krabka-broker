@@ -4,7 +4,7 @@
     "Coma": {
       "vc_clone_GroupMigrationRecordAction": {
         "prover": "alt-ergo",
-        "time": 0.012
+        "time": 0.008
       }
     }
   }

@@ -552,13 +552,11 @@ mod tests {
             let dir = tempfile::tempdir().expect("tempdir");
             let part_dir = crate::log_dir::partition_dir(dir.path(), "orders", 0);
             std::fs::create_dir_all(&part_dir).expect("partition dir");
-            let partition = crate::broker::spawn_partition(
-                "orders".into(),
-                krabka_ids::PartitionIndex(0),
-                dir.path().to_path_buf(),
+            let partition = crate::test_support::spawn_standalone_partition(
+                dir.path(),
+                "orders",
+                0,
                 krabka_log::Log::open(&part_dir, krabka_log::LogConfig::default()).expect("log"),
-                crate::log_dir_status::LogDirRegistry::default(),
-                Arc::new(crate::producer_state::ProducerState::new()),
                 false,
             );
             let isr: Vec<NodeId> = case.isr.iter().copied().map(NodeId).collect();

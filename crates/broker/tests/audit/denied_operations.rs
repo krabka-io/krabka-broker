@@ -7,12 +7,14 @@
 //! records why it stops short of asserting the `AuthorizationDenied` record.
 
 use krabka_broker::coordinator::AUDIT_TOPIC;
-use krabka_protocol::owned::{
-    create_topics_request::{CreatableTopic, CreateTopicsRequest},
-    fetch_request::{FetchPartition, FetchRequest, FetchTopic},
-};
 
-use crate::support;
+use crate::{
+    support,
+    support::{
+        fetch::{fetch_partition, single_partition_fetch},
+        topics::{creatable_topic, create_topic_request},
+    },
+};
 
 /// Verifies that the authorizer-decorator path denies an unauthorized
 /// operation.
@@ -46,21 +48,15 @@ use crate::support;
 #[tokio::test]
 async fn denied_operation_returns_topic_authorization_failed() {
     // Start a broker with a deny-all authorizer.
-    let p = support::start_with_deny_all_authz().await;
+    let p = Box::pin(support::start_with_deny_all_authz()).await;
 
     // Attempt a create that will be denied.
     let resp = p
         .client
-        .send(CreateTopicsRequest {
-            topics: vec![CreatableTopic {
-                name: "denied-topic".into(),
-                num_partitions: 1,
-                replication_factor: 1,
-                ..Default::default()
-            }],
-            timeout_ms: 5_000,
-            ..Default::default()
-        })
+        .send(create_topic_request(
+            creatable_topic("denied-topic", 1, 1),
+            5_000,
+        ))
         .await
         .unwrap();
 
@@ -77,23 +73,12 @@ async fn denied_operation_returns_topic_authorization_failed() {
     let topic_id = support::topic_id_for(&p.client, AUDIT_TOPIC).await;
     let fr = p
         .client
-        .send(FetchRequest {
-            max_wait_ms: 100,
-            min_bytes: 0,
-            max_bytes: 1 << 20,
-            topics: vec![FetchTopic {
-                topic: AUDIT_TOPIC.into(),
-                topic_id,
-                partitions: vec![FetchPartition {
-                    partition: 0,
-                    fetch_offset: 0,
-                    partition_max_bytes: 1 << 20,
-                    ..Default::default()
-                }],
-                ..Default::default()
-            }],
-            ..Default::default()
-        })
+        .send(single_partition_fetch(
+            AUDIT_TOPIC,
+            topic_id,
+            fetch_partition(0, 0, 1 << 20),
+            (100, 0, 1 << 20),
+        ))
         .await
         .unwrap();
     // The broker responded to the Fetch request without crashing.

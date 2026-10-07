@@ -4,7 +4,7 @@
     "Coma": {
       "vc_transaction_marker_equal_epoch_fenced": {
         "prover": "alt-ergo",
-        "time": 0.007
+        "time": 0.012
       }
     }
   }

@@ -17,17 +17,20 @@
 //! for the two-step `MEMBER_ID_REQUIRED` flow and the
 //! `INITIAL_REBALANCE_DELAY` wait, and `unit.rs`, for the `SyncGroup` shape.
 
+mod support;
+
 use std::time::Duration;
 
 use assert2::{assert, check};
 use bytes::Bytes;
-use krabka_broker::{Broker, BrokerConfig};
-use krabka_client_core::Client;
 use krabka_protocol::owned::{
     describe_groups_request::DescribeGroupsRequest,
-    describe_groups_response::DescribeGroupsResponse,
-    join_group_request::{JoinGroupRequest, JoinGroupRequestProtocol},
-    sync_group_request::{SyncGroupRequest, SyncGroupRequestAssignment},
+    describe_groups_response::DescribeGroupsResponse, join_group_request::JoinGroupRequest,
+};
+
+use crate::support::{
+    classic::{classic_join_request, classic_sync_request, join_protocol, sync_assignment},
+    client::connect_owned,
 };
 
 fn assert_described_group(resp: &DescribeGroupsResponse) {
@@ -99,29 +102,21 @@ const REAL_KAFKA_ASSIGNMENT: &[u8] = &[
     0x00, 0x00, 0x00, 0x00, 0x01, 0xff, 0xff, 0xff, 0xff,
 ];
 
-async fn start_broker() -> (krabka_broker::BrokerHandle, String, tempfile::TempDir) {
-    let tempdir = tempfile::tempdir().expect("tempdir");
-    let config = BrokerConfig::for_tests(tempdir.path().to_path_buf());
-    let handle = Broker::start(config).await.expect("broker must start");
-    handle.wait_until_group_coordinator_ready().await;
-    let bootstrap = handle.listen_addr().to_string();
-    (handle, bootstrap, tempdir)
-}
+use crate::support::start_group_coordinator as start_broker;
 
 fn join_request(group_id: &str, member_id: &str, metadata: &'static [u8]) -> JoinGroupRequest {
     JoinGroupRequest {
-        group_id: group_id.to_string(),
-        session_timeout_ms: 10_000,
-        rebalance_timeout_ms: 30_000,
-        member_id: member_id.to_string(),
         group_instance_id: None,
-        protocol_type: "consumer".to_string(),
-        protocols: vec![JoinGroupRequestProtocol {
-            name: "range".to_string(),
-            metadata: Bytes::from_static(metadata),
-            ..Default::default()
-        }],
-        ..Default::default()
+        ..classic_join_request(
+            group_id.to_string(),
+            member_id.to_string(),
+            (10_000, 30_000),
+            "consumer".to_string(),
+            vec![join_protocol(
+                "range".to_string(),
+                Bytes::from_static(metadata),
+            )],
+        )
     }
 }
 
@@ -133,12 +128,7 @@ fn join_request(group_id: &str, member_id: &str, metadata: &'static [u8]) -> Joi
 async fn describe_groups_reports_member_metadata_and_protocol_name() {
     let (handle, bootstrap, _tempdir) = start_broker().await;
     let group_id = "cg-describe-metadata";
-    let client = Client::builder()
-        .bootstrap(bootstrap)
-        .client_id("describe-metadata-member")
-        .build()
-        .await
-        .expect("client build");
+    let client = connect_owned(bootstrap, "describe-metadata-member", "client build").await;
 
     // ── JoinGroup round 1: empty member_id → MEMBER_ID_REQUIRED (79). ──
     let r1 = client
@@ -181,19 +171,17 @@ async fn describe_groups_reports_member_metadata_and_protocol_name() {
 
     // ── SyncGroup: leader supplies its own assignment. ──
     let r3 = client
-        .send(SyncGroupRequest {
-            group_id: group_id.to_string(),
+        .send(classic_sync_request(
+            group_id.to_string(),
             generation_id,
-            member_id: member_id.clone(),
-            protocol_type: Some("consumer".into()),
-            protocol_name: Some("range".into()),
-            assignments: vec![SyncGroupRequestAssignment {
-                member_id: member_id.clone(),
-                assignment: Bytes::from_static(ASSIGN),
-                ..Default::default()
-            }],
-            ..Default::default()
-        })
+            member_id.clone(),
+            Some("consumer".into()),
+            Some("range".into()),
+            vec![sync_assignment(
+                member_id.clone(),
+                Bytes::from_static(ASSIGN),
+            )],
+        ))
         .await
         .expect("SyncGroup must round-trip");
     assert!(
@@ -233,12 +221,7 @@ async fn describe_groups_reports_member_metadata_and_protocol_name() {
 async fn describe_groups_matches_real_kafka_range_subscription() {
     let (handle, bootstrap, _tempdir) = start_broker().await;
     let group_id = "cg-describe-real-kafka";
-    let client = Client::builder()
-        .bootstrap(bootstrap)
-        .client_id("describe-real-kafka-member")
-        .build()
-        .await
-        .expect("client build");
+    let client = connect_owned(bootstrap, "describe-real-kafka-member", "client build").await;
 
     // JoinGroup two-step, supplying the REAL captured subscription bytes.
     let r1 = client
@@ -270,19 +253,17 @@ async fn describe_groups_matches_real_kafka_range_subscription() {
 
     // SyncGroup: leader supplies the REAL captured assignment bytes.
     let r3 = client
-        .send(SyncGroupRequest {
-            group_id: group_id.to_string(),
+        .send(classic_sync_request(
+            group_id.to_string(),
             generation_id,
-            member_id: member_id.clone(),
-            protocol_type: Some("consumer".into()),
-            protocol_name: Some("range".into()),
-            assignments: vec![SyncGroupRequestAssignment {
-                member_id: member_id.clone(),
-                assignment: Bytes::from_static(REAL_KAFKA_ASSIGNMENT),
-                ..Default::default()
-            }],
-            ..Default::default()
-        })
+            member_id.clone(),
+            Some("consumer".into()),
+            Some("range".into()),
+            vec![sync_assignment(
+                member_id.clone(),
+                Bytes::from_static(REAL_KAFKA_ASSIGNMENT),
+            )],
+        ))
         .await
         .expect("SyncGroup must round-trip");
     assert!(

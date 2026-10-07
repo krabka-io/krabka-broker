@@ -209,6 +209,45 @@ mod tests {
         JavaPattern::compile(source).unwrap_or_else(|error| panic!("{source}: {error}"))
     }
 
+    fn check_matches<'a>(
+        cases: impl IntoIterator<Item = (&'a str, &'a str, bool)>,
+        debug_names: bool,
+    ) {
+        for (source, input, expected) in cases {
+            let context = if debug_names {
+                format!("{source:?} against {input:?}")
+            } else {
+                format!("{source} against {input}")
+            };
+            check!(
+                pattern(source).matches(input).ok() == Some(expected),
+                "{context}"
+            );
+        }
+    }
+
+    fn check_replacements<'a>(
+        cases: impl IntoIterator<Item = (&'a str, &'a str, &'a str, &'a str)>,
+        all: bool,
+        include_replacement: bool,
+    ) {
+        for (source, input, replacement, expected) in cases {
+            let context = if include_replacement {
+                format!("{source} on {input} with {replacement}")
+            } else {
+                format!("{source} on {input}")
+            };
+            check!(
+                pattern(source)
+                    .replace(input, replacement, all)
+                    .ok()
+                    .as_deref()
+                    == Some(expected),
+                "{context}"
+            );
+        }
+    }
+
     /// `Matcher.matches()` finds a whole-input match by backtracking, which a
     /// leftmost-first search does not.
     #[test]
@@ -222,12 +261,7 @@ mod tests {
             ("ali", "alice", false),
             ("ali.*", "alice", true),
         ];
-        for (source, input, expected) in cases {
-            check!(
-                pattern(source).matches(input).ok() == Some(expected),
-                "{source} against {input}"
-            );
-        }
+        check_matches(cases, false);
     }
 
     /// A search that runs past the engine's backtrack limit is an error. Java
@@ -259,35 +293,21 @@ mod tests {
             ("a", "", "|", ""),
             ("b*", "aé", "-", "-a-é-"),
         ];
-        for (source, input, replacement, expected) in cases {
-            check!(
-                pattern(source)
-                    .replace(input, replacement, true)
-                    .ok()
-                    .as_deref()
-                    == Some(expected),
-                "{source} on {input}"
-            );
-        }
+        check_replacements(cases, true, false);
     }
 
     /// `replaceFirst` stops after the first match, an empty one included.
     #[test]
     fn replace_first_stops_after_the_first_match_even_when_it_is_empty() {
         // (pattern, input, replacement, result)
-        for (source, input, replacement, expected) in [
-            ("(.*)", "alice", "$1x", "alicex"),
-            ("b*", "abc", "-", "-abc"),
-        ] {
-            check!(
-                pattern(source)
-                    .replace(input, replacement, false)
-                    .ok()
-                    .as_deref()
-                    == Some(expected),
-                "{source} on {input}"
-            );
-        }
+        check_replacements(
+            [
+                ("(.*)", "alice", "$1x", "alicex"),
+                ("b*", "abc", "-", "-abc"),
+            ],
+            false,
+            false,
+        );
     }
 
     /// Java reads `\w`, `\d`, `\s` and `\b` as ASCII unless `(?U)` asks for
@@ -345,12 +365,7 @@ mod tests {
             ("a[.]b", "a.b", true),
             ("a\\.b", "axb", false),
         ];
-        for (source, input, expected) in cases {
-            check!(
-                pattern(source).matches(input).ok() == Some(expected),
-                "{source:?} against {input:?}"
-            );
-        }
+        check_matches(cases, true);
     }
 
     /// `(?i)` folds ASCII case only, and `(?u)`, or `(?U)`, adds Unicode case.
@@ -499,12 +514,7 @@ mod tests {
             ("(a)\\1", "aa", true),
             ("(a)\\1", "aA", false),
         ];
-        for (source, input, expected) in cases {
-            check!(
-                pattern(source).matches(input).ok() == Some(expected),
-                "{source:?} against {input:?}"
-            );
-        }
+        check_matches(cases, true);
     }
 
     /// A `\Q...\E` is read out before the pattern is, as Java's `RemoveQEQuoting`
@@ -633,12 +643,7 @@ mod tests {
             ("(?i)(a)((b))\\3\\2\\1", "aBBBA", true),
             ("(?i)(a)((b))\\3\\2\\1", "aBbBa", true),
         ];
-        for (source, input, expected) in cases {
-            check!(
-                pattern(source).matches(input).ok() == Some(expected),
-                "{source:?} against {input:?}"
-            );
-        }
+        check_matches(cases, true);
     }
 
     /// Under `(?iu)` a class member is the set that Java's predicates accept, and not what
@@ -807,12 +812,7 @@ mod tests {
             ("(?iu:[a-z])[A-Z]", "aa", false),
             ("(?iu:[a-z])[A-Z]", "\u{212a}a", false),
         ];
-        for (source, input, expected) in cases {
-            check!(
-                pattern(source).matches(input).ok() == Some(expected),
-                "{source:?} against {input:?}"
-            );
-        }
+        check_matches(cases, true);
     }
 
     /// The surrogates are not chars, so a range that has them in the middle, or at an end, holds
@@ -846,12 +846,7 @@ mod tests {
             ("(?iu)[^a\\x{D800}-\\x{DFFF}]", "a", false),
             ("(?iu)[^a\\x{D800}-\\x{DFFF}]", "b", true),
         ];
-        for (source, input, expected) in cases {
-            check!(
-                pattern(source).matches(input).ok() == Some(expected),
-                "{source:?} against {input:?}"
-            );
-        }
+        check_matches(cases, true);
     }
 
     /// The POSIX classes are ASCII unless `(?U)` is on, when they are the Unicode properties, and
@@ -1038,12 +1033,7 @@ mod tests {
             ("(?iU)\\p{Punct}", "\u{a1}", true),
             ("(?iU)\\p{Graph}", "\u{212a}", true),
         ];
-        for (source, input, expected) in cases {
-            check!(
-                pattern(source).matches(input).ok() == Some(expected),
-                "{source:?} against {input:?}"
-            );
-        }
+        check_matches(cases, true);
     }
 
     /// Under `(?iu)` a literal matches the code points with its key, `Character.toLowerCase` of
@@ -1102,12 +1092,7 @@ mod tests {
             ("(?iu:i)i", "\u{130}i", true),
             ("(?iu:i)i", "\u{130}I", false),
         ];
-        for (source, input, expected) in cases {
-            check!(
-                pattern(source).matches(input).ok() == Some(expected),
-                "{source:?} against {input:?}"
-            );
-        }
+        check_matches(cases, true);
     }
 
     /// Java reads a literal in a run of two or more as a slice, which also matches `ẞ` for `ß`,
@@ -1159,12 +1144,7 @@ mod tests {
             ("(?iu)\u{1e9e}", "\u{df}", true),
             ("(?iu)\u{1e9e}\u{1e9e}", "\u{df}\u{df}", true),
         ];
-        for (source, input, expected) in cases {
-            check!(
-                pattern(source).matches(input).ok() == Some(expected),
-                "{source:?} against {input:?}"
-            );
-        }
+        check_matches(cases, true);
     }
 
     /// The flag `x` ends with the group it is set in, and the whitespace and the `#` after that
@@ -1185,12 +1165,7 @@ mod tests {
             ("(?x:a)#b", "a#b", true),
             ("(?x:a)#b", "a", false),
         ];
-        for (source, input, expected) in cases {
-            check!(
-                pattern(source).matches(input).ok() == Some(expected),
-                "{source:?} against {input:?}"
-            );
-        }
+        check_matches(cases, true);
     }
 
     /// A `^` that Java reads as a class member stays one under `(?x)`, where
@@ -1283,12 +1258,7 @@ mod tests {
             ("a-b", "a-b", true),
             ("(?i)a-b", "A-B", true),
         ];
-        for (source, input, expected) in cases {
-            check!(
-                pattern(source).matches(input).ok() == Some(expected),
-                "{source:?} against {input:?}"
-            );
-        }
+        check_matches(cases, true);
     }
 
     /// Under `(?x)` Java tells a `-` that ends a class from one that starts a
@@ -1326,12 +1296,7 @@ mod tests {
             ("(?x)[a-[b]]", "b", true),
             ("(?x)[a-[b]]", "c", false),
         ];
-        for (source, input, expected) in cases {
-            check!(
-                pattern(source).matches(input).ok() == Some(expected),
-                "{source:?} against {input:?}"
-            );
-        }
+        check_matches(cases, true);
         // The range ends at the `]` or the `[` past the white space, which
         // Java refuses as a reversed range or an unclosed class.
         for source in [
@@ -1391,12 +1356,7 @@ mod tests {
             ("(a)|(b)", "b", true),
             ("(?i)(a)|b", "B", true),
         ];
-        for (source, input, expected) in cases {
-            check!(
-                pattern(source).matches(input).ok() == Some(expected),
-                "{source:?} against {input:?}"
-            );
-        }
+        check_matches(cases, true);
     }
 
     /// A backreference under an ASCII fold is written `(?i:\1)`, and
@@ -1512,16 +1472,7 @@ mod tests {
             ("(a)|(b)", "b", "[$1]", "[]"),
             ("x", "abc", "$9", "abc"),
         ];
-        for (source, input, replacement, expected) in cases {
-            check!(
-                pattern(source)
-                    .replace(input, replacement, true)
-                    .ok()
-                    .as_deref()
-                    == Some(expected),
-                "{source} on {input} with {replacement}"
-            );
-        }
+        check_replacements(cases, true, true);
     }
 
     /// The replacements Java throws on.

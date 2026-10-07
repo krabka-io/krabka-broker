@@ -17,12 +17,11 @@
 
 use std::{
     collections::{HashMap, HashSet},
-    hash::{Hash, Hasher},
     time::{Duration, Instant},
 };
 
 use krabka_protocol::primitives::uuid::Uuid;
-use stateright::{Checker, Model, Property};
+use stateright::{Checker, Model};
 
 use super::{
     assignment::reconcile,
@@ -30,7 +29,7 @@ use super::{
 };
 use crate::{
     coordinator::unified::{
-        actor::MetadataProvider,
+        actor::{MetadataProvider, reconciliation_model_support::model_properties},
         reconciler::ReconcileInput,
         share::state::{ShareGroupState, ShareMemberState},
     },
@@ -106,19 +105,11 @@ impl State {
             .members
             .values()
             .map(|member| {
-                let mut subscriptions: Vec<String> =
-                    member.subscribed_topic_names.iter().cloned().collect();
-                subscriptions.sort();
-                let mut assigned = member
-                    .assigned_partitions
-                    .get(&TOPIC)
-                    .cloned()
-                    .unwrap_or_default();
-                assigned.sort_unstable();
+                let (id, epoch, previous, subscriptions, assigned) = durable_member(member);
                 (
-                    member.member_id.clone(),
-                    member.member_epoch,
-                    member.previous_member_epoch,
+                    id,
+                    epoch,
+                    previous,
                     subscriptions,
                     assigned,
                     member.last_seen,
@@ -151,19 +142,7 @@ impl State {
     }
 }
 
-impl PartialEq for State {
-    fn eq(&self, other: &Self) -> bool {
-        self.projection() == other.projection()
-    }
-}
-
-impl Eq for State {}
-
-impl Hash for State {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        self.projection().hash(state);
-    }
-}
+krabka_macros::projection_identity!(State, projection);
 
 #[derive(Clone, Debug)]
 struct ShareModel;
@@ -203,21 +182,19 @@ fn at(state: &State) -> Instant {
 }
 
 fn assignment_coordinates_unique(group: &ShareGroupState) -> bool {
-    group.members.values().all(|member| {
-        let mut seen = HashSet::new();
-        member.assigned_partitions.iter().all(|(topic, parts)| {
-            parts
-                .iter()
-                .all(|partition| seen.insert((*topic, *partition)))
-        })
-    }) && group.target.per_member.values().all(|assignment| {
+    let unique = |assignment: &HashMap<Uuid, Vec<i32>>| {
         let mut seen = HashSet::new();
         assignment.iter().all(|(topic, parts)| {
             parts
                 .iter()
                 .all(|partition| seen.insert((*topic, *partition)))
         })
-    })
+    };
+    group
+        .members
+        .values()
+        .all(|member| unique(&member.assigned_partitions))
+        && group.target.per_member.values().all(unique)
 }
 
 fn epochs_fenced(group: &ShareGroupState) -> bool {
@@ -251,29 +228,27 @@ type DurableProjection = (
     Vec<(String, Vec<i32>)>,
 );
 
+fn durable_member(member: &ShareMemberState) -> DurableMemberProjection {
+    let mut subscriptions: Vec<String> = member.subscribed_topic_names.iter().cloned().collect();
+    subscriptions.sort();
+    let mut assigned = member
+        .assigned_partitions
+        .get(&TOPIC)
+        .cloned()
+        .unwrap_or_default();
+    assigned.sort_unstable();
+    (
+        member.member_id.clone(),
+        member.member_epoch,
+        member.previous_member_epoch,
+        subscriptions,
+        assigned,
+    )
+}
+
 fn durable_projection(group: &ShareGroupState) -> DurableProjection {
-    let mut members: Vec<DurableMemberProjection> = group
-        .members
-        .values()
-        .map(|member| {
-            let mut subscriptions: Vec<String> =
-                member.subscribed_topic_names.iter().cloned().collect();
-            subscriptions.sort();
-            let mut assigned = member
-                .assigned_partitions
-                .get(&TOPIC)
-                .cloned()
-                .unwrap_or_default();
-            assigned.sort_unstable();
-            (
-                member.member_id.clone(),
-                member.member_epoch,
-                member.previous_member_epoch,
-                subscriptions,
-                assigned,
-            )
-        })
-        .collect();
+    let mut members: Vec<DurableMemberProjection> =
+        group.members.values().map(durable_member).collect();
     members.sort();
     let mut target: Vec<(String, Vec<i32>)> = group
         .members
@@ -288,6 +263,22 @@ fn durable_projection(group: &ShareGroupState) -> DurableProjection {
         .collect();
     target.sort();
     (group.group_epoch, group.target.epoch, members, target)
+}
+
+/// Reconciles the metadata heartbeat before advancing its member to a new target.
+macro_rules! reconcile_and_advance_member {
+    ($state:ident, $member_id:ident, $current:ident) => {
+        if !reconcile(
+            &mut $state.group,
+            &metadata($state.partitions),
+            std::time::Duration::ZERO,
+        ) {
+            return None;
+        }
+        if $state.group.target.epoch > $current {
+            $state.group.advance_member_epoch($member_id);
+        }
+    };
 }
 
 impl Model for ShareModel {
@@ -340,8 +331,7 @@ impl Model for ShareModel {
         }
     }
 
-    fn next_state(&self, last: &Self::State, action: Self::Action) -> Option<Self::State> {
-        let mut state = last.clone();
+    krabka_macros::model_transition! { last, action, state; {
         match action {
             Action::Join(member_id) => {
                 if state.group.members.contains_key(member_id) {
@@ -374,16 +364,7 @@ impl Model for ShareModel {
                 match state.group.validate_member_epoch(member_id, requested) {
                     Ok(_) => {
                         state.group.members.get_mut(member_id)?.last_seen = at(&state);
-                        if !reconcile(
-                            &mut state.group,
-                            &metadata(state.partitions),
-                            std::time::Duration::ZERO,
-                        ) {
-                            return None;
-                        }
-                        if state.group.target.epoch > current {
-                            state.group.advance_member_epoch(member_id);
-                        }
+                        reconcile_and_advance_member! { state, member_id, current }
                     }
                     Err(error) => match kind {
                         EpochKind::Stale => {
@@ -425,16 +406,7 @@ impl Model for ShareModel {
                 state.partitions = partitions;
                 initialize(&mut state.group, partitions);
                 let before = state.group.group_epoch;
-                if !reconcile(
-                    &mut state.group,
-                    &metadata(state.partitions),
-                    std::time::Duration::ZERO,
-                ) {
-                    return None;
-                }
-                if state.group.target.epoch > current {
-                    state.group.advance_member_epoch(member_id);
-                }
+                reconcile_and_advance_member! { state, member_id, current }
                 if state.group.group_epoch > before {
                     state.witnesses |= WITNESS_METADATA;
                 }
@@ -465,41 +437,20 @@ impl Model for ShareModel {
         assert2::assert!(epochs_fenced(&state.group));
         assert2::assert!(assignments_in_metadata(&state));
         Some(state)
-    }
+    }}
 
-    fn properties(&self) -> Vec<Property<Self>> {
-        vec![
-            Property::always("ownership_coordinate_uniqueness", |_, state: &State| {
-                assignment_coordinates_unique(&state.group)
-            }),
-            Property::always("member_epoch_fencing", |_, state: &State| {
-                epochs_fenced(&state.group)
-            }),
-            Property::always("assignment_within_metadata", |_, state: &State| {
-                assignments_in_metadata(state)
-            }),
-            Property::sometimes("stale_epoch_rejected", |_, state: &State| {
-                state.witnesses & WITNESS_STALE_FENCED != 0
-            }),
-            Property::sometimes("forward_epoch_rejected", |_, state: &State| {
-                state.witnesses & WITNESS_FORWARD_FENCED != 0
-            }),
-            Property::sometimes("timeout_evicted_member", |_, state: &State| {
-                state.witnesses & WITNESS_TIMEOUT != 0
-            }),
-            Property::sometimes("metadata_changed_assignment", |_, state: &State| {
-                state.witnesses & WITNESS_METADATA != 0
-            }),
-            Property::sometimes("state_replayed", |_, state: &State| {
-                state.witnesses & WITNESS_REPLAY != 0
-            }),
-            Property::sometimes("unknown_member_rejected", |_, state: &State| {
-                state.witnesses & WITNESS_UNKNOWN != 0
-            }),
-            Property::sometimes("two_members_joined", |_, state: &State| {
-                state.group.members.len() == 2
-            }),
-        ]
+    model_properties! {
+        @method State;
+        always "ownership_coordinate_uniqueness" => |state| assignment_coordinates_unique(&state.group),
+        always "member_epoch_fencing" => |state| epochs_fenced(&state.group),
+        always "assignment_within_metadata" => |state| assignments_in_metadata(state),
+        sometimes "stale_epoch_rejected" => |state| state.witnesses & WITNESS_STALE_FENCED != 0,
+        sometimes "forward_epoch_rejected" => |state| state.witnesses & WITNESS_FORWARD_FENCED != 0,
+        sometimes "timeout_evicted_member" => |state| state.witnesses & WITNESS_TIMEOUT != 0,
+        sometimes "metadata_changed_assignment" => |state| state.witnesses & WITNESS_METADATA != 0,
+        sometimes "state_replayed" => |state| state.witnesses & WITNESS_REPLAY != 0,
+        sometimes "unknown_member_rejected" => |state| state.witnesses & WITNESS_UNKNOWN != 0,
+        sometimes "two_members_joined" => |state| state.group.members.len() == 2,
     }
 
     fn within_boundary(&self, state: &Self::State) -> bool {

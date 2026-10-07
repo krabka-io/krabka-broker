@@ -22,9 +22,7 @@ use crate::{
 macro_rules! case_lock {
     () => {{
         static LOCK: std::sync::OnceLock<tokio::sync::Mutex<()>> = std::sync::OnceLock::new();
-        LOCK.get_or_init(|| tokio::sync::Mutex::new(()))
-            .lock()
-            .await
+        $crate::support::lazy_mutex(&LOCK).lock().await
     }};
 }
 
@@ -38,7 +36,7 @@ async fn preplacement_log_dir_preference_survives_until_reassignment_materialize
     let paths = extras.each_ref().map(|dir| dir.path().to_path_buf());
     let (h1, h2, h3, _d1, _d2, _d3, addr) =
         start_three_broker_plaintext_cluster_with_log_dirs(&paths).await;
-    create_topic_plaintext(addr, "preplaced", 1, 2).await;
+    create_topic_plaintext(addr, crate::plaintext_wire::CLIENT_ID, "preplaced", 1, 2).await;
     wait_partition_exists(&h1, "preplaced", 0).await;
 
     let partition = h1
@@ -104,7 +102,7 @@ async fn alter_then_complete_via_isr_catchup() {
     let _g = case_lock!();
 
     let (h1, h2, h3, _d1, _d2, _d3, addr1) = start_three_broker_plaintext_cluster().await;
-    create_topic_plaintext(addr1, "foo", 1, 2).await;
+    create_topic_plaintext(addr1, crate::plaintext_wire::CLIENT_ID, "foo", 1, 2).await;
     wait_partition_exists(&h1, "foo", 0).await;
 
     // Find which brokers are in `replicas` initially — choose target accordingly.
@@ -342,7 +340,7 @@ async fn foo_cluster() -> (
     std::net::SocketAddr,
 ) {
     let cluster = start_three_broker_plaintext_cluster().await;
-    create_topic_plaintext(cluster.6, "foo", 1, 2).await;
+    create_topic_plaintext(cluster.6, crate::plaintext_wire::CLIENT_ID, "foo", 1, 2).await;
     wait_partition_exists(&cluster.0, "foo", 0).await;
     cluster
 }

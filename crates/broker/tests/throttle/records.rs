@@ -9,14 +9,17 @@
 use std::net::SocketAddr;
 
 use assert2::assert;
-use bytes::{Buf, BufMut, BytesMut};
+use bytes::{Buf, BytesMut};
 use krabka_protocol::{Decode, Encode};
-use tokio::{
-    io::{AsyncReadExt, AsyncWriteExt},
-    net::TcpStream,
-};
+use tokio::net::TcpStream;
 
-use crate::{CLIENT_ID, kafka_wire};
+use crate::{
+    CLIENT_ID, kafka_wire,
+    support::{
+        fetch::{fetch_partition, single_partition_fetch},
+        records::{batch_from_records, value_record},
+    },
+};
 
 /// Produce `count` records of `record_bytes` bytes each to `(topic, 0)` over
 /// a PLAINTEXT connection. Asserts `error_code=0` on the partition row.
@@ -24,43 +27,33 @@ pub async fn produce_plaintext(addr: SocketAddr, topic: &str, record_bytes: usiz
     const VERSION: i16 = 9; // flexible, pre-KIP-516 (no topic_id needed)
 
     use krabka_protocol::{
-        owned::{
-            produce_request::{PartitionProduceData, ProduceRequest, TopicProduceData},
-            produce_response::ProduceResponse,
-        },
+        owned::produce_response::ProduceResponse,
         records::{Record, RecordBatch},
     };
 
     let value = vec![0u8; record_bytes];
     let records: Vec<Record> = (0..count)
-        .map(|i| Record {
-            offset_delta: i32::try_from(i).unwrap(),
-            value: Some(bytes::Bytes::copy_from_slice(&value)),
-            ..Default::default()
+        .map(|i| {
+            value_record(
+                i32::try_from(i).unwrap(),
+                Some(bytes::Bytes::copy_from_slice(&value)),
+            )
         })
         .collect();
 
-    let req = ProduceRequest {
-        acks: 1, // leader ack only (rf=1 topic)
-        timeout_ms: 5_000,
-        topic_data: vec![TopicProduceData {
-            name: topic.to_string(),
-            partition_data: vec![PartitionProduceData {
-                index: 0,
-                records: Some(
-                    RecordBatch {
-                        last_offset_delta: i32::try_from(count - 1).unwrap(),
-                        records,
-                        ..Default::default()
-                    }
-                    .into(),
-                ),
-                ..Default::default()
-            }],
-            ..Default::default()
-        }],
-        ..Default::default()
-    };
+    let req = crate::support::produce::single_partition_produce(
+        topic.to_string(),
+        krabka_protocol::primitives::uuid::Uuid::default(),
+        0,
+        Some(
+            RecordBatch {
+                last_offset_delta: i32::try_from(count - 1).unwrap(),
+                ..batch_from_records(records)
+            }
+            .into(),
+        ),
+        (1, 5_000), // leader ack only (rf=1 topic)
+    );
 
     let mut stream = TcpStream::connect(addr).await.expect("connect");
     let mut body = BytesMut::new();
@@ -96,27 +89,16 @@ pub async fn produce_plaintext(addr: SocketAddr, topic: &str, record_bytes: usiz
 pub async fn fetch_plaintext_replica(addr: SocketAddr, topic: &str, replica_id: i32) -> usize {
     const VERSION: i16 = 12; // flexible
 
-    use krabka_protocol::owned::{
-        fetch_request::{FetchPartition, FetchRequest, FetchTopic},
-        fetch_response::FetchResponse,
-    };
+    use krabka_protocol::owned::{fetch_request::FetchRequest, fetch_response::FetchResponse};
 
     let req = FetchRequest {
         replica_id,
-        max_wait_ms: 0,
-        min_bytes: 1,
-        max_bytes: 1 << 20,
-        topics: vec![FetchTopic {
-            topic: topic.to_string(),
-            partitions: vec![FetchPartition {
-                partition: 0,
-                fetch_offset: 0,
-                partition_max_bytes: 1 << 20,
-                ..Default::default()
-            }],
-            ..Default::default()
-        }],
-        ..Default::default()
+        ..single_partition_fetch(
+            topic.to_string(),
+            krabka_protocol::primitives::uuid::Uuid::default(),
+            fetch_partition(0, 0, 1 << 20),
+            (0, 1, 1 << 20),
+        )
     };
 
     let mut stream = TcpStream::connect(addr).await.expect("connect");
@@ -125,26 +107,19 @@ pub async fn fetch_plaintext_replica(addr: SocketAddr, topic: &str, replica_id: 
 
     // Send raw frame and capture the full raw response (before decode) so we
     // can measure response bytes.
-    let mut frame = BytesMut::with_capacity(16 + body.len());
-    frame.put_i16(1i16); // api_key
-    frame.put_i16(VERSION);
-    frame.put_i32(1i32); // corr_id
-    let client_id = "krabka-throttle-test";
-    frame.put_i16(i16::try_from(client_id.len()).unwrap());
-    frame.put_slice(client_id.as_bytes());
-    frame.put_u8(0); // flexible header tagged-fields
-    frame.put_slice(&body);
+    let frame = crate::support::wire::request_frame(
+        (1, VERSION, 1, true),
+        "krabka-throttle-test",
+        &body,
+        Some(16 + body.len()),
+        None,
+    );
 
-    stream
-        .write_u32(u32::try_from(frame.len()).unwrap())
+    crate::support::wire::write_frame(&mut stream, &frame, None)
         .await
         .unwrap();
-    stream.write_all(&frame).await.unwrap();
-    stream.flush().await.unwrap();
 
-    let resp_len = stream.read_u32().await.unwrap();
-    let mut resp = vec![0u8; resp_len as usize];
-    stream.read_exact(&mut resp).await.unwrap();
+    let resp = crate::support::wire::read_frame(&mut stream).await.unwrap();
 
     // Decode to assert no transport error and no partition error.
     let mut cur: &[u8] = &resp[4..]; // skip corr_id

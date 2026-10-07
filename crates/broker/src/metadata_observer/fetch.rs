@@ -218,19 +218,17 @@ fn apply_fetch_records(
 mod tests {
     use assert2::assert;
     use bytes::Bytes;
-    use krabka_metadata::{MetadataRecord, TopicRecord, to_kraft_values};
+    use krabka_metadata::{MetadataRecord, to_kraft_values};
     use krabka_protocol::records::{Record, header::Attributes};
     use uuid::Uuid;
 
     use super::*;
 
     fn topic_record(name: &str) -> MetadataRecord {
-        MetadataRecord::V1Topic(TopicRecord {
-            name: name.into(),
-            topic_id: Uuid::new_v4(),
-            partitions: 1,
-            replication_factor: 1,
-        })
+        MetadataRecord::V1Topic(crate::test_support::single_partition_topic(
+            name,
+            Uuid::new_v4(),
+        ))
     }
 
     fn metadata_batch(base_offset: i64, rec: &MetadataRecord) -> RecordBatch {

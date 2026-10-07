@@ -2,7 +2,7 @@
 //! metadata-image builders for the leader and follower-throttle cases, a
 //! `Config` over a temporary log dir, and `Fetch` response builders.
 
-use std::{collections::BTreeMap, net::SocketAddr, sync::Arc};
+use std::{collections::BTreeMap, sync::Arc};
 
 use krabka_ids::PartitionIndex;
 use krabka_log::LogConfig;
@@ -30,10 +30,7 @@ pub(super) const WIRE_TOPIC_ID: WireUuid = WireUuid([7; 16]);
 /// A metadata source over `image` with no controller leader elected, and a
 /// loopback controller listener.
 fn static_source(image: MetadataImage) -> FakeMetadataSource {
-    FakeMetadataSource::builder()
-        .image(image)
-        .controller_bound_addr(SocketAddr::from(([127, 0, 0, 1], 0)))
-        .build()
+    FakeMetadataSource::static_image(image)
 }
 
 pub(super) fn image_with_leader(leader: NodeId) -> MetadataImage {
@@ -95,10 +92,14 @@ pub(super) fn test_config(image: MetadataImage) -> (Config, tempfile::TempDir) {
         log_dirs: vec![log_dir.path().to_path_buf()],
         log_settings: LogConfig::default(),
         client_id: "replica-test".into(),
-        inter_broker_client: Arc::new(crate::network::client::InterBrokerClient::new(None, None)),
-        inter_broker_listener_protocol: ListenerProtocol::Plaintext,
-        inter_broker_server_name: "localhost".into(),
-        replication: ReplicationRuntimeConfig::default(),
+        connection: super::ReplicationConnectionConfig {
+            inter_broker_client: Arc::new(crate::network::client::InterBrokerClient::new(
+                None, None,
+            )),
+            inter_broker_listener_protocol: ListenerProtocol::Plaintext,
+            inter_broker_server_name: "localhost".into(),
+            replication: ReplicationRuntimeConfig::default(),
+        },
         throttle_state: Arc::new(ThrottleState::new()),
         controller: Arc::new(static_source(image)),
         log_dir_status: crate::log_dir_status::LogDirRegistry::default(),

@@ -82,6 +82,30 @@ fn loaded_member(
     }
 }
 
+/// Independently expected stable group rebuilt from the row's stored member fields.
+fn loaded_group(
+    instance_id: Option<&str>,
+    rebalance_timeout: Duration,
+    session_timeout: Duration,
+) -> ClassicState {
+    ClassicState {
+        state: ClassicGroupState::Stable,
+        protocol_type: Some("consumer".into()),
+        generation_id: 5,
+        leader_id: Some("m1".into()),
+        protocol_name: Some("range".into()),
+        members: HashMap::from([(
+            "m1".to_string(),
+            loaded_member(instance_id, rebalance_timeout, session_timeout),
+        )]),
+        static_members: instance_id
+            .into_iter()
+            .map(|id| (id.to_string(), "m1".to_string()))
+            .collect(),
+        ..ClassicState::new("g")
+    }
+}
+
 // Kafka's `GroupMetadataManager.replay(GroupMetadataKey, GroupMetadataValue)`:
 // every loaded member supports the selected protocol with its stored
 // subscription, a stored rebalance timeout of -1 becomes the session timeout,
@@ -97,19 +121,7 @@ fn replay_rebuilds_the_group_as_kafka_loads_it() {
                 Some("range"),
                 vec![stored_member(Some("inst"), 45_000, 30_000)],
             ),
-            ClassicState {
-                state: ClassicGroupState::Stable,
-                protocol_type: Some("consumer".into()),
-                generation_id: 5,
-                leader_id: Some("m1".into()),
-                protocol_name: Some("range".into()),
-                members: HashMap::from([(
-                    "m1".to_string(),
-                    loaded_member(Some("inst"), secs(45), secs(30)),
-                )]),
-                static_members: HashMap::from([("inst".to_string(), "m1".to_string())]),
-                ..ClassicState::new("g")
-            },
+            loaded_group(Some("inst"), secs(45), secs(30)),
         ),
         (
             "a member whose stored rebalance timeout is -1",
@@ -118,18 +130,7 @@ fn replay_rebuilds_the_group_as_kafka_loads_it() {
                 Some("range"),
                 vec![stored_member(None, -1, 30_000)],
             ),
-            ClassicState {
-                state: ClassicGroupState::Stable,
-                protocol_type: Some("consumer".into()),
-                generation_id: 5,
-                leader_id: Some("m1".into()),
-                protocol_name: Some("range".into()),
-                members: HashMap::from([(
-                    "m1".to_string(),
-                    loaded_member(None, secs(30), secs(30)),
-                )]),
-                ..ClassicState::new("g")
-            },
+            loaded_group(None, secs(30), secs(30)),
         ),
         (
             "an empty group with an empty protocol type",

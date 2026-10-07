@@ -40,17 +40,19 @@ let%span scopy_vote'21 = "/workspace/crates/verified/src/composition/byte_quorum
 let%span scopy_vote'22 = "/workspace/crates/verified/src/composition/byte_quorum/copy_vote.rs" 15 11 15 68
 let%span scopy_vote'23 = "/workspace/crates/verified/src/composition/byte_quorum/copy_vote.rs" 16 10 17 84
 let%span scopy_vote'24 = "/workspace/crates/verified/src/composition/byte_quorum/copy_vote.rs" 18 10 29 1
-let%span sselect_wal_voters = "/workspace/crates/verified/src/wal/select_wal_voters.rs" 126 10 127 83
-let%span sselect_wal_voters'0 = "/workspace/crates/verified/src/wal/select_wal_voters.rs" 128 10 130 65
-let%span sselect_wal_voters'1 = "/workspace/crates/verified/src/wal/select_wal_voters.rs" 131 10 133 65
-let%span sselect_wal_voters'2 = "/workspace/crates/verified/src/wal/select_wal_voters.rs" 134 10 136 67
+let%span sselect_wal_voters = "/workspace/crates/verified/src/wal/select_wal_voters.rs" 123 10 124 83
+let%span sselect_wal_voters'0 = "/workspace/crates/verified/src/wal/select_wal_voters.rs" 125 10 127 65
+let%span sselect_wal_voters'1 = "/workspace/crates/verified/src/wal/select_wal_voters.rs" 128 10 130 65
+let%span sselect_wal_voters'2 = "/workspace/crates/verified/src/wal/select_wal_voters.rs" 131 10 133 67
 let%span sselect_wal_voters'3 = "/workspace/crates/verified/src/wal/select_wal_voters.rs" 16 8 19 85
-let%span swal_copy = "/workspace/crates/verified/src/composition/wal_copy.rs" 145 10 161 1
-let%span swal_copy'0 = "/workspace/crates/verified/src/composition/wal_copy.rs" 162 10 183 1
-let%span swal_copy'1 = "/workspace/crates/verified/src/composition/wal_copy.rs" 15 10 15 15
-let%span swal_copy'2 = "/workspace/crates/verified/src/composition/wal_copy.rs" 13 11 13 47
-let%span swal_copy'3 = "/workspace/crates/verified/src/composition/wal_copy.rs" 14 10 14 21
-let%span swal_copy'4 = "/workspace/crates/verified/src/composition/wal_copy.rs" 18 8 20 9
+let%span swal_copy = "/workspace/crates/verified/src/composition/wal_copy.rs" 147 10 161 1
+let%span swal_copy'0 = "/workspace/crates/verified/src/composition/wal_copy.rs" 162 10 182 1
+let%span swal_copy'1 = "/workspace/crates/verified/src/composition/wal_copy.rs" 22 10 22 15
+let%span swal_copy'2 = "/workspace/crates/verified/src/composition/wal_copy.rs" 20 11 20 47
+let%span swal_copy'3 = "/workspace/crates/verified/src/composition/wal_copy.rs" 21 10 21 21
+let%span swal_copy'4 = "/workspace/crates/verified/src/composition/wal_copy.rs" 25 8 27 9
+let%span swal_copy'5 = "/workspace/crates/verified/src/composition/wal_copy.rs" 251 16 251 86
+let%span swal_copy'6 = "/workspace/crates/verified/src/composition/wal_copy.rs" 12 16 12 77
 let%span sspec = "/workspace/crates/verified/src/composition/byte_quorum/spec.rs" 11 8 22 82
 let%span sspec'0 = "/workspace/crates/verified/src/composition/byte_quorum/spec.rs" 38 8 46 25
 
@@ -181,7 +183,7 @@ axiom view_Vec_u8_Global_spec:
   forall self: t_Vec_u8_Global [view_Vec_u8_Global self]. [%#svec'1] Seq.length (view_Vec_u8_Global self)
     <= UInt64.t'int const_MAX
 
-function wal_copy_byte_count [#"/workspace/crates/verified/src/composition/wal_copy.rs" 16 0 16 80] (batches: Seq.seq tup3_i64_i32_Vec_u8_Global) (count: int) : int
+function wal_copy_byte_count [#"/workspace/crates/verified/src/composition/wal_copy.rs" 23 0 23 80] (batches: Seq.seq tup3_i64_i32_Vec_u8_Global) (count: int) : int
 
 axiom wal_copy_byte_count_def:
   forall batches: Seq.seq tup3_i64_i32_Vec_u8_Global, count: int [wal_copy_byte_count batches count]. ([%#swal_copy'2] 0
@@ -201,14 +203,21 @@ axiom wal_copy_byte_count_spec:
 
 constant const_MAX'1: Int64.t = (9223372036854775807: Int64.t)
 
+predicate copy_batch_coordinates_valid [#"/workspace/crates/verified/src/composition/wal_copy.rs" 250 0 250 60] (batch: tup3_i64_i32_Vec_u8_Global) =
+  [%#swal_copy'5] ge_log_Int (Int64.to_int batch.f0'0) 0
+  /\ ge_log_Int (Int32.to_int batch.f1'0) 0
+  /\ Int64.to_int batch.f0'0 + Int32.to_int batch.f1'0 + 1 <= Int64.to_int const_MAX'1
+
+predicate copy_batch_equal [#"/workspace/crates/verified/src/composition/wal_copy.rs" 11 0 11 72] (left: tup3_i64_i32_Vec_u8_Global) (right: tup3_i64_i32_Vec_u8_Global) =
+  [%#swal_copy'6] left.f0'0 = right.f0'0
+  /\ left.f1'0 = right.f1'0 /\ view_Vec_u8_Global left.f2'0 = view_Vec_u8_Global right.f2'0
+
 let covering_copy_preserves_logical_fetch (source: Slice64.slice tup3_i64_i32_Vec_u8_Global)
   (stored: Slice64.slice tup3_i64_i32_Vec_u8_Global) (floors: tup2_i64_i64) (target: Int64.t) (position: UInt64.t)
   (file_end: UInt64.t) (requested: Int64.t) (return (x: t_Option_tup3_i64_u64_Option_usize)) = any
   [ return (result: t_Option_tup3_i64_u64_Option_usize) ->
-  {[@stop_split] [@expl:covering_copy_preserves_logical_fetch ensures] ([@stop_split] [@expl:covering_copy_preserves_logical_fetch ensures #0] [%#swal_copy] match result with
-          | None'1 -> false
-          | Some'1 _ -> true
-          end
+  {[@stop_split] [@expl:covering_copy_preserves_logical_fetch ensures] ([@stop_split] [@expl:covering_copy_preserves_logical_fetch ensures #0] [%#swal_copy] (result
+        <> None'1)
       = (0 <= Int64.to_int floors.f0'2
       /\ 0 <= Int64.to_int floors.f1'2
       /\ Int64.to_int floors.f0'2 <= Int64.to_int target
@@ -232,20 +241,14 @@ let covering_copy_preserves_logical_fetch (source: Slice64.slice tup3_i64_i32_Ve
           + 1
         )
       /\ (forall i: int. 0 <= i /\ i < Seq.length (Slice64.view source)
-        -> ge_log_Int (Int64.to_int (Seq.get (Slice64.view source) i).f0'0) 0
-        /\ ge_log_Int (Int32.to_int (Seq.get (Slice64.view source) i).f1'0) 0
-        /\ Int64.to_int (Seq.get (Slice64.view source) i).f0'0 + Int32.to_int (Seq.get (Slice64.view source) i).f1'0 + 1
-          <= Int64.to_int const_MAX'1
+        -> copy_batch_coordinates_valid (Seq.get (Slice64.view source) i)
         /\ (gt_log_Int i 0
           -> Int64.to_int (Seq.get (Slice64.view source) i).f0'0
           = Int64.to_int (Seq.get (Slice64.view source) (i - 1)).f0'0
             + Int32.to_int (Seq.get (Slice64.view source) (i - 1)).f1'0
           + 1)
         /\ gt_log_Int (Seq.length (view_Vec_u8_Global (Seq.get (Slice64.view source) i).f2'0)) 0
-        /\ (Seq.get (Slice64.view source) i).f0'0 = (Seq.get (Slice64.view stored) i).f0'0
-        /\ (Seq.get (Slice64.view source) i).f1'0 = (Seq.get (Slice64.view stored) i).f1'0
-        /\ view_Vec_u8_Global (Seq.get (Slice64.view source) i).f2'0
-        = view_Vec_u8_Global (Seq.get (Slice64.view stored) i).f2'0)))
+        /\ copy_batch_equal (Seq.get (Slice64.view source) i) (Seq.get (Slice64.view stored) i))))
     /\ ([@stop_split] [@expl:covering_copy_preserves_logical_fetch ensures #1] [%#swal_copy'0] match result with
       | None'1 -> true
       | Some'1 {f0'3 = physical; f1'3 = bytes_end; f2'3 = selected} -> Int64.to_int physical
@@ -282,10 +285,7 @@ let covering_copy_preserves_logical_fetch (source: Slice64.slice tup3_i64_i32_Ve
           < Int64.to_int (Seq.get (Slice64.view source) (UInt64.t'int i)).f0'0
             + Int32.to_int (Seq.get (Slice64.view source) (UInt64.t'int i)).f1'0
           + 1
-        /\ (Seq.get (Slice64.view source) (UInt64.t'int i)).f0'0 = (Seq.get (Slice64.view stored) (UInt64.t'int i)).f0'0
-        /\ (Seq.get (Slice64.view source) (UInt64.t'int i)).f1'0 = (Seq.get (Slice64.view stored) (UInt64.t'int i)).f1'0
-        /\ view_Vec_u8_Global (Seq.get (Slice64.view source) (UInt64.t'int i)).f2'0
-        = view_Vec_u8_Global (Seq.get (Slice64.view stored) (UInt64.t'int i)).f2'0
+        /\ copy_batch_equal (Seq.get (Slice64.view source) (UInt64.t'int i)) (Seq.get (Slice64.view stored) (UInt64.t'int i))
         end
       end)}
     (! return {result}) ]
@@ -518,10 +518,8 @@ let authenticated_copy_vote [#"/workspace/crates/verified/src/composition/byte_q
   | & residual: t_Option_Infallible = Any.any_l ()
   | & val': tup3_i64_u64_Option_usize = Any.any_l () ])
   [ return (result: t_Option_i64) ->
-  {[@stop_split] [@expl:authenticated_copy_vote ensures] ([@stop_split] [@expl:authenticated_copy_vote ensures #0] [%#scopy_vote'23] match result with
-          | Some'3 _ -> true
-          | None'3 -> false
-          end
+  {[@stop_split] [@expl:authenticated_copy_vote ensures] ([@stop_split] [@expl:authenticated_copy_vote ensures #0] [%#scopy_vote'23] (result
+        <> None'3)
       = copy_admitted (Slice64.view voters) claimed local leader_epoch (Slice64.view reference.f0'1) observation)
     /\ ([@stop_split] [@expl:authenticated_copy_vote ensures #1] [%#scopy_vote'24] match result with
       | None'3 -> true

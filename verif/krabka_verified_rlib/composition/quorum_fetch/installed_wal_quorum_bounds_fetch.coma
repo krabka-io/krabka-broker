@@ -1,82 +1,84 @@
-(* #"/workspace/crates/verified/src/composition/quorum_fetch.rs" 91 0 98 28 *)
+(* #"/workspace/crates/verified/src/composition/quorum_fetch.rs" 84 0 91 28 *)
 
-let%span sord = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
-let%span sord'0 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
-let%span snum = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 27 28 27 33
-let%span scmp = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 76 26 76 66
-let%span scmp'0 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 77 26 77 63
-let%span scmp'1 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 78 36 78 40
-let%span scmp'2 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 79 26 79 79
-let%span scmp'3 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 80 26 80 77
-let%span scmp'4 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 66 26 66 66
-let%span scmp'5 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 67 26 67 63
-let%span scmp'6 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 68 36 68 40
-let%span scmp'7 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 69 26 69 30
-let%span scmp'8 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 70 75 70 79
-let%span swell_founded = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/well_founded.rs" 43 8 43 33
-let%span sslice = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 331 18 331 22
-let%span sslice'0 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 151 20 151 37
-let%span sslice'1 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 156 20 156 37
-let%span svec = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 104 18 104 36
-let%span svec'0 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 18 14 18 41
-let%span svec'1 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 118 18 118 48
-let%span svec'2 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 202 18 202 34
-let%span svec'3 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 195 19 195 38
-let%span svec'4 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 196 18 196 46
-let%span sselect_wal_voters = "/workspace/crates/verified/src/wal/select_wal_voters.rs" 100 10 103 37
-let%span sfailover = "/workspace/crates/verified/src/consensus/failover.rs" 217 10 217 15
-let%span sfailover'0 = "/workspace/crates/verified/src/consensus/failover.rs" 212 11 212 76
-let%span sfailover'1 = "/workspace/crates/verified/src/consensus/failover.rs" 213 11 214 59
-let%span sfailover'2 = "/workspace/crates/verified/src/consensus/failover.rs" 215 10 216 63
-let%span sfailover'3 = "/workspace/crates/verified/src/consensus/failover.rs" 203 10 203 17
-let%span sfailover'4 = "/workspace/crates/verified/src/consensus/failover.rs" 205 16 205 74
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span snum = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 27 28 27 33
+let%span scmp = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 76 26 76 66
+let%span scmp'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 77 26 77 63
+let%span scmp'1 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 78 36 78 40
+let%span scmp'2 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 79 26 79 79
+let%span scmp'3 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 80 26 80 77
+let%span scmp'4 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 66 26 66 66
+let%span scmp'5 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 67 26 67 63
+let%span scmp'6 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 68 36 68 40
+let%span scmp'7 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 69 26 69 30
+let%span scmp'8 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 70 75 70 79
+let%span swell_founded = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/well_founded.rs" 43 8 43 33
+let%span sslice = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 331 18 331 22
+let%span sslice'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 151 20 151 37
+let%span sslice'1 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 156 20 156 37
+let%span ssequence = "/workspace/crates/verified/src/sequence.rs" 7 16 7 71
+let%span ssequence'0 = "/workspace/crates/verified/src/sequence.rs" 21 16 22 44
+let%span svec = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 104 18 104 36
+let%span svec'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 18 14 18 41
+let%span svec'1 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 118 18 118 48
+let%span svec'2 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 202 18 202 34
+let%span svec'3 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 195 19 195 38
+let%span svec'4 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 196 18 196 46
+let%span sselect_wal_voters = "/workspace/crates/verified/src/wal/select_wal_voters.rs" 98 10 100 42
+let%span sfailover = "/workspace/crates/verified/src/consensus/failover.rs" 211 10 211 15
+let%span sfailover'0 = "/workspace/crates/verified/src/consensus/failover.rs" 206 11 206 76
+let%span sfailover'1 = "/workspace/crates/verified/src/consensus/failover.rs" 207 11 208 59
+let%span sfailover'2 = "/workspace/crates/verified/src/consensus/failover.rs" 209 10 210 63
+let%span sfailover'3 = "/workspace/crates/verified/src/consensus/failover.rs" 196 10 196 17
+let%span sfailover'4 = "/workspace/crates/verified/src/consensus/failover.rs" 198 16 198 74
 let%span sfailover'5 = "/workspace/crates/verified/src/consensus/failover.rs" 6 10 6 41
-let%span sfailover'6 = "/workspace/crates/verified/src/consensus/failover.rs" 186 10 186 15
-let%span sfailover'7 = "/workspace/crates/verified/src/consensus/failover.rs" 189 8 195 9
-let%span sfailover'8 = "/workspace/crates/verified/src/consensus/failover.rs" 178 8 178 48
-let%span squorum_fetch = "/workspace/crates/verified/src/composition/quorum_fetch.rs" 99 7 99 19
-let%span squorum_fetch'0 = "/workspace/crates/verified/src/composition/quorum_fetch.rs" 99 23 99 37
-let%span squorum_fetch'1 = "/workspace/crates/verified/src/composition/quorum_fetch.rs" 99 42 99 91
-let%span squorum_fetch'2 = "/workspace/crates/verified/src/composition/quorum_fetch.rs" 102 29 102 39
-let%span squorum_fetch'3 = "/workspace/crates/verified/src/composition/quorum_fetch.rs" 103 16 103 22
-let%span squorum_fetch'4 = "/workspace/crates/verified/src/composition/quorum_fetch.rs" 107 14 107 32
-let%span squorum_fetch'5 = "/workspace/crates/verified/src/composition/quorum_fetch.rs" 108 14 108 26
-let%span squorum_fetch'6 = "/workspace/crates/verified/src/composition/quorum_fetch.rs" 105 16 106 54
-let%span squorum_fetch'7 = "/workspace/crates/verified/src/composition/quorum_fetch.rs" 104 16 104 56
-let%span squorum_fetch'8 = "/workspace/crates/verified/src/composition/quorum_fetch.rs" 109 18 109 29
-let%span squorum_fetch'9 = "/workspace/crates/verified/src/composition/quorum_fetch.rs" 109 18 109 44
-let%span squorum_fetch'10 = "/workspace/crates/verified/src/composition/quorum_fetch.rs" 109 8 109 45
-let%span squorum_fetch'11 = "/workspace/crates/verified/src/composition/quorum_fetch.rs" 110 13 110 14
-let%span squorum_fetch'12 = "/workspace/crates/verified/src/composition/quorum_fetch.rs" 110 8 110 14
-let%span squorum_fetch'13 = "/workspace/crates/verified/src/composition/quorum_fetch.rs" 113 18 119 5
-let%span squorum_fetch'14 = "/workspace/crates/verified/src/composition/quorum_fetch.rs" 120 16 120 40
-let%span squorum_fetch'15 = "/workspace/crates/verified/src/composition/quorum_fetch.rs" 121 51 121 63
-let%span squorum_fetch'16 = "/workspace/crates/verified/src/composition/quorum_fetch.rs" 121 19 121 64
-let%span squorum_fetch'17 = "/workspace/crates/verified/src/composition/quorum_fetch.rs" 122 49 122 54
-let%span squorum_fetch'18 = "/workspace/crates/verified/src/composition/quorum_fetch.rs" 122 80 122 85
-let%span squorum_fetch'19 = "/workspace/crates/verified/src/composition/quorum_fetch.rs" 122 22 122 89
-let%span squorum_fetch'20 = "/workspace/crates/verified/src/composition/quorum_fetch.rs" 123 42 123 52
-let%span squorum_fetch'21 = "/workspace/crates/verified/src/composition/quorum_fetch.rs" 124 8 124 9
-let%span squorum_fetch'22 = "/workspace/crates/verified/src/composition/quorum_fetch.rs" 135 14 135 32
-let%span squorum_fetch'23 = "/workspace/crates/verified/src/composition/quorum_fetch.rs" 136 14 136 26
-let%span squorum_fetch'24 = "/workspace/crates/verified/src/composition/quorum_fetch.rs" 133 16 134 48
-let%span squorum_fetch'25 = "/workspace/crates/verified/src/composition/quorum_fetch.rs" 129 16 132 81
-let%span squorum_fetch'26 = "/workspace/crates/verified/src/composition/quorum_fetch.rs" 127 16 128 86
-let%span squorum_fetch'27 = "/workspace/crates/verified/src/composition/quorum_fetch.rs" 126 16 126 39
-let%span squorum_fetch'28 = "/workspace/crates/verified/src/composition/quorum_fetch.rs" 125 16 125 35
-let%span squorum_fetch'29 = "/workspace/crates/verified/src/composition/quorum_fetch.rs" 137 15 137 18
-let%span squorum_fetch'30 = "/workspace/crates/verified/src/composition/quorum_fetch.rs" 138 29 138 38
-let%span squorum_fetch'31 = "/workspace/crates/verified/src/composition/quorum_fetch.rs" 138 44 138 47
-let%span squorum_fetch'32 = "/workspace/crates/verified/src/composition/quorum_fetch.rs" 138 12 138 49
-let%span squorum_fetch'33 = "/workspace/crates/verified/src/composition/quorum_fetch.rs" 140 13 140 14
-let%span squorum_fetch'34 = "/workspace/crates/verified/src/composition/quorum_fetch.rs" 140 8 140 14
+let%span sfailover'6 = "/workspace/crates/verified/src/consensus/failover.rs" 181 10 181 15
+let%span sfailover'7 = "/workspace/crates/verified/src/consensus/failover.rs" 184 8 190 9
+let%span sfailover'8 = "/workspace/crates/verified/src/consensus/failover.rs" 175 8 175 48
+let%span squorum_fetch = "/workspace/crates/verified/src/composition/quorum_fetch.rs" 92 7 92 19
+let%span squorum_fetch'0 = "/workspace/crates/verified/src/composition/quorum_fetch.rs" 92 23 92 37
+let%span squorum_fetch'1 = "/workspace/crates/verified/src/composition/quorum_fetch.rs" 92 42 92 91
+let%span squorum_fetch'2 = "/workspace/crates/verified/src/composition/quorum_fetch.rs" 95 29 95 39
+let%span squorum_fetch'3 = "/workspace/crates/verified/src/composition/quorum_fetch.rs" 96 16 96 22
+let%span squorum_fetch'4 = "/workspace/crates/verified/src/composition/quorum_fetch.rs" 100 14 100 32
+let%span squorum_fetch'5 = "/workspace/crates/verified/src/composition/quorum_fetch.rs" 101 14 101 26
+let%span squorum_fetch'6 = "/workspace/crates/verified/src/composition/quorum_fetch.rs" 98 16 99 54
+let%span squorum_fetch'7 = "/workspace/crates/verified/src/composition/quorum_fetch.rs" 97 16 97 56
+let%span squorum_fetch'8 = "/workspace/crates/verified/src/composition/quorum_fetch.rs" 102 18 102 29
+let%span squorum_fetch'9 = "/workspace/crates/verified/src/composition/quorum_fetch.rs" 102 18 102 44
+let%span squorum_fetch'10 = "/workspace/crates/verified/src/composition/quorum_fetch.rs" 102 8 102 45
+let%span squorum_fetch'11 = "/workspace/crates/verified/src/composition/quorum_fetch.rs" 103 13 103 14
+let%span squorum_fetch'12 = "/workspace/crates/verified/src/composition/quorum_fetch.rs" 103 8 103 14
+let%span squorum_fetch'13 = "/workspace/crates/verified/src/composition/quorum_fetch.rs" 106 18 112 5
+let%span squorum_fetch'14 = "/workspace/crates/verified/src/composition/quorum_fetch.rs" 113 16 113 40
+let%span squorum_fetch'15 = "/workspace/crates/verified/src/composition/quorum_fetch.rs" 114 51 114 63
+let%span squorum_fetch'16 = "/workspace/crates/verified/src/composition/quorum_fetch.rs" 114 19 114 64
+let%span squorum_fetch'17 = "/workspace/crates/verified/src/composition/quorum_fetch.rs" 115 49 115 54
+let%span squorum_fetch'18 = "/workspace/crates/verified/src/composition/quorum_fetch.rs" 115 80 115 85
+let%span squorum_fetch'19 = "/workspace/crates/verified/src/composition/quorum_fetch.rs" 115 22 115 89
+let%span squorum_fetch'20 = "/workspace/crates/verified/src/composition/quorum_fetch.rs" 116 42 116 52
+let%span squorum_fetch'21 = "/workspace/crates/verified/src/composition/quorum_fetch.rs" 117 8 117 9
+let%span squorum_fetch'22 = "/workspace/crates/verified/src/composition/quorum_fetch.rs" 128 14 128 32
+let%span squorum_fetch'23 = "/workspace/crates/verified/src/composition/quorum_fetch.rs" 129 14 129 26
+let%span squorum_fetch'24 = "/workspace/crates/verified/src/composition/quorum_fetch.rs" 126 16 127 48
+let%span squorum_fetch'25 = "/workspace/crates/verified/src/composition/quorum_fetch.rs" 122 16 125 81
+let%span squorum_fetch'26 = "/workspace/crates/verified/src/composition/quorum_fetch.rs" 120 16 121 86
+let%span squorum_fetch'27 = "/workspace/crates/verified/src/composition/quorum_fetch.rs" 119 16 119 39
+let%span squorum_fetch'28 = "/workspace/crates/verified/src/composition/quorum_fetch.rs" 118 16 118 35
+let%span squorum_fetch'29 = "/workspace/crates/verified/src/composition/quorum_fetch.rs" 130 15 130 18
+let%span squorum_fetch'30 = "/workspace/crates/verified/src/composition/quorum_fetch.rs" 131 29 131 38
+let%span squorum_fetch'31 = "/workspace/crates/verified/src/composition/quorum_fetch.rs" 131 44 131 47
+let%span squorum_fetch'32 = "/workspace/crates/verified/src/composition/quorum_fetch.rs" 131 12 131 49
+let%span squorum_fetch'33 = "/workspace/crates/verified/src/composition/quorum_fetch.rs" 133 13 133 14
+let%span squorum_fetch'34 = "/workspace/crates/verified/src/composition/quorum_fetch.rs" 133 8 133 14
 let%span squorum_fetch'35 = "/workspace/crates/verified/src/composition/quorum_fetch.rs" 55 11 55 63
-let%span squorum_fetch'36 = "/workspace/crates/verified/src/composition/quorum_fetch.rs" 56 10 60 41
-let%span squorum_fetch'37 = "/workspace/crates/verified/src/composition/quorum_fetch.rs" 61 10 65 1
-let%span squorum_fetch'38 = "/workspace/crates/verified/src/composition/quorum_fetch.rs" 66 10 71 1
-let%span squorum_fetch'39 = "/workspace/crates/verified/src/composition/quorum_fetch.rs" 72 10 79 1
-let%span squorum_fetch'40 = "/workspace/crates/verified/src/composition/quorum_fetch.rs" 80 10 84 1
-let%span squorum_fetch'41 = "/workspace/crates/verified/src/composition/quorum_fetch.rs" 85 10 90 1
+let%span squorum_fetch'36 = "/workspace/crates/verified/src/composition/quorum_fetch.rs" 56 10 59 46
+let%span squorum_fetch'37 = "/workspace/crates/verified/src/composition/quorum_fetch.rs" 60 10 64 1
+let%span squorum_fetch'38 = "/workspace/crates/verified/src/composition/quorum_fetch.rs" 65 10 68 1
+let%span squorum_fetch'39 = "/workspace/crates/verified/src/composition/quorum_fetch.rs" 69 10 72 1
+let%span squorum_fetch'40 = "/workspace/crates/verified/src/composition/quorum_fetch.rs" 73 10 77 1
+let%span squorum_fetch'41 = "/workspace/crates/verified/src/composition/quorum_fetch.rs" 78 10 83 1
 let%span squorum_fetch'42 = "/workspace/crates/verified/src/composition/quorum_fetch.rs" 7 29 7 80
 let%span squorum_fetch'43 = "/workspace/crates/verified/src/composition/quorum_fetch.rs" 8 29 8 75
 let%span squorum_fetch'44 = "/workspace/crates/verified/src/composition/quorum_fetch.rs" 9 29 9 51
@@ -86,11 +88,14 @@ let%span squorum_fetch'47 = "/workspace/crates/verified/src/composition/quorum_f
 let%span squorum_fetch'48 = "/workspace/crates/verified/src/composition/quorum_fetch.rs" 14 28 14 82
 let%span squorum_fetch'49 = "/workspace/crates/verified/src/composition/quorum_fetch.rs" 15 28 17 22
 let%span squorum_fetch'50 = "/workspace/crates/verified/src/composition/quorum_fetch.rs" 18 28 19 93
+let%span sconsensus = "/workspace/crates/verified/src/consensus.rs" 111 16 111 117
+let%span sconsensus'0 = "/workspace/crates/verified/src/consensus.rs" 123 16 125 31
 
 use creusot.slice.Slice64
 use creusot.int.UInt64
 use seq.Seq
 use creusot.int.Int64
+use map.Map
 use int.MinMax
 use creusot.prelude.MutBorrow
 use int.ComputerDivision
@@ -111,14 +116,21 @@ predicate gt_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord'0] oth
 
 meta "rewrite_def" predicate gt_log_Int
 
+type tup2_u64_u64 = { f0: UInt64.t; f1: UInt64.t }
+
+predicate pairwise_u64 [#"/workspace/crates/verified/src/sequence.rs" 20 0 20 95] (values: Seq.seq UInt64.t) (relation: Map.map tup2_u64_u64 bool) =
+  [%#ssequence'0] forall i: int, j: int. 0 <= i /\ i < j /\ j < Seq.length values
+    -> Map.get relation { f0 = Seq.get values i; f1 = Seq.get values j }
+
+predicate distinct_u64 [#"/workspace/crates/verified/src/sequence.rs" 6 0 6 42] (values: Seq.seq UInt64.t) =
+  [%#ssequence] pairwise_u64 values (fun (__0: tup2_u64_u64) -> let {f0 = left; f1 = right} = __0 in left <> right)
+
 let wal_voter_set_valid (voters: Slice64.slice UInt64.t) (local_node: UInt64.t) (expected: UInt64.t)
   (return (x: bool)) = any
   [ return (result: bool) -> {[@stop_split] [@expl:wal_voter_set_valid ensures] [%#sselect_wal_voters] result
     = (gt_log_Int (UInt64.t'int expected) 0
     /\ Seq.length (Slice64.view voters) = UInt64.t'int expected
-    /\ Seq.get (Slice64.view voters) 0 = local_node
-    /\ (forall i: int, j: int. 0 <= i /\ i < j /\ j < Seq.length (Slice64.view voters)
-      -> Seq.get (Slice64.view voters) i <> Seq.get (Slice64.view voters) j))}
+    /\ Seq.get (Slice64.view voters) 0 = local_node /\ distinct_u64 (Slice64.view voters))}
     (! return {result}) ]
 
 type t_Vec_i64_Global
@@ -166,10 +178,10 @@ let push_i64 (self_: MutBorrow.t t_Vec_i64_Global) (v: Int64.t) (return (x: ()))
     = Seq.snoc (view_Vec_i64_Global self_.current) v}
     (! return {result}) ]
 
-function hwm_member_at [#"/workspace/crates/verified/src/consensus/failover.rs" 176 0 176 62] (log_end'0: int) (s: Seq.seq Int64.t) (k: int) : int
+function hwm_member_at [#"/workspace/crates/verified/src/consensus/failover.rs" 173 0 173 62] (log_end'0: int) (s: Seq.seq Int64.t) (k: int) : int
  = [%#sfailover'8] if k = 0 then log_end'0 else Int64.to_int (Seq.get s (k - 1))
 
-function count_ge_prefix [#"/workspace/crates/verified/src/consensus/failover.rs" 187 0 187 97] (log_end'0: int) (s: Seq.seq Int64.t) (v: int) (limit: int) (leader_counts: bool) : int
+function count_ge_prefix [#"/workspace/crates/verified/src/consensus/failover.rs" 182 0 182 97] (log_end'0: int) (s: Seq.seq Int64.t) (v: int) (limit: int) (leader_counts: bool) : int
 
 axiom count_ge_prefix_def:
   forall log_end'0: int, s: Seq.seq Int64.t, v: int, limit: int, leader_counts: bool [count_ge_prefix log_end'0 s v limit leader_counts]. count_ge_prefix log_end'0 s v limit leader_counts
@@ -180,7 +192,7 @@ axiom count_ge_prefix_def:
       + (if (leader_counts \/ gt_log_Int limit 1) /\ ge_log_Int (hwm_member_at log_end'0 s (limit - 1)) v then 1 else 0)
     )
 
-function lemma_explicit_vote_count_equal [#"/workspace/crates/verified/src/consensus/failover.rs" 218 0 224 1] (log_end'0: int) (left: Seq.seq Int64.t) (right: Seq.seq Int64.t) (threshold: int) (limit: int) : ()
+function lemma_explicit_vote_count_equal [#"/workspace/crates/verified/src/consensus/failover.rs" 212 0 218 1] (log_end'0: int) (left: Seq.seq Int64.t) (right: Seq.seq Int64.t) (threshold: int) (limit: int) : ()
 
 axiom lemma_explicit_vote_count_equal_spec:
   forall log_end'0: int, left: Seq.seq Int64.t, right: Seq.seq Int64.t, threshold: int, limit: int. ([%#sfailover'0] 0
@@ -191,7 +203,7 @@ axiom lemma_explicit_vote_count_equal_spec:
     -> ([%#sfailover'2] count_ge_prefix log_end'0 left threshold limit false
     = count_ge_prefix log_end'0 right threshold limit false)
 
-function count_ge [#"/workspace/crates/verified/src/consensus/failover.rs" 204 0 204 78] (log_end'0: int) (s: Seq.seq Int64.t) (v: int) (leader_counts: bool) : int
+function count_ge [#"/workspace/crates/verified/src/consensus/failover.rs" 197 0 197 78] (log_end'0: int) (s: Seq.seq Int64.t) (v: int) (leader_counts: bool) : int
 
 axiom count_ge_def:
   forall log_end'0: int, s: Seq.seq Int64.t, v: int, leader_counts: bool [count_ge log_end'0 s v leader_counts]. count_ge log_end'0 s v leader_counts
@@ -216,7 +228,7 @@ let deref_Vec_i64_Global (self_: t_Vec_i64_Global) (return (x: Slice64.slice Int
     = view_Vec_i64_Global self_}
     (! return {result}) ]
 
-type tup2_i64_i64 = { f0: Int64.t; f1: Int64.t }
+type tup2_i64_i64 = { f0'0: Int64.t; f1'0: Int64.t }
 
 let quorum_commit_bounds_fetch (followers: Slice64.slice Int64.t) (majority: UInt64.t) (epoch_start: Int64.t)
   (current': Int64.t) (leader_counts: bool) (w: t_FetchWatermarks) (return (x: tup2_i64_i64)) =
@@ -233,22 +245,22 @@ let quorum_commit_bounds_fetch (followers: Slice64.slice Int64.t) (majority: UIn
   any
   [ return (result: tup2_i64_i64) ->
   {[@stop_split] [@expl:quorum_commit_bounds_fetch ensures] ([@stop_split] [@expl:quorum_commit_bounds_fetch ensures #0] [%#squorum_fetch'46] Int64.to_int current'
-        <= Int64.to_int result.f0
-      /\ Int64.to_int result.f0 <= Int64.to_int w.log_end)
-    /\ ([@stop_split] [@expl:quorum_commit_bounds_fetch ensures #1] [%#squorum_fetch'47] Int64.to_int result.f1
-      <= Int64.to_int result.f0)
-    /\ ([@stop_split] [@expl:quorum_commit_bounds_fetch ensures #2] [%#squorum_fetch'48] Int64.to_int result.f1
-      = MinMax.min (MinMax.min (Int64.to_int result.f0) (Int64.to_int w.lso)) (Int64.to_int w.deliverable))
+        <= Int64.to_int result.f0'0
+      /\ Int64.to_int result.f0'0 <= Int64.to_int w.log_end)
+    /\ ([@stop_split] [@expl:quorum_commit_bounds_fetch ensures #1] [%#squorum_fetch'47] Int64.to_int result.f1'0
+      <= Int64.to_int result.f0'0)
+    /\ ([@stop_split] [@expl:quorum_commit_bounds_fetch ensures #2] [%#squorum_fetch'48] Int64.to_int result.f1'0
+      = MinMax.min (MinMax.min (Int64.to_int result.f0'0) (Int64.to_int w.lso)) (Int64.to_int w.deliverable))
     /\ ([@stop_split] [@expl:quorum_commit_bounds_fetch ensures #3] [%#squorum_fetch'49] forall v: int. gt_log_Int v (Int64.to_int epoch_start)
           /\ ge_log_Int (count_ge (Int64.to_int w.log_end) (Slice64.view followers) v leader_counts) (UInt64.t'int majority)
-        -> v <= Int64.to_int result.f0)
-    /\ ([@stop_split] [@expl:quorum_commit_bounds_fetch ensures #4] [%#squorum_fetch'50] gt_log_Int (Int64.to_int result.f0) (Int64.to_int current')
-    -> ge_log_Int (count_ge (Int64.to_int w.log_end) (Slice64.view followers) (Int64.to_int result.f1) leader_counts) (UInt64.t'int majority))}
+        -> v <= Int64.to_int result.f0'0)
+    /\ ([@stop_split] [@expl:quorum_commit_bounds_fetch ensures #4] [%#squorum_fetch'50] gt_log_Int (Int64.to_int result.f0'0) (Int64.to_int current')
+    -> ge_log_Int (count_ge (Int64.to_int w.log_end) (Slice64.view followers) (Int64.to_int result.f1'0) leader_counts) (UInt64.t'int majority))}
     (! return {result}) ]
 
 type t_Vec_tup2_u64_i64_Global
 
-type tup2_u64_i64 = { f0'0: UInt64.t; f1'0: Int64.t }
+type tup2_u64_i64 = { f0'1: UInt64.t; f1'1: Int64.t }
 
 function view_Vec_tup2_u64_i64_Global (self: t_Vec_tup2_u64_i64_Global) : Seq.seq tup2_u64_i64
 
@@ -283,15 +295,28 @@ let push_tup2_u64_i64 (self_: MutBorrow.t t_Vec_tup2_u64_i64_Global) (v: tup2_u6
     = Seq.snoc (view_Vec_tup2_u64_i64_Global self_.current) v}
     (! return {result}) ]
 
-type tup3_i64_i64_Vec_tup2_u64_i64_Global = { f0'1: Int64.t; f1'1: Int64.t; f2'1: t_Vec_tup2_u64_i64_Global }
+type tup3_i64_i64_Vec_tup2_u64_i64_Global = { f0'2: Int64.t; f1'2: Int64.t; f2'2: t_Vec_tup2_u64_i64_Global }
 
 type t_Option_tup3_i64_i64_Vec_tup2_u64_i64_Global = None | Some tup3_i64_i64_Vec_tup2_u64_i64_Global
+
+predicate supporting_nodes_distinct [#"/workspace/crates/verified/src/consensus.rs" 110 0 110 76] (supporters: Seq.seq tup2_u64_i64) =
+  [%#sconsensus] forall i: int, j: int. 0 <= i /\ i < j /\ j < Seq.length supporters
+    -> (Seq.get supporters i).f0'1 <> (Seq.get supporters j).f0'1
+
+type tup2_Int_Int = { f0'3: int; f1'3: int }
+
+predicate supporting_voter_witnesses [#"/workspace/crates/verified/src/consensus.rs" 117 0 122 9] (supporters: Seq.seq tup2_u64_i64) (voters: Seq.seq UInt64.t) (limit: int) (evidence: Map.map tup2_Int_Int bool) =
+  [%#sconsensus'0] forall i: int. 0 <= i /\ i < Seq.length supporters
+    -> ge_log_Int (Int64.to_int (Seq.get supporters i).f1'1) limit
+    /\ (exists j: int. 0 <= j
+      /\ j < Seq.length voters
+      /\ (Seq.get supporters i).f0'1 = Seq.get voters j /\ Map.get evidence { f0'3 = i; f1'3 = j })
 
 meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let installed_wal_quorum_bounds_fetch [#"/workspace/crates/verified/src/composition/quorum_fetch.rs" 91 0 98 28]
+let installed_wal_quorum_bounds_fetch [#"/workspace/crates/verified/src/composition/quorum_fetch.rs" 84 0 91 28]
   (voters: Slice64.slice UInt64.t) (reported: Slice64.slice Int64.t) (local_node: UInt64.t) (expected: UInt64.t)
   (current': Int64.t) (w: t_FetchWatermarks) (return (x: t_Option_tup3_i64_i64_Vec_tup2_u64_i64_Global)) =
 {[@stop_split] [@expl:installed_wal_quorum_bounds_fetch requires] [%#squorum_fetch'35] Int64.to_int w.log_start
@@ -351,8 +376,8 @@ let installed_wal_quorum_bounds_fetch [#"/workspace/crates/verified/src/composit
     | s5 = deref_Vec_i64_Global [%#squorum_fetch'17] {_95} (fun (_x: Slice64.slice Int64.t) -> [ &_93 <- _x ] s6)
     | s6 = quorum_commit_bounds_fetch [%#squorum_fetch'19] {_93} {majority} {floor} {floor} {[%#squorum_fetch'18] false}
         {w} (fun (_x: tup2_i64_i64) -> [ &_91 <- _x ] s7)
-    | s7 = [ &hw'0 <- _91.f0 ] s8
-    | s8 = [ &limit <- _91.f1 ] s9
+    | s7 = [ &hw'0 <- _91.f0'0 ] s8
+    | s8 = [ &limit <- _91.f1'0 ] s9
     | s9 = new_tup2_u64_i64 [%#squorum_fetch'20] (fun (_x: t_Vec_tup2_u64_i64_Global) -> [ &supporters <- _x ] s10)
     | s10 = [ &i <- [%#squorum_fetch'21] (0: UInt64.t) ] s11
     | s11 = bb24 ]
@@ -370,15 +395,15 @@ let installed_wal_quorum_bounds_fetch [#"/workspace/crates/verified/src/composit
       + 1) false}
       {[@expl:loop invariant #3] [%#squorum_fetch'25] forall j: int. 0 <= j
           /\ j < Seq.length (view_Vec_tup2_u64_i64_Global supporters)
-        -> ge_log_Int (Int64.to_int (Seq.get (view_Vec_tup2_u64_i64_Global supporters) j).f1'0) (Int64.to_int limit)
+        -> ge_log_Int (Int64.to_int (Seq.get (view_Vec_tup2_u64_i64_Global supporters) j).f1'1) (Int64.to_int limit)
         /\ (exists k: int. 0 <= k
           /\ k < UInt64.t'int i
-          /\ (Seq.get (view_Vec_tup2_u64_i64_Global supporters) j).f0'0 = Seq.get (Slice64.view voters) k
-          /\ (Seq.get (view_Vec_tup2_u64_i64_Global supporters) j).f1'0 = Seq.get (view_Vec_i64_Global ends) k)}
+          /\ (Seq.get (view_Vec_tup2_u64_i64_Global supporters) j).f0'1 = Seq.get (Slice64.view voters) k
+          /\ (Seq.get (view_Vec_tup2_u64_i64_Global supporters) j).f1'1 = Seq.get (view_Vec_i64_Global ends) k)}
       {[@expl:loop invariant #4] [%#squorum_fetch'24] forall j: int, k: int. 0 <= j
           /\ j < k /\ k < Seq.length (view_Vec_tup2_u64_i64_Global supporters)
-        -> (Seq.get (view_Vec_tup2_u64_i64_Global supporters) j).f0'0
-        <> (Seq.get (view_Vec_tup2_u64_i64_Global supporters) k).f0'0}
+        -> (Seq.get (view_Vec_tup2_u64_i64_Global supporters) j).f0'1
+        <> (Seq.get (view_Vec_tup2_u64_i64_Global supporters) k).f0'1}
       (! [ &variant_old_bb24 <- [%#squorum_fetch'22] Seq.length (Slice64.view voters) - UInt64.t'int i ] s0)
       [ s0 = len_u64 [%#squorum_fetch'23] {voters} (fun (_x: UInt64.t) -> [ &_128 <- _x ] s1)
       | s1 = [ &_126 <- UInt64.lt i _128 ] s2
@@ -394,7 +419,7 @@ let installed_wal_quorum_bounds_fetch [#"/workspace/crates/verified/src/composit
         | s3 = {[@expl:index in bounds] [%#squorum_fetch'30] _143} s4
         | s4 = Slice64.get [%#squorum_fetch'30] <UInt64.t> {voters} {_141} (fun (r: UInt64.t) -> [ &_140 <- r ] s5)
         | s5 = index_Vec_i64_Global [%#squorum_fetch'31] {ends} {i} (fun (_x: Int64.t) -> [ &_145 <- _x ] s6)
-        | s6 = [ &_139 <- { f0'0 = _140; f1'0 = _145 } ] s7
+        | s6 = [ &_139 <- { f0'1 = _140; f1'1 = _145 } ] s7
         | s7 = MutBorrow.borrow_mut <t_Vec_tup2_u64_i64_Global> {supporters}
             (fun (_bor: MutBorrow.t t_Vec_tup2_u64_i64_Global) -> [ &_138 <- _bor ] [ &supporters <- _bor.final ] s8)
         | s8 = push_tup2_u64_i64 [%#squorum_fetch'32] {_138} {_139} (fun (_x: ()) -> [ &_137 <- _x ] s9)
@@ -404,7 +429,7 @@ let installed_wal_quorum_bounds_fetch [#"/workspace/crates/verified/src/composit
             (fun (_x: UInt64.t) -> [ &i <- _x ] s1)
         | s1 = bb24 ] ] ]
   | bb35 = s0
-    [ s0 = [ &_149 <- { f0'1 = hw'0; f1'1 = limit; f2'1 = supporters } ] s1
+    [ s0 = [ &_149 <- { f0'2 = hw'0; f1'2 = limit; f2'2 = supporters } ] s1
     | s1 = [ &_ret <- Some _149 ] s2
     | s2 = return {_ret} ]
   | bb8 = s0 [ s0 = [ &_ret <- None ] s1 | s1 = return {_ret} ] ]
@@ -455,19 +480,15 @@ let installed_wal_quorum_bounds_fetch [#"/workspace/crates/verified/src/composit
   | & variant_old_bb10: int = Any.any_l ()
   | & variant_old_bb24: int = Any.any_l () ])
   [ return (result: t_Option_tup3_i64_i64_Vec_tup2_u64_i64_Global) ->
-  {[@stop_split] [@expl:installed_wal_quorum_bounds_fetch ensures] ([@stop_split] [@expl:installed_wal_quorum_bounds_fetch ensures #0] [%#squorum_fetch'36] match result with
-          | None -> false
-          | Some _ -> true
-          end
+  {[@stop_split] [@expl:installed_wal_quorum_bounds_fetch ensures] ([@stop_split] [@expl:installed_wal_quorum_bounds_fetch ensures #0] [%#squorum_fetch'36] (result
+        <> None)
       = (Seq.length (Slice64.view voters) = Seq.length (Slice64.view reported)
       /\ Seq.length (Slice64.view voters) = UInt64.t'int expected
       /\ gt_log_Int (UInt64.t'int expected) 0
-      /\ Seq.get (Slice64.view voters) 0 = local_node
-      /\ (forall i: int, j: int. 0 <= i /\ i < j /\ j < Seq.length (Slice64.view voters)
-        -> Seq.get (Slice64.view voters) i <> Seq.get (Slice64.view voters) j)))
+      /\ Seq.get (Slice64.view voters) 0 = local_node /\ distinct_u64 (Slice64.view voters)))
     /\ ([@stop_split] [@expl:installed_wal_quorum_bounds_fetch ensures #1] [%#squorum_fetch'37] match result with
         | None -> true
-        | Some {f0'1 = hw'0; f1'1 = limit} -> Int64.to_int current' <= Int64.to_int hw'0
+        | Some {f0'2 = hw'0; f1'2 = limit} -> Int64.to_int current' <= Int64.to_int hw'0
         /\ Int64.to_int w.log_start <= Int64.to_int hw'0
         /\ Int64.to_int hw'0 <= Int64.to_int w.log_end
         /\ Int64.to_int limit
@@ -475,32 +496,23 @@ let installed_wal_quorum_bounds_fetch [#"/workspace/crates/verified/src/composit
         end)
     /\ ([@stop_split] [@expl:installed_wal_quorum_bounds_fetch ensures #2] [%#squorum_fetch'38] match result with
         | None -> true
-        | Some {f2'1 = supporters} -> forall i: int, j: int. 0 <= i
-            /\ i < j /\ j < Seq.length (view_Vec_tup2_u64_i64_Global supporters)
-          -> (Seq.get (view_Vec_tup2_u64_i64_Global supporters) i).f0'0
-          <> (Seq.get (view_Vec_tup2_u64_i64_Global supporters) j).f0'0
+        | Some {f2'2 = supporters} -> supporting_nodes_distinct (view_Vec_tup2_u64_i64_Global supporters)
         end)
     /\ ([@stop_split] [@expl:installed_wal_quorum_bounds_fetch ensures #3] [%#squorum_fetch'39] match result with
         | None -> true
-        | Some {f1'1 = limit; f2'1 = supporters} -> forall i: int. 0 <= i
-            /\ i < Seq.length (view_Vec_tup2_u64_i64_Global supporters)
-          -> ge_log_Int (Int64.to_int (Seq.get (view_Vec_tup2_u64_i64_Global supporters) i).f1'0) (Int64.to_int limit)
-          /\ (exists j: int. 0 <= j
-            /\ j < Seq.length (Slice64.view voters)
-            /\ (Seq.get (view_Vec_tup2_u64_i64_Global supporters) i).f0'0 = Seq.get (Slice64.view voters) j
-            /\ Int64.to_int (Seq.get (view_Vec_tup2_u64_i64_Global supporters) i).f1'0
-            = MinMax.min (Int64.to_int (Seq.get (Slice64.view reported) j)) (Int64.to_int w.log_end))
+        | Some {f1'2 = limit; f2'2 = supporters} -> supporting_voter_witnesses (view_Vec_tup2_u64_i64_Global supporters) (Slice64.view voters) (Int64.to_int limit) (fun (__0: tup2_Int_Int) -> let {f0'3 = i; f1'3 = j} = __0 in Int64.to_int (Seq.get (view_Vec_tup2_u64_i64_Global supporters) i).f1'1
+        = MinMax.min (Int64.to_int (Seq.get (Slice64.view reported) j)) (Int64.to_int w.log_end))
         end)
     /\ ([@stop_split] [@expl:installed_wal_quorum_bounds_fetch ensures #4] [%#squorum_fetch'40] match result with
         | None -> true
-        | Some {f0'1 = hw'0; f1'1 = limit; f2'1 = supporters} -> gt_log_Int (Int64.to_int hw'0) (Int64.to_int current')
+        | Some {f0'2 = hw'0; f1'2 = limit; f2'2 = supporters} -> gt_log_Int (Int64.to_int hw'0) (Int64.to_int current')
           /\ gt_log_Int (Int64.to_int limit) (Int64.to_int w.log_start)
         -> ge_log_Int (Seq.length (view_Vec_tup2_u64_i64_Global supporters)) (ComputerDivision.div (Seq.length (Slice64.view voters)) 2
         + 1)
         end)
     /\ ([@stop_split] [@expl:installed_wal_quorum_bounds_fetch ensures #5] [%#squorum_fetch'41] match result with
       | None -> true
-      | Some {f0'1 = hw'0} -> forall v: int. Int64.to_int current' < v
+      | Some {f0'2 = hw'0} -> forall v: int. Int64.to_int current' < v
           /\ Int64.to_int w.log_start < v
           /\ v <= Int64.to_int w.log_end
           /\ ge_log_Int (count_ge (Int64.to_int w.log_end) (Slice64.view reported) v false) (ComputerDivision.div (Seq.length (Slice64.view voters)) 2

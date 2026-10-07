@@ -122,9 +122,7 @@ async fn node_id_reports_configured_node() {
 
 #[tokio::test]
 async fn injected_election_makes_single_voter_leader() {
-    let (ctrl, _dir) = build(NodeId(1), &[NodeId(1)]);
-    ctrl.inject_event(Event::ElectionTimeout).await.unwrap();
-    await_leader(&ctrl, Some(NodeId(1))).await;
+    let (ctrl, _dir) = super::test_support::single_voter_leader().await;
     ctrl.shutdown().await;
 }
 

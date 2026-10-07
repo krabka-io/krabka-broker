@@ -335,9 +335,17 @@ use moxy::{
     ast::{ItemEnum, ItemStruct, ParseError},
     token::TokenStream,
 };
+use proc_macro::TokenStream as NativeTokenStream;
 
 mod api_names;
+mod async_write_delegate;
+mod auth_fixtures;
+mod bound_start_fixture;
 mod cli_main;
+mod cli_support;
+mod config_table;
+mod container_fixtures;
+mod cross_storage_fixtures;
 mod dispatch;
 mod enum_str;
 mod field_defaults;
@@ -345,14 +353,41 @@ mod fixtures;
 mod gcs_fields;
 mod human_units;
 mod krabka_env;
+mod legacy_fixtures;
 mod meta;
 mod metrics;
+mod network_fixtures;
+mod object_ops;
+mod object_store_config;
+mod object_store_delegate;
 mod primitive_cmp;
+mod produce_fixtures;
+mod projection_identity;
+mod raft_fixtures;
 mod refined_newtype;
+mod remote_metadata_fixtures;
 mod runtime_overlay;
 mod runtime_policy_fields;
+mod s3_fields;
+mod sendfile_match;
 mod throttle_probes;
+mod timer_hooks;
 mod timestamped_batch;
+mod transport_errors;
+mod wire_fixtures;
+
+// Token-to-token fixtures share the same Moxy adapter and error handling.
+macro_rules! function_macros {
+    ($( $(#[$($doc:tt)*])* $name:ident => $module:ident::$delegate:ident; )*) => {
+        $(
+            $(#[$($doc)*])*
+            #[moxy::function]
+            pub fn $name(tokens: TokenStream) -> Result<TokenStream, ParseError> {
+                $module::$delegate(tokens)
+            }
+        )*
+    };
+}
 
 /// Derives `unregistered` and `register` for a struct of metric handles. The
 /// crate documentation lists the field attributes.
@@ -361,8 +396,7 @@ pub fn register_metrics(item: ItemStruct) -> Result<TokenStream, ParseError> {
     metrics::expand(item)
 }
 
-// New macros: put the implementation in its own module under `src/` and add
-// its entry point below this line, one block per macro.
+// Keep implementations in their own modules and document each adapter below.
 
 /// Gives every `Option<Time>`, `Option<ByteSize>` and `Option<Ratio>` field of
 /// a file-config struct its human-unit serde codec and schema marker. The
@@ -388,18 +422,14 @@ pub fn primitive_cmp(item: ItemStruct) -> Result<TokenStream, ParseError> {
     primitive_cmp::expand(item)
 }
 
-/// Generates the broker's dispatch adapters and `register_dispatch_table`
-/// from one table of api names. The crate documentation describes the table.
-#[moxy::function(name = "dispatch_table")]
-pub fn dispatch_table(tokens: TokenStream) -> Result<TokenStream, ParseError> {
-    dispatch::expand(tokens)
-}
+function_macros! {
+    /// Generates the broker's dispatch adapters and `register_dispatch_table`
+    /// from one table of api names. The crate documentation describes the table.
+    dispatch_table => dispatch::expand;
 
-/// Expands to the throttle-echo audit's `[(API_KEY, Probe); N]` array from one
-/// table of api names. The crate documentation describes the table.
-#[moxy::function(name = "throttle_probes")]
-pub fn throttle_probes(tokens: TokenStream) -> Result<TokenStream, ParseError> {
-    throttle_probes::expand(tokens)
+    /// Expands to the throttle-echo audit's `[(API_KEY, Probe); N]` array from one
+    /// table of api names. The crate documentation describes the table.
+    throttle_probes => throttle_probes::expand;
 }
 
 /// Derives `copy_into`, which copies each field of a clap argument group onto
@@ -435,30 +465,20 @@ pub fn field_defaults(item: ItemStruct) -> Result<TokenStream, ParseError> {
     field_defaults::expand(item)
 }
 
-/// Expands to an operator binary's `main`: tracing setup, then
-/// `std::process::exit` with what the named crate's `run_from_args` returns.
-/// The crate documentation describes the expansion.
-#[moxy::function(name = "cli_main")]
-pub fn cli_main(tokens: TokenStream) -> Result<TokenStream, ParseError> {
-    cli_main::expand(tokens)
-}
+function_macros! {
+    /// Expands to an operator binary's `main`: tracing setup, then
+    /// `std::process::exit` with what the named crate's `run_from_args` returns.
+    /// The crate documentation describes the expansion.
+    cli_main => cli_main::expand;
 
-/// Generate the bounded exhaustive Stateright runner under the supplied function name.
-#[moxy::function(name = "bounded_bfs")]
-pub fn bounded_bfs(tokens: TokenStream) -> Result<TokenStream, ParseError> {
-    fixtures::bounded_bfs(tokens)
-}
+    /// Generate the bounded exhaustive Stateright runner under the supplied function name.
+    bounded_bfs => fixtures::bounded_bfs;
 
-/// Generate the compacted-batch test projection under the supplied struct name.
-#[moxy::function(name = "compacted_batch")]
-pub fn compacted_batch(tokens: TokenStream) -> Result<TokenStream, ParseError> {
-    fixtures::compacted_batch(tokens)
-}
+    /// Generate the compacted-batch test projection under the supplied struct name.
+    compacted_batch => fixtures::compacted_batch;
 
-/// Generate the benchmark's Kafka record-batch builder under the supplied function name.
-#[moxy::function(name = "record_batch_fixture")]
-pub fn record_batch_fixture(tokens: TokenStream) -> Result<TokenStream, ParseError> {
-    fixtures::record_batch(tokens)
+    /// Generate the benchmark's Kafka record-batch builder under the supplied function name.
+    record_batch_fixture => fixtures::record_batch;
 }
 
 /// Prepend the common bucket, prefix, redacted credentials and endpoint fields to a GCS config.
@@ -468,10 +488,9 @@ pub fn gcs_fields(meta: TokenStream, item: TokenStream) -> Result<TokenStream, P
     gcs_fields::expand(meta, item)
 }
 
-/// Generate action-to-message/log/timer adaptation inside a simulation impl.
-#[moxy::function(name = "simulation_actions")]
-pub fn simulation_actions(tokens: TokenStream) -> Result<TokenStream, ParseError> {
-    fixtures::simulation_actions(tokens)
+function_macros! {
+    /// Generate action-to-message/log/timer adaptation inside a simulation impl.
+    simulation_actions => fixtures::simulation_actions;
 }
 
 /// Delegate unchanged metadata-log operations through `self.inner`, before `async_trait`.
@@ -483,10 +502,9 @@ pub fn metadata_log_delegate(
     fixtures::metadata_log_delegate(meta, item)
 }
 
-/// Generate the finished remote-segment lookup assertions shared by manager fixtures.
-#[moxy::function(name = "remote_segment_check")]
-pub fn remote_segment_check(tokens: TokenStream) -> Result<TokenStream, ParseError> {
-    fixtures::remote_segment_check(tokens)
+function_macros! {
+    /// Generate the finished remote-segment lookup assertions shared by manager fixtures.
+    remote_segment_check => fixtures::remote_segment_check;
 }
 
 /// Add the shared runtime policy fields before TOML or CLI field derives.
@@ -498,20 +516,283 @@ pub fn runtime_policy_fields(
     runtime_policy_fields::expand(meta, item)
 }
 
-/// Generate the shared simulation event adapter inside a harness impl.
-#[moxy::function(name = "simulation_step")]
-pub fn simulation_step(tokens: TokenStream) -> Result<TokenStream, ParseError> {
-    fixtures::simulation_step(tokens)
+function_macros! {
+    /// Generate the shared simulation event adapter inside a harness impl.
+    simulation_step => fixtures::simulation_step;
+
+    /// Generate the shared two-partition metadata topic fixture.
+    snapshot_topic_fixture => fixtures::snapshot_topic;
+
+    /// Generate the timestamped record-batch fixture used by local and remote read tests.
+    timestamped_batch => timestamped_batch::expand;
+
+    /// Generate a producer batch builder with the caller's exact record value expression.
+    producer_batch_fixture => wire_fixtures::producer_batch;
+
+    /// Generate a one-topic `CreateTopics` request builder with explicit sizes and timeout.
+    create_topic_fixture => wire_fixtures::create_topic;
+
+    /// Generate the consumer Fetch request fixture for partition zero with a 1 MiB limit.
+    consumer_fetch_fixture => wire_fixtures::consumer_fetch;
+
+    /// Generate the initial single-replica metadata partition record builder.
+    single_replica_partition_fixture => wire_fixtures::single_replica_partition;
+
+    /// Generate a topic record builder for one partition and one replica.
+    topic_record_fixture => wire_fixtures::topic_record;
+
+    /// Generate projection-based Eq and Hash, and optionally Debug, for model state.
+    projection_identity => projection_identity::expand;
+
+    /// Generate the shared `MinIO` process/readiness helpers under the supplied module name.
+    minio_fixture => container_fixtures::expand;
+
+    /// Start a SCRAM client exchange while preserving its private handshake phase type.
+    scram_client_first => auth_fixtures::scram_client_first;
+
+    /// Generate the independent four-state remote-segment transition oracle.
+    remote_segment_transition_matrix => fixtures::remote_segment_transition_matrix;
+
+    /// Generate a tracing capture layer with an explicit mutex poison policy.
+    capture_layer_fixture => fixtures::capture_layer;
 }
 
-/// Generate the shared two-partition metadata topic fixture.
-#[moxy::function(name = "snapshot_topic_fixture")]
-pub fn snapshot_topic_fixture(tokens: TokenStream) -> Result<TokenStream, ParseError> {
-    fixtures::snapshot_topic(tokens)
+/// Add the selected direct `ObjectStore` delegates to an implementation.
+#[moxy::attribute(name = "object_store_delegate")]
+pub fn object_store_delegate(
+    meta: TokenStream,
+    item: TokenStream,
+) -> Result<TokenStream, ParseError> {
+    object_store_delegate::expand(meta, item)
 }
 
-/// Generate the timestamped record-batch fixture used by local and remote read tests.
-#[moxy::function(name = "timestamped_batch")]
-pub fn timestamped_batch(tokens: TokenStream) -> Result<TokenStream, ParseError> {
-    timestamped_batch::expand(tokens)
+function_macros! {
+    /// Generate remote metadata lifecycle fixtures with an explicit timestamp policy.
+    remote_segment_fixtures => remote_metadata_fixtures::segment;
+
+    /// Generate the independent missing-partition metadata assertions.
+    remote_metadata_missing => remote_metadata_fixtures::missing;
+
+    /// Generate the direct flush and shutdown delegates for a tuple write wrapper.
+    async_write_delegate => async_write_delegate::expand;
+}
+
+/// Generate a model transition's signature and cloned state before its body.
+#[moxy::function(name = "model_transition")]
+pub fn model_transition(tokens: NativeTokenStream) -> Result<NativeTokenStream, ParseError> {
+    fixtures::model_transition(tokens)
+}
+
+/// Append the shared object-store retry and HTTP timeout fields.
+#[moxy::attribute(name = "object_store_config")]
+pub fn object_store_config(
+    meta: TokenStream,
+    item: TokenStream,
+) -> Result<TokenStream, ParseError> {
+    object_store_config::expand(meta, item)
+}
+
+/// Expand the object-store file-upload method before async trait processing.
+#[moxy::attribute(name = "object_ops")]
+pub fn object_ops(meta: TokenStream, item: TokenStream) -> Result<TokenStream, ParseError> {
+    object_ops::expand(meta, item)
+}
+
+/// Match inline writes and conditionally available sendfile regions.
+#[moxy::function(name = "sendfile_match")]
+pub fn sendfile_match(tokens: NativeTokenStream) -> Result<NativeTokenStream, ParseError> {
+    sendfile_match::expand_native(tokens)
+}
+
+function_macros! {
+    /// Generate timer registration and completion helpers with caller-specific messages.
+    timer_hooks => timer_hooks::expand;
+
+    /// Generate the SCRAM proof XOR fixture without imposing extra length checks.
+    scram_client_proof_fixture => auth_fixtures::scram_client_proof;
+
+    /// Generate a single-partition Produce fixture with explicit request settings.
+    single_partition_produce_fixture => produce_fixtures::single_partition_produce;
+
+    /// Generate a manual Kafka request-frame fixture with explicit header inputs.
+    request_frame_fixture => network_fixtures::request_frame;
+
+    /// Generate deterministic patterned bytes for framing tests and benchmarks.
+    patterned_bytes_fixture => network_fixtures::patterned_bytes;
+
+    /// Generate a response frame prefix independently of production framing.
+    frame_prefix_fixture => network_fixtures::frame_prefix;
+
+    /// Generate the independent file-region byte reader used by wire comparisons.
+    file_region_fixture => network_fixtures::file_region;
+}
+
+/// Expand the common I/O, TLS and SASL error variants at their original position.
+#[moxy::attribute(name = "transport_errors")]
+pub fn transport_errors(meta: TokenStream, item: TokenStream) -> Result<TokenStream, ParseError> {
+    transport_errors::expand(meta, item)
+}
+
+function_macros! {
+    /// Generate a voter-set fixture whose endpoints and directory IDs remain empty.
+    empty_endpoint_voters => raft_fixtures::empty_endpoint_voters;
+
+    /// Generate the one-record leader-epoch batch fixture.
+    epoch_record_batch_fixture => raft_fixtures::epoch_record_batch;
+
+    /// Generate the epoch-cache `LogView` delegation used by Raft simulations.
+    epoch_log_view => raft_fixtures::epoch_log_view;
+}
+
+/// Derive a TOML table's schema and value traits with an explicit unknown-key policy.
+#[moxy::attribute(name = "config_table")]
+pub fn config_table(meta: TokenStream, item: TokenStream) -> Result<TokenStream, ParseError> {
+    config_table::expand(meta, item)
+}
+
+/// Match record payloads with file-region arms only on supported platforms.
+#[moxy::function(name = "records_payload_match")]
+pub fn records_payload_match(tokens: NativeTokenStream) -> Result<NativeTokenStream, ParseError> {
+    sendfile_match::records_payload_native(tokens)
+}
+
+function_macros! {
+    /// Generate the canonical compressed legacy record used by policy tests.
+    legacy_policy_fixture => legacy_fixtures::policy;
+
+    /// Generate keyed fixture records with explicit count and value size.
+    keyed_record_batch_fixture => network_fixtures::keyed_record_batch;
+}
+
+/// Add the shared generic argv signature to a command-line entry point.
+#[moxy::attribute(name = "argv_entrypoint")]
+pub fn argv_entrypoint(meta: TokenStream, item: TokenStream) -> Result<TokenStream, ParseError> {
+    cli_support::argv_entrypoint(meta, item)
+}
+
+/// Add bootstrap-server and subcommand fields before deriving a CLI parser.
+#[moxy::attribute(name = "bootstrap_cli_fields")]
+pub fn bootstrap_cli_fields(
+    meta: TokenStream,
+    item: TokenStream,
+) -> Result<TokenStream, ParseError> {
+    cli_support::bootstrap_cli_fields(meta, item)
+}
+
+function_macros! {
+    /// Generate a duration-parser check over each caller's literal cases.
+    duration_cases_fixture => cli_support::duration_cases;
+
+    /// Generate a sorted directory-tree fixture with the caller's path projection.
+    directory_tree_fixture => cli_support::directory_tree;
+
+    /// Generate a CLI entry point with the caller's documentation.
+    parsed_cli_entrypoint => cli_support::parsed_cli_entrypoint;
+
+    /// Generate a duration-parser test from explicit literal cases.
+    duration_parser_fixture => cli_support::duration_parser_fixture;
+
+    /// Generate bootstrap parser tests from accepted and refused arguments.
+    bootstrap_parser_fixture => cli_support::bootstrap_parser_fixture;
+
+    /// Generate the shared snapshot fixture over an on-disk metadata log.
+    snapshot_node_fixture => cli_support::snapshot_node_fixture;
+
+    /// Connect a CLI client with the caller's identity and refusal exit code.
+    connect_cli_client => cli_support::connect_cli_client;
+
+    /// Generate the temporary metadata and data directories used by format tests.
+    format_directories_fixture => cli_support::format_directories_fixture;
+
+    /// Generate the explicit topic map used by WAL capture fixtures.
+    wal_capture_topic_fixture => remote_metadata_fixtures::wal_capture_topic_fixture;
+
+    /// Generate a CLI flag's name, environment and default-value projection.
+    flag_metadata_fixture => cli_support::flag_metadata_fixture;
+
+    /// Generate a listener bind retry with an explicit caller timeout.
+    bind_retry_fixture => cli_support::bind_retry_fixture;
+
+    /// Generate bound-listener configuration or startup with the caller's diagnostics.
+    bound_start_fixture => bound_start_fixture::expand;
+
+    /// Generate directory-assignment requests with explicit broker and partition identities.
+    assignment_dirs_fixture => bound_start_fixture::assignment_dirs;
+
+    /// Generate a registry-rendering macro that retains the caller's lock guard.
+    metric_registry_fixture => bound_start_fixture::metric_registry;
+
+    /// Generate the started remote-segment fixture with an explicit metadata crate.
+    remote_started_segment => remote_metadata_fixtures::remote_started_segment;
+
+    /// Generate a SCRAM user request preserving optional and ordered user lists.
+    scram_users_fixture => bound_start_fixture::scram_users;
+
+    /// Generate the first matching record header decoder with an explicit UTF-8 policy.
+    record_header_text => fixtures::record_header_text;
+
+    /// Generate the shared dead-letter metric observations with caller-selected types.
+    share_dlq_meters => fixtures::share_dlq_meters;
+
+    /// Generate exported segment paths with an explicit snapshot and lazy epoch projection.
+    export_segment_data_fixture => network_fixtures::export_segment_data;
+}
+
+/// Keep partition-spawn wrappers on one shared parameter list.
+#[moxy::attribute(name = "partition_spawn_parameters")]
+pub fn partition_spawn_parameters(
+    meta: TokenStream,
+    item: NativeTokenStream,
+) -> Result<NativeTokenStream, ParseError> {
+    network_fixtures::partition_spawn_parameters(meta, item)
+}
+
+function_macros! {
+    /// Generate a checkpoint writer with a caller-selected failure kind.
+    epoch_checkpoint_failure => network_fixtures::epoch_checkpoint_failure;
+}
+
+/// Gate original items or expressions on the supported sendfile platforms.
+#[moxy::function(name = "sendfile_platform")]
+#[expect(
+    clippy::unnecessary_wraps,
+    reason = "Moxy's proc_macro adapter requires a Result-returning entry point"
+)]
+pub fn sendfile_platform(tokens: NativeTokenStream) -> Result<NativeTokenStream, ParseError> {
+    Ok(network_fixtures::sendfile_platform(tokens))
+}
+
+/// Generate a test authorizer while retaining the original policy body tokens.
+#[moxy::function(name = "test_authorizer")]
+pub fn test_authorizer(tokens: NativeTokenStream) -> Result<NativeTokenStream, ParseError> {
+    network_fixtures::test_authorizer(tokens)
+}
+
+function_macros! {
+    /// Generate checked Unix-millisecond fixtures with explicit panic contexts.
+    unix_millis_fixture => bound_start_fixture::unix_millis;
+
+    /// Generate a Vec request frame with the caller's checked length-prefix type.
+    vector_request_fixture => bound_start_fixture::vector_request;
+    /// Generate the independent seven-row supported-feature oracle.
+    supported_features_fixture => cross_storage_fixtures::supported_features_fixture;
+
+    /// Generate supported-feature rows from explicit wire bounds.
+    supported_feature_fixture => cross_storage_fixtures::supported_feature_fixture;
+    /// Generate finalized-feature rows from explicit wire levels.
+    finalized_feature_fixture => cross_storage_fixtures::finalized_feature_fixture;
+    /// Generate the record input used by byte-limit tests.
+    record_limit_fixture => cross_storage_fixtures::record_limit_fixture;
+    /// Generate keyed compaction batches with explicit producer state and timestamp.
+    compaction_record_fixture => cross_storage_fixtures::compaction_record_fixture;
+    /// Project registration feature bounds into an ordered map.
+    registration_feature_projection => cross_storage_fixtures::registration_feature_projection;
+    /// Generate the validated connection dispatch-capacity parser.
+    dispatch_capacity_parser => cli_support::dispatch_capacity_parser;
+}
+
+/// Share S3 endpoint and credential fields with the original configuration documentation.
+#[moxy::attribute]
+pub fn s3_fields(meta: TokenStream, item: TokenStream) -> Result<TokenStream, ParseError> {
+    s3_fields::expand(meta, item)
 }

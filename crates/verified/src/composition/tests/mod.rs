@@ -11,6 +11,66 @@ mod refill;
 mod tiered_timestamp;
 mod typed_timestamp;
 
+/// Full-width available/debt/burst inputs and two whole-token charges.
+fn quota_charge_cases() -> impl Strategy<Value = ((u64, u64), u64, u64, u64)> {
+    (
+        any::<u64>(),
+        any::<u64>(),
+        any::<u64>(),
+        any::<bool>(),
+        any::<u64>(),
+        any::<u64>(),
+    )
+        .prop_map(|(available, debt, burst, owes, refill, requested)| {
+            let balance = if owes {
+                (0, debt)
+            } else {
+                (available.min(burst), 0)
+            };
+            (balance, burst, refill, requested)
+        })
+}
+
+/// Original nonnegative reload coordinates, including saturation at `i64::MAX`.
+fn replay_range_cases() -> impl Strategy<Value = (ProducerReloadRange, i64)> {
+    (
+        0i64..=i64::MAX,
+        0i64..=i64::MAX,
+        0i64..=i64::MAX,
+        0i64..=i64::MAX,
+    )
+        .prop_map(|(start, span, local, tail)| {
+            let cut = start.saturating_add(span);
+            (
+                ProducerReloadRange {
+                    log_start: start,
+                    local_start: local.min(cut),
+                    log_end: cut.saturating_add(tail),
+                },
+                cut,
+            )
+        })
+}
+
+/// The same complete debt, burst and fractional-credit input domain for ledger tests.
+fn token_balance_cases() -> impl Strategy<Value = ((u64, u64, u64), u64)> {
+    (
+        any::<u64>(),
+        prop_oneof![0_u64..100_000_000, any::<u64>()],
+        prop_oneof![0_u64..100_000_000, any::<u64>()],
+        any::<bool>(),
+        0_u64..1_000_000_000,
+    )
+        .prop_map(|(available, debt, burst, owes, fraction)| {
+            let initial = if owes {
+                (0, debt, fraction)
+            } else {
+                (available.min(burst), 0, fraction)
+            };
+            (initial, burst)
+        })
+}
+
 fn token_acl(operation: AclOperationKind, allow: bool, flags: u16) -> TokenDescriptionAcl {
     let bit = |index| flags & (1_u16 << index) != 0_u16;
     TokenDescriptionAcl {
@@ -47,6 +107,76 @@ fn recovered_window_row(base: i64, delta: i32, last_sequence: i32) -> ProducerSn
         current_txn_first_offset: -1,
     }
 }
+
+type TimestampRecords = (Vec<u32>, Vec<i64>, Vec<(usize, usize)>);
+
+fn timestamp_records(
+    records: &std::collections::BTreeMap<u32, i64>,
+    step: usize,
+    span: usize,
+) -> TimestampRecords {
+    (
+        records.keys().copied().collect(),
+        records.values().copied().collect(),
+        (0..records.len())
+            .step_by(step)
+            .map(|i| (i, (i + span).min(records.len() - 1)))
+            .collect(),
+    )
+}
+
+fn prefix_maxima(window: SparseTimestampWindow<'_>) -> Vec<(i64, u32)> {
+    let (offsets, times, rows) = window;
+    rows.iter()
+        .map(|&(indexed, through)| (*times[..=through].iter().max().unwrap(), offsets[indexed]))
+        .collect()
+}
+
+fn indexed_timestamp_records(
+    records: &std::collections::BTreeMap<u32, i64>,
+    step: usize,
+) -> (Vec<u32>, Vec<i64>, Vec<(i64, u32)>) {
+    let (offsets, times, rows) = timestamp_records(records, step, 0);
+    let entries = prefix_maxima((&offsets, &times, &rows));
+    (offsets, times, entries)
+}
+
+fn oracle_sequence(value: i64) -> i32 {
+    i32::try_from(value.rem_euclid(1_i64 << 31)).unwrap()
+}
+
+fn oracle_retry_matches(row: &ProducerSnapshotEntryFacts, request: (i16, i32, i32, bool)) -> bool {
+    request.0 == row.producer_epoch
+        && request.1 == oracle_sequence(i64::from(row.last_sequence) - i64::from(row.offset_delta))
+        && row.last_sequence == oracle_sequence(i64::from(request.1) + i64::from(request.2))
+}
+
+fn epoch_rows(count: usize, epoch: i16, sequence: i32) -> Vec<ProducerSnapshotEntryFacts> {
+    (0..count)
+        .map(|i| {
+            let mut row = recovered_window_row(4 * i64::try_from(i).unwrap(), 2, sequence);
+            row.producer_epoch = epoch;
+            row
+        })
+        .collect()
+}
+
+fn maximum_epoch_row(epoch: i16) -> ProducerSnapshotEntryFacts {
+    let mut row = recovered_window_row(i64::MAX - 1, 0, i32::MAX);
+    row.producer_epoch = epoch;
+    row
+}
+
+fn constant_time_window(offsets: &[u32]) -> SparseTimestampWindow<'_> {
+    (offsets, &[100; 3], &[(0, 0), (1, 1), (2, 2)])
+}
+
+type ScheduledFixture<'a> = (&'a [(i64, i32)], &'a [i64]);
+
+const VALID_SCHEDULES: [ScheduledFixture<'_>; 2] = [
+    (&[(0, 1), (2, 1), (4, 1)], &[0, 100, 0]),
+    (&[(0, 1), (4, 1)], &[10, 20]),
+];
 
 mod charge_refund_agrees_with_a_signed_ledger_and_detects_storage_loss;
 
@@ -133,7 +263,6 @@ fn oracle_next_producer_decision(
     request: (i16, i32, i32, bool),
     end: i64,
 ) -> ProducerDecision {
-    let sequence = |value: i64| i32::try_from(value.rem_euclid(1_i64 << 31)).unwrap();
     match last {
         Some(last) if request.0 < last.producer_epoch => ProducerDecision::Fenced,
         Some(last) if request.0 > last.producer_epoch => {
@@ -144,7 +273,7 @@ fn oracle_next_producer_decision(
             }
         }
         Some(last) => {
-            if request.1 == sequence(i64::from(last.last_sequence) + 1) {
+            if request.1 == oracle_sequence(i64::from(last.last_sequence) + 1) {
                 ProducerDecision::Append
             } else {
                 ProducerDecision::OutOfOrder

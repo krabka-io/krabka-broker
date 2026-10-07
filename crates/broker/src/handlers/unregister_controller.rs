@@ -31,12 +31,9 @@
 
 use bytes::Bytes;
 use krabka_metadata::{MetadataRecord, NodeId, UnregisterControllerRecord};
-use krabka_protocol::{
-    Decode,
-    owned::{
-        unregister_controller_request::{self, UnregisterControllerRequest},
-        unregister_controller_response::UnregisterControllerResponse,
-    },
+use krabka_protocol::owned::{
+    unregister_controller_request::{self, UnregisterControllerRequest},
+    unregister_controller_response::UnregisterControllerResponse,
 };
 use krabka_raft::RaftError;
 
@@ -47,7 +44,7 @@ use crate::{
     error::BrokerError,
     features::CONTROLLER_UNREGISTRATION_MIN_LEVEL,
     handlers::{
-        RequestContext, cluster_alter_denied,
+        cluster_alter_denied,
         forward_to_controller::{to_active_controller, wrong_controller_message},
     },
 };
@@ -65,65 +62,61 @@ const CLUSTER_ALTER_DENIED_MESSAGE: &str = "Request UnregisterController needs A
 const UNSUPPORTED_METADATA_VERSION_MESSAGE: &str =
     "The current MetadataVersion is too old to support controller unregistration.";
 
-pub(crate) async fn handle(
-    broker: &Broker,
-    version: i16,
-    req_bytes: &[u8],
-    ctx: &RequestContext<'_>,
-) -> Result<Bytes, BrokerError> {
-    let mut cur: &[u8] = req_bytes;
-    let req = UnregisterControllerRequest::decode(&mut cur, version)?;
-    let image = broker.controller.current_image();
+wire_handler! {
+    async (broker, version, req_bytes, ctx), {
+        let req = crate::handlers::decode_request::<UnregisterControllerRequest>(req_bytes, version)?;
+        let image = broker.controller.current_image();
 
-    // A broker listener forwards the request untouched, and the controller
-    // authorizes the principal the `Envelope` names. A node that is itself
-    // the active controller has nowhere to forward to and answers in place.
-    if ctx.connection_id != CONTROLLER_ADMIN_CONNECTION_ID
-        && let Some(answer) = to_active_controller(
-            broker,
-            unregister_controller_request::API_KEY,
-            req_bytes,
-            version,
-            ctx,
-            |error_code, message| encode(version, error_code, message),
-        )
-        .await
-    {
-        return answer;
-    }
-    if cluster_alter_denied(broker.config.authorizer.as_ref(), &image, ctx) {
-        return encode(
-            version,
-            codes::CLUSTER_AUTHORIZATION_FAILED,
-            Some(CLUSTER_ALTER_DENIED_MESSAGE),
-        );
-    }
+        // A broker listener forwards the request untouched, and the controller
+        // authorizes the principal the `Envelope` names. A node that is itself
+        // the active controller has nowhere to forward to and answers in place.
+        if ctx.connection_id != CONTROLLER_ADMIN_CONNECTION_ID
+            && let Some(answer) = to_active_controller(
+                broker,
+                unregister_controller_request::API_KEY,
+                req_bytes,
+                version,
+                ctx,
+                |error_code, message| encode(version, error_code, message),
+            )
+            .await
+        {
+            return answer;
+        }
+        if cluster_alter_denied(broker.config.authorizer.as_ref(), &image, ctx) {
+            return encode(
+                version,
+                codes::CLUSTER_AUTHORIZATION_FAILED,
+                Some(CLUSTER_ALTER_DENIED_MESSAGE),
+            );
+        }
 
-    let leader = *broker.controller.watch_leader().borrow();
-    if leader != Some(broker.config.node_id) {
-        return encode(
-            version,
-            codes::NOT_CONTROLLER,
-            Some(&wrong_controller_message(leader)),
-        );
-    }
+        let leader = *broker.controller.watch_leader().borrow();
+        if leader != Some(broker.config.node_id) {
+            return encode(
+                version,
+                codes::NOT_CONTROLLER,
+                Some(&wrong_controller_message(leader)),
+            );
+        }
 
-    let (error_code, message) = match refusal(&image, req.controller_id) {
-        Some(refused) => refused,
-        None => submit(broker, req.controller_id).await,
-    };
-    if error_code == codes::NONE {
-        crate::handlers::audit_admin_success(
-            broker.audit_log.as_ref(),
-            ctx,
-            "UnregisterController",
-            vec![crate::handlers::audit_resource(
-                "Controller",
-                req.controller_id.to_string(),
-            )],
-        );
+        let (error_code, message) = match refusal(&image, req.controller_id) {
+            Some(refused) => refused,
+            None => submit(broker, req.controller_id).await,
+        };
+        if error_code == codes::NONE {
+            crate::handlers::audit_admin_success(
+                broker.audit_log.as_ref(),
+                ctx,
+                "UnregisterController",
+                vec![crate::handlers::audit_resource(
+                    "Controller",
+                    req.controller_id.to_string(),
+                )],
+            );
+        }
+        encode(version, error_code, message.as_deref())
     }
-    encode(version, error_code, message.as_deref())
 }
 
 /// The refusal trunk's `QuorumController.unregisterController` and

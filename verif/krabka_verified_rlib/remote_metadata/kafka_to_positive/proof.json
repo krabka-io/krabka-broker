@@ -2,11 +2,8 @@
   "profile": [],
   "proofs": {
     "Coma": {
-      "vc_from_u64": { "prover": "alt-ergo", "time": 0.019 },
-      "vc_kafka_to_positive": {
-        "tactic": "compute_specified",
-        "children": [ { "prover": "alt-ergo", "time": 0.021 } ]
-      }
+      "vc_from_u64": { "prover": "alt-ergo", "time": 0.011 },
+      "vc_kafka_to_positive": { "prover": "alt-ergo", "time": 0.023 }
     }
   }
 }

@@ -40,15 +40,7 @@ pub fn dormant_timer() -> Arc<dyn Timer> {
 
 /// Yield-polls until `cond` holds. A bounded hang-guard makes a real stall
 /// fail the test deterministically instead of spinning forever.
-pub async fn await_until(what: &str, mut cond: impl FnMut() -> bool) {
-    for _ in 0..200_000 {
-        if cond() {
-            return;
-        }
-        tokio::task::yield_now().await;
-    }
-    panic!("condition never held: {what}");
-}
+pub(crate) use crate::test_support::await_until;
 
 /// Serves a fixed body at `/jwks` on an ephemeral port. It returns the
 /// bound address and a shutdown token for the server task.

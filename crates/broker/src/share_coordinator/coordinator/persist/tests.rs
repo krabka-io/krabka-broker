@@ -165,21 +165,12 @@ async fn an_answer_waits_for_the_commit_under_its_term() {
         part.install_leader_change(1, 0).await;
         part.replica_state.lock().await.hw = Offset(case.hw_now);
 
-        let changes = {
-            let part = Arc::clone(&part);
-            let (moves_to, hw_later) = (case.moves_to, case.hw_later);
-            tokio::spawn(async move {
-                // intentional: the wait has to start before the changes land.
-                tokio::time::sleep(Duration::from_millis(20)).await;
-                if let Some((leader, epoch)) = moves_to {
-                    part.install_leader_change(leader, epoch).await;
-                }
-                if let Some(hw) = hw_later {
-                    part.replica_state.lock().await.hw = Offset(hw);
-                    part.hw_advance_notify.notify_waiters();
-                }
-            })
-        };
+        let changes = crate::coordinator::test_support::schedule_commit_changes!(
+            case, part;
+            captures {  }
+            leader(leader, epoch) { part.install_leader_change(leader, epoch).await; }
+            notify { part.hw_advance_notify.notify_waiters(); }
+        );
         let result = coord.await_committed(TERM, Offset(2)).await;
         changes.await.expect("the changes land");
 

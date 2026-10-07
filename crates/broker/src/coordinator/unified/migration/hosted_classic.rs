@@ -252,11 +252,17 @@ mod tests {
     }
 
     fn image() -> ReconcileInput {
-        ReconcileInput {
-            topic_id_by_name: [("t".to_string(), TOPIC)].into(),
-            partitions_per_topic: [(TOPIC, 2)].into(),
-            ..ReconcileInput::default()
-        }
+        crate::coordinator::unified::actor::test_support::topic_reconcile_input("t", TOPIC, 2)
+    }
+
+    fn group_with_native_member() -> ConsumerState {
+        let mut state = ConsumerState::new("g");
+        state.add_or_update_member(native_member("m-native"));
+        state
+            .target
+            .per_member
+            .insert("m-native".into(), [(TOPIC, vec![0, 1])].into());
+        state
     }
 
     /// A native KIP-848 member reconciles through `ConsumerGroupHeartbeat`,
@@ -266,12 +272,7 @@ mod tests {
     /// hand the member an assignment it never acknowledged.
     #[test]
     fn classic_sync_by_a_native_member_is_an_unknown_member() {
-        let mut state = ConsumerState::new("g");
-        state.add_or_update_member(native_member("m-native"));
-        state
-            .target
-            .per_member
-            .insert("m-native".into(), [(TOPIC, vec![0, 1])].into());
+        let mut state = group_with_native_member();
 
         let result = serve_classic_sync(&mut state, "m-native", &image());
 
@@ -293,12 +294,7 @@ mod tests {
     /// path that cannot serve it.
     #[test]
     fn classic_heartbeat_by_a_native_member_is_an_unknown_member() {
-        let mut state = ConsumerState::new("g");
-        state.add_or_update_member(native_member("m-native"));
-        state
-            .target
-            .per_member
-            .insert("m-native".into(), [(TOPIC, vec![0, 1])].into());
+        let mut state = group_with_native_member();
 
         check!(
             serve_classic_heartbeat(&mut state, "m-native", &image()) == codes::UNKNOWN_MEMBER_ID

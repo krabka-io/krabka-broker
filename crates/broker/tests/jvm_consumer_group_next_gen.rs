@@ -4,9 +4,8 @@
 
 mod support;
 
-use std::process::{Command, Stdio};
-
 use assert2::assert;
+use support::jvm_docker_run as docker_run;
 
 /// Ports for this test process, allocated once rather than fixed at 9092.
 ///
@@ -101,28 +100,6 @@ fn parse_partitions(stdout: &str) -> std::collections::BTreeSet<i32> {
         }
     }
     set
-}
-
-/// Run a docker container and return its output, with no success assertion.
-/// Consumer commands often exit non-zero on timeout even when they consumed
-/// messages, so each caller must check what matters to it.
-fn docker_run(image: &str, args: &[&str]) -> std::process::Output {
-    let out = Command::new("docker")
-        .arg("run")
-        .arg("--rm")
-        .arg("--add-host=host.docker.internal:host-gateway")
-        .arg(image)
-        .args(args)
-        .stderr(Stdio::piped())
-        .stdout(Stdio::piped())
-        .output()
-        .expect("docker run");
-    eprintln!(
-        "KRABKA[test] docker {image} {args:?} status={} stderr={}",
-        out.status,
-        String::from_utf8_lossy(&out.stderr),
-    );
-    out
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

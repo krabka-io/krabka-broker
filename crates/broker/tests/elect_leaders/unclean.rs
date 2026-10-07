@@ -9,7 +9,7 @@ use assert2::assert;
 use krabka_metadata::{MetadataRecord, PartitionRecord};
 
 use crate::{
-    cluster_lock, support,
+    cluster_lock,
     wait::{
         wait_partition_exists, wait_partition_isr_contains, wait_partition_isr_only,
         wait_partition_leader, wait_partition_record_known,
@@ -36,8 +36,7 @@ use crate::{
 async fn unclean_election_via_wire_picks_alive_replica() {
     let _g = cluster_lock().lock().await;
 
-    let cluster = support::start_n_node_with_retry(3).await;
-    support::wait_for_all_brokers_registered(&cluster, 3).await;
+    let cluster = crate::support::registered_cluster(3).await;
 
     // Send ElectLeaders to the current raft leader. Any broker answers it the
     // same way now that the election reads replicated state, but the leader is
@@ -61,7 +60,7 @@ async fn unclean_election_via_wire_picks_alive_replica() {
     let h1 = &cluster[1].0;
 
     // Create rf=2 topic. Replicas=[1,2]; broker 1 is preferred.
-    create_topic_plaintext(addr, "foo-unclean", &[1, 2]).await;
+    create_topic_plaintext(addr, crate::wire::CLIENT_ID, "foo-unclean", &[1, 2]).await;
     wait_partition_exists(h0, "foo-unclean", 0).await;
     wait_partition_exists(h1, "foo-unclean", 0).await;
 
@@ -103,7 +102,7 @@ async fn unclean_election_via_wire_picks_alive_replica() {
     // Drive ElectLeaders Unclean (election_type=1).
     // The algorithm finds: ISR=[99] — all dead → unclean eligible.
     // First alive in replicas=[1,2] → broker 1 → new leader=1, isr=[1].
-    let result = drive_elect_leaders(addr, "foo-unclean", vec![0], 1).await;
+    let result = drive_elect_leaders(addr, crate::wire::CLIENT_ID, "foo-unclean", vec![0], 1).await;
     assert!(
         result == vec![(0, 0)],
         "expected error_code=0 for UNCLEAN election; got {result:?}"
@@ -119,7 +118,5 @@ async fn unclean_election_via_wire_picks_alive_replica() {
     wait_partition_isr_contains(h0, "foo-unclean", 0, 1).await;
 
     // Clean up.
-    for (h, _, _) in cluster {
-        h.shutdown().await;
-    }
+    crate::support::shutdown_cluster(cluster).await;
 }

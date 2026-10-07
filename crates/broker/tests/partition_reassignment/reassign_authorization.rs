@@ -7,9 +7,7 @@
 use std::time::{Duration, Instant};
 
 use assert2::assert;
-use krabka_metadata::{
-    AclEntry, AclOperation, MetadataRecord, PatternType, PermissionType, ResourceType,
-};
+use krabka_metadata::AclOperation;
 
 use crate::{
     plaintext_cluster::wait_partition_exists,
@@ -37,15 +35,11 @@ async fn non_super_user_denied() {
     // irrelevant — any non-empty `image.acls` flips the shim off and forces
     // the authorizer to evaluate every request.
     handle
-        .submit_metadata_record_for_test(MetadataRecord::V1AccessControlEntry(AclEntry {
-            resource_type: ResourceType::Topic,
-            resource_name: "__compat_shim_disable__".to_string(),
-            pattern_type: PatternType::Literal,
-            principal: "User:admin".to_string(),
-            host: "*".to_string(),
-            operation: AclOperation::Read,
-            permission_type: PermissionType::Allow,
-        }))
+        .submit_metadata_record_for_test(crate::support::acl::topic_acl_record(
+            "__compat_shim_disable__",
+            "User:admin",
+            AclOperation::Read,
+        ))
         .await
         .expect("seed dummy ACL");
 
@@ -57,7 +51,7 @@ async fn non_super_user_denied() {
         .wait_for_image(|img| img.all_acls().next().is_some())
         .await;
 
-    create_topic_as_admin(addr, "foo", 1, 1).await;
+    create_topic_as_admin(addr, crate::plaintext_wire::CLIENT_ID, "foo", 1, 1).await;
     wait_partition_exists(&handle, "foo", 0).await;
 
     // Retry up to 5s to absorb raft apply latency on slow runners.

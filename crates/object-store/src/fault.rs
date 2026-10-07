@@ -227,6 +227,14 @@ pub struct FaultInjectingStore {
     counters: Counters,
 }
 
+fn failed_stream<T: Send + 'static>(
+    kind: FaultKind,
+    operation: StoreOp,
+) -> BoxStream<'static, object_store::Result<T>> {
+    let error = kind.error(operation.label(), &listing_path());
+    futures_util::stream::once(async move { Err(error) }).boxed()
+}
+
 impl FaultInjectingStore {
     /// Wrap `inner` with `policy`.
     #[must_use]
@@ -315,10 +323,7 @@ impl ObjectStore for FaultInjectingStore {
         match self.policy.fault(StoreOp::Delete) {
             // The delete stream is built synchronously, so an injected
             // latency here is applied per yielded path rather than once.
-            Some(fault) if fault.fails_call(n) => {
-                let error = fault.kind.error(StoreOp::Delete.label(), &listing_path());
-                futures_util::stream::once(async move { Err(error) }).boxed()
-            }
+            Some(fault) if fault.fails_call(n) => failed_stream(fault.kind, StoreOp::Delete),
             Some(fault) if !fault.latency.is_zero() => {
                 let stream = self.inner.delete_stream(locations);
                 stream
@@ -338,10 +343,7 @@ impl ObjectStore for FaultInjectingStore {
             .slot(StoreOp::List)
             .fetch_add(1, Ordering::SeqCst);
         match self.policy.fault(StoreOp::List) {
-            Some(fault) if fault.fails_call(n) => {
-                let error = fault.kind.error(StoreOp::List.label(), &listing_path());
-                futures_util::stream::once(async move { Err(error) }).boxed()
-            }
+            Some(fault) if fault.fails_call(n) => failed_stream(fault.kind, StoreOp::List),
             Some(fault) if !fault.latency.is_zero() => {
                 let stream = self.inner.list(prefix);
                 let latency = fault.latency;
@@ -484,11 +486,7 @@ mod tests {
         let store = memory(FaultPolicy::none());
         let path = Path::from("seg.log");
 
-        store
-            .put(&path, PutPayload::from(b"bytes".to_vec()))
-            .await
-            .unwrap();
-        let got = store.get(&path).await.unwrap().bytes().await.unwrap();
+        let got = crate::test_support::round_trip(&store, &path, b"bytes").await;
 
         check!(&got[..] == b"bytes");
         check!(store.attempts(StoreOp::Put) == 1);

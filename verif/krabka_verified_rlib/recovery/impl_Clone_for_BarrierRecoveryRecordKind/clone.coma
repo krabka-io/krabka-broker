@@ -1,4 +1,4 @@
-(* #"/workspace/crates/verified/src/recovery.rs" 29 27 29 32 *)
+(* #"/workspace/crates/verified/src/recovery.rs" 6 19 6 36 *)
 
 (* <recovery::BarrierRecoveryRecordKind as std::clone::Clone> *)
 
@@ -10,7 +10,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let clone_BarrierRecoveryRecordKind [#"/workspace/crates/verified/src/recovery.rs" 29 27 29 32]
+let clone_BarrierRecoveryRecordKind [#"/workspace/crates/verified/src/recovery.rs" 6 19 6 36]
   (self: t_BarrierRecoveryRecordKind) (return (x: t_BarrierRecoveryRecordKind)) = (! bb0
   [ bb0 = s0 [ s0 = [ &_ret <- self ] s1 | s1 = return {_ret} ] ]
   [ & _ret: t_BarrierRecoveryRecordKind = Any.any_l () | & self: t_BarrierRecoveryRecordKind = self ])

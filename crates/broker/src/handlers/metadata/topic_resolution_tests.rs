@@ -21,12 +21,10 @@ use krabka_protocol::{
 };
 
 use crate::{
-    authorizer::{
-        AclSource, AllowAllAuthorizer, AuthorizationRequest, AuthorizationResult, Authorizer,
-    },
+    authorizer::{AllowAllAuthorizer, AuthorizationResult, Authorizer},
     broker::BrokerHandle,
     codes,
-    test_support::{peer, principal, request_context, start_broker_no_audit_with},
+    test_support::{peer, principal, start_broker_no_audit_with},
 };
 
 /// An id that no topic in these tests has.
@@ -44,21 +42,13 @@ const TOPIC_B: &str = "resolution-b";
 #[derive(Debug)]
 struct DenyTopicDescribe;
 
-impl Authorizer for DenyTopicDescribe {
-    fn authorize(
-        &self,
-        _source: &dyn AclSource,
-        request: &AuthorizationRequest<'_>,
-    ) -> AuthorizationResult {
-        if request.resource_type == ResourceType::Topic
-            && request.operation == AclOperation::Describe
-        {
-            AuthorizationResult::Deny
-        } else {
-            AuthorizationResult::Allow
-        }
+test_authorizer!(DenyTopicDescribe, (self, _source, request), {
+    if request.resource_type == ResourceType::Topic && request.operation == AclOperation::Describe {
+        AuthorizationResult::Deny
+    } else {
+        AuthorizationResult::Allow
     }
-}
+});
 
 /// A request row: the name, if any, and the kind of id.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -166,9 +156,11 @@ async fn metadata(
     request: &MetadataRequest,
 ) -> MetadataResponse {
     let shared = broker.broker_arc_for_test();
-    let user = principal("describer");
-    let address = peer();
-    let ctx = request_context(&user, &address, "metadata-client");
+    request_identity!(
+        (user, address, ctx),
+        principal("describer"),
+        client_id = "metadata-client"
+    );
     crate::test_support::dispatch_wire(
         &shared,
         krabka_protocol::api_key::ApiKey::Metadata as i16,

@@ -10,6 +10,36 @@ mod commit_waiter;
 mod control_support;
 mod sets;
 
+type RequestCase = (
+    Vec<u64>,
+    u64,
+    (
+        ReconfigurationLeadership,
+        CurrentVoterSet,
+        VoterChangeRequest,
+        TargetVoter,
+    ),
+);
+
+fn request_cases() -> impl Strategy<Value = RequestCase> {
+    (
+        prop::collection::vec(0_u64..12, 0..10),
+        0_u64..13,
+        any::<u16>(),
+        0_u8..4,
+        0_u8..4,
+        0_u16..3,
+        0_u16..3,
+    )
+        .prop_map(
+            |(old, node, bits, operation, membership, version, requested)| {
+                let facts =
+                    generated_request(old.len(), bits, operation, membership, version, requested);
+                (old, node, facts)
+            },
+        )
+}
+
 fn generated_request(
     count: usize,
     bits: u16,
@@ -56,4 +86,9 @@ fn generated_request(
             caught_up: flag(6),
         },
     )
+}
+
+/// One old/new report pair for every possible voter slot, with original full-width bounds.
+fn prefix_report_cases() -> impl Strategy<Value = Vec<(i64, i64)>> {
+    prop::collection::vec((any::<i64>(), any::<i64>()), 11)
 }

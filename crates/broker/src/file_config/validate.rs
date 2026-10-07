@@ -234,14 +234,8 @@ pub(super) fn disableable_millis_i32_time(
     name: &str,
     value: Time,
 ) -> Result<Time, FileConfigError> {
-    let value = nonnegative_time(name, value)?;
+    let value = whole_millis(name, nonnegative_time(name, value)?)?;
     let millis = value.millis_i64();
-    if Time::from_millis(millis) != value {
-        return Err(invalid_runtime_value(
-            name,
-            "must be a whole number of milliseconds",
-        ));
-    }
     if (0..=i64::from(i32::MAX)).contains(&millis) {
         Ok(value)
     } else {
@@ -254,15 +248,7 @@ pub(super) fn disableable_millis_i32_time(
 
 pub(super) fn whole_millis_i64_time(name: &str, value: Time) -> Result<Time, FileConfigError> {
     let value = positive_time(name, value)?;
-    let millis = value.millis_i64();
-    if Time::from_millis(millis) == value {
-        Ok(value)
-    } else {
-        Err(invalid_runtime_value(
-            name,
-            "must be a whole number of milliseconds",
-        ))
-    }
+    whole_millis(name, value)
 }
 
 /// A whole number of milliseconds Kafka's `ConfigDef.Type::LONG` can hold,
@@ -277,6 +263,11 @@ pub(super) fn nonnegative_millis_i64_time(
     value: Time,
 ) -> Result<Time, FileConfigError> {
     let value = nonnegative_time(name, value)?;
+    whole_millis(name, value)
+}
+
+/// Verify representability after the caller applies its own sign or zero policy.
+fn whole_millis(name: &str, value: Time) -> Result<Time, FileConfigError> {
     let millis = value.millis_i64();
     if Time::from_millis(millis) == value {
         Ok(value)
@@ -298,6 +289,19 @@ mod tests {
     use assert2::{assert, check};
 
     use crate::file_config::FileConfig;
+
+    /// Independent default provenance with the two explicitly varied expiry flags.
+    fn expected_origins(expiration: bool, cleanup: bool) -> crate::config::StaticConfigOrigins {
+        crate::config::StaticConfigOrigins {
+            txn_id_expiration: expiration,
+            txn_id_expiration_cleanup_interval: cleanup,
+            topic_creation: crate::config::TopicCreationOrigins::default(),
+            log: crate::config::LogOrigins::default(),
+            topic_admin: crate::config::TopicAdminOrigins::default(),
+            authentication: crate::config::AuthenticationOrigins::default(),
+            ..Default::default()
+        }
+    }
 
     #[test]
     fn runtime_file_config_rejects_zero_and_names_field() {
@@ -413,57 +417,28 @@ mod tests {
             (
                 "nothing supplied",
                 "[runtime]\n",
-                crate::config::StaticConfigOrigins {
-                    txn_id_expiration: false,
-                    txn_id_expiration_cleanup_interval: false,
-                    topic_creation: crate::config::TopicCreationOrigins::default(),
-                    log: crate::config::LogOrigins::default(),
-                    topic_admin: crate::config::TopicAdminOrigins::default(),
-                    authentication: crate::config::AuthenticationOrigins::default(),
-                    ..Default::default()
-                },
+                expected_origins(false, false),
             ),
             (
                 "the expiry supplied, at Kafka's own default value",
                 "[runtime]\ntxn_id_expiration = \"604800000ms\"\n",
-                crate::config::StaticConfigOrigins {
-                    txn_id_expiration: true,
-                    txn_id_expiration_cleanup_interval: false,
-                    topic_creation: crate::config::TopicCreationOrigins::default(),
-                    log: crate::config::LogOrigins::default(),
-                    topic_admin: crate::config::TopicAdminOrigins::default(),
-                    authentication: crate::config::AuthenticationOrigins::default(),
-                    ..Default::default()
-                },
+                expected_origins(true, false),
             ),
             (
                 "both supplied",
                 "[runtime]\ntxn_id_expiration = \"120000ms\"\n\
                  txn_id_expiration_cleanup_interval = \"60000ms\"\n",
-                crate::config::StaticConfigOrigins {
-                    txn_id_expiration: true,
-                    txn_id_expiration_cleanup_interval: true,
-                    topic_creation: crate::config::TopicCreationOrigins::default(),
-                    log: crate::config::LogOrigins::default(),
-                    topic_admin: crate::config::TopicAdminOrigins::default(),
-                    authentication: crate::config::AuthenticationOrigins::default(),
-                    ..Default::default()
-                },
+                expected_origins(true, true),
             ),
             (
                 "the KIP-464 topic-creation defaults supplied, at Kafka's own default value",
                 "[runtime]\nnum_partitions = 1\ndefault_replication_factor = 1\n",
                 crate::config::StaticConfigOrigins {
-                    txn_id_expiration: false,
-                    txn_id_expiration_cleanup_interval: false,
                     topic_creation: crate::config::TopicCreationOrigins {
                         num_partitions: true,
                         default_replication_factor: true,
                     },
-                    log: crate::config::LogOrigins::default(),
-                    topic_admin: crate::config::TopicAdminOrigins::default(),
-                    authentication: crate::config::AuthenticationOrigins::default(),
-                    ..Default::default()
+                    ..expected_origins(false, false)
                 },
             ),
             (
@@ -471,17 +446,12 @@ mod tests {
                 "[runtime]\nmessage_max_bytes = \"1048588B\"\nlog_segment_bytes = \"1GiB\"\n\
                  default_min_insync_replicas = 1\n",
                 crate::config::StaticConfigOrigins {
-                    txn_id_expiration: false,
-                    txn_id_expiration_cleanup_interval: false,
-                    topic_creation: crate::config::TopicCreationOrigins::default(),
                     log: crate::config::LogOrigins {
                         message_max_bytes: true,
                         log_segment_bytes: true,
                         min_insync_replicas: true,
                     },
-                    topic_admin: crate::config::TopicAdminOrigins::default(),
-                    authentication: crate::config::AuthenticationOrigins::default(),
-                    ..Default::default()
+                    ..expected_origins(false, false)
                 },
             ),
             (
@@ -489,22 +459,16 @@ mod tests {
                 "[runtime]\nsasl_server_max_receive = \"524288B\"\n\
                  connection_failed_authentication_delay = \"100ms\"\n",
                 crate::config::StaticConfigOrigins {
-                    txn_id_expiration: false,
-                    txn_id_expiration_cleanup_interval: false,
-                    topic_creation: crate::config::TopicCreationOrigins::default(),
-                    log: crate::config::LogOrigins::default(),
-                    topic_admin: crate::config::TopicAdminOrigins::default(),
                     authentication: crate::config::AuthenticationOrigins {
                         sasl_server_max_receive: true,
                         connection_failed_authentication_delay: true,
                     },
-                    ..Default::default()
+                    ..expected_origins(false, false)
                 },
             ),
         ] {
-            let file: FileConfig = toml::from_str(source).expect("parse runtime config");
-            let mut cfg = crate::config::BrokerConfig::default();
-            file.apply_to(&mut cfg).expect("apply runtime config");
+            let cfg = crate::file_config::test_support::configured(source, "parse runtime config")
+                .expect("apply runtime config");
 
             check!(cfg.static_config_origins == expected, "{label}");
         }

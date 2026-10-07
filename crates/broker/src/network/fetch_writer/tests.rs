@@ -9,6 +9,21 @@ use super::{
     *,
 };
 
+fn empty_plan_body(
+    response: &krabka_protocol::owned::fetch_response::FetchResponse,
+    version: i16,
+    context: &str,
+) -> BytesMut {
+    let mut body = BytesMut::new();
+    for op in fetch_response_write_plan(response, version).unwrap() {
+        match op {
+            FetchWriteOp::Inline(bytes) => body.extend_from_slice(&bytes),
+            FetchWriteOp::Records(_) => panic!("{context}"),
+        }
+    }
+    body
+}
+
 /// The broker-level golden test: the full framed bytes that
 /// `build_fetch_plan` produces, which are the length prefix, the
 /// correlation header, and the body, must equal the bytes from the
@@ -32,19 +47,7 @@ fn build_fetch_plan_matches_legacy_encode_path() {
         .unwrap();
         let mut new_bytes = BytesMut::new();
         for op in &ops {
-            match op {
-                WriteOp::Inline(b) => new_bytes.extend_from_slice(b),
-                #[cfg(any(
-                    target_os = "linux",
-                    target_os = "macos",
-                    target_os = "ios",
-                    target_os = "tvos",
-                    target_os = "watchos",
-                    target_os = "freebsd",
-                    target_os = "dragonfly",
-                ))]
-                WriteOp::File(_) => unreachable!("inline resolver emits no File ops"),
-            }
+            new_bytes.extend_from_slice(inline_bytes(op));
         }
 
         // Old path: encode the body, then the response header, then frame.
@@ -99,53 +102,57 @@ fn plan_total_len_matches_frame_prefix() {
 /// every other partition in the same response with it.
 #[test]
 fn a_partition_with_nothing_to_serve_encodes_an_empty_record_set() {
-    let v7: &[u8] = &[
-        0x00, 0x00, 0x00, 0x00, // throttle_time_ms
-        0x00, 0x00, // error_code
-        0x00, 0x00, 0x00, 0x07, // session_id
-        0x00, 0x00, 0x00, 0x01, // responses len
-        0x00, 0x01, b't', // topic
-        0x00, 0x00, 0x00, 0x01, // partitions len
+    let partition_header: &[u8] = &[
         0x00, 0x00, 0x00, 0x00, // partition_index
         0x00, 0x00, // error_code
         0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x05, // high_watermark
         0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x05, // last_stable_offset
         0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // log_start_offset
-        0xff, 0xff, 0xff, 0xff, // aborted_transactions: null
-        0x00, 0x00, 0x00, 0x00, // records: empty, not null
     ];
-    let v12: &[u8] = &[
-        0x00, 0x00, 0x00, 0x00, // throttle_time_ms
-        0x00, 0x00, // error_code
-        0x00, 0x00, 0x00, 0x07, // session_id
-        0x02, // responses len
-        0x02, b't', // topic
-        0x02, // partitions len
-        0x00, 0x00, 0x00, 0x00, // partition_index
-        0x00, 0x00, // error_code
-        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x05, // high_watermark
-        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x05, // last_stable_offset
-        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // log_start_offset
-        0x00, // aborted_transactions: null
-        0xff, 0xff, 0xff, 0xff, // preferred_read_replica
-        0x01, // records: empty, not null
-        0x00, // partition tagged fields
-        0x00, // topic tagged fields
-        0x00, // response tagged fields
-    ];
+    let v7 = [
+        &[
+            0x00, 0x00, 0x00, 0x00, // throttle_time_ms
+            0x00, 0x00, // error_code
+            0x00, 0x00, 0x00, 0x07, // session_id
+            0x00, 0x00, 0x00, 0x01, // responses len
+            0x00, 0x01, b't', // topic
+            0x00, 0x00, 0x00, 0x01, // partitions len
+        ],
+        partition_header,
+        &[
+            0xff, 0xff, 0xff, 0xff, // aborted_transactions: null
+            0x00, 0x00, 0x00, 0x00, // records: empty, not null
+        ],
+    ]
+    .concat();
+    let v12 = [
+        &[
+            0x00, 0x00, 0x00, 0x00, // throttle_time_ms
+            0x00, 0x00, // error_code
+            0x00, 0x00, 0x00, 0x07, // session_id
+            0x02, // responses len
+            0x02, b't', // topic
+            0x02, // partitions len
+        ],
+        partition_header,
+        &[
+            0x00, // aborted_transactions: null
+            0xff, 0xff, 0xff, 0xff, // preferred_read_replica
+            0x01, // records: empty, not null
+            0x00, // partition tagged fields
+            0x00, // topic tagged fields
+            0x00, // response tagged fields
+        ],
+    ]
+    .concat();
 
-    for (version, expected) in [(7i16, v7), (12i16, v12)] {
+    for (version, expected) in [(7i16, &v7[..]), (12i16, &v12[..])] {
         let response = test_support::one_partition_response(version, None);
-        let ops = fetch_response_write_plan(&response, version).unwrap();
-        let mut body = BytesMut::new();
-        for op in &ops {
-            match op {
-                FetchWriteOp::Inline(b) => body.extend_from_slice(b),
-                FetchWriteOp::Records(_) => {
-                    panic!("a partition with nothing to serve emits no records op")
-                }
-            }
-        }
+        let body = empty_plan_body(
+            &response,
+            version,
+            "a partition with nothing to serve emits no records op",
+        );
         assert2::assert!((&body[..]) == (expected), "wrong body at version {version}");
     }
 }
@@ -160,14 +167,11 @@ fn an_empty_record_set_and_an_absent_one_encode_alike() {
         let mut bodies = Vec::new();
         for records in [None, Some(RecordsPayload::Raw(Bytes::new()))] {
             let response = test_support::one_partition_response(version, records);
-            let ops = fetch_response_write_plan(&response, version).unwrap();
-            let mut body = BytesMut::new();
-            for op in &ops {
-                match op {
-                    FetchWriteOp::Inline(b) => body.extend_from_slice(b),
-                    FetchWriteOp::Records(_) => panic!("an empty record set emits no records op"),
-                }
-            }
+            let body = empty_plan_body(
+                &response,
+                version,
+                "an empty record set emits no records op",
+            );
             bodies.push(body);
         }
         assert2::assert!(

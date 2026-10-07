@@ -58,18 +58,24 @@ pub(super) async fn dispatch_submit_change(
         }
     };
     let resp = match engine.submit_change(records).await {
-        Ok(result) => KrabkaSubmitChangeResponse {
-            error_code: SUBMIT_CHANGE_APPLIED,
-            leader_hint: LEADER_HINT_UNKNOWN,
-            result: Bytes::from(
-                <serde_wincode::SerdeCompat<crate::SubmitChangeResult> as wincode::Serialize>::serialize(&result)?,
-            ),
-        },
+        Ok(result) => applied_change(&result)?,
         Err(e) => submit_change_failure(&e),
     };
     let mut out = Vec::with_capacity(16);
     resp.encode_v0(&mut out)?;
     Ok(Bytes::from(out))
+}
+
+fn applied_change(
+    result: &crate::SubmitChangeResult,
+) -> Result<KrabkaSubmitChangeResponse, RaftError> {
+    Ok(KrabkaSubmitChangeResponse {
+        error_code: SUBMIT_CHANGE_APPLIED,
+        leader_hint: LEADER_HINT_UNKNOWN,
+        result: Bytes::from(
+            <serde_wincode::SerdeCompat<crate::SubmitChangeResult> as wincode::Serialize>::serialize(result)?,
+        ),
+    })
 }
 
 /// The forwarded `submit_change` response for a local submit that failed with
@@ -124,13 +130,7 @@ pub(super) async fn dispatch_delegation_token_mutation(
         }
     };
     let response = match engine.submit_delegation_token_mutations(mutations).await {
-        Ok(result) => KrabkaSubmitChangeResponse {
-            error_code: SUBMIT_CHANGE_APPLIED,
-            leader_hint: LEADER_HINT_UNKNOWN,
-            result: Bytes::from(
-                <serde_wincode::SerdeCompat<crate::SubmitChangeResult> as wincode::Serialize>::serialize(&result)?,
-            ),
-        },
+        Ok(result) => applied_change(&result)?,
         Err(RaftError::NotLeader { current_leader }) => KrabkaSubmitChangeResponse {
             error_code: SUBMIT_CHANGE_NOT_LEADER,
             leader_hint: current_leader
@@ -209,7 +209,7 @@ pub(super) async fn dispatch_metadata_fetch(
 mod tests {
     use assert2::check;
     use krabka_ids::ApiKey;
-    use krabka_metadata::{MetadataRecord, TopicRecord};
+    use krabka_metadata::MetadataRecord;
     use uuid::Uuid;
 
     use super::*;
@@ -222,12 +222,10 @@ mod tests {
     };
 
     fn topic_record(name: &str) -> MetadataRecord {
-        MetadataRecord::V1Topic(TopicRecord {
-            name: name.into(),
-            topic_id: Uuid::new_v4(),
-            partitions: 1,
-            replication_factor: 1,
-        })
+        MetadataRecord::V1Topic(crate::test_support::single_partition_topic(
+            name,
+            Uuid::new_v4(),
+        ))
     }
 
     fn submit_change_body(records: &[MetadataRecord]) -> Bytes {

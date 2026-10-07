@@ -287,6 +287,22 @@ mod tests {
     use super::*;
     use crate::txn::handlers::end_txn::test_support::{marker_entry, plaintext_client, tps};
 
+    fn marker_context<'a>(
+        image: &'a MetadataImage,
+        client: &'a InterBrokerClient,
+    ) -> MarkerDispatchContext<'a> {
+        MarkerDispatchContext {
+            node_id: NodeId(1),
+            coordinator_epoch: 0,
+            image,
+            inter_broker_client: client,
+            inter_broker_protocol: ListenerProtocol::Plaintext,
+            inter_broker_listener_name: "PLAINTEXT",
+            inter_broker_server_name: "localhost",
+            group_coordinator: None,
+        }
+    }
+
     #[tokio::test]
     async fn marker_dispatch_skips_deleted_partition() {
         let image = MetadataImage::default();
@@ -296,16 +312,7 @@ mod tests {
         entry.partitions.insert(tps().remove(0));
 
         let result = dispatch_markers(
-            MarkerDispatchContext {
-                node_id: NodeId(1),
-                coordinator_epoch: 0,
-                image: &image,
-                inter_broker_client: &client,
-                inter_broker_protocol: ListenerProtocol::Plaintext,
-                inter_broker_listener_name: "PLAINTEXT",
-                inter_broker_server_name: "localhost",
-                group_coordinator: None,
-            },
+            marker_context(&image, &client),
             &partitions,
             &entry,
             MarkerType::Commit,
@@ -319,38 +326,19 @@ mod tests {
 
     #[tokio::test]
     async fn marker_dispatch_marks_materialized_partition_missing_from_image() {
-        use krabka_log::{Log, LogConfig, Offset};
+        use krabka_log::Offset;
 
         let image = MetadataImage::default();
         let client = plaintext_client();
         let partitions = std::sync::Arc::new(crate::partition_registry::PartitionRegistry::new());
         let dir = tempfile::tempdir().unwrap();
-        let part_dir = crate::log_dir::partition_dir(dir.path(), "t", 0);
-        std::fs::create_dir_all(&part_dir).unwrap();
-        let part = crate::broker::spawn_partition(
-            "t".to_string(),
-            PartitionIndex(0),
-            dir.path().to_path_buf(),
-            Log::open(&part_dir, LogConfig::default()).unwrap(),
-            crate::log_dir_status::LogDirRegistry::default(),
-            std::sync::Arc::new(crate::producer_state::ProducerState::new()),
-            false,
-        );
+        let part = crate::test_support::open_partition(dir.path(), "t", 0);
         part.install_leader_change(2, 0).await;
         partitions.insert("t".into(), PartitionIndex(0), part.clone());
         let mut entry = marker_entry();
         entry.partitions.insert(tps().remove(0));
 
-        let context = MarkerDispatchContext {
-            node_id: NodeId(1),
-            coordinator_epoch: 0,
-            image: &image,
-            inter_broker_client: &client,
-            inter_broker_protocol: ListenerProtocol::Plaintext,
-            inter_broker_listener_name: "PLAINTEXT",
-            inter_broker_server_name: "localhost",
-            group_coordinator: None,
-        };
+        let context = marker_context(&image, &client);
         assert!(
             dispatch_markers(context, &partitions, &entry, MarkerType::Commit)
                 .await
@@ -374,7 +362,7 @@ mod tests {
     #[tokio::test]
     async fn marker_dispatch_appends_every_reachable_partition_despite_one_failing() {
         use krabka_ids::PartitionIndex as PIdx;
-        use krabka_log::{Log, LogConfig, Offset};
+        use krabka_log::Offset;
         use krabka_metadata::{
             BrokerRegistrationRecord, MetadataRecord, PartitionRecord, TopicRecord,
         };
@@ -407,17 +395,7 @@ mod tests {
         let client = plaintext_client();
         let partitions = std::sync::Arc::new(crate::partition_registry::PartitionRegistry::new());
         let dir = tempfile::tempdir().unwrap();
-        let part_dir = crate::log_dir::partition_dir(dir.path(), "local-topic", 0);
-        std::fs::create_dir_all(&part_dir).unwrap();
-        let local_partition = crate::broker::spawn_partition(
-            "local-topic".to_string(),
-            PIdx(0),
-            dir.path().to_path_buf(),
-            Log::open(&part_dir, LogConfig::default()).unwrap(),
-            crate::log_dir_status::LogDirRegistry::default(),
-            std::sync::Arc::new(crate::producer_state::ProducerState::new()),
-            false,
-        );
+        let local_partition = crate::test_support::open_partition(dir.path(), "local-topic", 0);
         local_partition.install_leader_change(1, 0).await;
         partitions.insert("local-topic".into(), PIdx(0), local_partition.clone());
 
@@ -432,16 +410,7 @@ mod tests {
         });
 
         let result = dispatch_markers(
-            MarkerDispatchContext {
-                node_id: NodeId(1),
-                coordinator_epoch: 0,
-                image: &image,
-                inter_broker_client: &client,
-                inter_broker_protocol: ListenerProtocol::Plaintext,
-                inter_broker_listener_name: "PLAINTEXT",
-                inter_broker_server_name: "localhost",
-                group_coordinator: None,
-            },
+            marker_context(&image, &client),
             &partitions,
             &entry,
             MarkerType::Commit,
@@ -472,7 +441,7 @@ mod tests {
     /// again to the next leader.
     #[tokio::test]
     async fn a_local_marker_counts_only_once_committed() {
-        use krabka_log::{Log, LogConfig, Offset};
+        use krabka_log::Offset;
         use krabka_metadata::{MetadataRecord, PartitionRecord, TopicRecord};
 
         let mut image = MetadataImage::default();
@@ -507,17 +476,7 @@ mod tests {
             let partitions =
                 std::sync::Arc::new(crate::partition_registry::PartitionRegistry::new());
             let dir = tempfile::tempdir().expect("tempdir");
-            let part_dir = crate::log_dir::partition_dir(dir.path(), "t", 0);
-            std::fs::create_dir_all(&part_dir).expect("partition dir");
-            let part = crate::broker::spawn_partition(
-                "t".to_string(),
-                PartitionIndex(0),
-                dir.path().to_path_buf(),
-                Log::open(&part_dir, LogConfig::default()).expect("open log"),
-                crate::log_dir_status::LogDirRegistry::default(),
-                std::sync::Arc::new(crate::producer_state::ProducerState::new()),
-                false,
-            );
+            let part = crate::test_support::open_partition(dir.path(), "t", 0);
             part.install_leader_change(1, 0).await;
             // The follower has not fetched, so it holds the high watermark at
             // zero.
@@ -549,16 +508,7 @@ mod tests {
                 })
             };
             let outcome = dispatch_markers(
-                MarkerDispatchContext {
-                    node_id: NodeId(1),
-                    coordinator_epoch: 0,
-                    image: &image,
-                    inter_broker_client: &client,
-                    inter_broker_protocol: ListenerProtocol::Plaintext,
-                    inter_broker_listener_name: "PLAINTEXT",
-                    inter_broker_server_name: "localhost",
-                    group_coordinator: None,
-                },
+                marker_context(&image, &client),
                 &partitions,
                 &entry,
                 MarkerType::Commit,

@@ -1,10 +1,10 @@
-(* #"/workspace/crates/verified/src/broker/fetch.rs" 44 0 44 79 *)
+(* #"/workspace/crates/verified/src/broker/fetch.rs" 42 0 42 79 *)
 
-let%span sord = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
-let%span sfetch = "/workspace/crates/verified/src/broker/fetch.rs" 50 34 50 35
-let%span sfetch'0 = "/workspace/crates/verified/src/broker/fetch.rs" 52 39 52 40
-let%span sfetch'1 = "/workspace/crates/verified/src/broker/fetch.rs" 34 10 42 1
-let%span sfetch'2 = "/workspace/crates/verified/src/broker/fetch.rs" 17 8 19 45
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sfetch = "/workspace/crates/verified/src/broker/fetch.rs" 48 34 48 35
+let%span sfetch'0 = "/workspace/crates/verified/src/broker/fetch.rs" 50 39 50 40
+let%span sfetch'1 = "/workspace/crates/verified/src/broker/fetch.rs" 32 10 40 1
+let%span sfetch'2 = "/workspace/crates/verified/src/broker/fetch.rs" 14 8 16 45
 
 use creusot.int.Int32
 use creusot.int.Int16
@@ -21,7 +21,7 @@ type t_ReplicaFetchFacts = {
 
 type t_ReplicaFetchMutation = Reject | Retry | Truncate | Append
 
-predicate replica_fetch_fenced [#"/workspace/crates/verified/src/broker/fetch.rs" 15 0 15 61] (facts: t_ReplicaFetchFacts) =
+predicate replica_fetch_fenced [#"/workspace/crates/verified/src/broker/fetch.rs" 12 0 12 61] (facts: t_ReplicaFetchFacts) =
   [%#sfetch'2] Int32.to_int facts.request_leader_epoch <> Int32.to_int facts.current_leader_epoch
   \/ not facts.target_matches \/ not facts.reported_target_matches
 
@@ -33,7 +33,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let replica_fetch_mutation [#"/workspace/crates/verified/src/broker/fetch.rs" 44 0 44 79] (facts: t_ReplicaFetchFacts)
+let replica_fetch_mutation [#"/workspace/crates/verified/src/broker/fetch.rs" 42 0 42 79] (facts: t_ReplicaFetchFacts)
   (return (x: t_ReplicaFetchMutation)) = (! bb0
   [ bb0 = s0
     [ s0 = [ &_4 <- facts.request_leader_epoch <> facts.current_leader_epoch ] s1

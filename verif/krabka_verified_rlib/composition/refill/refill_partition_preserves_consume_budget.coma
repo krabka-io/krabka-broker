@@ -1,23 +1,24 @@
-(* #"/workspace/crates/verified/src/composition/refill.rs" 30 0 36 25 *)
+(* #"/workspace/crates/verified/src/composition/refill.rs" 25 0 31 25 *)
 
-let%span sord = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
-let%span srefill = "/workspace/crates/verified/src/composition/refill.rs" 37 16 37 85
-let%span srefill'0 = "/workspace/crates/verified/src/composition/refill.rs" 38 16 38 79
-let%span srefill'1 = "/workspace/crates/verified/src/composition/refill.rs" 43 8 43 29
-let%span srefill'2 = "/workspace/crates/verified/src/composition/refill.rs" 39 17 46 5
-let%span srefill'3 = "/workspace/crates/verified/src/composition/refill.rs" 47 18 48 50
-let%span srefill'4 = "/workspace/crates/verified/src/composition/refill.rs" 50 8 51 48
-let%span srefill'5 = "/workspace/crates/verified/src/composition/refill.rs" 55 18 56 62
-let%span srefill'6 = "/workspace/crates/verified/src/composition/refill.rs" 57 18 57 83
-let%span srefill'7 = "/workspace/crates/verified/src/composition/refill.rs" 63 21 63 22
-let%span srefill'8 = "/workspace/crates/verified/src/composition/refill.rs" 61 24 66 5
-let%span srefill'9 = "/workspace/crates/verified/src/composition/refill.rs" 12 11 12 71
-let%span srefill'10 = "/workspace/crates/verified/src/composition/refill.rs" 13 11 13 37
-let%span srefill'11 = "/workspace/crates/verified/src/composition/refill.rs" 14 11 14 47
-let%span srefill'12 = "/workspace/crates/verified/src/composition/refill.rs" 15 10 15 56
-let%span srefill'13 = "/workspace/crates/verified/src/composition/refill.rs" 17 4 17 82
-let%span srefill'14 = "/workspace/crates/verified/src/composition/refill.rs" 24 10 24 35
-let%span srefill'15 = "/workspace/crates/verified/src/composition/refill.rs" 26 4 26 67
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span squota = "/workspace/crates/verified/src/quota.rs" 222 16 222 67
+let%span srefill = "/workspace/crates/verified/src/composition/refill.rs" 32 16 32 85
+let%span srefill'0 = "/workspace/crates/verified/src/composition/refill.rs" 33 16 33 79
+let%span srefill'1 = "/workspace/crates/verified/src/composition/refill.rs" 38 8 38 29
+let%span srefill'2 = "/workspace/crates/verified/src/composition/refill.rs" 34 17 41 5
+let%span srefill'3 = "/workspace/crates/verified/src/composition/refill.rs" 42 18 43 50
+let%span srefill'4 = "/workspace/crates/verified/src/composition/refill.rs" 45 8 46 48
+let%span srefill'5 = "/workspace/crates/verified/src/composition/refill.rs" 50 18 51 62
+let%span srefill'6 = "/workspace/crates/verified/src/composition/refill.rs" 52 18 52 83
+let%span srefill'7 = "/workspace/crates/verified/src/composition/refill.rs" 58 21 58 22
+let%span srefill'8 = "/workspace/crates/verified/src/composition/refill.rs" 56 24 61 5
+let%span srefill'9 = "/workspace/crates/verified/src/composition/refill.rs" 7 11 7 77
+let%span srefill'10 = "/workspace/crates/verified/src/composition/refill.rs" 8 11 8 37
+let%span srefill'11 = "/workspace/crates/verified/src/composition/refill.rs" 9 11 9 47
+let%span srefill'12 = "/workspace/crates/verified/src/composition/refill.rs" 10 10 10 56
+let%span srefill'13 = "/workspace/crates/verified/src/composition/refill.rs" 12 4 12 82
+let%span srefill'14 = "/workspace/crates/verified/src/composition/refill.rs" 19 10 19 35
+let%span srefill'15 = "/workspace/crates/verified/src/composition/refill.rs" 21 4 21 67
 let%span srefill'16 = "/workspace/crates/verified/src/quota/refill.rs" 9 11 9 36
 let%span srefill'17 = "/workspace/crates/verified/src/quota/refill.rs" 10 11 10 66
 let%span srefill'18 = "/workspace/crates/verified/src/quota/refill.rs" 11 10 11 67
@@ -26,11 +27,11 @@ let%span srefill'20 = "/workspace/crates/verified/src/quota/refill.rs" 14 4 14 6
 let%span srefill'21 = "/workspace/crates/verified/src/quota/refill.rs" 18 4 18 64
 let%span srefill'22 = "/workspace/crates/verified/src/quota/refill.rs" 22 10 23 59
 let%span srefill'23 = "/workspace/crates/verified/src/quota/refill.rs" 25 4 25 86
-let%span sthrottle = "/workspace/crates/verified/src/throttle.rs" 87 10 87 37
-let%span sthrottle'0 = "/workspace/crates/verified/src/throttle.rs" 88 10 88 33
-let%span sthrottle'1 = "/workspace/crates/verified/src/throttle.rs" 89 10 89 80
-let%span sthrottle'2 = "/workspace/crates/verified/src/throttle.rs" 90 10 94 1
-let%span sthrottle'3 = "/workspace/crates/verified/src/throttle.rs" 79 4 83 5
+let%span sthrottle = "/workspace/crates/verified/src/throttle.rs" 47 10 47 37
+let%span sthrottle'0 = "/workspace/crates/verified/src/throttle.rs" 48 10 48 33
+let%span sthrottle'1 = "/workspace/crates/verified/src/throttle.rs" 49 10 49 80
+let%span sthrottle'2 = "/workspace/crates/verified/src/throttle.rs" 50 10 54 1
+let%span sthrottle'3 = "/workspace/crates/verified/src/throttle.rs" 38 4 42 5
 
 use creusot.int.UInt64
 use int.ComputerDivision
@@ -41,7 +42,7 @@ type tup3_u64_u64_u64 = { f0: UInt64.t; f1: UInt64.t; f2: UInt64.t }
 
 type tup2_u64_u64 = { f0'0: UInt64.t; f1'0: UInt64.t }
 
-function capped [#"/workspace/crates/verified/src/throttle.rs" 78 0 78 61] (available: int) (refill: int) (burst: int) : int
+function capped [#"/workspace/crates/verified/src/throttle.rs" 37 0 37 61] (available: int) (refill: int) (burst: int) : int
  = [%#sthrottle'3] if available + refill <= burst then available + refill else burst
 
 let quota_refill (available: UInt64.t) (debt: UInt64.t) (fraction: UInt64.t) (elapsed: UInt64.t) (rate: UInt64.t)
@@ -117,6 +118,9 @@ let plan_consume (available: t_AvailableTokens) (refill: t_RefillTokens) (burst:
 
 type tup4_u64_u64_u64_u64 = { f0'8: UInt64.t; f1'8: UInt64.t; f2'8: UInt64.t; f3'8: UInt64.t }
 
+predicate balance_within_burst [#"/workspace/crates/verified/src/quota.rs" 221 0 221 81] (available: int) (debt: int) (burst: int) =
+  [%#squota] available <= burst /\ (available = 0 \/ debt = 0)
+
 constant const_MAX: UInt64.t = (18446744073709551615: UInt64.t)
 
 predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other <= self
@@ -127,12 +131,10 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let refill_partition_preserves_consume_budget [#"/workspace/crates/verified/src/composition/refill.rs" 30 0 36 25]
+let refill_partition_preserves_consume_budget [#"/workspace/crates/verified/src/composition/refill.rs" 25 0 31 25]
   (initial: tup3_u64_u64_u64) (elapsed: tup2_u64_u64) (rate: UInt64.t) (burst: UInt64.t) (requested: UInt64.t)
   (return (x: tup4_u64_u64_u64_u64)) =
-{[@stop_split] [@expl:refill_partition_preserves_consume_budget requires] ([@stop_split] [@expl:refill_partition_preserves_consume_budget requires #0] [%#srefill'9] UInt64.t'int initial.f0
-      <= UInt64.t'int burst
-    /\ (UInt64.t'int initial.f0 = 0 \/ UInt64.t'int initial.f1 = 0))
+{[@stop_split] [@expl:refill_partition_preserves_consume_budget requires] ([@stop_split] [@expl:refill_partition_preserves_consume_budget requires #0] [%#srefill'9] balance_within_burst (UInt64.t'int initial.f0) (UInt64.t'int initial.f1) (UInt64.t'int burst))
   /\ ([@stop_split] [@expl:refill_partition_preserves_consume_budget requires #1] [%#srefill'10] UInt64.t'int initial.f2
     < 1000000000)
   /\ ([@stop_split] [@expl:refill_partition_preserves_consume_budget requires #2] [%#srefill'11] UInt64.t'int elapsed.f0'0

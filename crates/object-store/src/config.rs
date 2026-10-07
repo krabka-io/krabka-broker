@@ -51,6 +51,8 @@ pub enum ObjectStoreConfig {
 ///
 /// `Debug` redacts the credential fields, so a stray `{:?}` call or tracing
 /// call never leaks them.
+#[krabka_macros::s3_fields(runtime)]
+#[krabka_macros::object_store_config]
 #[derive(Clone, PartialEq, Eq, derive_more::Debug, krabka_macros::FieldDefaults)]
 pub struct S3Config {
     /// S3 bucket name.
@@ -61,17 +63,6 @@ pub struct S3Config {
     /// AWS region. AWS S3 requires it. Use the placeholder `"us-east-1"` for
     /// `MinIO` and R2.
     pub region: String,
-    /// Optional custom endpoint URL, for example `http://minio:9000` or an R2
-    /// endpoint.
-    pub endpoint: Option<String>,
-    /// Optional explicit access key id. Without it, the backend falls back to
-    /// the AWS credential chain.
-    #[debug("{:?}", access_key_id.as_ref().map(|_| "***"))]
-    pub access_key_id: Option<String>,
-    /// Optional explicit secret access key. Without it, the backend falls back
-    /// to the AWS credential chain.
-    #[debug("{:?}", secret_access_key.as_ref().map(|_| "***"))]
-    pub secret_access_key: Option<String>,
     /// Allow plaintext HTTP. `MinIO` without TLS requires it.
     pub allow_http: bool,
     /// Files of at least this size upload with multipart. Defaults to
@@ -89,21 +80,6 @@ pub struct S3Config {
     /// ingest. Defaults to `true`.
     #[default(true)]
     pub checksum_sha256: bool,
-    /// How many times one request is retried before the error surfaces.
-    /// Defaults to [`DEFAULT_MAX_RETRIES`]; `0` disables retries.
-    #[default(DEFAULT_MAX_RETRIES)]
-    pub max_retries: usize,
-    /// Ceiling on the wall-clock time one request may spend across all of its
-    /// retries. Defaults to [`DEFAULT_RETRY_TIMEOUT`].
-    #[default(DEFAULT_RETRY_TIMEOUT)]
-    pub retry_timeout: Duration,
-    /// Ceiling on one HTTP request. Defaults to [`DEFAULT_REQUEST_TIMEOUT`].
-    #[default(DEFAULT_REQUEST_TIMEOUT)]
-    pub request_timeout: Duration,
-    /// Ceiling on the connect phase alone. Defaults to
-    /// [`DEFAULT_CONNECT_TIMEOUT`].
-    #[default(DEFAULT_CONNECT_TIMEOUT)]
-    pub connect_timeout: Duration,
 }
 
 /// Connection and bucket parameters for native Google Cloud Storage.
@@ -114,6 +90,7 @@ pub struct S3Config {
 /// `Debug` redacts the credential fields, so a stray `{:?}` call or tracing
 /// call never leaks them.
 #[krabka_macros::gcs_fields(runtime)]
+#[krabka_macros::object_store_config]
 #[derive(Clone, PartialEq, Eq, derive_more::Debug, krabka_macros::FieldDefaults)]
 pub struct GcsConfig {
     /// Allow plaintext HTTP. Emulators without TLS require it.
@@ -125,21 +102,6 @@ pub struct GcsConfig {
     /// Per-part size for multipart. Defaults to [`DEFAULT_MULTIPART_CHUNK_SIZE`].
     #[default(DEFAULT_MULTIPART_CHUNK_SIZE)]
     pub multipart_chunk_size: usize,
-    /// How many times one request is retried before the error surfaces.
-    /// Defaults to [`DEFAULT_MAX_RETRIES`]; `0` disables retries.
-    #[default(DEFAULT_MAX_RETRIES)]
-    pub max_retries: usize,
-    /// Ceiling on the wall-clock time one request may spend across all of its
-    /// retries. Defaults to [`DEFAULT_RETRY_TIMEOUT`].
-    #[default(DEFAULT_RETRY_TIMEOUT)]
-    pub retry_timeout: Duration,
-    /// Ceiling on one HTTP request. Defaults to [`DEFAULT_REQUEST_TIMEOUT`].
-    #[default(DEFAULT_REQUEST_TIMEOUT)]
-    pub request_timeout: Duration,
-    /// Ceiling on the connect phase alone. Defaults to
-    /// [`DEFAULT_CONNECT_TIMEOUT`].
-    #[default(DEFAULT_CONNECT_TIMEOUT)]
-    pub connect_timeout: Duration,
 }
 
 #[cfg(test)]

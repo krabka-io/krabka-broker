@@ -2,7 +2,7 @@
   "profile": [],
   "proofs": {
     "Coma": {
-      "vc_clone_FetchFence": { "prover": "alt-ergo", "time": 0.018 }
+      "vc_clone_FetchFence": { "prover": "alt-ergo", "time": 0.011 }
     }
   }
 }

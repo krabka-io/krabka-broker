@@ -170,21 +170,7 @@ pub(super) fn apply_consumer_fetch_quota(
         context.client_id,
         response_bytes,
     );
-    let elapsed_micros = u64::try_from(
-        handler_start
-            .elapsed()
-            .as_micros()
-            .min(u128::from(u64::MAX)),
-    )
-    .expect("elapsed microseconds clamped to u64");
-    let request_delay = crate::quota::consume_request_quota(
-        image,
-        &broker.quota_buckets,
-        &context.principal.name,
-        context.client_id,
-        elapsed_micros,
-        broker.config.quota_throttle_max,
-    );
+    let request_delay = context.charge_request_quota(broker, image, handler_start);
     // KIP-219: the connection is muted for the larger of the two delays.
     // Resolving it through the metric records the throttle phase and the quota
     // that caused it, and hands back the delay the response reports.
@@ -296,22 +282,11 @@ mod tests {
 
     #[test]
     fn consume_consumer_quota_tuple_match_overage_throttles() {
-        use krabka_metadata::{ClientQuotaRecord, MetadataImage, MetadataRecord, QuotaEntity};
-        let mut img = MetadataImage::new(uuid::Uuid::nil());
-        img.apply(&MetadataRecord::V1ClientQuota(ClientQuotaRecord {
-            entity: vec![
-                QuotaEntity {
-                    entity_type: "user".into(),
-                    entity_name: Some("alice".into()),
-                },
-                QuotaEntity {
-                    entity_type: "client-id".into(),
-                    entity_name: Some("app-x".into()),
-                },
-            ],
-            config_key: "consumer_byte_rate".into(),
-            config_value: Some(1024.0),
-        }));
+        let img = crate::quota::test_support::image_with_quota(
+            vec![("user", Some("alice")), ("client-id", Some("app-x"))],
+            "consumer_byte_rate",
+            1024.0,
+        );
         // A one-second window, so 4096 bytes at 1024 B/s is over the burst
         // rather than inside the default 11-second one.
         let buckets = crate::quota::QuotaBuckets::with_window(secs(1));
@@ -338,16 +313,11 @@ mod tests {
     /// as it was. A throttled fetch that is not refunded stays charged.
     #[test]
     fn a_throttled_fetch_gives_the_whole_charge_back() {
-        use krabka_metadata::{ClientQuotaRecord, MetadataImage, MetadataRecord, QuotaEntity};
-        let mut img = MetadataImage::new(uuid::Uuid::nil());
-        img.apply(&MetadataRecord::V1ClientQuota(ClientQuotaRecord {
-            entity: vec![QuotaEntity {
-                entity_type: "user".into(),
-                entity_name: Some("alice".into()),
-            }],
-            config_key: "consumer_byte_rate".into(),
-            config_value: Some(1_000.0),
-        }));
+        let img = crate::quota::test_support::image_with_quota(
+            vec![("user", Some("alice"))],
+            "consumer_byte_rate",
+            1_000.0,
+        );
         let consume = |buckets: &crate::quota::QuotaBuckets, bytes| {
             super::consume_consumer_quota(&img, buckets, "alice", Some("app"), bytes)
         };
@@ -372,22 +342,17 @@ mod tests {
     /// second.
     #[test]
     fn a_fractional_consumer_byte_rate_throttles() {
-        use krabka_metadata::{ClientQuotaRecord, MetadataImage, MetadataRecord, QuotaEntity};
         // `(consumer_byte_rate, response bytes, expected throttle)`. The
         // one-second window gives the bucket a burst of exactly its rate.
         let cases = crate::quota::test_support::fractional_bandwidth_cases();
         let mut actual = Vec::new();
         let mut expected = Vec::new();
         for (rate, bytes, delay) in cases {
-            let mut img = MetadataImage::new(uuid::Uuid::nil());
-            img.apply(&MetadataRecord::V1ClientQuota(ClientQuotaRecord {
-                entity: vec![QuotaEntity {
-                    entity_type: "user".into(),
-                    entity_name: Some("alice".into()),
-                }],
-                config_key: "consumer_byte_rate".into(),
-                config_value: Some(rate),
-            }));
+            let img = crate::quota::test_support::image_with_quota(
+                vec![("user", Some("alice"))],
+                "consumer_byte_rate",
+                rate,
+            );
             let buckets = crate::quota::QuotaBuckets::with_window(secs(1));
             let (throttle, _) =
                 super::consume_consumer_quota(&img, &buckets, "alice", Some("app"), bytes);
@@ -413,20 +378,17 @@ mod tests {
         }));
         for (partition, in_sync) in (0..).zip(isr_has_follower) {
             image.apply(&MetadataRecord::V1Partition(PartitionRecord {
-                topic: "t".into(),
-                partition,
-                leader: NodeId(1),
-                replicas: vec![NodeId(1), NodeId(2)],
                 isr: if *in_sync {
                     vec![NodeId(1), NodeId(2)]
                 } else {
                     vec![NodeId(1)]
                 },
-                leader_epoch: krabka_metadata::LeaderEpoch(0),
-                adding_replicas: Vec::new(),
-                removing_replicas: Vec::new(),
-                directories: Vec::new(),
-                partition_epoch: 0,
+                ..crate::handlers::test_support::replicated_partition(
+                    "t",
+                    partition,
+                    NodeId(1),
+                    &[NodeId(1), NodeId(2)],
+                )
             }));
         }
         image.apply(&MetadataRecord::V1TopicConfig(TopicConfigRecord {

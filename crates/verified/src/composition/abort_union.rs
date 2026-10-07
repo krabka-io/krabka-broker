@@ -1,7 +1,10 @@
 use creusot_std::prelude::*;
 
 #[cfg(creusot)]
-use super::restored_aborts::{abort_intersects_fetch, restored_abort_index_valid};
+use super::restored_aborts::{
+    abort_intersects_fetch, restored_abort_index_valid, wire_abort_from_source,
+    wire_aborts_cover_source,
+};
 use super::{
     FetchWatermarks, RestoreAbortedTxn, RestoreSegmentExtent, fetch_visibility,
     restored_aborts_remain_bounded_when_fetch_shrinks, truncation_frontier,
@@ -22,22 +25,12 @@ use crate::{
         && restored_abort_index_valid(local@, owners.1)),
     Some(rows) => restored_abort_index_valid(remote@, owners.0)
         && restored_abort_index_valid(local@, owners.1)
-        && (forall<i: Int, j: Int> 0 <= i && i < j && j < rows@.len() ==> rows@[i] != rows@[j])
+        && (crate::sequence::distinct(rows@))
         && (forall<i: Int> 0 <= i && i < rows@.len() ==> rows@[i].0@ >= 0 && rows@[i].1@ >= 0
-            && ((exists<j: Int> 0 <= j && j < remote@.len()
-                && rows@[i] == (remote@[j].producer_id, remote@[j].start_offset)
-                && abort_intersects_fetch(remote@[j], from@, w.hw@.min(w.lso@).min(w.deliverable@).min(cut@)))
-                || (exists<j: Int> 0 <= j && j < local@.len()
-                && rows@[i] == (local@[j].producer_id, local@[j].start_offset)
-                && abort_intersects_fetch(local@[j], from@, w.hw@.min(w.lso@).min(w.deliverable@).min(cut@)))))
-        && (forall<i: Int> 0 <= i && i < remote@.len()
-            && abort_intersects_fetch(remote@[i], from@, w.hw@.min(w.lso@).min(w.deliverable@).min(cut@))
-            ==> exists<j: Int> 0 <= j && j < rows@.len()
-                && rows@[j] == (remote@[i].producer_id, remote@[i].start_offset))
-        && (forall<i: Int> 0 <= i && i < local@.len()
-            && abort_intersects_fetch(local@[i], from@, w.hw@.min(w.lso@).min(w.deliverable@).min(cut@))
-            ==> exists<j: Int> 0 <= j && j < rows@.len()
-                && rows@[j] == (local@[i].producer_id, local@[i].start_offset)),
+            && (wire_abort_from_source(remote@, rows@[i], from@, w.hw@.min(w.lso@).min(w.deliverable@).min(cut@))
+                || wire_abort_from_source(local@, rows@[i], from@, w.hw@.min(w.lso@).min(w.deliverable@).min(cut@))))
+        && wire_aborts_cover_source(remote@, rows@, from@, w.hw@.min(w.lso@).min(w.deliverable@).min(cut@))
+        && wire_aborts_cover_source(local@, rows@, from@, w.hw@.min(w.lso@).min(w.deliverable@).min(cut@)),
 })]
 pub(super) fn restored_abort_sources_cover_committed_fetch(
     remote: &[RestoreAbortedTxn],

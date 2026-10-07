@@ -1,48 +1,49 @@
-(* #"/workspace/crates/verified/src/composition/controller_session.rs" 47 0 54 27 *)
+(* #"/workspace/crates/verified/src/composition/controller_session.rs" 45 0 52 27 *)
 
-let%span sord = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
-let%span sord'0 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
 let%span sacl_decision = "/workspace/crates/verified/src/authz/acl_decision.rs" 123 10 131 1
-let%span scontroller_session = "/workspace/crates/verified/src/composition/controller_session.rs" 55 27 61 5
-let%span scontroller_session'0 = "/workspace/crates/verified/src/composition/controller_session.rs" 62 24 62 34
-let%span scontroller_session'1 = "/workspace/crates/verified/src/composition/controller_session.rs" 70 16 70 23
-let%span scontroller_session'2 = "/workspace/crates/verified/src/composition/controller_session.rs" 76 14 76 34
-let%span scontroller_session'3 = "/workspace/crates/verified/src/composition/controller_session.rs" 77 14 77 28
-let%span scontroller_session'4 = "/workspace/crates/verified/src/composition/controller_session.rs" 73 16 75 99
-let%span scontroller_session'5 = "/workspace/crates/verified/src/composition/controller_session.rs" 72 16 72 77
-let%span scontroller_session'6 = "/workspace/crates/verified/src/composition/controller_session.rs" 71 16 71 63
-let%span scontroller_session'7 = "/workspace/crates/verified/src/composition/controller_session.rs" 78 59 78 70
-let%span scontroller_session'8 = "/workspace/crates/verified/src/composition/controller_session.rs" 78 59 78 72
-let%span scontroller_session'9 = "/workspace/crates/verified/src/composition/controller_session.rs" 78 55 78 57
-let%span scontroller_session'10 = "/workspace/crates/verified/src/composition/controller_session.rs" 78 12 78 73
-let%span scontroller_session'11 = "/workspace/crates/verified/src/composition/controller_session.rs" 82 25 82 36
-let%span scontroller_session'12 = "/workspace/crates/verified/src/composition/controller_session.rs" 82 25 82 38
-let%span scontroller_session'13 = "/workspace/crates/verified/src/composition/controller_session.rs" 82 12 82 39
-let%span scontroller_session'14 = "/workspace/crates/verified/src/composition/controller_session.rs" 81 8 84 10
-let%span scontroller_session'15 = "/workspace/crates/verified/src/composition/controller_session.rs" 85 13 85 14
-let%span scontroller_session'16 = "/workspace/crates/verified/src/composition/controller_session.rs" 85 8 85 14
+let%span scontroller_session = "/workspace/crates/verified/src/composition/controller_session.rs" 53 27 59 5
+let%span scontroller_session'0 = "/workspace/crates/verified/src/composition/controller_session.rs" 60 24 60 34
+let%span scontroller_session'1 = "/workspace/crates/verified/src/composition/controller_session.rs" 68 16 68 23
+let%span scontroller_session'2 = "/workspace/crates/verified/src/composition/controller_session.rs" 74 14 74 34
+let%span scontroller_session'3 = "/workspace/crates/verified/src/composition/controller_session.rs" 75 14 75 28
+let%span scontroller_session'4 = "/workspace/crates/verified/src/composition/controller_session.rs" 71 16 73 99
+let%span scontroller_session'5 = "/workspace/crates/verified/src/composition/controller_session.rs" 70 16 70 77
+let%span scontroller_session'6 = "/workspace/crates/verified/src/composition/controller_session.rs" 69 16 69 63
+let%span scontroller_session'7 = "/workspace/crates/verified/src/composition/controller_session.rs" 76 59 76 70
+let%span scontroller_session'8 = "/workspace/crates/verified/src/composition/controller_session.rs" 76 59 76 72
+let%span scontroller_session'9 = "/workspace/crates/verified/src/composition/controller_session.rs" 76 55 76 57
+let%span scontroller_session'10 = "/workspace/crates/verified/src/composition/controller_session.rs" 76 12 76 73
+let%span scontroller_session'11 = "/workspace/crates/verified/src/composition/controller_session.rs" 80 25 80 36
+let%span scontroller_session'12 = "/workspace/crates/verified/src/composition/controller_session.rs" 80 25 80 38
+let%span scontroller_session'13 = "/workspace/crates/verified/src/composition/controller_session.rs" 80 12 80 39
+let%span scontroller_session'14 = "/workspace/crates/verified/src/composition/controller_session.rs" 79 8 82 10
+let%span scontroller_session'15 = "/workspace/crates/verified/src/composition/controller_session.rs" 83 13 83 14
+let%span scontroller_session'16 = "/workspace/crates/verified/src/composition/controller_session.rs" 83 8 83 14
 let%span scontroller_session'17 = "/workspace/crates/verified/src/composition/controller_session.rs" 25 11 25 67
-let%span scontroller_session'18 = "/workspace/crates/verified/src/composition/controller_session.rs" 26 10 28 100
-let%span scontroller_session'19 = "/workspace/crates/verified/src/composition/controller_session.rs" 29 10 33 1
-let%span scontroller_session'20 = "/workspace/crates/verified/src/composition/controller_session.rs" 34 10 34 44
-let%span scontroller_session'21 = "/workspace/crates/verified/src/composition/controller_session.rs" 35 10 38 1
-let%span scontroller_session'22 = "/workspace/crates/verified/src/composition/controller_session.rs" 39 10 43 1
-let%span scontroller_session'23 = "/workspace/crates/verified/src/composition/controller_session.rs" 44 10 46 95
+let%span scontroller_session'18 = "/workspace/crates/verified/src/composition/controller_session.rs" 26 10 26 153
+let%span scontroller_session'19 = "/workspace/crates/verified/src/composition/controller_session.rs" 27 10 31 1
+let%span scontroller_session'20 = "/workspace/crates/verified/src/composition/controller_session.rs" 32 10 32 44
+let%span scontroller_session'21 = "/workspace/crates/verified/src/composition/controller_session.rs" 33 10 36 1
+let%span scontroller_session'22 = "/workspace/crates/verified/src/composition/controller_session.rs" 37 10 41 1
+let%span scontroller_session'23 = "/workspace/crates/verified/src/composition/controller_session.rs" 42 10 44 95
 let%span scontroller_session'24 = "/workspace/crates/verified/src/authz/controller_session.rs" 7 10 10 1
-let%span swell_founded = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/well_founded.rs" 43 8 43 33
-let%span sslice = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 331 18 331 22
-let%span svec = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 104 18 104 36
-let%span svec'0 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 18 14 18 41
-let%span svec'1 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 118 18 118 48
-let%span sjwks_publication = "/workspace/crates/verified/src/composition/jwks_publication.rs" 91 11 91 67
-let%span sjwks_publication'0 = "/workspace/crates/verified/src/composition/jwks_publication.rs" 92 10 92 112
-let%span sjwks_publication'1 = "/workspace/crates/verified/src/composition/jwks_publication.rs" 93 10 95 100
-let%span sjwks_publication'2 = "/workspace/crates/verified/src/composition/jwks_publication.rs" 96 10 104 1
-let%span sjwks_publication'3 = "/workspace/crates/verified/src/composition/jwks_publication.rs" 75 8 80 109
-let%span sjwks_publication'4 = "/workspace/crates/verified/src/composition/jwks_publication.rs" 22 10 22 16
-let%span sjwks_publication'5 = "/workspace/crates/verified/src/composition/jwks_publication.rs" 19 11 19 49
-let%span sjwks_publication'6 = "/workspace/crates/verified/src/composition/jwks_publication.rs" 20 10 20 41
-let%span sjwks_publication'7 = "/workspace/crates/verified/src/composition/jwks_publication.rs" 21 10 21 80
+let%span swell_founded = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/well_founded.rs" 43 8 43 33
+let%span sslice = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 331 18 331 22
+let%span svec = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 104 18 104 36
+let%span svec'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 18 14 18 41
+let%span svec'1 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 118 18 118 48
+let%span sjwks_publication = "/workspace/crates/verified/src/composition/jwks_publication.rs" 89 11 89 67
+let%span sjwks_publication'0 = "/workspace/crates/verified/src/composition/jwks_publication.rs" 90 10 90 112
+let%span sjwks_publication'1 = "/workspace/crates/verified/src/composition/jwks_publication.rs" 91 10 91 152
+let%span sjwks_publication'2 = "/workspace/crates/verified/src/composition/jwks_publication.rs" 92 10 100 1
+let%span sjwks_publication'3 = "/workspace/crates/verified/src/composition/jwks_publication.rs" 72 8 77 109
+let%span sjwks_publication'4 = "/workspace/crates/verified/src/composition/jwks_publication.rs" 136 16 137 95
+let%span sjwks_publication'5 = "/workspace/crates/verified/src/composition/jwks_publication.rs" 22 10 22 16
+let%span sjwks_publication'6 = "/workspace/crates/verified/src/composition/jwks_publication.rs" 19 11 19 49
+let%span sjwks_publication'7 = "/workspace/crates/verified/src/composition/jwks_publication.rs" 20 10 20 41
+let%span sjwks_publication'8 = "/workspace/crates/verified/src/composition/jwks_publication.rs" 21 10 21 80
 
 use creusot.int.Int64
 use creusot.int.UInt64
@@ -93,7 +94,7 @@ predicate gt_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other
 
 meta "rewrite_def" predicate gt_log_Int
 
-predicate initial_session_input_valid [#"/workspace/crates/verified/src/composition/jwks_publication.rs" 69 0 73 9] (facts: t_OAuthSessionFacts) (cache: t_JwksCacheFacts) (completed: int) =
+predicate initial_session_input_valid [#"/workspace/crates/verified/src/composition/jwks_publication.rs" 66 0 70 9] (facts: t_OAuthSessionFacts) (cache: t_JwksCacheFacts) (completed: int) =
   [%#sjwks_publication'3] Int64.to_int cache.now_ms'0 = Int64.to_int facts.now_ms
   /\ ge_log_Int (Int64.to_int facts.now_ms) 0
   /\ ge_log_Int completed (Int64.to_int facts.now_ms)
@@ -110,17 +111,23 @@ predicate initial_session_input_valid [#"/workspace/crates/verified/src/composit
 function successful_fetches [#"/workspace/crates/verified/src/composition/jwks_publication.rs" 23 0 23 61] (fetches: Seq.seq bool) (prefix: int) : int
 
 axiom successful_fetches_spec:
-  forall fetches: Seq.seq bool, prefix: int [successful_fetches fetches prefix]. ([%#sjwks_publication'5] 0 <= prefix
+  forall fetches: Seq.seq bool, prefix: int [successful_fetches fetches prefix]. ([%#sjwks_publication'6] 0 <= prefix
       /\ prefix <= Seq.length fetches)
-    -> ([%#sjwks_publication'6] 0 <= successful_fetches fetches prefix /\ successful_fetches fetches prefix <= prefix)
+    -> ([%#sjwks_publication'7] 0 <= successful_fetches fetches prefix /\ successful_fetches fetches prefix <= prefix)
 
 axiom successful_fetches_spec'0:
-  forall fetches: Seq.seq bool, prefix: int [successful_fetches fetches prefix]. ([%#sjwks_publication'5] 0 <= prefix
+  forall fetches: Seq.seq bool, prefix: int [successful_fetches fetches prefix]. ([%#sjwks_publication'6] 0 <= prefix
       /\ prefix <= Seq.length fetches)
-    -> ([%#sjwks_publication'7] (successful_fetches fetches prefix = 0)
+    -> ([%#sjwks_publication'8] (successful_fetches fetches prefix = 0)
     = (forall i: int. 0 <= i /\ i < prefix -> not Seq.get fetches i))
 
 constant const_MAX: UInt64.t = (18446744073709551615: UInt64.t)
+
+predicate publication_invalidates_credential [#"/workspace/crates/verified/src/composition/jwks_publication.rs" 130 0 135 9] (cache: t_JwksCacheFacts) (completed: int) (published: int) (writer_unfinished: bool) =
+  [%#sjwks_publication'4] gt_log_Int published 0
+  \/ writer_unfinished /\ UInt64.t'int cache.generation_before'0 < UInt64.t'int const_MAX - 1
+  \/ cache.expiry_enabled'0
+  /\ gt_log_Int (completed - Int64.to_int cache.last_successful_fetch_ms'0) (Int64.to_int cache.expiry_ms'0)
 
 let published_keys_bound_oauth_session (facts: t_OAuthSessionFacts) (cache: t_JwksCacheFacts) (completed_ms: Int64.t)
   (fetches: Slice64.slice bool) (begin_unfinished_writer: bool) (return (x: tup2_OAuthSessionDecision_tup2_u64_u64)) =
@@ -131,11 +138,7 @@ let published_keys_bound_oauth_session (facts: t_OAuthSessionFacts) (cache: t_Jw
       /\ UInt64.t'int result.f1'0.f1 <= successful_fetches (Slice64.view fetches) (Seq.length (Slice64.view fetches)))
     /\ ([@stop_split] [@expl:published_keys_bound_oauth_session ensures #1] [%#sjwks_publication'1] (result.f0'0
         = Reject)
-      = (gt_log_Int (UInt64.t'int result.f1'0.f1) 0
-      \/ begin_unfinished_writer /\ UInt64.t'int cache.generation_before'0 < UInt64.t'int const_MAX - 1
-      \/ cache.expiry_enabled'0
-      /\ gt_log_Int (Int64.to_int completed_ms
-      - Int64.to_int cache.last_successful_fetch_ms'0) (Int64.to_int cache.expiry_ms'0)))
+      = publication_invalidates_credential cache (Int64.to_int completed_ms) (UInt64.t'int result.f1'0.f1) begin_unfinished_writer)
     /\ ([@stop_split] [@expl:published_keys_bound_oauth_session ensures #2] [%#sjwks_publication'2] match result.f0'0 with
       | Reject -> true
       | Admit session_lifetime_ms effective_expires_at_ms -> result.f1'0.f0 = cache.generation_before'0
@@ -227,7 +230,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let published_controller_session_bounds_quorum_requests [#"/workspace/crates/verified/src/composition/controller_session.rs" 47 0 54 27]
+let published_controller_session_bounds_quorum_requests [#"/workspace/crates/verified/src/composition/controller_session.rs" 45 0 52 27]
   (facts: t_OAuthSessionFacts) (cache: t_JwksCacheFacts) (completed_ms: Int64.t) (fetches: Slice64.slice bool)
   (begin_unfinished_writer: bool) (requests: Slice64.slice tup2_i64_AclFacts)
   (return (x: tup3_Option_i64_Vec_bool_Global_tup2_u64_u64)) =
@@ -235,9 +238,9 @@ let published_controller_session_bounds_quorum_requests [#"/workspace/crates/ver
   (! bb0
   [ bb0 = s0
     [ s0 = published_keys_bound_oauth_session [%#scontroller_session] {facts} {cache} {completed_ms} {fetches}
-        {begin_unfinished_writer} (fun (_x: tup2_OAuthSessionDecision_tup2_u64_u64) -> [ &_32 <- _x ] s1)
-    | s1 = [ &session <- _32.f0'0 ] s2
-    | s2 = [ &trace <- _32.f1'0 ] s3
+        {begin_unfinished_writer} (fun (_x: tup2_OAuthSessionDecision_tup2_u64_u64) -> [ &_29 <- _x ] s1)
+    | s1 = [ &session <- _29.f0'0 ] s2
+    | s2 = [ &trace <- _29.f1'0 ] s3
     | s3 = new_bool [%#scontroller_session'0] (fun (_x: t_Vec_bool_Global) -> [ &responses <- _x ] s4)
     | s4 = any
       [ br0 -> {session = Reject} (! bb6) | br1 (x0: Int64.t) (x1: Int64.t) -> {session = Admit x0 x1} (! bb5) ] ]
@@ -265,50 +268,50 @@ let published_controller_session_bounds_quorum_requests [#"/workspace/crates/ver
         /\ ((Seq.get (Slice64.view requests) j).f1'1.saw_allow
         \/ (Seq.get (Slice64.view requests) j).f1'1.default_decision = Allow))}
       (! [ &variant_old_bb8 <- [%#scontroller_session'2] Seq.length (Slice64.view requests) - UInt64.t'int i ] s0)
-      [ s0 = len_tup2_i64_AclFacts [%#scontroller_session'3] {requests} (fun (_x: UInt64.t) -> [ &_67 <- _x ] s1)
-      | s1 = [ &_65 <- UInt64.lt i _67 ] s2
-      | s2 = any [ br0 -> {_65 = false} (! bb24) | br1 -> {_65} (! bb11) ] ]
+      [ s0 = len_tup2_i64_AclFacts [%#scontroller_session'3] {requests} (fun (_x: UInt64.t) -> [ &_64 <- _x ] s1)
+      | s1 = [ &_62 <- UInt64.lt i _64 ] s2
+      | s2 = any [ br0 -> {_62 = false} (! bb24) | br1 -> {_62} (! bb11) ] ]
       [ bb11 = s0
-        [ s0 = [ &_71 <- Some expiry'0 ] s1
-        | s1 = [ &_74 <- i ] s2
-        | s2 = [ &_75 <- Slice64.length requests ] s3
-        | s3 = [ &_76 <- UInt64.lt _74 _75 ] s4
-        | s4 = {[@expl:index in bounds] [%#scontroller_session'7] _76} s5
-        | s5 = Slice64.get [%#scontroller_session'8] <tup2_i64_AclFacts> {requests} {_74}
-            (fun (r: tup2_i64_AclFacts) -> [ &_73 <- r.f0'1 ] s6)
-        | s6 = controller_request_admission [%#scontroller_session'10] {_71} {[%#scontroller_session'9] (55: Int16.t)}
-            {_73} (fun (_x: bool) -> [ &_70 <- _x ] s7)
-        | s7 = any [ br0 -> {_70 = false} (! bb24) | br1 -> {_70} (! bb14) ] ]
+        [ s0 = [ &_68 <- Some expiry'0 ] s1
+        | s1 = [ &_71 <- i ] s2
+        | s2 = [ &_72 <- Slice64.length requests ] s3
+        | s3 = [ &_73 <- UInt64.lt _71 _72 ] s4
+        | s4 = {[@expl:index in bounds] [%#scontroller_session'7] _73} s5
+        | s5 = Slice64.get [%#scontroller_session'8] <tup2_i64_AclFacts> {requests} {_71}
+            (fun (r: tup2_i64_AclFacts) -> [ &_70 <- r.f0'1 ] s6)
+        | s6 = controller_request_admission [%#scontroller_session'10] {_68} {[%#scontroller_session'9] (55: Int16.t)}
+            {_70} (fun (_x: bool) -> [ &_67 <- _x ] s7)
+        | s7 = any [ br0 -> {_67 = false} (! bb24) | br1 -> {_67} (! bb14) ] ]
       | bb14 = s0
-        [ s0 = [ &_83 <- i ] s1
-        | s1 = [ &_84 <- Slice64.length requests ] s2
-        | s2 = [ &_85 <- UInt64.lt _83 _84 ] s3
-        | s3 = {[@expl:index in bounds] [%#scontroller_session'11] _85} s4
-        | s4 = Slice64.get [%#scontroller_session'12] <tup2_i64_AclFacts> {requests} {_83}
-            (fun (r: tup2_i64_AclFacts) -> [ &_82 <- r.f1'1 ] s5)
-        | s5 = acl_decision [%#scontroller_session'13] {_82} (fun (_x: t_AclDecision) -> [ &_81 <- _x ] s6)
+        [ s0 = [ &_80 <- i ] s1
+        | s1 = [ &_81 <- Slice64.length requests ] s2
+        | s2 = [ &_82 <- UInt64.lt _80 _81 ] s3
+        | s3 = {[@expl:index in bounds] [%#scontroller_session'11] _82} s4
+        | s4 = Slice64.get [%#scontroller_session'12] <tup2_i64_AclFacts> {requests} {_80}
+            (fun (r: tup2_i64_AclFacts) -> [ &_79 <- r.f1'1 ] s5)
+        | s5 = acl_decision [%#scontroller_session'13] {_79} (fun (_x: t_AclDecision) -> [ &_78 <- _x ] s6)
         | s6 = any
-          [ br0 -> {_81 = AllowSuperuser} (! bb20)
-          | br1 -> {_81 = AllowAcl} (! bb20)
-          | br2 -> {_81 = AllowNoAcl} (! bb20)
-          | br3 -> {_81 = DenyExplicit} (! bb18)
-          | br4 -> {_81 = DenyDefault} (! bb18) ] ]
-      | bb18 = s0 [ s0 = [ &_80 <- false ] s1 | s1 = bb21 ]
-      | bb20 = s0 [ s0 = [ &_80 <- true ] s1 | s1 = bb21 ]
+          [ br0 -> {_78 = AllowSuperuser} (! bb20)
+          | br1 -> {_78 = AllowAcl} (! bb20)
+          | br2 -> {_78 = AllowNoAcl} (! bb20)
+          | br3 -> {_78 = DenyExplicit} (! bb18)
+          | br4 -> {_78 = DenyDefault} (! bb18) ] ]
+      | bb18 = s0 [ s0 = [ &_77 <- false ] s1 | s1 = bb21 ]
+      | bb20 = s0 [ s0 = [ &_77 <- true ] s1 | s1 = bb21 ]
       | bb21 = s0
         [ s0 = MutBorrow.borrow_mut <t_Vec_bool_Global> {responses}
-            (fun (_bor: MutBorrow.t t_Vec_bool_Global) -> [ &_79 <- _bor ] [ &responses <- _bor.final ] s1)
-        | s1 = push_bool [%#scontroller_session'14] {_79} {_80} (fun (_x: ()) -> [ &_78 <- _x ] s2)
+            (fun (_bor: MutBorrow.t t_Vec_bool_Global) -> [ &_76 <- _bor ] [ &responses <- _bor.final ] s1)
+        | s1 = push_bool [%#scontroller_session'14] {_76} {_77} (fun (_x: ()) -> [ &_75 <- _x ] s2)
         | s2 = UInt64.add [%#scontroller_session'16] {i} {[%#scontroller_session'15] (1: UInt64.t)}
             (fun (_x: UInt64.t) -> [ &i <- _x ] s3)
         | s3 = bb8 ] ] ]
   | bb24 = s0
-    [ s0 = [ &_88 <- Some expiry'0 ] s1
-    | s1 = [ &_ret <- { f0'2 = _88; f1'2 = responses; f2'2 = trace } ] s2
+    [ s0 = [ &_85 <- Some expiry'0 ] s1
+    | s1 = [ &_ret <- { f0'2 = _85; f1'2 = responses; f2'2 = trace } ] s2
     | s2 = return {_ret} ]
   | bb6 = s0
-    [ s0 = [ &_42 <- None ] s1
-    | s1 = [ &_ret <- { f0'2 = _42; f1'2 = responses; f2'2 = trace } ] s2
+    [ s0 = [ &_39 <- None ] s1
+    | s1 = [ &_ret <- { f0'2 = _39; f1'2 = responses; f2'2 = trace } ] s2
     | s2 = return {_ret} ] ]
   [ & _ret: tup3_Option_i64_Vec_bool_Global_tup2_u64_u64 = Any.any_l ()
   | & facts: t_OAuthSessionFacts = facts
@@ -319,38 +322,34 @@ let published_controller_session_bounds_quorum_requests [#"/workspace/crates/ver
   | & requests: Slice64.slice tup2_i64_AclFacts = requests
   | & session: t_OAuthSessionDecision = Any.any_l ()
   | & trace: tup2_u64_u64 = Any.any_l ()
-  | & _32: tup2_OAuthSessionDecision_tup2_u64_u64 = Any.any_l ()
+  | & _29: tup2_OAuthSessionDecision_tup2_u64_u64 = Any.any_l ()
   | & responses: t_Vec_bool_Global = Any.any_l ()
   | & expiry'0: Int64.t = Any.any_l ()
-  | & _42: t_Option_i64 = Any.any_l ()
+  | & _39: t_Option_i64 = Any.any_l ()
   | & effective_expires_at_ms: Int64.t = Any.any_l ()
   | & i: UInt64.t = Any.any_l ()
-  | & _65: bool = Any.any_l ()
-  | & _67: UInt64.t = Any.any_l ()
-  | & _70: bool = Any.any_l ()
-  | & _71: t_Option_i64 = Any.any_l ()
-  | & _73: Int64.t = Any.any_l ()
-  | & _74: UInt64.t = Any.any_l ()
-  | & _75: UInt64.t = Any.any_l ()
-  | & _76: bool = Any.any_l ()
-  | & _78: () = Any.any_l ()
-  | & _79: MutBorrow.t t_Vec_bool_Global = Any.any_l ()
-  | & _80: bool = Any.any_l ()
-  | & _81: t_AclDecision = Any.any_l ()
-  | & _82: t_AclFacts = Any.any_l ()
-  | & _83: UInt64.t = Any.any_l ()
-  | & _84: UInt64.t = Any.any_l ()
-  | & _85: bool = Any.any_l ()
-  | & _88: t_Option_i64 = Any.any_l ()
+  | & _62: bool = Any.any_l ()
+  | & _64: UInt64.t = Any.any_l ()
+  | & _67: bool = Any.any_l ()
+  | & _68: t_Option_i64 = Any.any_l ()
+  | & _70: Int64.t = Any.any_l ()
+  | & _71: UInt64.t = Any.any_l ()
+  | & _72: UInt64.t = Any.any_l ()
+  | & _73: bool = Any.any_l ()
+  | & _75: () = Any.any_l ()
+  | & _76: MutBorrow.t t_Vec_bool_Global = Any.any_l ()
+  | & _77: bool = Any.any_l ()
+  | & _78: t_AclDecision = Any.any_l ()
+  | & _79: t_AclFacts = Any.any_l ()
+  | & _80: UInt64.t = Any.any_l ()
+  | & _81: UInt64.t = Any.any_l ()
+  | & _82: bool = Any.any_l ()
+  | & _85: t_Option_i64 = Any.any_l ()
   | & variant_old_bb8: int = Any.any_l () ])
   [ return (result: tup3_Option_i64_Vec_bool_Global_tup2_u64_u64) ->
   {[@stop_split] [@expl:published_controller_session_bounds_quorum_requests ensures] ([@stop_split] [@expl:published_controller_session_bounds_quorum_requests ensures #0] [%#scontroller_session'18] (result.f0'2
         = None)
-      = (gt_log_Int (UInt64.t'int result.f2'2.f1) 0
-      \/ begin_unfinished_writer /\ UInt64.t'int cache.generation_before'0 < UInt64.t'int const_MAX - 1
-      \/ cache.expiry_enabled'0
-      /\ gt_log_Int (Int64.to_int completed_ms
-      - Int64.to_int cache.last_successful_fetch_ms'0) (Int64.to_int cache.expiry_ms'0)))
+      = publication_invalidates_credential cache (Int64.to_int completed_ms) (UInt64.t'int result.f2'2.f1) begin_unfinished_writer)
     /\ ([@stop_split] [@expl:published_controller_session_bounds_quorum_requests ensures #1] [%#scontroller_session'19] match result.f0'2 with
         | None -> Seq.length (view_Vec_bool_Global result.f1'2) = 0
         | Some expiry'0 -> expiry'0 = facts.token_expires_at_ms

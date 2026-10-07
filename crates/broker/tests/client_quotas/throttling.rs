@@ -13,7 +13,7 @@ use krabka_protocol::{
     Decode, Encode,
     owned::{
         add_offsets_to_txn_response::AddOffsetsToTxnResponse,
-        api_versions_request::ApiVersionsRequest, api_versions_response::ApiVersionsResponse,
+        api_versions_response::ApiVersionsResponse,
     },
 };
 use tokio::net::TcpStream;
@@ -21,14 +21,16 @@ use tokio::net::TcpStream;
 use super::{
     CLIENT_ID,
     cluster::{
-        create_topic_as_admin, seed_alice_read_acl, seed_alice_write_acl,
-        seed_compat_shim_disable_acl, start_single_broker_sasl_plaintext_with_users,
-        wait_partition_exists,
+        create_topic_as_admin, seed_alice_write_acl, seed_compat_shim_disable_acl,
+        start_single_broker_sasl_plaintext_with_users, wait_partition_exists,
     },
     data_plane::{drive_add_offsets_to_txn, drive_fetch_sasl, drive_produce_sasl},
     quota_admin::drive_alter_client_quotas_sasl,
 };
-use crate::kafka_wire::{self, Flexibility};
+use crate::{
+    kafka_wire::{self, Flexibility},
+    support::discovery::api_versions_request_for,
+};
 
 /// `ApiVersions` is `api_key` 18.
 const API_VERSIONS_KEY: i16 = 18;
@@ -36,6 +38,21 @@ const API_VERSIONS_KEY: i16 = 18;
 /// The broker's default `quota_throttle_max`, in milliseconds. KIP-219 caps
 /// the reported back-off at this, so no response may carry more.
 const QUOTA_THROTTLE_MAX_MS: i32 = 1000;
+
+macro_rules! throttled_response {
+    ($stream:expr, $drive:path, $failure:tt) => {{
+        let deadline = Instant::now() + Duration::from_secs(15);
+        let mut correlation = 11;
+        loop {
+            let response = $drive($stream, correlation).await;
+            correlation += 1;
+            if response.throttle_time_ms > 0 {
+                break response;
+            }
+            assert!(Instant::now() <= deadline, $failure);
+        }
+    }};
+}
 
 /// Test 2: a low `(user=alice) producer_byte_rate` throttles a produce.
 ///
@@ -49,30 +66,20 @@ const QUOTA_THROTTLE_MAX_MS: i32 = 1000;
 /// exact value is not load-bearing.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn producer_byte_rate_throttles_produce() {
-    let (handle, _dir, addr) = start_single_broker_sasl_plaintext_with_users(
-        "admin",
-        &[("admin", "admin-secret"), ("alice", "alice-secret")],
-    )
-    .await;
+    let (handle, _dir, addr) = quota_fixture().await;
 
     // Seed ACL entries so the authorizer engages (compat shim disabled) and
     // alice can Write to the topic.
-    seed_compat_shim_disable_acl(&handle).await;
-    create_topic_as_admin(addr, "throttle-produce", 1, 1).await;
-    wait_partition_exists(&handle, "throttle-produce", 0).await;
-    seed_alice_write_acl(&handle, "throttle-produce").await;
-
-    // Set low producer quota for alice.
-    kafka_wire::quotas::set_user_quota(
-        CLIENT_ID,
+    prepare_quota_topic(
         &handle,
         addr,
-        ("admin", "admin-secret"),
-        "alice",
-        "producer_byte_rate",
-        128.0,
+        "throttle-produce",
+        krabka_metadata::AclOperation::Write,
     )
     .await;
+
+    // Set low producer quota for alice.
+    set_alice_quota(&handle, addr, "producer_byte_rate", 128.0).await;
 
     // Alice produces 8 KB (8 records of 1 KB each). Rate = 128 bytes/sec.
     // Retry loop: TOPIC_AUTHORIZATION_FAILED (29) can fire if the alice ACL
@@ -109,28 +116,18 @@ async fn producer_byte_rate_throttles_produce() {
 /// cause the throttle.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn request_percentage_throttles_produce() {
-    let (handle, _dir, addr) = start_single_broker_sasl_plaintext_with_users(
-        "admin",
-        &[("admin", "admin-secret"), ("alice", "alice-secret")],
-    )
-    .await;
+    let (handle, _dir, addr) = quota_fixture().await;
 
-    seed_compat_shim_disable_acl(&handle).await;
-    create_topic_as_admin(addr, "throttle-request", 1, 1).await;
-    wait_partition_exists(&handle, "throttle-request", 0).await;
-    seed_alice_write_acl(&handle, "throttle-request").await;
-
-    // Set a tiny request_percentage for alice (no byte-rate quota).
-    kafka_wire::quotas::set_user_quota(
-        CLIENT_ID,
+    prepare_quota_topic(
         &handle,
         addr,
-        ("admin", "admin-secret"),
-        "alice",
-        "request_percentage",
-        0.001,
+        "throttle-request",
+        krabka_metadata::AclOperation::Write,
     )
     .await;
+
+    // Set a tiny request_percentage for alice (no byte-rate quota).
+    set_alice_quota(&handle, addr, "request_percentage", 0.001).await;
 
     // Alice produces a single small record. Retry past TOPIC_AUTHORIZATION_FAILED
     // (29) while the alice Write ACL propagates to the handler's image snapshot.
@@ -151,17 +148,7 @@ async fn request_percentage_throttles_produce() {
     handle.shutdown().await;
 }
 
-/// Renders the broker's registry as the exposition text an operator scrapes,
-/// and reads one series' value out of it.
-///
-/// `Histogram::sum` and `Histogram::count` are behind prometheus-client's
-/// `test-util` feature, which this workspace does not enable, so a test reads
-/// a histogram the way Prometheus does. Missing series read as `0.0`: a
-/// `Family` emits nothing until it has an entry, and "never observed" and
-/// "observed only zeroes" mean the same thing to the assertions below.
-async fn metric_value(handle: &krabka_broker::BrokerHandle, series: &str) -> f64 {
-    crate::support::client::metric_value(handle, series).await
-}
+use crate::support::client::metric_value;
 
 /// A throttled produce must move the throttle series, attributed to the quota
 /// that caused it.
@@ -175,27 +162,17 @@ async fn metric_value(handle: &krabka_broker::BrokerHandle, series: &str) -> f64
 /// quota asks for nothing.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn producer_byte_rate_throttle_moves_the_throttle_metrics() {
-    let (handle, _dir, addr) = start_single_broker_sasl_plaintext_with_users(
-        "admin",
-        &[("admin", "admin-secret"), ("alice", "alice-secret")],
-    )
-    .await;
+    let (handle, _dir, addr) = quota_fixture().await;
 
-    seed_compat_shim_disable_acl(&handle).await;
-    create_topic_as_admin(addr, "throttle-metrics", 1, 1).await;
-    wait_partition_exists(&handle, "throttle-metrics", 0).await;
-    seed_alice_write_acl(&handle, "throttle-metrics").await;
-
-    kafka_wire::quotas::set_user_quota(
-        CLIENT_ID,
+    prepare_quota_topic(
         &handle,
         addr,
-        ("admin", "admin-secret"),
-        "alice",
-        "producer_byte_rate",
-        128.0,
+        "throttle-metrics",
+        krabka_metadata::AclOperation::Write,
     )
     .await;
+
+    set_alice_quota(&handle, addr, "producer_byte_rate", 128.0).await;
 
     // Alice produces 8 KB against a 128 B/s quota. Retry past
     // TOPIC_AUTHORIZATION_FAILED (29) while the Write ACL propagates.
@@ -252,27 +229,23 @@ async fn producer_byte_rate_throttle_moves_the_throttle_metrics() {
 /// The rate and burst reasoning is the same as Test 2.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn consumer_byte_rate_throttles_fetch() {
-    let (handle, _dir, addr) = start_single_broker_sasl_plaintext_with_users(
-        "admin",
-        &[("admin", "admin-secret"), ("alice", "alice-secret")],
+    let (handle, _dir, addr) = quota_fixture().await;
+
+    prepare_quota_topic(
+        &handle,
+        addr,
+        "throttle-fetch",
+        krabka_metadata::AclOperation::Read,
     )
     .await;
 
-    seed_compat_shim_disable_acl(&handle).await;
-    create_topic_as_admin(addr, "throttle-fetch", 1, 1).await;
-    wait_partition_exists(&handle, "throttle-fetch", 0).await;
-    seed_alice_read_acl(&handle, "throttle-fetch").await;
-
     // Set low consumer quota for alice.
-    let alter_resp = drive_alter_client_quotas_sasl(
+    let alter_resp = crate::kafka_wire::quotas::alter_user_quota(
         addr,
-        "admin",
-        "admin-secret",
-        vec![(
-            vec![("user".into(), Some("alice".into()))],
-            vec![("consumer_byte_rate".into(), 128.0, false)],
-        )],
-        false,
+        crate::CLIENT_ID,
+        ("admin", "admin-secret"),
+        "alice",
+        ("consumer_byte_rate", 128.0),
     )
     .await;
     assert!(
@@ -342,27 +315,23 @@ async fn consumer_byte_rate_throttles_fetch() {
 /// Test 4: a `(user, client-id)` quota overrides a user-only quota.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn user_client_tuple_overrides_user_specific() {
-    let (handle, _dir, addr) = start_single_broker_sasl_plaintext_with_users(
-        "admin",
-        &[("admin", "admin-secret"), ("alice", "alice-secret")],
+    let (handle, _dir, addr) = quota_fixture().await;
+
+    prepare_quota_topic(
+        &handle,
+        addr,
+        "precedence-topic",
+        krabka_metadata::AclOperation::Write,
     )
     .await;
 
-    seed_compat_shim_disable_acl(&handle).await;
-    create_topic_as_admin(addr, "precedence-topic", 1, 1).await;
-    wait_partition_exists(&handle, "precedence-topic", 0).await;
-    seed_alice_write_acl(&handle, "precedence-topic").await;
-
     // Set a lenient user-only quota.
-    let alter_user = drive_alter_client_quotas_sasl(
+    let alter_user = crate::kafka_wire::quotas::alter_user_quota(
         addr,
-        "admin",
-        "admin-secret",
-        vec![(
-            vec![("user".into(), Some("alice".into()))],
-            vec![("producer_byte_rate".into(), 8192.0, false)],
-        )],
-        false,
+        crate::CLIENT_ID,
+        ("admin", "admin-secret"),
+        "alice",
+        ("producer_byte_rate", 8192.0),
     )
     .await;
     assert!(alter_user[0].1 == 0, "alter user quota must succeed");
@@ -370,6 +339,7 @@ async fn user_client_tuple_overrides_user_specific() {
     // Set a tight tuple quota for `CLIENT_ID`.
     let alter_tuple = drive_alter_client_quotas_sasl(
         addr,
+        crate::CLIENT_ID,
         "admin",
         "admin-secret",
         vec![(
@@ -444,11 +414,7 @@ async fn user_client_tuple_overrides_user_specific() {
 /// field, which is what a leading-int32 patch and nothing more looks like.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn request_percentage_throttle_is_echoed_on_a_patched_api() {
-    let (handle, _dir, addr) = start_single_broker_sasl_plaintext_with_users(
-        "admin",
-        &[("admin", "admin-secret"), ("alice", "alice-secret")],
-    )
-    .await;
+    let (handle, _dir, addr) = quota_fixture().await;
 
     // One connection for every alice request: re-authenticating would charge
     // each handshake to the same quota bucket.
@@ -464,32 +430,15 @@ async fn request_percentage_throttle_is_echoed_on_a_patched_api() {
         baseline.throttle_time_ms
     );
 
-    kafka_wire::quotas::set_user_quota(
-        CLIENT_ID,
-        &handle,
-        addr,
-        ("admin", "admin-secret"),
-        "alice",
-        "request_percentage",
-        0.001,
-    )
-    .await;
+    set_alice_quota(&handle, addr, "request_percentage", 0.001).await;
 
     // Drive the same request until the request bucket runs dry. Each request
     // charges its own handler time, so the first one over budget is throttled.
-    let deadline = Instant::now() + Duration::from_secs(15);
-    let mut corr_id = 11;
-    let throttled = loop {
-        let resp = drive_add_offsets_to_txn(&mut stream, corr_id).await;
-        corr_id += 1;
-        if resp.throttle_time_ms > 0 {
-            break resp;
-        }
-        assert!(
-            Instant::now() <= deadline,
-            "no request-quota throttle on AddOffsetsToTxn after 15s"
-        );
-    };
+    let throttled = throttled_response!(
+        &mut stream,
+        drive_add_offsets_to_txn,
+        "no request-quota throttle on AddOffsetsToTxn after 15s"
+    );
 
     // The patch touched the leading int32 and nothing else: every other field
     // still decodes to what the unthrottled response carried.
@@ -517,11 +466,7 @@ const API_VERSIONS_VERSION: i16 = 3;
 /// client which has not yet learned the broker's versions can always parse the
 /// reply. The two header flexibilities therefore differ.
 async fn drive_api_versions(stream: &mut TcpStream, corr_id: i32) -> ApiVersionsResponse {
-    let req = ApiVersionsRequest {
-        client_software_name: "krabka-quota-test".to_string(),
-        client_software_version: "0.0.1".to_string(),
-        ..Default::default()
-    };
+    let req = api_versions_request_for("krabka-quota-test".to_string(), "0.0.1".to_string());
     let mut body = BytesMut::new();
     req.encode(&mut body, API_VERSIONS_VERSION)
         .expect("encode ApiVersions");
@@ -558,11 +503,7 @@ async fn drive_api_versions(stream: &mut TcpStream, corr_id: i32) -> ApiVersions
 /// `AddOffsetsToTxn` test above does on the patched path.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn request_percentage_throttle_is_reported_on_api_versions() {
-    let (handle, _dir, addr) = start_single_broker_sasl_plaintext_with_users(
-        "admin",
-        &[("admin", "admin-secret"), ("alice", "alice-secret")],
-    )
-    .await;
+    let (handle, _dir, addr) = quota_fixture().await;
 
     let mut stream = kafka_wire::sasl_plain_authenticate(addr, CLIENT_ID, "alice", b"alice-secret")
         .await
@@ -581,30 +522,13 @@ async fn request_percentage_throttle_is_reported_on_api_versions() {
         baseline.throttle_time_ms
     );
 
-    kafka_wire::quotas::set_user_quota(
-        CLIENT_ID,
-        &handle,
-        addr,
-        ("admin", "admin-secret"),
-        "alice",
-        "request_percentage",
-        0.001,
-    )
-    .await;
+    set_alice_quota(&handle, addr, "request_percentage", 0.001).await;
 
-    let deadline = Instant::now() + Duration::from_secs(15);
-    let mut corr_id = 11;
-    let throttled = loop {
-        let resp = drive_api_versions(&mut stream, corr_id).await;
-        corr_id += 1;
-        if resp.throttle_time_ms > 0 {
-            break resp;
-        }
-        assert!(
-            Instant::now() <= deadline,
-            "no request-quota throttle on ApiVersions after 15s"
-        );
-    };
+    let throttled = throttled_response!(
+        &mut stream,
+        drive_api_versions,
+        "no request-quota throttle on ApiVersions after 15s"
+    );
 
     // The handler set the field on the typed response, so nothing else moved:
     // the advertised table and the feature rows are the baseline's. The
@@ -652,4 +576,46 @@ async fn produce_when_acl_applied(
         );
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
+}
+
+async fn quota_fixture() -> (
+    krabka_broker::BrokerHandle,
+    tempfile::TempDir,
+    std::net::SocketAddr,
+) {
+    start_single_broker_sasl_plaintext_with_users(
+        "admin",
+        &[("admin", "admin-secret"), ("alice", "alice-secret")],
+    )
+    .await
+}
+
+async fn prepare_quota_topic(
+    broker: &krabka_broker::BrokerHandle,
+    addr: std::net::SocketAddr,
+    topic: &str,
+    operation: krabka_metadata::AclOperation,
+) {
+    seed_compat_shim_disable_acl(broker).await;
+    create_topic_as_admin(addr, crate::CLIENT_ID, topic, 1, 1).await;
+    wait_partition_exists(broker, topic, 0).await;
+    crate::support::acl::seed_topic_acl(broker, topic, "User:alice", operation).await;
+}
+
+async fn set_alice_quota(
+    broker: &krabka_broker::BrokerHandle,
+    addr: std::net::SocketAddr,
+    key: &str,
+    value: f64,
+) {
+    kafka_wire::quotas::set_user_quota(
+        CLIENT_ID,
+        broker,
+        addr,
+        ("admin", "admin-secret"),
+        "alice",
+        key,
+        value,
+    )
+    .await;
 }

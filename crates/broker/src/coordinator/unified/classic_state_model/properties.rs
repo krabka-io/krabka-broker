@@ -51,8 +51,7 @@ impl Model for ClassicModel {
         }
     }
 
-    fn next_state(&self, last: &Self::State, action: Self::Action) -> Option<Self::State> {
-        let mut s = last.clone();
+    krabka_macros::model_transition! { last, action, s; {
         match action {
             Act::JoinDynamic(mid) => {
                 // Handler guard (classic_ops step 2b): a known member_id with a
@@ -145,7 +144,7 @@ impl Model for ClassicModel {
         assert2::assert!(index_coherent(&s.g), "index coherence violated: {:?}", s.g);
         assert2::assert!(single_owner(&s.g), "single-owner violated: {:?}", s.g);
         Some(s)
-    }
+    }}
 
     fn properties(&self) -> Vec<Property<Self>> {
         vec![

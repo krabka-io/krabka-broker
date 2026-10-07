@@ -68,19 +68,13 @@ pub(super) fn snapshot_pending_after_change(
             assignment_epoch: state.target.epoch,
         });
     }
-    for mid in affected_members {
-        if let Some(m) = state.members.get(mid) {
-            pending
-                .member_metadata
-                .push((mid.clone(), Some(member_metadata_value(m))));
-            pending
-                .current_per_member
-                .push((mid.clone(), Some(current_assignment_value(m))));
+    crate::coordinator::unified::persistence::snapshot_members!(pending, state, affected_members;
+        member_metadata_value, current_assignment_value; |mid, m| {
             if let Some(tv) = target_member_value(state, mid) {
                 pending.target_per_member.push((mid.clone(), Some(tv)));
             }
         }
-    }
+    );
     pending
 }
 
@@ -135,34 +129,44 @@ fn target_member_value(
     })
 }
 
-pub(super) async fn flush_pending(
-    actor: &ActorState,
-    pending: PendingStreamsRecords,
+crate::coordinator::unified::persistence::flush_pending_records! {
+    actor: ActorState, pending: PendingStreamsRecords;
+    offsets_log, coordinator, now_ms;
+    group &actor.state.group_id;
+    encode pending.into_batch(&actor.state.group_id, now_ms);
+    cache coordinator.update_streams_cache(&actor.state.group_id, snapshot_seed(actor));
+}
+
+/// Persist the reconciler's current delta after a timer or configuration change.
+pub(super) async fn reconcile_and_flush(
+    actor: &mut ActorState,
+    config: &super::super::config::StreamsGroupConfig,
+    metadata_source: Option<&std::sync::Arc<dyn crate::metadata_source::MetadataSource>>,
     offsets_log: &dyn OffsetsLog,
     coordinator: &GroupCoordinator,
-    now_ms: i64,
 ) -> Result<(), crate::error::BrokerError> {
-    if pending.is_empty() {
-        return Ok(());
-    }
-    let batch = pending.into_batch(&actor.state.group_id, now_ms)?;
-    offsets_log.append(&actor.state.group_id, batch).await?;
-    coordinator.update_streams_cache(&actor.state.group_id, snapshot_seed(actor));
-    Ok(())
+    super::reconciliation::reconcile(actor, config, metadata_source);
+    let pending = snapshot_pending_after_change(actor, &[]);
+    flush_pending(
+        actor,
+        pending,
+        offsets_log,
+        coordinator,
+        super::chrono_now_ms(),
+    )
+    .await
 }
 
 /// Snapshots the full actor state into a `StreamsGroupSeed` for the cache and
 /// for a respawned actor. The result matches what bootstrap replay produces.
 pub(super) fn snapshot_seed(actor: &ActorState) -> StreamsGroupSeed {
     let state = &actor.state;
-    let mut members = std::collections::HashMap::new();
-    let mut target_per_member = std::collections::HashMap::new();
-    let mut current_per_member = std::collections::HashMap::new();
-    for (mid, m) in &state.members {
-        members.insert(mid.clone(), member_metadata_value(m));
-        current_per_member.insert(mid.clone(), current_assignment_value(m));
-        if let Some(tv) = target_member_value(state, mid) {
-            target_per_member.insert(mid.clone(), tv);
+    crate::coordinator::unified::seeds::snapshot_member_maps! { state;
+        members, current_per_member, target_per_member;
+        member_metadata_value, current_assignment_value; |mid, m| {
+            if let Some(tv) = target_member_value(state, mid) {
+                target_per_member.insert(mid.clone(), tv);
+            }
         }
     }
     StreamsGroupSeed {
@@ -207,10 +211,7 @@ pub(super) fn apply_seed(actor: &mut ActorState, seed: StreamsGroupSeed) {
         m.topology_epoch = meta.topology_epoch;
         state.members.insert(mid, m);
     }
-    for (mid, cur) in seed.current_per_member {
-        if let Some(m) = state.members.get_mut(&mid) {
-            m.member_epoch = cur.member_epoch;
-            m.previous_member_epoch = cur.previous_member_epoch;
+    crate::coordinator::unified::seeds::hydrate_member_epochs!(state, seed; m, cur {
             m.assignment_state = cur.state.into();
             m.active = cur.active;
             m.standby = cur.standby;
@@ -220,8 +221,7 @@ pub(super) fn apply_seed(actor: &mut ActorState, seed: StreamsGroupSeed) {
             m.warmup_pending_revocation = cur.warmup_pending_revocation;
             // The member got this assignment before the load.
             m.sent_tasks = [m.active.clone(), m.standby.clone(), m.warmup.clone()];
-        }
-    }
+    });
     for (mid, tv) in seed.target_per_member {
         if !tv.active.is_empty() {
             state.target.active.insert(mid.clone(), tv.active);
@@ -251,7 +251,7 @@ mod tests {
 
     use super::*;
     use crate::coordinator::unified::streams::persistence::{
-        DescriptionEpochs, StreamsGroupTopologyValue, StreamsMemberWireState,
+        DescriptionEpochs, StreamsGroupTopologyValue,
     };
 
     #[test]
@@ -278,17 +278,10 @@ mod tests {
         let mut current = std::collections::HashMap::new();
         current.insert(
             "m1".to_string(),
-            StreamsGroupCurrentMemberAssignmentValue {
-                member_epoch: 4,
-                previous_member_epoch: 3,
-                state: StreamsMemberWireState::Stable,
-                active: maplit::btreemap! {"0".to_string() => vec![0, 1]},
-                standby: BTreeMap::new(),
-                warmup: BTreeMap::new(),
-                active_pending_revocation: BTreeMap::new(),
-                standby_pending_revocation: BTreeMap::new(),
-                warmup_pending_revocation: BTreeMap::new(),
-            },
+            crate::coordinator::unified::test_support::stable_streams_assignment(
+                (4, 3),
+                maplit::btreemap! {"0".to_string() => vec![0, 1]},
+            ),
         );
         let mut target = std::collections::HashMap::new();
         target.insert(

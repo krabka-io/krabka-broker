@@ -366,6 +366,23 @@ mod tests {
         }
     }
 
+    async fn route_fetch(
+        router: &WalShardRouter,
+        body: Bytes,
+        principal: &krabka_security::Principal,
+    ) -> FetchResponse {
+        let response = router
+            .route(
+                krabka_raft::kraft::transport::api_key::FETCH,
+                body,
+                Some(principal),
+            )
+            .await
+            .unwrap()
+            .expect("diskless WAL fetch response");
+        FetchResponse::decode(&mut response.as_ref(), 17).unwrap()
+    }
+
     fn broker_principal(id: u64) -> krabka_security::Principal {
         crate::test_support::sasl_principal(&format!("broker-{id}"))
     }
@@ -425,16 +442,7 @@ mod tests {
         );
         let principal = crate::test_support::sasl_principal("admin");
 
-        let response = router
-            .route(
-                krabka_raft::kraft::transport::api_key::FETCH,
-                body,
-                Some(&principal),
-            )
-            .await
-            .unwrap()
-            .expect("diskless WAL fetch response");
-        let decoded = FetchResponse::decode(&mut response.as_ref(), 17).unwrap();
+        let decoded = route_fetch(&router, body, &principal).await;
         let partition = &decoded.responses[0].partitions[0];
         assert2::assert!((partition.high_watermark) == (1));
         assert2::assert!((partition.last_stable_offset) == (1));
@@ -548,16 +556,7 @@ mod tests {
         );
         let principal = broker_principal(9);
 
-        let response = router
-            .route(
-                krabka_raft::kraft::transport::api_key::FETCH,
-                body,
-                Some(&principal),
-            )
-            .await
-            .unwrap()
-            .expect("diskless WAL fetch response");
-        let decoded = FetchResponse::decode(&mut response.as_ref(), 17).unwrap();
+        let decoded = route_fetch(&router, body, &principal).await;
         let partition = &decoded.responses[0].partitions[0];
         assert2::assert!((partition.error_code) == (3));
         assert2::assert!(

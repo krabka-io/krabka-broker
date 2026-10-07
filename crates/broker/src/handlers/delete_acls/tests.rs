@@ -10,9 +10,9 @@
 use std::sync::Arc;
 
 use assert2::{assert, check};
-use krabka_metadata::{AclEntry, AclOperation, MetadataRecord, PatternType, PermissionType};
+use krabka_metadata::{AclEntry, AclOperation, PatternType, PermissionType};
 use krabka_protocol::{
-    ProtocolError, UnknownTaggedFields,
+    ProtocolError,
     owned::{
         delete_acls_request::DeleteAclsFilter,
         delete_acls_response::{DeleteAclsFilterResult, DeleteAclsMatchingAcl, DeleteAclsResponse},
@@ -24,64 +24,38 @@ use crate::{
     broker::BrokerHandle,
     codes,
     error::BrokerError,
-    handlers::delete_acls::test_support::{
-        OPERATION_ANY, OPERATION_READ, PATTERN_TYPE_ANY, PATTERN_TYPE_LITERAL, PATTERN_TYPE_MATCH,
-        PATTERN_TYPE_PREFIXED, PERMISSION_ALLOW, PERMISSION_ANY, RESOURCE_TYPE_TOPIC, VERSION, acl,
-        configured_authorizer, filter, request, test_context,
+    handlers::{
+        acl_test_support::{all_acls, seed_acls},
+        delete_acls::test_support::{
+            OPERATION_ANY, OPERATION_READ, PATTERN_TYPE_ANY, PATTERN_TYPE_LITERAL,
+            PATTERN_TYPE_MATCH, PATTERN_TYPE_PREFIXED, PERMISSION_ALLOW, PERMISSION_ANY,
+            RESOURCE_TYPE_TOPIC, VERSION, acl, configured_authorizer, filter, named_filters,
+            request, test_context,
+        },
     },
     test_support::{DenyAll, start_broker_with_authorizer_no_audit as start_broker, test_ctx},
 };
 
-async fn seed_acls(handle: &BrokerHandle, entries: Vec<AclEntry>) {
-    handle
-        .broker_arc_for_test()
-        .controller
-        .submit_change(
-            entries
-                .into_iter()
-                .map(MetadataRecord::V1AccessControlEntry)
-                .collect(),
-        )
-        .await
-        .expect("seed ACLs");
-}
-
-fn all_acls(handle: &BrokerHandle) -> Vec<AclEntry> {
-    handle
-        .controller_image_for_test()
-        .all_acls()
-        .cloned()
-        .collect()
-}
-
 #[tokio::test]
 async fn handle_denies_cluster_alter_for_each_filter() {
-    let (broker_handle, _dir) = start_broker(Arc::new(DenyAll)).await;
-    seed_acls(
-        &broker_handle,
+    seeded_acl_fixture!(
+        (broker_handle, _dir, broker, ctx),
+        start_broker(Arc::new(DenyAll)),
         vec![acl("orders", "User:alice", AclOperation::Read)],
-    )
-    .await;
-    let broker = broker_handle.broker_arc_for_test();
-    test_ctx!(ctx, "alice");
-    let req = request(vec![
-        filter(Some("orders"), Some("User:alice")),
-        filter(Some("payments"), Some("User:bob")),
-    ]);
+        "alice"
+    );
+    let req = named_filters(&[("orders", "User:alice"), ("payments", "User:bob")]);
 
     let resp = handle(&broker, req, VERSION, &ctx).await.expect("handle");
 
-    let denied = DeleteAclsFilterResult {
+    let denied = tagged_wire!(DeleteAclsFilterResult {
         error_code: codes::CLUSTER_AUTHORIZATION_FAILED,
         error_message: Some("Request DeleteAcls needs ALTER permission.".into()),
         matching_acls: Vec::new(),
-        unknown_tagged_fields: UnknownTaggedFields::default(),
-    };
-    let expected = DeleteAclsResponse {
-        throttle_time_ms: 0,
+    });
+    let expected = unthrottled_wire!(DeleteAclsResponse {
         filter_results: vec![denied.clone(), denied],
-        unknown_tagged_fields: UnknownTaggedFields::default(),
-    };
+    });
     assert!(resp == expected);
     assert!(all_acls(&broker_handle).len() == 1);
     broker_handle.shutdown().await;
@@ -89,27 +63,24 @@ async fn handle_denies_cluster_alter_for_each_filter() {
 
 #[tokio::test]
 async fn handle_returns_matching_acl_fields_and_deletes_only_matches() {
-    let (broker_handle, _dir) = start_broker(configured_authorizer()).await;
-    seed_acls(
-        &broker_handle,
+    seeded_acl_fixture!(
+        (broker_handle, _dir, broker, ctx),
+        start_broker(configured_authorizer()),
         vec![
             acl("orders", "User:alice", AclOperation::Read),
             acl("payments", "User:bob", AclOperation::Write),
         ],
-    )
-    .await;
-    let broker = broker_handle.broker_arc_for_test();
-    test_ctx!(ctx, "admin");
+        "admin"
+    );
     let req = request(vec![filter(Some("orders"), Some("User:alice"))]);
 
     let resp = handle(&broker, req, VERSION, &ctx).await.expect("handle");
 
-    let expected = DeleteAclsResponse {
-        throttle_time_ms: 0,
-        filter_results: vec![DeleteAclsFilterResult {
+    let expected = unthrottled_wire!(DeleteAclsResponse {
+        filter_results: vec![tagged_wire!(DeleteAclsFilterResult {
             error_code: codes::NONE,
             error_message: None,
-            matching_acls: vec![DeleteAclsMatchingAcl {
+            matching_acls: vec![tagged_wire!(DeleteAclsMatchingAcl {
                 error_code: codes::NONE,
                 error_message: None,
                 resource_type: RESOURCE_TYPE_TOPIC,
@@ -119,12 +90,9 @@ async fn handle_returns_matching_acl_fields_and_deletes_only_matches() {
                 host: "*".into(),
                 operation: OPERATION_READ,
                 permission_type: PERMISSION_ALLOW,
-                unknown_tagged_fields: UnknownTaggedFields::default(),
-            }],
-            unknown_tagged_fields: UnknownTaggedFields::default(),
-        }],
-        unknown_tagged_fields: UnknownTaggedFields::default(),
-    };
+            })],
+        })],
+    });
     assert!(resp == expected);
 
     let remaining = all_acls(&broker_handle);
@@ -138,32 +106,24 @@ async fn handle_returns_matching_acl_fields_and_deletes_only_matches() {
 /// seeded binding must survive the refusal.
 #[tokio::test]
 async fn handle_answers_security_disabled_for_each_filter_when_no_authorizer_is_configured() {
-    let (broker_handle, _dir) = start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
-    seed_acls(
-        &broker_handle,
+    seeded_acl_fixture!(
+        (broker_handle, _dir, broker, ctx),
+        start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)),
         vec![acl("orders", "User:alice", AclOperation::Read)],
-    )
-    .await;
-    let broker = broker_handle.broker_arc_for_test();
-    test_ctx!(ctx, "admin");
-    let req = request(vec![
-        filter(Some("orders"), Some("User:alice")),
-        filter(Some("payments"), Some("User:bob")),
-    ]);
+        "admin"
+    );
+    let req = named_filters(&[("orders", "User:alice"), ("payments", "User:bob")]);
 
     let resp = handle(&broker, req, VERSION, &ctx).await.expect("handle");
 
-    let disabled = DeleteAclsFilterResult {
+    let disabled = tagged_wire!(DeleteAclsFilterResult {
         error_code: codes::SECURITY_DISABLED,
         error_message: Some("No Authorizer is configured.".into()),
         matching_acls: Vec::new(),
-        unknown_tagged_fields: UnknownTaggedFields::default(),
-    };
-    let expected = DeleteAclsResponse {
-        throttle_time_ms: 0,
+    });
+    let expected = unthrottled_wire!(DeleteAclsResponse {
         filter_results: vec![disabled.clone(), disabled],
-        unknown_tagged_fields: UnknownTaggedFields::default(),
-    };
+    });
     assert!(resp == expected);
     assert!(all_acls(&broker_handle) == vec![acl("orders", "User:alice", AclOperation::Read)]);
     broker_handle.shutdown().await;
@@ -215,8 +175,10 @@ fn sorted(mut acls: Vec<AclEntry>) -> Vec<AclEntry> {
 /// value, not a wildcard.
 #[tokio::test]
 async fn handle_deletes_exactly_what_kafka_matches() {
-    let (broker_handle, _dir) = start_broker(configured_authorizer()).await;
-    let broker = broker_handle.broker_arc_for_test();
+    broker_fixture!(
+        (broker_handle, _dir, broker),
+        start_broker(configured_authorizer())
+    );
     test_ctx!(ctx, "admin");
 
     let literal_foo = topic_acl(
@@ -319,19 +281,16 @@ async fn handle_deletes_exactly_what_kafka_matches() {
         });
 
         let want_deleted = sorted(want_deleted);
-        let expected = DeleteAclsResponse {
-            throttle_time_ms: 0,
-            filter_results: vec![DeleteAclsFilterResult {
+        let expected = unthrottled_wire!(DeleteAclsResponse {
+            filter_results: vec![tagged_wire!(DeleteAclsFilterResult {
                 error_code: codes::NONE,
                 error_message: None,
                 matching_acls: want_deleted
                     .iter()
                     .map(super::response::matching_acl_result)
                     .collect(),
-                unknown_tagged_fields: UnknownTaggedFields::default(),
-            }],
-            unknown_tagged_fields: UnknownTaggedFields::default(),
-        };
+            })],
+        });
         check!(resp == expected, "{name}");
 
         let want_left = sorted(
@@ -363,17 +322,14 @@ async fn handle_lists_an_acl_under_every_filter_that_matches_it() {
 
     let resp = handle(&broker, req, VERSION, &ctx).await.expect("handle");
 
-    let row = DeleteAclsFilterResult {
+    let row = tagged_wire!(DeleteAclsFilterResult {
         error_code: codes::NONE,
         error_message: None,
         matching_acls: vec![super::response::matching_acl_result(&shared)],
-        unknown_tagged_fields: UnknownTaggedFields::default(),
-    };
-    let expected = DeleteAclsResponse {
-        throttle_time_ms: 0,
+    });
+    let expected = unthrottled_wire!(DeleteAclsResponse {
         filter_results: vec![row.clone(), row],
-        unknown_tagged_fields: UnknownTaggedFields::default(),
-    };
+    });
     assert!(resp == expected);
     assert!(all_acls(&broker_handle) == vec![other]);
     broker_handle.shutdown().await;
@@ -424,28 +380,24 @@ async fn handle_refuses_a_filter_with_an_undefined_byte_and_runs_the_rest() {
 
     let mut filter_results: Vec<DeleteAclsFilterResult> = cases
         .iter()
-        .map(|(_, message)| DeleteAclsFilterResult {
-            error_code: if message.is_some() {
-                codes::INVALID_REQUEST
-            } else {
-                codes::NONE
-            },
-            error_message: message.map(Into::into),
-            matching_acls: Vec::new(),
-            unknown_tagged_fields: UnknownTaggedFields::default(),
+        .map(|(_, message)| {
+            tagged_wire!(DeleteAclsFilterResult {
+                error_code: if message.is_some() {
+                    codes::INVALID_REQUEST
+                } else {
+                    codes::NONE
+                },
+                error_message: message.map(Into::into),
+                matching_acls: Vec::new(),
+            })
         })
         .collect();
-    filter_results.push(DeleteAclsFilterResult {
+    filter_results.push(tagged_wire!(DeleteAclsFilterResult {
         error_code: codes::NONE,
         error_message: None,
         matching_acls: vec![super::response::matching_acl_result(&doomed)],
-        unknown_tagged_fields: UnknownTaggedFields::default(),
-    });
-    let expected = DeleteAclsResponse {
-        throttle_time_ms: 0,
-        filter_results,
-        unknown_tagged_fields: UnknownTaggedFields::default(),
-    };
+    }));
+    let expected = unthrottled_wire!(DeleteAclsResponse { filter_results });
     assert!(resp == expected);
     assert!(all_acls(&broker_handle).is_empty());
     broker_handle.shutdown().await;
@@ -456,14 +408,12 @@ async fn handle_refuses_a_filter_with_an_undefined_byte_and_runs_the_rest() {
 /// filter runs.
 #[tokio::test]
 async fn handle_closes_the_connection_on_an_unknown_element() {
-    let (broker_handle, _dir) = start_broker(configured_authorizer()).await;
-    seed_acls(
-        &broker_handle,
+    seeded_acl_fixture!(
+        (broker_handle, _dir, broker, ctx),
+        start_broker(configured_authorizer()),
         vec![acl("orders", "User:alice", AclOperation::Read)],
-    )
-    .await;
-    let broker = broker_handle.broker_arc_for_test();
-    test_ctx!(ctx, "admin");
+        "admin"
+    );
     let mut unknown = filter(Some("payments"), None);
     unknown.permission_type = 0;
     let req = request(vec![filter(Some("orders"), Some("User:alice")), unknown]);
@@ -519,19 +469,16 @@ async fn handle_bounds_a_request_to_ten_thousand_removals() {
             .await
             .expect("handle");
 
-        let bound = DeleteAclsFilterResult {
+        let bound = tagged_wire!(DeleteAclsFilterResult {
             error_code: codes::INVALID_REQUEST,
             error_message: Some(
                 "Cannot remove more than 10000 acls in a single delete operation.".into(),
             ),
             matching_acls: Vec::new(),
-            unknown_tagged_fields: UnknownTaggedFields::default(),
-        };
-        let expected = DeleteAclsResponse {
-            throttle_time_ms: 0,
+        });
+        let expected = unthrottled_wire!(DeleteAclsResponse {
             filter_results: vec![bound; filter_count],
-            unknown_tagged_fields: UnknownTaggedFields::default(),
-        };
+        });
         check!(resp == expected, "{seeded} acls, {filter_count} filters");
         check!(
             all_acls(&broker_handle).len() == seeded,

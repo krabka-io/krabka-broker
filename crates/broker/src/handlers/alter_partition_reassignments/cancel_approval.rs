@@ -16,7 +16,6 @@ use std::{
     ops::{Deref, DerefMut},
 };
 
-use krabka_audit::PrivilegedPhase;
 use krabka_metadata::{BreakGlassAction, MetadataImage, MetadataRecord};
 use krabka_protocol::owned::{
     alter_partition_reassignments_request::ReassignablePartition,
@@ -28,20 +27,11 @@ use super::{
     response::{err_row, ok_row},
 };
 use crate::{
-    break_glass::{
-        gate::{self, BreakGlassDenial},
-        handlers::{
-            audit::{GatedTransition, audit_transition},
-            batch::GatedBatch,
-        },
-        metrics as break_glass_metrics,
-    },
+    break_glass::handlers::batch::GatedBatch,
     broker::Broker,
     codes::POLICY_VIOLATION,
-    config::BreakGlassConfig,
     freeze::resolve::{FreezeMutationResolution, FreezeVerdict},
     handlers::RequestContext,
-    time_util::now_ms,
 };
 
 /// Everything one alter row reads, and nothing it writes.
@@ -150,56 +140,34 @@ pub(super) fn alter_one(
                 return err_row(index, code, message);
             };
             let message = denial.to_string();
-            break_glass_metrics::record_refusal(&env.broker.metrics, denial.action);
-            audit_transition(
-                &env.broker.audit_log,
-                &env.broker.config.break_glass,
+            crate::handlers::partition_transition::audit_refusal(
+                env.broker,
                 env.ctx,
-                &GatedTransition {
-                    action: BreakGlassAction::CancelReassignment,
-                    target: &cancel_target(topic, index),
-                    phase: PrivilegedPhase::Refused,
-                    proposal_id: denial.proposal_id(),
-                    reason: &message,
-                },
+                BreakGlassAction::CancelReassignment,
+                || cancel_target(topic, index),
+                &denial,
+                &message,
             );
             err_row(index, code, message)
         }
     }
 }
 
+crate::handlers::partition_transition::authorizer! {
 /// KFC-9: find the approved proposal that authorizes a cancel of one partition,
 /// and stamp it consumed.
 ///
 /// `Ok(None)` is a broker that gates nothing, where `[break_glass]` names no
 /// approver. A cancel then behaves as it does on a cluster with no such
 /// section.
-fn authorize_cancel(
-    image: &MetadataImage,
-    config: &BreakGlassConfig,
-    topic: &str,
-    partition: i32,
-) -> Result<Option<MetadataRecord>, BreakGlassDenial> {
-    if !gate::is_gated(config) {
-        return Ok(None);
-    }
-    gate::authorize(
-        image,
-        config,
-        BreakGlassAction::CancelReassignment,
-        &cancel_target(topic, partition),
-        now_ms(),
-    )
-    .map(Some)
+fn authorize_cancel = CancelReassignment;
 }
 
 /// The break-glass target of one partition.
 ///
 /// A proposal on the bare topic name covers every partition of it, which
 /// `gate::authorize` resolves from this spelling.
-fn cancel_target(topic: &str, partition: i32) -> String {
-    format!("{topic}-{partition}")
-}
+use crate::handlers::partition_transition::partition_target as cancel_target;
 
 #[cfg(test)]
 mod tests {
@@ -215,6 +183,18 @@ mod tests {
     };
 
     const NOW_MS: i64 = 60_000;
+
+    macro_rules! gated_cancel_fixture {
+        (($handle:ident, $directory:ident, $broker:ident)) => {
+            broker_fixture!(
+                ($handle, $directory, $broker),
+                crate::test_support::start_broker_no_audit_with(|config| {
+                    config.authorizer = Arc::new(crate::authorizer::AllowAllAuthorizer);
+                    config.break_glass = gated_config();
+                })
+            );
+        };
+    }
 
     fn gated_config() -> crate::config::BreakGlassConfig {
         crate::config::BreakGlassConfig {
@@ -275,14 +255,26 @@ mod tests {
         }
     }
 
+    macro_rules! reassign_env_fixture {
+        (($principal:ident, $peer:ident, $ctx:ident, $env:ident), $broker:ident, $image:ident) => {
+            request_identity!(
+                ($principal, $peer, $ctx),
+                crate::test_support::principal("admin"),
+                client_id = "reassign-client",
+                address = crate::test_support::peer()
+            );
+            let $env = ReassignEnv {
+                broker: &$broker,
+                image: &$image,
+                ctx: &$ctx,
+                allow_rf_change: true,
+            };
+        };
+    }
+
     #[tokio::test]
     async fn an_approved_cancel_appends_the_consume_beside_the_partition_record() {
-        let (handle, _dir) = crate::test_support::start_broker_no_audit_with(|cfg| {
-            cfg.authorizer = Arc::new(crate::authorizer::AllowAllAuthorizer);
-            cfg.break_glass = gated_config();
-        })
-        .await;
-        let broker = handle.broker_arc_for_test();
+        gated_cancel_fixture!((handle, _dir, broker));
         let proposal = approved_proposal(BreakGlassAction::CancelReassignment, "foo-0");
         let image = img_reassigning(std::slice::from_ref(&proposal));
         let (row, batch) = cancel(&broker, &image);
@@ -302,12 +294,7 @@ mod tests {
 
     #[tokio::test]
     async fn an_unapproved_cancel_appends_nothing_and_carries_the_gate_text() {
-        let (handle, _dir) = crate::test_support::start_broker_no_audit_with(|cfg| {
-            cfg.authorizer = Arc::new(crate::authorizer::AllowAllAuthorizer);
-            cfg.break_glass = gated_config();
-        })
-        .await;
-        let broker = handle.broker_arc_for_test();
+        gated_cancel_fixture!((handle, _dir, broker));
         let image = img_reassigning(&[]);
         let (row, batch) = cancel(&broker, &image);
 
@@ -325,25 +312,12 @@ mod tests {
 
     #[tokio::test]
     async fn a_freeze_refuses_start_and_cancel_before_any_record_or_approval_spend() {
-        let (handle, _dir) = crate::test_support::start_broker_no_audit_with(|cfg| {
-            cfg.authorizer = Arc::new(crate::authorizer::AllowAllAuthorizer);
-            cfg.break_glass = gated_config();
-        })
-        .await;
-        let broker = handle.broker_arc_for_test();
+        gated_cancel_fixture!((handle, _dir, broker));
         let image = img_reassigning(&[approved_proposal(
             BreakGlassAction::CancelReassignment,
             "foo-0",
         )]);
-        let principal = crate::test_support::principal("admin");
-        let peer = crate::test_support::peer();
-        let ctx = crate::test_support::request_context(&principal, &peer, "reassign-client");
-        let env = ReassignEnv {
-            broker: &broker,
-            image: &image,
-            ctx: &ctx,
-            allow_rf_change: true,
-        };
+        reassign_env_fixture!((principal, peer, ctx, env), broker, image);
         let record = krabka_metadata::TopicFreezeRecord {
             scope: "foo".into(),
             pattern_type: krabka_metadata::PatternType::Literal,
@@ -395,15 +369,7 @@ mod tests {
         .await;
         let broker = handle.broker_arc_for_test();
         let image = img_with(&[1, 2], &[1, 2], &[], &[], 1);
-        let principal = crate::test_support::principal("admin");
-        let peer = crate::test_support::peer();
-        let ctx = crate::test_support::request_context(&principal, &peer, "reassign-client");
-        let env = ReassignEnv {
-            broker: &broker,
-            image: &image,
-            ctx: &ctx,
-            allow_rf_change: true,
-        };
+        reassign_env_fixture!((principal, peer, ctx, env), broker, image);
 
         for (label, replicas, altered) in [
             ("already at the requested target", vec![1, 2], false),
@@ -458,9 +424,12 @@ mod tests {
         broker: &Broker,
         image: &MetadataImage,
     ) -> (ReassignablePartitionResponse, ReassignBatch) {
-        let principal = crate::test_support::principal("admin");
-        let peer = crate::test_support::peer();
-        let ctx = crate::test_support::request_context(&principal, &peer, "reassign-client");
+        request_identity!(
+            (principal, peer, ctx),
+            crate::test_support::principal("admin"),
+            client_id = "reassign-client",
+            address = crate::test_support::peer()
+        );
         let env = ReassignEnv {
             broker,
             image,

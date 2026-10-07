@@ -311,14 +311,12 @@ mod tests {
 
             let result = topic_config_record(&topic_resource("orders", replacement), &image);
 
-            check!(result.is_ok() == want_ok, "{label}");
-            if let Err((code, message)) = result {
-                check!(code == codes::INVALID_CONFIG, "{label}");
-                check!(
-                    message.contains(config_keys::DISKLESS),
-                    "{label}: {message}"
-                );
-            }
+            crate::handlers::test_support::check_config_result(
+                result,
+                want_ok,
+                label,
+                config_keys::DISKLESS,
+            );
         }
     }
 
@@ -339,10 +337,8 @@ mod tests {
         assert!(record == expected);
     }
 
-    #[test]
-    fn a_replacement_that_breaks_the_policy_is_a_policy_violation() {
-        let image = image_with_topic("orders");
-        let policy = TopicPolicy {
+    fn forbid_unclean_election() -> TopicPolicy {
+        TopicPolicy {
             forbidden: [(
                 config_keys::UNCLEAN_LEADER_ELECTION_ENABLE.to_owned(),
                 "true".to_owned(),
@@ -350,7 +346,13 @@ mod tests {
             .into_iter()
             .collect(),
             ..TopicPolicy::default()
-        };
+        }
+    }
+
+    #[test]
+    fn a_replacement_that_breaks_the_policy_is_a_policy_violation() {
+        let image = image_with_topic("orders");
+        let policy = forbid_unclean_election();
 
         let (code, message) = super::topic_config_record(
             &topic_resource(
@@ -374,15 +376,7 @@ mod tests {
     #[test]
     fn a_replacement_the_policy_allows_still_commits() {
         let image = image_with_topic("orders");
-        let policy = TopicPolicy {
-            forbidden: [(
-                config_keys::UNCLEAN_LEADER_ELECTION_ENABLE.to_owned(),
-                "true".to_owned(),
-            )]
-            .into_iter()
-            .collect(),
-            ..TopicPolicy::default()
-        };
+        let policy = forbid_unclean_election();
 
         let record = super::topic_config_record(
             &topic_resource(

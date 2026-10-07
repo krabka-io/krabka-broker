@@ -8,12 +8,9 @@
 //! [`test_partition_with_writer`] is `pub(crate)` for the same reason: the
 //! group coordinator's offsets log appends through a real writer in its tests.
 
-use std::{
-    io::Write as _,
-    sync::{
-        Arc, Mutex,
-        atomic::{AtomicI32, AtomicU64},
-    },
+use std::sync::{
+    Arc, Mutex,
+    atomic::{AtomicI32, AtomicU64},
 };
 
 use arc_swap::ArcSwap;
@@ -24,26 +21,13 @@ use tokio::sync::{Notify, mpsc};
 
 use crate::{
     delivery::DeliveryHandles,
-    partition::{Partition, WriterMessage, initial_replication_target},
+    partition::{
+        Partition, WriterMessage, empty_marker_materialization, initial_replication_target,
+    },
 };
 
-/// Fails leader-epoch checkpoint writes as a full disk would.
-#[derive(Debug)]
-pub(crate) struct EpochCheckpointFull;
-
-impl krabka_log::LogIo for EpochCheckpointFull {
-    fn write_at(
-        &self,
-        target: krabka_log::IoTarget,
-        file: &std::fs::File,
-        buf: &[u8],
-    ) -> std::io::Result<usize> {
-        if target == krabka_log::IoTarget::LeaderEpochCheckpoint {
-            return Err(std::io::ErrorKind::StorageFull.into());
-        }
-        (&*file).write(buf)
-    }
-}
+// Fails leader-epoch checkpoint writes as a full disk would.
+krabka_macros::epoch_checkpoint_failure!(pub(crate) EpochCheckpointFull, StorageFull);
 
 pub(crate) fn test_partition(hw_advance_notify: Arc<Notify>) -> (Partition, tempfile::TempDir) {
     let dir = tempdir().expect("tempdir");
@@ -56,9 +40,7 @@ pub(crate) fn test_partition(hw_advance_notify: Arc<Notify>) -> (Partition, temp
         log_dir: Arc::new(ArcSwap::from_pointee(dir.path().to_path_buf())),
         log: Arc::new(Mutex::new(log)),
         writer_tx: tx,
-        marker_materialization: Arc::new(tokio::sync::Mutex::new(
-            std::collections::HashMap::default(),
-        )),
+        marker_materialization: empty_marker_materialization(),
         append_notify: Arc::new(Notify::new()),
         replica_state: Arc::new(tokio::sync::Mutex::new(
             crate::replica_state::ReplicaState::new(),
@@ -80,52 +62,41 @@ pub(crate) fn test_partition_with_writer() -> (Partition, tempfile::TempDir) {
         Log::open(dir.path(), LogConfig::default()).expect("open log"),
     ));
     let log_dir = Arc::new(ArcSwap::from_pointee(dir.path().to_path_buf()));
-    let (tx, rx) = mpsc::channel::<WriterMessage>(8);
-    let append_notify = Arc::new(Notify::new());
-    let replica_state = Arc::new(tokio::sync::Mutex::new(
-        crate::replica_state::ReplicaState::new(),
-    ));
-    let hw_advance_notify = Arc::new(Notify::new());
-    // The writer and the partition share one set of delivery handles, as
-    // they do in production: the writer refreshes the mirror the partition
-    // reads.
-    let delivery = DeliveryHandles::new();
-    let writer = tokio::spawn(crate::partition_writer::run(
-        ("t".to_string(), PartitionIndex(0)),
-        (log.clone(), log_dir.clone()),
-        rx,
-        (
-            append_notify.clone(),
-            replica_state.clone(),
-            hw_advance_notify.clone(),
-            delivery.clone(),
-        ),
-        (
-            crate::log_dir_status::LogDirRegistry::default(),
-            Arc::new(crate::producer_state::ProducerState::new()),
-            None,
-        ),
-    ));
-    let p = Partition {
-        topic: "t".into(),
-        index: PartitionIndex(0),
-        log_dir,
-        log,
-        writer_tx: tx,
-        marker_materialization: Arc::new(tokio::sync::Mutex::new(
-            std::collections::HashMap::default(),
-        )),
-        append_notify,
-        replica_state,
-        hw_advance_notify,
-        current_leader: Arc::new(AtomicU64::new(0)),
-        current_leader_epoch: Arc::new(AtomicI32::new(0)),
-        delivery,
-        replication_target: initial_replication_target(None),
-        diskless: false,
-        writer_handle: Arc::new(Mutex::new(Some(writer))),
-    };
+    let p = Partition::writer_fixture("t", log, log_dir, |identity, storage, rx, signals| {
+        tokio::spawn(crate::partition_writer::run(
+            identity,
+            storage,
+            rx,
+            signals,
+            (
+                crate::log_dir_status::LogDirRegistry::default(),
+                Arc::new(crate::producer_state::ProducerState::new()),
+                None,
+            ),
+        ))
+    });
     (p, dir)
+}
+
+/// Project checkpoint rows without choosing the caller's mutex-poison diagnostic.
+pub(crate) fn epoch_history(log: &Log) -> Vec<(i32, i64)> {
+    log.epoch_checkpoint()
+        .entries()
+        .iter()
+        .map(|entry| (entry.epoch.0, entry.start_offset.0))
+        .collect()
+}
+
+/// Install the three-replica setup; expected ISR rows remain independent in callers.
+pub(crate) async fn install_three_replica_isr(partition: &Partition) {
+    let replicas = [
+        krabka_audit::NodeId(1),
+        krabka_audit::NodeId(2),
+        krabka_audit::NodeId(3),
+    ];
+    partition
+        .install_isr(&replicas, &replicas, krabka_audit::NodeId(1))
+        .await;
 }
 
 pub(super) fn append_records(p: &Partition, count: i32) {

@@ -9,14 +9,11 @@ use std::time::{Duration, Instant};
 
 use assert2::assert;
 use krabka_broker::{BrokerConfig, BrokerHandle};
-use krabka_client_core::Client;
 use krabka_metadata::{LeaderRecoveryState, MetadataRecord, TopicConfigRecord};
-use krabka_protocol::owned::metadata_request::{MetadataRequest, MetadataRequestTopic};
-use support::{
-    cluster_lock,
-    durability::{create_topic_on_replicas as create_topic, produce_acks},
-};
+use support::{cluster_lock, durability::produce_acks};
 use tempfile::TempDir;
+
+use crate::support::client::connect_client;
 
 mod support;
 
@@ -58,10 +55,8 @@ async fn wait_for_controller_leader_other_than(
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn broker_death_elects_new_leader() {
     let _g = cluster_lock().lock().await;
-    let mut cluster = support::start_n_node_with_retry(3).await;
-    support::wait_for_all_brokers_registered(&cluster, 3).await;
-    let bootstrap_1 = cluster[0].1.listen_addr.to_string();
-    create_topic(&cluster[0].0, &bootstrap_1, "elect", 3).await;
+    let (mut cluster, _bootstrap_1) =
+        crate::support::durability::replicated_topic_fixture(3, "elect", 3).await;
 
     // Kill broker 1 (the partition leader by round-robin).
     let (dead, dead_cfg, _dead_dir) = cluster.remove(0);
@@ -76,19 +71,9 @@ async fn broker_death_elects_new_leader() {
         .0
         .wait_until_partition_leader_changed("elect", 0, victim)
         .await;
-    let client = Client::builder()
-        .bootstrap(cluster[0].1.listen_addr.to_string())
-        .build()
-        .await
-        .unwrap();
+    let client = connect_client(cluster[0].1.listen_addr.to_string(), None).await;
     let resp = client
-        .send(MetadataRequest {
-            topics: Some(vec![MetadataRequestTopic {
-                name: Some("elect".into()),
-                ..Default::default()
-            }]),
-            ..Default::default()
-        })
+        .send(crate::support::discovery::named_topic_metadata("elect"))
         .await
         .expect("metadata");
     let t = resp
@@ -105,18 +90,14 @@ async fn broker_death_elects_new_leader() {
     assert!(new_epoch > 0, "leader_epoch should bump after election");
 
     // Clean up surviving brokers.
-    for (h, _, _) in cluster {
-        h.shutdown().await;
-    }
+    crate::support::shutdown_cluster(cluster).await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn unclean_failover_recovers_after_a_real_broker_restart() {
     let _g = cluster_lock().lock().await;
-    let mut cluster = support::start_n_node_with_retry(3).await;
-    support::wait_for_all_brokers_registered(&cluster, 3).await;
-    let bootstrap = cluster[0].1.listen_addr.to_string();
-    create_topic(&cluster[0].0, &bootstrap, "kip704-restart", 3).await;
+    let (mut cluster, _bootstrap) =
+        crate::support::durability::replicated_topic_fixture(3, "kip704-restart", 3).await;
 
     cluster[0]
         .0
@@ -179,18 +160,14 @@ async fn unclean_failover_recovers_after_a_real_broker_restart() {
 
     reborn.shutdown().await;
     drop(dead_dir);
-    for (handle, _, _) in cluster {
-        handle.shutdown().await;
-    }
+    crate::support::shutdown_cluster(cluster).await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn acks_all_completes_after_isr_shrink() {
     let _g = cluster_lock().lock().await;
-    let mut cluster = support::start_n_node_with_retry(3).await;
-    support::wait_for_all_brokers_registered(&cluster, 3).await;
-    let bootstrap_1 = cluster[0].1.listen_addr.to_string();
-    create_topic(&cluster[0].0, &bootstrap_1, "shrink2", 3).await;
+    let (mut cluster, bootstrap_1) =
+        crate::support::durability::replicated_topic_fixture(3, "shrink2", 3).await;
 
     // Freeze broker 3 by shutting it down.
     let dead = cluster.pop().expect("3rd broker");
@@ -210,19 +187,14 @@ async fn acks_all_completes_after_isr_shrink() {
         "shrink should be quick on for_tests config; took {elapsed:?}"
     );
 
-    for (h, _, _) in cluster {
-        h.shutdown().await;
-    }
+    crate::support::shutdown_cluster(cluster).await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn isr_expand_on_catchup() {
     let _g = cluster_lock().lock().await;
-    let mut cluster = support::start_n_node_with_retry(3).await;
-    support::wait_for_all_brokers_registered(&cluster, 3).await;
-    let bootstrap_1 = cluster[0].1.listen_addr.to_string();
-
-    create_topic(&cluster[0].0, &bootstrap_1, "expand", 3).await;
+    let (mut cluster, _bootstrap_1) =
+        crate::support::durability::replicated_topic_fixture(3, "expand", 3).await;
 
     // 1. Find the controller leader so we can activate dynamic membership.
     let leader_idx = find_controller_leader(&cluster).await;
@@ -296,18 +268,14 @@ async fn isr_expand_on_catchup() {
     cluster[0].0.wait_until_isr_len("expand", 0, 3).await;
 
     reborn.shutdown().await;
-    for (h, _, _) in cluster {
-        h.shutdown().await;
-    }
+    crate::support::shutdown_cluster(cluster).await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn produce_during_leader_failover() {
     let _g = cluster_lock().lock().await;
-    let mut cluster = support::start_n_node_with_retry(3).await;
-    support::wait_for_all_brokers_registered(&cluster, 3).await;
-    let bootstrap_1 = cluster[0].1.listen_addr.to_string();
-    create_topic(&cluster[0].0, &bootstrap_1, "failover", 3).await;
+    let (mut cluster, bootstrap_1) =
+        crate::support::durability::replicated_topic_fixture(3, "failover", 3).await;
 
     // Produce 5 records with acks=1, kill broker 1 mid-burst, produce 5
     // more pointed at broker 2's bootstrap (clients will re-fetch
@@ -339,7 +307,5 @@ async fn produce_during_leader_failover() {
         let _ = res;
     }
 
-    for (h, _, _) in cluster {
-        h.shutdown().await;
-    }
+    crate::support::shutdown_cluster(cluster).await;
 }

@@ -152,14 +152,7 @@ async fn run_until_the_ticker_dies(timer: Arc<dyn Timer>) -> CoordinatorGroup {
     group
 }
 
-#[tokio::test]
-async fn the_actor_stamps_the_retention_clock_when_its_ticker_cannot_be_armed() {
-    let timer = BrokenTimer::dead(TimerFailure::Registration);
-
-    // The actor never reaches its mailbox loop, so the start-up exit is the
-    // only thing that can stamp the offset-retention clock — and it must,
-    // because a memberless group whose stamp stayed `None` would never be
-    // measured for offset expiry at all.
+async fn check_retention_clock_on_failure(timer: &Arc<BrokenTimer>) {
     let before = chrono_now_ms();
     let group = run_until_the_ticker_dies(timer.injectable()).await;
     let after = chrono_now_ms();
@@ -172,21 +165,24 @@ async fn the_actor_stamps_the_retention_clock_when_its_ticker_cannot_be_armed() 
 }
 
 #[tokio::test]
+async fn the_actor_stamps_the_retention_clock_when_its_ticker_cannot_be_armed() {
+    let timer = BrokenTimer::dead(TimerFailure::Registration);
+
+    // The actor never reaches its mailbox loop, so the start-up exit is the
+    // only thing that can stamp the offset-retention clock — and it must,
+    // because a memberless group whose stamp stayed `None` would never be
+    // measured for offset expiry at all.
+    check_retention_clock_on_failure(&timer).await;
+}
+
+#[tokio::test]
 async fn the_actor_stops_when_its_armed_tick_never_completes() {
     let timer = BrokenTimer::dead(TimerFailure::Completion);
 
     // The registration is accepted, so the actor reaches its select; the
     // deadline then fails, and the loop tail still stamps the clock on the way
     // out rather than returning from inside the arm.
-    let before = chrono_now_ms();
-    let group = run_until_the_ticker_dies(timer.injectable()).await;
-    let after = chrono_now_ms();
-
-    let stamped = group
-        .empty_since_ms
-        .expect("the retention clock is stamped");
-    check!((before..=after).contains(&stamped));
-    check!(timer.registrations() == 1);
+    check_retention_clock_on_failure(&timer).await;
 }
 
 #[tokio::test]

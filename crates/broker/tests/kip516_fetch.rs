@@ -5,12 +5,16 @@
 //! `UNKNOWN_TOPIC_ID` on every partition row of a topic whose id does not
 //! resolve to a name. The zero id is such an id.
 use assert2::assert;
+
+use crate::support::{
+    fetch::fetch_request_for,
+    topics::{creatable_topic, create_topic_request},
+};
 mod support;
 
 use bytes::Bytes;
 use krabka_protocol::{
     owned::{
-        create_topics_request::{CreatableTopic, CreateTopicsRequest},
         fetch_request::{FetchPartition, FetchRequest, FetchTopic},
         fetch_response::{FetchableTopicResponse, PartitionData},
     },
@@ -25,16 +29,10 @@ const UNKNOWN_TOPIC_ID: i16 = 100;
 async fn fetch_unresolved_topic_id_returns_unknown_topic_id() {
     let p = support::start().await;
     p.client
-        .send(CreateTopicsRequest {
-            topics: vec![CreatableTopic {
-                name: "f_known".into(),
-                num_partitions: 1,
-                replication_factor: 1,
-                ..Default::default()
-            }],
-            timeout_ms: 5_000,
-            ..Default::default()
-        })
+        .send(create_topic_request(
+            creatable_topic("f_known", 1, 1),
+            5_000,
+        ))
         .await
         .expect("create topic");
 
@@ -56,17 +54,15 @@ async fn fetch_unresolved_topic_id_returns_unknown_topic_id() {
         };
         let resp = p
             .client
-            .send(FetchRequest {
-                max_wait_ms: 100,
-                min_bytes: 1,
-                topics: vec![FetchTopic {
+            .send(fetch_request_for(
+                vec![FetchTopic {
                     topic: String::new(), // v13+: name absent, id-only on the wire
                     topic_id,
                     partitions: vec![partition(0), partition(1)],
                     ..Default::default()
                 }],
-                ..Default::default()
-            })
+                (100, 1, FetchRequest::default().max_bytes),
+            ))
             .await
             .expect("fetch");
         // Kafka's `FetchResponse.partitionResponse`.

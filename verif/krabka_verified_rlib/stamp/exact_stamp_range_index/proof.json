@@ -2,8 +2,8 @@
   "profile": [],
   "proofs": {
     "Coma": {
-      "vc_exact_stamp_range_index": { "prover": "alt-ergo", "time": 0.057 },
-      "vc_len_i64": { "prover": "alt-ergo", "time": 0.026 }
+      "vc_exact_stamp_range_index": { "prover": "alt-ergo", "time": 0.019 },
+      "vc_len_i64": { "prover": "alt-ergo", "time": 0.009 }
     }
   }
 }

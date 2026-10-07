@@ -13,10 +13,11 @@ use std::{
 };
 
 use assert2::{assert, check};
-use krabka_protocol::owned::{
-    create_topics_request::{CreatableTopic, CreateTopicsRequest},
-    fetch_snapshot_request::{FetchSnapshotRequest, PartitionSnapshot, SnapshotId, TopicSnapshot},
+use krabka_protocol::owned::fetch_snapshot_request::{
+    FetchSnapshotRequest, PartitionSnapshot, SnapshotId, TopicSnapshot,
 };
+
+use crate::support::topics::{creatable_topic, create_topic_request};
 
 mod support;
 
@@ -83,16 +84,10 @@ async fn fetch_snapshot_serves_the_named_metadata_snapshot() {
 
     // Make the metadata image non-empty so the snapshot has real content.
     let resp = client
-        .send(CreateTopicsRequest {
-            topics: vec![CreatableTopic {
-                name: "snap-topic".into(),
-                num_partitions: 1,
-                replication_factor: 1,
-                ..Default::default()
-            }],
-            timeout_ms: 5_000,
-            ..Default::default()
-        })
+        .send(create_topic_request(
+            creatable_topic("snap-topic", 1, 1),
+            5_000,
+        ))
         .await
         .unwrap();
     assert!(resp.topics[0].error_code == 0);

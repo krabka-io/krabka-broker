@@ -161,72 +161,72 @@ impl Model for CrashModel {
         }
     }
 
-    fn next_state(&self, last: &Self::State, action: Self::Action) -> Option<Self::State> {
-        let mut s = last.clone();
-        match action {
-            Act::ReserveVia(node) => {
-                let (base, next) = reserve_via_controller(&s);
-                s.kraft_next = next;
-                s.reservations.push((base, next));
-                s.appenders_seen |= 1 << node;
-                if s.appenders_seen.count_ones() >= 2 {
-                    s.witnesses |= WITNESS_STATELESS_APPEND;
+    krabka_macros::model_transition!(last, action, s; {
+            match action {
+                Act::ReserveVia(node) => {
+                    let (base, next) = reserve_via_controller(&s);
+                    s.kraft_next = next;
+                    s.reservations.push((base, next));
+                    s.appenders_seen |= 1 << node;
+                    if s.appenders_seen.count_ones() >= 2 {
+                        s.witnesses |= WITNESS_STATELESS_APPEND;
+                    }
+                }
+                Act::FsyncAppend => {
+                    s.log_end += 1;
+                    fsync_quorum(&mut s);
+                    s.producer_committed = s.log_end;
+                }
+                Act::CrashBeforeFsync => {
+                    if s.kraft_next > s.log_end {
+                        s.witnesses |= WITNESS_KRAFT_FSYNC_GAP;
+                    }
+                }
+                Act::CrashMidFsync => {
+                    s.witnesses |= WITNESS_MID_FSYNC;
+                    s.kraft_next = s.kraft_next.max(s.log_end);
+                }
+                Act::PutObject => {
+                    s.object_frontier = s.wal_acked;
+                    if s.object_frontier > s.index_frontier {
+                        s.witnesses |= WITNESS_PUT_BEFORE_INDEX;
+                    }
+                }
+                Act::CommitIndex => {
+                    s.index_frontier = s.object_frontier;
+                }
+                Act::Trim => {
+                    let decision = krabka_verified::diskless::diskless_trim_decision(
+                        s.index_frontier,
+                        s.wal_acked,
+                        0,
+                        s.trimmed,
+                    );
+                    if decision.should_trim {
+                        s.trimmed = decision.target;
+                    }
+                    if s.trimmed > 0 && s.trimmed == s.index_frontier {
+                        s.witnesses |= WITNESS_TRIM_AT_INDEX;
+                    }
+                }
+                Act::LoseWalNode(node) => {
+                    s.wal_lost[node] = true;
+                    s.witnesses |= WITNESS_MINORITY_WAL_LOSS;
+                }
+                Act::SequencerHandoff => {
+                    s.sequencer_epoch += 1;
+                    s.handoff_wal_acked = s.handoff_wal_acked.max(s.wal_acked);
+                    // KIP-207 permits the newly advertised frontier to move back
+                    // while authority changes. Durability does not move back: the
+                    // new sequencer can re-derive `wal_acked` from the surviving
+                    // quorum, independently of this conservative visible value.
+                    s.advertised_hwm = s.index_frontier.min(s.wal_acked);
+                    s.witnesses |= WITNESS_SEQUENCER_HANDOFF;
                 }
             }
-            Act::FsyncAppend => {
-                s.log_end += 1;
-                fsync_quorum(&mut s);
-                s.producer_committed = s.log_end;
-            }
-            Act::CrashBeforeFsync => {
-                if s.kraft_next > s.log_end {
-                    s.witnesses |= WITNESS_KRAFT_FSYNC_GAP;
-                }
-            }
-            Act::CrashMidFsync => {
-                s.witnesses |= WITNESS_MID_FSYNC;
-                s.kraft_next = s.kraft_next.max(s.log_end);
-            }
-            Act::PutObject => {
-                s.object_frontier = s.wal_acked;
-                if s.object_frontier > s.index_frontier {
-                    s.witnesses |= WITNESS_PUT_BEFORE_INDEX;
-                }
-            }
-            Act::CommitIndex => {
-                s.index_frontier = s.object_frontier;
-            }
-            Act::Trim => {
-                let decision = krabka_verified::diskless::diskless_trim_decision(
-                    s.index_frontier,
-                    s.wal_acked,
-                    0,
-                    s.trimmed,
-                );
-                if decision.should_trim {
-                    s.trimmed = decision.target;
-                }
-                if s.trimmed > 0 && s.trimmed == s.index_frontier {
-                    s.witnesses |= WITNESS_TRIM_AT_INDEX;
-                }
-            }
-            Act::LoseWalNode(node) => {
-                s.wal_lost[node] = true;
-                s.witnesses |= WITNESS_MINORITY_WAL_LOSS;
-            }
-            Act::SequencerHandoff => {
-                s.sequencer_epoch += 1;
-                s.handoff_wal_acked = s.handoff_wal_acked.max(s.wal_acked);
-                // KIP-207 permits the newly advertised frontier to move back
-                // while authority changes. Durability does not move back: the
-                // new sequencer can re-derive `wal_acked` from the surviving
-                // quorum, independently of this conservative visible value.
-                s.advertised_hwm = s.index_frontier.min(s.wal_acked);
-                s.witnesses |= WITNESS_SEQUENCER_HANDOFF;
-            }
-        }
-        Some(s)
-    }
+            Some(s)
+
+    });
 
     fn properties(&self) -> Vec<Property<Self>> {
         vec![

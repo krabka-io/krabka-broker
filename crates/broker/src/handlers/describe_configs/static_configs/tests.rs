@@ -3,9 +3,8 @@
 //! supplies.
 
 use assert2::assert;
-use krabka_protocol::{
-    UnknownTaggedFields,
-    owned::describe_configs_response::{DescribeConfigsResourceResult, DescribeConfigsSynonym},
+use krabka_protocol::owned::describe_configs_response::{
+    DescribeConfigsResourceResult, DescribeConfigsSynonym,
 };
 use krabka_units::{Time, millis, secs};
 
@@ -62,7 +61,7 @@ fn config_with(idle: Option<Time>, overrides: &[(&str, Time)]) -> IdleCase {
 const LONG: i8 = 5;
 
 fn expected(name: &str, value: &str, source: i8) -> DescribeConfigsResourceResult {
-    DescribeConfigsResourceResult {
+    tagged_wire!(DescribeConfigsResourceResult {
         name: name.to_string(),
         value: Some(value.to_string()),
         read_only: true,
@@ -71,8 +70,7 @@ fn expected(name: &str, value: &str, source: i8) -> DescribeConfigsResourceResul
         synonyms: Vec::new(),
         config_type: LONG,
         documentation: None,
-        unknown_tagged_fields: UnknownTaggedFields::default(),
-    }
+    })
 }
 
 fn synonym(name: &str, value: &str, source: i8) -> DescribeConfigsSynonym {

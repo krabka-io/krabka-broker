@@ -25,7 +25,7 @@
 //! A `uuid` is sixteen raw bytes with no length prefix, arrays are compact, and
 //! each element struct as well as the message carries a tagged-field trailer.
 
-use bytes::{Buf, BufMut, Bytes, BytesMut};
+use bytes::{Buf, BufMut, BytesMut};
 use krabka_protocol::{
     ProtocolError,
     primitives::{array, fixed, uuid::Uuid},
@@ -34,11 +34,11 @@ use krabka_protocol::{
 use crate::{
     coordinator::unified::persistence::{
         flex::{
-            array_value_codec, get_compact_array, get_i32_array, get_uuid, put_compact_array,
-            put_empty_tagged_fields, put_i32_array, put_tagged_fields, put_uuid, read_tagged,
-            skip_tagged_fields,
+            array_value_codec, get_assigned_topics, get_compact_array, get_i32_array, get_uuid,
+            put_assigned_topics, put_compact_array, put_i32_array, put_tagged_fields, put_uuid,
+            read_tagged, value_codec,
         },
-        get_i16, get_i32,
+        get_i32,
     },
     error::BrokerError,
 };
@@ -134,34 +134,26 @@ pub struct CurrentMemberAssignmentValue {
     pub partitions_pending_revocation: Vec<CurrentTopicPartitions>,
 }
 
-impl CurrentMemberAssignmentValue {
-    #[must_use]
-    pub fn encode(&self) -> Bytes {
-        let mut buf = BytesMut::new();
-        buf.put_i16(0);
+value_codec! {
+    CurrentMemberAssignmentValue,
+    encode(&self) -> buf {
         buf.put_i32(self.member_epoch);
         buf.put_i32(self.previous_member_epoch);
         buf.put_i8(self.state as i8);
-        encode_current_topic_partitions(&mut buf, &self.assigned_partitions);
-        encode_current_topic_partitions(&mut buf, &self.partitions_pending_revocation);
-        put_empty_tagged_fields(&mut buf);
-        buf.freeze()
+        encode_current_topic_partitions(buf, &self.assigned_partitions);
+        encode_current_topic_partitions(buf, &self.partitions_pending_revocation);
     }
-    /// # Errors
-    /// Returns an error when log I/O fails, a record or index is corrupt, or the requested offset violates the segment state.
-    pub fn decode(mut buf: &[u8]) -> Result<Self, BrokerError> {
-        let _v = get_i16(&mut buf)?;
-        let member_epoch = get_i32(&mut buf)?;
-        let previous_member_epoch = get_i32(&mut buf)?;
+    decode(buf) {
+        let member_epoch = get_i32(buf)?;
+        let previous_member_epoch = get_i32(buf)?;
         if buf.remaining() < 1 {
             return Err(BrokerError::Protocol(ProtocolError::InvalidValue(
                 "missing state byte",
             )));
         }
         let state = MemberAssignmentState::from_i8(buf.get_i8())?;
-        let assigned_partitions = decode_current_topic_partitions(&mut buf)?;
-        let partitions_pending_revocation = decode_current_topic_partitions(&mut buf)?;
-        skip_tagged_fields(&mut buf)?;
+        let assigned_partitions = decode_current_topic_partitions(buf)?;
+        let partitions_pending_revocation = decode_current_topic_partitions(buf)?;
         Ok(Self {
             member_epoch,
             previous_member_epoch,
@@ -173,22 +165,13 @@ impl CurrentMemberAssignmentValue {
 }
 
 fn encode_topic_partitions(buf: &mut BytesMut, items: &[AssignedTopicPartitions]) {
-    put_compact_array(buf, items.iter(), |buf, tp| {
-        put_uuid(buf, tp.topic_id.0);
-        put_i32_array(buf, &tp.partitions);
-        put_empty_tagged_fields(buf);
-    });
+    put_assigned_topics(buf, items, |tp| (&tp.topic_id, &tp.partitions));
 }
 
 fn decode_topic_partitions(buf: &mut &[u8]) -> Result<Vec<AssignedTopicPartitions>, BrokerError> {
-    get_compact_array(buf, |buf| {
-        let topic_id = Uuid(get_uuid(buf)?);
-        let partitions = get_i32_array(buf)?;
-        skip_tagged_fields(buf)?;
-        Ok(AssignedTopicPartitions {
-            topic_id,
-            partitions,
-        })
+    get_assigned_topics(buf, |topic_id, partitions| AssignedTopicPartitions {
+        topic_id,
+        partitions,
     })
 }
 
@@ -245,6 +228,7 @@ mod tests {
     use assert2::assert;
 
     use super::*;
+    use crate::coordinator::unified::test_support::wire_bytes;
 
     #[test]
     fn target_assignment_member_bytes_match_kafka_schema() {
@@ -254,15 +238,16 @@ mod tests {
                 partitions: vec![0, 1],
             }],
         };
-        let mut want: Vec<u8> = Vec::new();
-        want.extend_from_slice(b"\x00\x00"); // value version 0
-        want.push(0x02); // one TopicPartition
-        want.extend_from_slice(&[1u8; 16]); // TopicId, sixteen raw bytes
-        want.push(0x03); // two partitions
-        want.extend_from_slice(&0i32.to_be_bytes());
-        want.extend_from_slice(&1i32.to_be_bytes());
-        want.push(0x00); // TopicPartition tagged fields
-        want.push(0x00); // message tagged fields
+        let want = wire_bytes(&[
+            "0000",                             // value version 0
+            "02",                               // one TopicPartition
+            "01010101010101010101010101010101", // TopicId, sixteen raw bytes
+            "03",                               // two partitions
+            "00000000",
+            "00000001",
+            "00", // TopicPartition tagged fields
+            "00", // message tagged fields
+        ]);
         assert!(&v.encode()[..] == &want[..]);
     }
 
@@ -294,28 +279,29 @@ mod tests {
                 assignment_epochs: None,
             }],
         };
-        let mut want: Vec<u8> = Vec::new();
-        want.extend_from_slice(b"\x00\x00");
-        want.extend_from_slice(&5i32.to_be_bytes());
-        want.extend_from_slice(&4i32.to_be_bytes());
-        want.push(0x01); // MemberState.UNREVOKED_PARTITIONS
-        want.push(0x02); // one assigned TopicPartitions
-        want.extend_from_slice(&[2u8; 16]);
-        want.push(0x03); // two partitions
-        want.extend_from_slice(&7i32.to_be_bytes());
-        want.extend_from_slice(&8i32.to_be_bytes());
-        want.push(0x01); // one tagged field
-        want.push(0x00); // tag 0, AssignmentEpochs
-        want.push(0x09); // payload size: 1 + 2 * 4
-        want.push(0x03); // two epochs
-        want.extend_from_slice(&3i32.to_be_bytes());
-        want.extend_from_slice(&5i32.to_be_bytes());
-        want.push(0x02); // one pending TopicPartitions
-        want.extend_from_slice(&[3u8; 16]);
-        want.push(0x02); // one partition
-        want.extend_from_slice(&1i32.to_be_bytes());
-        want.push(0x00); // null AssignmentEpochs is omitted
-        want.push(0x00); // message tagged fields
+        let want = wire_bytes(&[
+            "0000",
+            "00000005",
+            "00000004",
+            "01", // MemberState.UNREVOKED_PARTITIONS
+            "02", // one assigned TopicPartitions
+            "02020202020202020202020202020202",
+            "03", // two partitions
+            "00000007",
+            "00000008",
+            "01", // one tagged field
+            "00", // tag 0, AssignmentEpochs
+            "09", // payload size: 1 + 2 * 4
+            "03", // two epochs
+            "00000003",
+            "00000005",
+            "02", // one pending TopicPartitions
+            "03030303030303030303030303030303",
+            "02", // one partition
+            "00000001",
+            "00", // null AssignmentEpochs is omitted
+            "00", // message tagged fields
+        ]);
         let encoded = v.encode();
         assert!(&encoded[..] == &want[..]);
         assert!(CurrentMemberAssignmentValue::decode(&encoded).unwrap() == v);

@@ -11,12 +11,12 @@ use krabka_metadata::{
     BrokerRegistrationRecord, LeaderEpoch, MetadataRecord, PartitionRecord, PatternType,
     TopicFreezeRecord, TopicRecord,
 };
-use krabka_protocol::UnknownTaggedFields;
 use krabka_raft::NodeId;
 use uuid::Uuid;
 
 use super::*;
 use crate::{
+    broker::Broker,
     codes::{POLICY_VIOLATION, UNKNOWN_TOPIC_OR_PARTITION},
     handlers::alter_partition_reassignments::test_support::{request, test_context},
     test_support::{DenyAll, start_broker_with_authorizer as start_broker, test_ctx},
@@ -44,16 +44,14 @@ async fn seed_reassignable_partition(broker: &Broker) {
                 replication_factor: 1,
             }),
             MetadataRecord::V1Partition(PartitionRecord {
-                topic: "orders".into(),
-                partition: 7,
-                leader: NodeId(1),
-                replicas: vec![NodeId(1)],
-                isr: vec![NodeId(1)],
                 leader_epoch: LeaderEpoch(3),
-                adding_replicas: vec![],
-                removing_replicas: vec![],
-                directories: vec![],
                 partition_epoch: 11,
+                ..crate::handlers::test_support::replicated_partition(
+                    "orders",
+                    7,
+                    NodeId(1),
+                    &[NodeId(1)],
+                )
             }),
         ])
         .await
@@ -82,16 +80,16 @@ async fn seed_cancellable_partition(broker: &Broker) {
         replication_factor: 2,
     }));
     records.push(MetadataRecord::V1Partition(PartitionRecord {
-        topic: "orders".into(),
-        partition: 7,
-        leader: NodeId(1),
-        replicas: vec![NodeId(1), NodeId(2), NodeId(3)],
         isr: vec![NodeId(1)],
         leader_epoch: LeaderEpoch(3),
         adding_replicas: vec![NodeId(3)],
-        removing_replicas: vec![],
-        directories: vec![],
         partition_epoch: 11,
+        ..crate::handlers::test_support::replicated_partition(
+            "orders",
+            7,
+            NodeId(1),
+            &[NodeId(1), NodeId(2), NodeId(3)],
+        )
     }));
     records.push(MetadataRecord::V1TopicConfig(
         krabka_metadata::TopicConfigRecord {
@@ -121,9 +119,7 @@ async fn seed_cancellable_partition(broker: &Broker) {
 #[tokio::test]
 async fn a_cancel_publishes_the_eligible_leader_state_the_revert_implies() {
     let version = 1;
-    let (broker_handle, _dir) = start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
-    let broker = broker_handle.broker_arc_for_test();
-    crate::test_support::wait_for_controller_leader(&broker).await;
+    broker_fixture!((broker_handle, _dir, broker), allow_all, controller_leader);
     crate::test_support::finalize_elr_version_on(&broker).await;
     seed_cancellable_partition(&broker).await;
     test_ctx!(ctx, "admin");
@@ -150,9 +146,11 @@ async fn a_cancel_publishes_the_eligible_leader_state_the_revert_implies() {
 #[tokio::test]
 async fn handle_preserves_unknown_partition_response_shape() {
     let version = 1;
-    let (broker_handle, _dir) = start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
-    let broker = broker_handle.broker_arc_for_test();
-    test_ctx!(ctx, "admin");
+    broker_fixture!(
+        (broker_handle, _dir, broker),
+        allow_all,
+        context(ctx, "admin")
+    );
 
     let resp = handle(
         &broker,
@@ -163,23 +161,19 @@ async fn handle_preserves_unknown_partition_response_shape() {
     .await
     .expect("handle");
 
-    let expected = AlterPartitionReassignmentsResponse {
-        throttle_time_ms: 0,
+    let expected = unthrottled_wire!(AlterPartitionReassignmentsResponse {
         allow_replication_factor_change: false,
         error_code: 0,
         error_message: None,
-        responses: vec![ReassignableTopicResponse {
+        responses: vec![tagged_wire!(ReassignableTopicResponse {
             name: "payments".into(),
-            partitions: vec![ReassignablePartitionResponse {
+            partitions: vec![tagged_wire!(ReassignablePartitionResponse {
                 partition_index: 8,
                 error_code: UNKNOWN_TOPIC_OR_PARTITION,
                 error_message: Some("Unable to find a topic named payments.".into()),
-                unknown_tagged_fields: UnknownTaggedFields::default(),
-            }],
-            unknown_tagged_fields: UnknownTaggedFields::default(),
-        }],
-        unknown_tagged_fields: UnknownTaggedFields::default(),
-    };
+            })],
+        })],
+    });
     assert!(resp == expected);
     broker_handle.shutdown().await;
 }
@@ -195,9 +189,11 @@ async fn handle_preserves_unknown_partition_response_shape() {
 async fn handle_denies_cluster_alter_with_top_level_cluster_authorization_failed() {
     for version in 0..=1 {
         for allow_rf_change in [false, true] {
-            let (broker_handle, _dir) = start_broker(Arc::new(DenyAll)).await;
-            let broker = broker_handle.broker_arc_for_test();
-            test_ctx!(ctx, "admin");
+            broker_fixture!(
+                (broker_handle, _dir, broker),
+                deny_all,
+                context(ctx, "admin")
+            );
 
             let resp = handle(
                 &broker,
@@ -208,23 +204,19 @@ async fn handle_denies_cluster_alter_with_top_level_cluster_authorization_failed
             .await
             .expect("handle");
 
-            let expected = AlterPartitionReassignmentsResponse {
-                throttle_time_ms: 0,
+            let expected = unthrottled_wire!(AlterPartitionReassignmentsResponse {
                 allow_replication_factor_change: true,
                 error_code: CLUSTER_AUTHORIZATION_FAILED,
                 error_message: Some("alter-reassignment denied".into()),
-                responses: vec![ReassignableTopicResponse {
+                responses: vec![tagged_wire!(ReassignableTopicResponse {
                     name: "payments".into(),
-                    partitions: vec![ReassignablePartitionResponse {
+                    partitions: vec![tagged_wire!(ReassignablePartitionResponse {
                         partition_index: 8,
                         error_code: CLUSTER_AUTHORIZATION_FAILED,
                         error_message: Some("alter-reassignment denied".into()),
-                        unknown_tagged_fields: UnknownTaggedFields::default(),
-                    }],
-                    unknown_tagged_fields: UnknownTaggedFields::default(),
-                }],
-                unknown_tagged_fields: UnknownTaggedFields::default(),
-            };
+                    })],
+                })],
+            });
             assert!(
                 resp == expected,
                 "version={version} allow_rf_change={allow_rf_change}"
@@ -237,9 +229,7 @@ async fn handle_denies_cluster_alter_with_top_level_cluster_authorization_failed
 #[tokio::test]
 async fn handle_submits_successful_reassignment_records() {
     let version = 1;
-    let (broker_handle, _dir) = start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
-    let broker = broker_handle.broker_arc_for_test();
-    crate::test_support::wait_for_controller_leader(&broker).await;
+    broker_fixture!((broker_handle, _dir, broker), allow_all, controller_leader);
     seed_reassignable_partition(&broker).await;
     test_ctx!(ctx, "admin");
 
@@ -252,23 +242,19 @@ async fn handle_submits_successful_reassignment_records() {
     .await
     .expect("handle");
 
-    let expected = AlterPartitionReassignmentsResponse {
-        throttle_time_ms: 0,
+    let expected = unthrottled_wire!(AlterPartitionReassignmentsResponse {
         allow_replication_factor_change: true,
         error_code: 0,
         error_message: None,
-        responses: vec![ReassignableTopicResponse {
+        responses: vec![tagged_wire!(ReassignableTopicResponse {
             name: "orders".into(),
-            partitions: vec![ReassignablePartitionResponse {
+            partitions: vec![tagged_wire!(ReassignablePartitionResponse {
                 partition_index: 7,
                 error_code: 0,
                 error_message: None,
-                unknown_tagged_fields: UnknownTaggedFields::default(),
-            }],
-            unknown_tagged_fields: UnknownTaggedFields::default(),
-        }],
-        unknown_tagged_fields: UnknownTaggedFields::default(),
-    };
+            })],
+        })],
+    });
     assert!(resp == expected);
 
     let image = broker.controller.current_image();
@@ -281,9 +267,7 @@ async fn handle_submits_successful_reassignment_records() {
 #[tokio::test]
 async fn handle_refuses_a_frozen_reassignment_without_mutating_the_partition() {
     let version = 1;
-    let (broker_handle, _dir) = start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
-    let broker = broker_handle.broker_arc_for_test();
-    crate::test_support::wait_for_controller_leader(&broker).await;
+    broker_fixture!((broker_handle, _dir, broker), allow_all, controller_leader);
     seed_reassignable_partition(&broker).await;
     broker
         .controller

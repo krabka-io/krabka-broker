@@ -6,6 +6,8 @@ use std::net::SocketAddr;
 
 use crate::{CLIENT_ID, kafka_wire};
 
+krabka_macros::scram_users_fixture!(describe_request);
+
 /// Drives `DescribeUserScramCredentials` (`api_key=50`) over a SASL/PLAIN
 /// connection.
 ///
@@ -18,22 +20,9 @@ pub(crate) async fn drive_describe_user_scram_credentials_sasl(
     pass: &str,
     users_filter: Option<Vec<String>>,
 ) -> (i16, Vec<(String, i16, Vec<(i8, i32)>)>) {
-    use krabka_protocol::owned::{
-        describe_user_scram_credentials_request::{DescribeUserScramCredentialsRequest, UserName},
-        describe_user_scram_credentials_response::DescribeUserScramCredentialsResponse,
-    };
+    use krabka_protocol::owned::describe_user_scram_credentials_response::DescribeUserScramCredentialsResponse;
 
-    let req = DescribeUserScramCredentialsRequest {
-        users: users_filter.map(|v| {
-            v.into_iter()
-                .map(|n| UserName {
-                    name: n,
-                    ..Default::default()
-                })
-                .collect()
-        }),
-        ..Default::default()
-    };
+    let req = describe_request(users_filter);
 
     let mut stream = kafka_wire::sasl_plain_authenticate(addr, CLIENT_ID, user, pass.as_bytes())
         .await

@@ -142,6 +142,15 @@ mod tests {
 
     use crate::test_support::{start_broker_with_authorizer_no_audit as start_broker, test_ctx};
 
+    fn expected_empty_partition(partition_index: i32) -> OngoingPartitionReassignment {
+        tagged_wire!(OngoingPartitionReassignment {
+            partition_index,
+            replicas: vec![],
+            adding_replicas: vec![],
+            removing_replicas: vec![],
+        })
+    }
+
     #[tokio::test]
     async fn denied_response_echoes_requested_topics() {
         struct Case {
@@ -163,11 +172,10 @@ mod tests {
                     partition_indexes: vec![],
                     ..Default::default()
                 }]),
-                expected_topics: vec![OngoingTopicReassignment {
+                expected_topics: vec![tagged_wire!(OngoingTopicReassignment {
                     name: "orders-add".to_string(),
                     partitions: vec![],
-                    unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(vec![]),
-                }],
+                })],
             },
             Case {
                 name: "requested topic and partition indexes are echoed with empty replicas",
@@ -176,26 +184,10 @@ mod tests {
                     partition_indexes: vec![0, 1],
                     ..Default::default()
                 }]),
-                expected_topics: vec![OngoingTopicReassignment {
+                expected_topics: vec![tagged_wire!(OngoingTopicReassignment {
                     name: "orders-add".to_string(),
-                    partitions: vec![
-                        OngoingPartitionReassignment {
-                            partition_index: 0,
-                            replicas: vec![],
-                            adding_replicas: vec![],
-                            removing_replicas: vec![],
-                            unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(vec![]),
-                        },
-                        OngoingPartitionReassignment {
-                            partition_index: 1,
-                            replicas: vec![],
-                            adding_replicas: vec![],
-                            removing_replicas: vec![],
-                            unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(vec![]),
-                        },
-                    ],
-                    unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(vec![]),
-                }],
+                    partitions: vec![expected_empty_partition(0), expected_empty_partition(1),],
+                })],
             },
             Case {
                 name: "multiple requested topics are all echoed",
@@ -212,36 +204,24 @@ mod tests {
                     },
                 ]),
                 expected_topics: vec![
-                    OngoingTopicReassignment {
+                    tagged_wire!(OngoingTopicReassignment {
                         name: "orders-add".to_string(),
-                        partitions: vec![OngoingPartitionReassignment {
-                            partition_index: 0,
-                            replicas: vec![],
-                            adding_replicas: vec![],
-                            removing_replicas: vec![],
-                            unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(vec![]),
-                        }],
-                        unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(vec![]),
-                    },
-                    OngoingTopicReassignment {
+                        partitions: vec![expected_empty_partition(0)],
+                    }),
+                    tagged_wire!(OngoingTopicReassignment {
                         name: "orders-remove".to_string(),
-                        partitions: vec![OngoingPartitionReassignment {
-                            partition_index: 2,
-                            replicas: vec![],
-                            adding_replicas: vec![],
-                            removing_replicas: vec![],
-                            unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(vec![]),
-                        }],
-                        unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(vec![]),
-                    },
+                        partitions: vec![expected_empty_partition(2)],
+                    }),
                 ],
             },
         ];
 
         for case in cases {
-            let (broker_handle, _dir) = start_broker(Arc::new(DenyAll)).await;
-            let broker = broker_handle.broker_arc_for_test();
-            test_ctx!(ctx, "alice");
+            broker_fixture!(
+                (broker_handle, _dir, broker),
+                deny_all,
+                context(ctx, "alice")
+            );
 
             let resp = handle(
                 &broker,
@@ -253,13 +233,11 @@ mod tests {
                 &ctx,
             );
 
-            let expected = ListPartitionReassignmentsResponse {
-                throttle_time_ms: 0,
+            let expected = unthrottled_wire!(ListPartitionReassignmentsResponse {
                 error_code: CLUSTER_AUTHORIZATION_FAILED,
                 error_message: Some("list-reassignment denied".to_string()),
                 topics: case.expected_topics,
-                unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(vec![]),
-            };
+            });
             assert!(resp == expected, "case `{}`: {resp:?}", case.name);
             broker_handle.shutdown().await;
         }
@@ -308,17 +286,19 @@ mod tests {
         let broker = broker_handle.broker_arc_for_test();
         test_ctx!(ctx, "admin");
 
-        let row = |partition_index: i32| OngoingPartitionReassignment {
-            partition_index,
-            replicas: vec![1, 2, 3],
-            adding_replicas: vec![3],
-            removing_replicas: vec![],
-            unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(vec![]),
+        let row = |partition_index: i32| {
+            tagged_wire!(OngoingPartitionReassignment {
+                partition_index,
+                replicas: vec![1, 2, 3],
+                adding_replicas: vec![3],
+                removing_replicas: vec![],
+            })
         };
-        let topic = |name: &str, partitions: &[i32]| OngoingTopicReassignment {
-            name: name.to_string(),
-            partitions: partitions.iter().map(|&p| row(p)).collect(),
-            unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(vec![]),
+        let topic = |name: &str, partitions: &[i32]| {
+            tagged_wire!(OngoingTopicReassignment {
+                name: name.to_string(),
+                partitions: partitions.iter().map(|&p| row(p)).collect(),
+            })
         };
         let filter = |topics: &[(&str, &[i32])]| {
             Some(
@@ -365,13 +345,11 @@ mod tests {
                 &ctx,
             );
 
-            let expected = ListPartitionReassignmentsResponse {
-                throttle_time_ms: 0,
+            let expected = unthrottled_wire!(ListPartitionReassignmentsResponse {
                 error_code: 0,
                 error_message: None,
                 topics: expected_topics,
-                unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(vec![]),
-            };
+            });
             assert2::check!(resp == expected, "case {name}");
         }
         broker_handle.shutdown().await;

@@ -2,8 +2,8 @@
   "profile": [],
   "proofs": {
     "Coma": {
-      "vc_compute_horizon": { "prover": "alt-ergo", "time": 0.011 },
-      "vc_saturating_add": { "prover": "alt-ergo", "time": 0.007 }
+      "vc_compute_horizon": { "prover": "alt-ergo", "time": 0.02 },
+      "vc_saturating_add": { "prover": "alt-ergo", "time": 0.009 }
     }
   }
 }

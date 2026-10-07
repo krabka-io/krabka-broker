@@ -5,7 +5,7 @@
 //! same transactional batch and the same control marker are what several
 //! submodules assert on.
 
-use std::time::SystemTime;
+use std::{fs::File, io::Write as _, time::SystemTime};
 
 use bytes::Bytes;
 use krabka_ids::{LeaderEpoch, Offset, ProducerId};
@@ -14,7 +14,10 @@ use krabka_units::prelude::{ByteSize, bytes, gibibytes};
 use tempfile::tempdir;
 
 use super::{BARRIER_CONTROL_TYPE, CompactionContext, Log, VerbatimBatch};
-use crate::{config::LogConfig, producer_snapshot::ProducerSnapshotEntry, txn_index::AbortedTxn};
+use crate::{
+    CleanupPolicy, config::LogConfig, producer_snapshot::ProducerSnapshotEntry,
+    txn_index::AbortedTxn,
+};
 
 /// A read budget larger than anything these tests write, so the byte
 /// budget never clips the result.
@@ -28,20 +31,119 @@ pub fn sample_batch(n: i32) -> RecordBatch {
         ..RecordBatch::default()
     };
     for i in 0..n {
-        b.records.push(Record {
-            offset_delta: i,
-            key: Some(Bytes::from(format!("k{i}"))),
-            value: Some(Bytes::from(format!("v{i}"))),
-            ..Default::default()
-        });
+        b.records.push(crate::test_support::numbered_record(i, 0));
     }
     b
 }
 
+/// Append numbered sample records, retaining the caller's batch count and size.
+pub fn append_samples(log: &mut Log, batches: usize, records_per_batch: i32) {
+    for _ in 0..batches {
+        let mut batch = sample_batch(records_per_batch);
+        log.append(&mut batch).expect("append");
+    }
+}
+
 pub fn test_log() -> (tempfile::TempDir, Log) {
+    configured_test_log(LogConfig::default())
+}
+
+pub fn configured_test_log(config: LogConfig) -> (tempfile::TempDir, Log) {
     let dir = tempdir().unwrap();
-    let log = Log::open(dir.path(), LogConfig::default()).unwrap();
+    let log = Log::open(dir.path(), config).unwrap();
     (dir, log)
+}
+
+pub fn sample_log(config: LogConfig, batches: usize, records: i32) -> (tempfile::TempDir, Log) {
+    let (dir, mut log) = configured_test_log(config);
+    append_samples(&mut log, batches, records);
+    (dir, log)
+}
+
+/// A refused append must not create offsets, transactions, or producer state.
+pub fn assert_empty_append_state(log: &Log) {
+    assert2::assert!(log.log_end_offset() == Offset(0));
+    assert2::assert!(log.lso() == Offset(0));
+    assert2::assert!(log.producer_state_snapshot().is_empty());
+}
+
+/// Preserve the original active segment when a roll fails.
+pub fn assert_only_active(log: &Log, end: Offset, base: Offset) {
+    assert2::assert!(log.log_end_offset() == end);
+    assert2::assert!(log.segments.is_empty());
+    assert2::assert!(log.active.as_ref().unwrap().base_offset() == base);
+}
+
+pub fn check_append_time_lookup(log: &Log, stamp: Option<i64>) -> i64 {
+    let stamp = stamp.expect("a LogAppendTime log reports the stamp it wrote");
+    assert2::check!(log.offset_for_timestamp(1_000) == Some((Offset(0), stamp)));
+    stamp
+}
+
+/// Compress the existing batch and replace its first value with an explicit length.
+pub fn gzip_value(batch: &mut RecordBatch, length: usize) {
+    batch.attributes = batch
+        .attributes
+        .with_compression(krabka_compression::CompressionType::Gzip);
+    batch.records[0].value = Some(Bytes::from(vec![7_u8; length]));
+}
+
+pub fn synced_sample_log(
+    dir: &std::path::Path,
+    config: LogConfig,
+    batches: usize,
+    records: i32,
+) -> Log {
+    let mut log = Log::open(dir, config).unwrap();
+    append_samples(&mut log, batches, records);
+    log.sync().unwrap();
+    log
+}
+
+pub fn stamped_rolling_log(first: u64, step: u64, batches: usize) -> (tempfile::TempDir, Log) {
+    let (dir, mut log) = configured_test_log(tiny_segments());
+    install_stamps(&mut log, first, step);
+    append_samples(&mut log, batches, 1);
+    (dir, log)
+}
+
+/// Install an explicit monotonic stamp sequence on an existing log.
+pub fn install_stamps(log: &mut Log, first: u64, step: u64) {
+    log.set_stamp_source(std::sync::Arc::new(
+        crate::stamp_source::MonotonicStampSource::new(first, step),
+    ))
+    .unwrap();
+}
+
+/// A default log with the caller's explicit stamp sequence installed.
+pub fn stamped_test_log(first: u64, step: u64) -> (tempfile::TempDir, Log) {
+    let (dir, mut log) = test_log();
+    install_stamps(&mut log, first, step);
+    (dir, log)
+}
+
+/// Check each explicitly expected offset-to-stamp mapping.
+pub fn check_stamps(log: &Log, expected: &[(i64, Option<u64>)]) {
+    for &(offset, stamp) in expected {
+        assert2::check!(log.stamp_for_offset(Offset(offset)) == stamp);
+    }
+}
+
+/// Read every aborted interval from the caller's explicit sidecar filename.
+#[cfg(test)]
+pub fn transaction_entries(dir: &std::path::Path, filename: &str) -> Vec<AbortedTxn> {
+    crate::txn_index::TxnIndex::open(dir.join(filename))
+        .unwrap()
+        .entries()
+        .to_vec()
+}
+
+/// Read the entire durable stamp sidecar of one segment.
+pub fn stamp_entries(dir: &std::path::Path, base: i64) -> Vec<crate::stamp_index::StampEntry> {
+    crate::stamp_index::StampIndex::open(dir.join(format!("{base:020}.stampindex")))
+        .unwrap()
+        .entries()
+        .to_vec()
 }
 
 /// A config whose one-byte `segment_size` rolls the active segment on every
@@ -51,6 +153,44 @@ pub fn tiny_segments() -> LogConfig {
         segment_size: bytes(1),
         ..LogConfig::default()
     }
+}
+
+/// A compacted log with one batch per segment.
+pub fn compacting_segments() -> LogConfig {
+    LogConfig {
+        cleanup_policy: CleanupPolicy::Compact,
+        ..tiny_segments()
+    }
+}
+
+pub fn compact_test_log() -> (tempfile::TempDir, Log) {
+    configured_test_log(compacting_segments())
+}
+
+/// Change the roll and compaction grouping cap without changing other options.
+pub fn set_segment_size(log: &mut Log, size: ByteSize) {
+    let mut config = log.config_snapshot();
+    config.segment_size = size;
+    log.set_config(config);
+}
+
+/// Append one record per batch, with caller-selected keys and value `v`.
+pub fn append_keyed_samples(log: &mut Log, batches: i64, key: impl Fn(i64) -> String) {
+    for i in 0..batches {
+        let key = key(i);
+        log.append(&mut keyed_batch(i, &[(0, key.as_bytes(), b"v")]))
+            .unwrap();
+    }
+}
+
+/// Write the allowed prefix, then report a full disk when no budget remains.
+pub fn write_with_budget(file: &File, buf: &[u8], remaining: &mut usize) -> std::io::Result<usize> {
+    if *remaining == 0 {
+        return Err(std::io::ErrorKind::StorageFull.into());
+    }
+    let written = (&*file).write(&buf[..buf.len().min(*remaining)])?;
+    *remaining -= written;
+    Ok(written)
 }
 
 /// A log under `dir` opened with [`tiny_segments`].
@@ -75,19 +215,7 @@ pub fn log_append_time_log() -> (tempfile::TempDir, Log) {
 
 pub fn test_batch_at(_off: i64) -> RecordBatch {
     // `Log::append` overwrites `base_offset`; one record per batch.
-    let mut b = RecordBatch {
-        base_offset: 0,
-        base_timestamp: 1_000,
-        max_timestamp: 1_000,
-        last_offset_delta: 0,
-        ..RecordBatch::default()
-    };
-    b.records.push(Record {
-        offset_delta: 0,
-        value: Some(Bytes::from("v")),
-        ..Default::default()
-    });
-    b
+    crate::test_support::single_record_batch(0, 1_000, Bytes::from("v"))
 }
 
 /// Encode a "producer" batch with a producer-chosen `base_offset` and
@@ -112,6 +240,11 @@ pub fn verbatim_from(producer: &RecordBatch, leader_epoch: LeaderEpoch) -> (Byte
 // ---- helpers for transactional tests ----
 
 /// A transactional (non-control) batch for the given pid/epoch containing `values`.
+pub fn append_transaction(log: &mut Log, producer: (i64, i16), values: &[&str]) {
+    log.append(&mut transactional_batch(producer.0, producer.1, values))
+        .unwrap();
+}
+
 pub fn transactional_batch(pid: i64, epoch: i16, values: &[&str]) -> RecordBatch {
     let last_offset_delta = i32::try_from(values.len()).unwrap() - 1;
     let mut records = Vec::new();
@@ -152,27 +285,16 @@ pub fn control_value(coordinator_epoch: i32) -> Bytes {
 /// A commit control batch (`marker_type=1`) for the given pid and epoch.
 /// `Log::append` rewrites the offsets.
 pub fn commit_marker(pid: i64, epoch: i16) -> RecordBatch {
-    RecordBatch {
-        base_offset: 0,
-        last_offset_delta: 0,
-        producer_id: pid,
-        producer_epoch: epoch,
-        attributes: Attributes::default()
-            .with_transactional(true)
-            .with_control(true),
-        records: vec![Record {
-            offset_delta: 0,
-            key: Some(control_key(1 /* COMMIT */)),
-            value: Some(control_value(17)),
-            ..Default::default()
-        }],
-        ..RecordBatch::default()
-    }
+    transaction_marker(pid, epoch, 1 /* COMMIT */)
 }
 
 /// An abort control batch (`marker_type=0`) for the given pid and epoch.
 /// `Log::append` rewrites the offsets.
 pub fn abort_marker(pid: i64, epoch: i16) -> RecordBatch {
+    transaction_marker(pid, epoch, 0 /* ABORT */)
+}
+
+fn transaction_marker(pid: i64, epoch: i16, marker_type: i16) -> RecordBatch {
     RecordBatch {
         base_offset: 0,
         last_offset_delta: 0,
@@ -183,7 +305,7 @@ pub fn abort_marker(pid: i64, epoch: i16) -> RecordBatch {
             .with_control(true),
         records: vec![Record {
             offset_delta: 0,
-            key: Some(control_key(0 /* ABORT */)),
+            key: Some(control_key(marker_type)),
             value: Some(control_value(17)),
             ..Default::default()
         }],
@@ -372,5 +494,20 @@ pub(crate) fn append_path(log: &mut Log, path: AppendPath, mut batch: RecordBatc
             log.append_verbatim_at(&verbatim, log_end).unwrap();
         }
         AppendPath::Follower | AppendPath::Verbatim => log.append_at(&mut batch, log_end).unwrap(),
+    }
+}
+
+pub fn snapshot_offsets(dir: &std::path::Path) -> Vec<Offset> {
+    crate::producer_snapshot::list(dir)
+        .unwrap()
+        .into_iter()
+        .map(|(offset, _)| offset)
+        .collect()
+}
+
+pub fn check_contiguous_exports(exports: &[super::SegmentExport]) {
+    for pair in exports.windows(2) {
+        // Each sealed segment ends exactly one offset before its successor.
+        assert2::assert!(pair[0].last_offset + 1 == pair[1].base_offset);
     }
 }

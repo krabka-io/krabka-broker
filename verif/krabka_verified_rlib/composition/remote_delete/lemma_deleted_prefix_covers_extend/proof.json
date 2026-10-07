@@ -4,7 +4,7 @@
     "Coma": {
       "vc_lemma_deleted_prefix_covers_extend": {
         "prover": "alt-ergo",
-        "time": 0.007
+        "time": 0.02
       }
     }
   }

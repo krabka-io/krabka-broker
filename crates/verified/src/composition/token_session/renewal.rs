@@ -11,17 +11,19 @@ use crate::{
     },
 };
 
-#[cfg_attr(creusot, derive(DeepModel))]
-#[cfg_attr(not(creusot), derive(Clone, Copy, Debug, PartialEq, Eq))]
-pub struct RenewalTrace {
-    pub original_expiry: i64,
-    pub maximum: i64,
-    pub renewed_expiry: i64,
-    pub boundary_authenticated: bool,
-    pub renewal: TokenMutationDecision,
-    pub cleanup: TokenMutationDecision,
-    // Session deadline, advertised lifetime and request admission.
-    pub session: Option<(i64, i64, bool)>,
+model_types! {
+    @derives (derive(DeepModel))
+        (derive(Clone, Copy, Debug, PartialEq, Eq));
+    pub struct RenewalTrace {
+        pub original_expiry: i64,
+        pub maximum: i64,
+        pub renewed_expiry: i64,
+        pub boundary_authenticated: bool,
+        pub renewal: TokenMutationDecision,
+        pub cleanup: TokenMutationDecision,
+        // Session deadline, advertised lifetime and request admission.
+        pub session: Option<(i64, i64, bool)>,
+    }
 }
 
 /// Renew exactly at the expiry captured by a cleanup worker, then evaluate

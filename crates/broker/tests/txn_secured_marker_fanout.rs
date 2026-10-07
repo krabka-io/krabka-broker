@@ -31,42 +31,39 @@
 
 use std::{
     net::SocketAddr,
-    sync::Arc,
     time::{Duration, Instant},
 };
 
 use assert2::assert;
-use bytes::BufMut;
 use krabka_broker::{
     BootstrapMode, Broker, BrokerConfig, BrokerError, BrokerHandle,
-    authorizer::SimpleAclAuthorizer,
     config::{InterBrokerCredentials, ListenerSpec},
 };
 use krabka_client_core::{
     Client,
     security::{ClientSecurity, SaslCredentials},
 };
-use krabka_metadata::{
-    AclEntry, AclOperation, MetadataRecord, PatternType, PermissionType, ResourceType,
-};
+use krabka_metadata::{AclOperation, ResourceType};
 use krabka_protocol::{
-    Encode, ProtocolError, ProtocolRequest,
     owned::{
         add_partitions_to_txn_request::{AddPartitionsToTxnRequest, AddPartitionsToTxnTransaction},
         common::add_partitions_to_txn_request::add_partitions_to_txn_topic::AddPartitionsToTxnTopic,
-        create_topics_request::{CreatableTopic, CreateTopicsRequest},
-        end_txn_request::EndTxnRequest,
         find_coordinator_request::FindCoordinatorRequest,
-        init_producer_id_request::InitProducerIdRequest,
         init_producer_id_response::InitProducerIdResponse,
-        metadata_request::{MetadataRequest, MetadataRequestTopic},
-        produce_request::{PartitionProduceData, ProduceRequest, TopicProduceData},
+        produce_request::ProduceRequest,
         produce_response::PartitionProduceResponse,
     },
-    records::{Attributes, Record, RecordBatch},
+    records::{Attributes, RecordBatch},
 };
 use krabka_security::{ListenerProtocol, SaslMechanism};
 use tempfile::TempDir;
+
+use crate::support::{
+    produce::single_partition_produce,
+    records::{batch_from_records, value_record},
+    topics::{creatable_topic, create_topic_request},
+    transactions::{end_transaction_request, init_producer_request},
+};
 
 mod support;
 
@@ -83,15 +80,11 @@ const TOPIC: &str = "t";
 /// listener is bound, so a `:0` would register port 0 and break the
 /// inter-broker dial.
 fn sasl_listener(addr: SocketAddr) -> Vec<ListenerSpec> {
-    vec![ListenerSpec {
-        name: IB_LISTENER.to_string(),
-        bind_addr: addr,
-        advertised: addr.to_string(),
-        protocol: ListenerProtocol::SaslPlaintext,
-        tls_config: None,
-        sasl_mechanisms: None,
-        principal_mapper: krabka_broker::SslPrincipalMapper::default(),
-    }]
+    vec![crate::support::listeners::listener(
+        IB_LISTENER,
+        addr,
+        ListenerProtocol::SaslPlaintext,
+    )]
 }
 
 /// Add the `SASL_PLAINTEXT` inter-broker listener and its `SASL/PLAIN`
@@ -167,10 +160,7 @@ async fn start_two_sasl(
     cfg0.directory_id = uuid::Uuid::from_u128(1);
     cfg0.bootstrap_mode = BootstrapMode::Bootstrap;
     cfg0.controller_listen_addr = controller_addrs[0];
-    cfg0.controller_quorum_voters = voters
-        .iter()
-        .map(|(id, a)| (krabka_broker::NodeId(*id), a.to_string()))
-        .collect();
+    cfg0.controller_quorum_voters = crate::support::controller_voters(&voters);
     cfg0.auto_join = false;
     cfg0.bootstrap_servers = vec![];
     apply_sasl(&mut cfg0, client_addrs[0]);
@@ -183,10 +173,7 @@ async fn start_two_sasl(
     cfg1.directory_id = uuid::Uuid::from_u128(2);
     cfg1.bootstrap_mode = BootstrapMode::Bootstrap;
     cfg1.controller_listen_addr = controller_addrs[1];
-    cfg1.controller_quorum_voters = voters
-        .iter()
-        .map(|(id, a)| (krabka_broker::NodeId(*id), a.to_string()))
-        .collect();
+    cfg1.controller_quorum_voters = crate::support::controller_voters(&voters);
     cfg1.auto_join = false;
     cfg1.bootstrap_servers = vec![];
     apply_sasl(&mut cfg1, client_addrs[1]);
@@ -288,13 +275,9 @@ async fn partition_leaders(client: &Client, handle: &BrokerHandle, topic: &str) 
         })
         .await;
     let resp = client
-        .send(MetadataRequest {
-            topics: Some(vec![MetadataRequestTopic {
-                name: Some(topic.to_string()),
-                ..Default::default()
-            }]),
-            ..Default::default()
-        })
+        .send(crate::support::discovery::named_topic_metadata(
+            topic.to_string(),
+        ))
         .await
         .expect("metadata");
     let topic = resp
@@ -355,16 +338,7 @@ async fn end_txn_marker_fanout_to_remote_leader_over_sasl() {
     // Topic with 2 partitions, RF=1. Round-robin places P0 on node 1 and P1 on
     // node 2.
     let cr = admin
-        .send(CreateTopicsRequest {
-            topics: vec![CreatableTopic {
-                name: TOPIC.into(),
-                num_partitions: 2,
-                replication_factor: 1,
-                ..Default::default()
-            }],
-            timeout_ms: 5_000,
-            ..Default::default()
-        })
+        .send(create_topic_request(creatable_topic(TOPIC, 2, 1), 5_000))
         .await
         .expect("create topic");
     assert!(
@@ -394,13 +368,7 @@ async fn end_txn_marker_fanout_to_remote_leader_over_sasl() {
     let coord = sasl_client(&format!("{coord_host}:{coord_port}")).await;
 
     let init = coord
-        .send(InitProducerIdRequest {
-            transactional_id: Some(TID.into()),
-            transaction_timeout_ms: 60_000,
-            producer_id: -1,
-            producer_epoch: -1,
-            ..Default::default()
-        })
+        .send(init_producer_request(Some(TID.into()), 60_000, (-1, -1)))
         .await
         .expect("init producer id");
     assert!(init.error_code == 0, "InitProducerId failed: {init:?}");
@@ -442,13 +410,7 @@ async fn end_txn_marker_fanout_to_remote_leader_over_sasl() {
     // the path the fix repairs — the pre-fix one-shot client could not
     // authenticate and EndTxn would surface a retriable UNKNOWN_SERVER_ERROR.
     let end = coord
-        .send(EndTxnRequest {
-            transactional_id: TID.into(),
-            producer_id: pid,
-            producer_epoch: epoch,
-            committed: true,
-            ..Default::default()
-        })
+        .send(end_transaction_request(TID, (pid, epoch), true))
         .await
         .expect("end txn");
     assert!(
@@ -459,9 +421,7 @@ async fn end_txn_marker_fanout_to_remote_leader_over_sasl() {
 
     admin.close();
     coord.close();
-    for (h, _, _) in cluster {
-        h.shutdown().await;
-    }
+    crate::support::shutdown_cluster(cluster).await;
 }
 
 const ADMIN_USER: &str = "admin";
@@ -486,49 +446,11 @@ fn apply_acls(cfg: &mut BrokerConfig) {
     cfg.super_users = [ADMIN_USER.to_string(), "ANONYMOUS".to_string()]
         .into_iter()
         .collect();
-    cfg.authorizer = Arc::new(SimpleAclAuthorizer::new(cfg.super_users.clone()));
+    crate::support::acl::use_simple_acl_authorizer(cfg);
 }
 
-/// An `Allow` ACL on a literal resource.
-fn allow(
-    resource_type: ResourceType,
-    resource_name: &str,
-    principal: &str,
-    operation: AclOperation,
-) -> MetadataRecord {
-    MetadataRecord::V1AccessControlEntry(AclEntry {
-        resource_type,
-        resource_name: resource_name.into(),
-        pattern_type: PatternType::Literal,
-        principal: principal.into(),
-        host: "*".into(),
-        operation,
-        permission_type: PermissionType::Allow,
-    })
-}
-
-/// A request sent at exactly version `V`, whatever the broker also supports.
-#[derive(Clone, Debug)]
-struct At<R, const V: i16>(R);
-
-impl<R: Encode, const V: i16> Encode for At<R, V> {
-    fn encode<B: BufMut>(&self, buf: &mut B, version: i16) -> Result<(), ProtocolError> {
-        self.0.encode(buf, version)
-    }
-
-    fn encoded_len(&self, version: i16) -> usize {
-        self.0.encoded_len(version)
-    }
-}
-
-impl<R: ProtocolRequest, const V: i16> ProtocolRequest for At<R, V> {
-    const API_KEY: i16 = R::API_KEY;
-    const MIN_VERSION: i16 = V;
-    const MAX_VERSION: i16 = V;
-    const LATEST_STABLE_VERSION: i16 = V;
-    const FLEXIBLE_MIN: i16 = R::FLEXIBLE_MIN;
-    type Response = R::Response;
-}
+// An Allow ACL on a literal resource.
+use crate::support::{acl::resource_allow_acl as allow, wire::At};
 
 /// One transactional `Produce` whose partition leader is not the transaction
 /// coordinator.
@@ -640,16 +562,10 @@ async fn a_remote_coordinator_verifies_a_produce_for_a_broker_with_only_cluster_
     let mut expected = Vec::new();
     for case in cases {
         let created = admin
-            .send(CreateTopicsRequest {
-                topics: vec![CreatableTopic {
-                    name: case.name.into(),
-                    num_partitions: 2,
-                    replication_factor: 1,
-                    ..Default::default()
-                }],
-                timeout_ms: 5_000,
-                ..Default::default()
-            })
+            .send(create_topic_request(
+                creatable_topic(case.name, 2, 1),
+                5_000,
+            ))
             .await
             .expect("create topic");
         assert!(
@@ -707,27 +623,17 @@ async fn a_remote_coordinator_verifies_a_produce_for_a_broker_with_only_cluster_
             base_sequence: 0,
             last_offset_delta: 0,
             max_timestamp: 1,
-            records: vec![Record {
-                offset_delta: 0,
-                value: Some(bytes::Bytes::from_static(b"v")),
-                ..Record::default()
-            }],
-            ..RecordBatch::default()
+            ..batch_from_records(vec![value_record(0, Some(bytes::Bytes::from_static(b"v")))])
         };
         let request = ProduceRequest {
             transactional_id: Some(case.name.into()),
-            acks: -1,
-            timeout_ms: 5_000,
-            topic_data: vec![TopicProduceData {
-                name: case.name.into(),
-                partition_data: vec![PartitionProduceData {
-                    index: partition,
-                    records: Some(batch.into()),
-                    ..Default::default()
-                }],
-                ..Default::default()
-            }],
-            ..Default::default()
+            ..single_partition_produce(
+                case.name,
+                krabka_protocol::primitives::uuid::Uuid::default(),
+                partition,
+                Some(batch.into()),
+                (-1, 5_000),
+            )
         };
         let produced = if case.produce_version < 12 {
             to_leader.send(At::<_, 11>(request)).await
@@ -737,13 +643,11 @@ async fn a_remote_coordinator_verifies_a_produce_for_a_broker_with_only_cluster_
         .expect("produce");
 
         let ended = to_coordinator
-            .send(EndTxnRequest {
-                transactional_id: case.name.into(),
-                producer_id: init.producer_id,
-                producer_epoch: init.producer_epoch,
-                committed: true,
-                ..Default::default()
-            })
+            .send(end_transaction_request(
+                case.name,
+                (init.producer_id, init.producer_epoch),
+                true,
+            ))
             .await
             .expect("end txn");
 
@@ -770,9 +674,7 @@ async fn a_remote_coordinator_verifies_a_produce_for_a_broker_with_only_cluster_
 
     admin.close();
     client_bootstrap.close();
-    for (h, _, _) in cluster {
-        h.shutdown().await;
-    }
+    crate::support::shutdown_cluster(cluster).await;
     assert!(actual == expected);
 }
 
@@ -782,13 +684,11 @@ async fn init_producer(client: &Client, transactional_id: &str) -> InitProducerI
     let deadline = Instant::now() + Duration::from_secs(30);
     loop {
         let init = client
-            .send(InitProducerIdRequest {
-                transactional_id: Some(transactional_id.into()),
-                transaction_timeout_ms: 60_000,
-                producer_id: -1,
-                producer_epoch: -1,
-                ..Default::default()
-            })
+            .send(init_producer_request(
+                Some(transactional_id.into()),
+                60_000,
+                (-1, -1),
+            ))
             .await
             .expect("init producer id");
         // COORDINATOR_NOT_AVAILABLE, NOT_COORDINATOR and

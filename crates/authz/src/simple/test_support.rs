@@ -15,7 +15,121 @@ use krabka_metadata::{
 use krabka_security::Principal;
 use uuid::Uuid;
 
-use crate::AuthorizationRequest;
+use super::SimpleAclAuthorizer;
+use crate::{AuthorizationRequest, AuthorizationResult, Authorizer};
+
+/// The default test caller, retaining one authorizer across all decisions in a case.
+pub(super) struct AliceAuthorizer {
+    pub principal: Principal,
+    pub host: SocketAddr,
+    pub authorizer: SimpleAclAuthorizer,
+}
+
+impl Default for AliceAuthorizer {
+    fn default() -> Self {
+        Self {
+            principal: alice(),
+            host: addr(),
+            authorizer: SimpleAclAuthorizer::new(no_super()),
+        }
+    }
+}
+
+impl AliceAuthorizer {
+    pub fn authorize(
+        &self,
+        image: &MetadataImage,
+        name: &str,
+        operation: AclOperation,
+    ) -> AuthorizationResult {
+        self.authorizer
+            .authorize(image, &req(&self.principal, &self.host, name, operation))
+    }
+
+    pub fn authorize_by_resource_type(
+        &self,
+        image: &MetadataImage,
+        resource_type: ResourceType,
+        operation: AclOperation,
+    ) -> AuthorizationResult {
+        self.authorizer.authorize_by_resource_type(
+            image,
+            &self.principal,
+            &self.host,
+            resource_type,
+            operation,
+        )
+    }
+
+    pub fn check(
+        &self,
+        image: &MetadataImage,
+        name: &str,
+        operation: AclOperation,
+        expected: AuthorizationResult,
+    ) {
+        assert2::assert!(self.authorize(image, name, operation) == expected);
+    }
+
+    pub fn check_resource_type(
+        &self,
+        image: &MetadataImage,
+        resource_type: ResourceType,
+        operation: AclOperation,
+        expected: AuthorizationResult,
+    ) {
+        assert2::assert!(
+            self.authorize_by_resource_type(image, resource_type, operation) == expected
+        );
+    }
+
+    pub fn authorize_on(
+        &self,
+        image: &MetadataImage,
+        resource_type: ResourceType,
+        name: &str,
+        operation: AclOperation,
+    ) -> AuthorizationResult {
+        self.authorizer.authorize(
+            image,
+            &req_on(&self.principal, &self.host, resource_type, name, operation),
+        )
+    }
+}
+
+/// Check one decision with the default principal, host, and authorizer.
+pub(super) fn check_topic_access(
+    image: &MetadataImage,
+    name: &str,
+    operation: AclOperation,
+    expected: AuthorizationResult,
+) {
+    AliceAuthorizer::default().check(image, name, operation, expected);
+}
+
+pub(super) fn check_resource_type_access(
+    image: &MetadataImage,
+    resource_type: ResourceType,
+    operation: AclOperation,
+    expected: AuthorizationResult,
+) {
+    AliceAuthorizer::default().check_resource_type(image, resource_type, operation, expected);
+}
+
+/// Build the default metadata image with the supplied ACLs in their original order.
+pub(super) fn acl_image(entries: impl IntoIterator<Item = AclEntry>) -> MetadataImage {
+    image_with_acls(img(), entries)
+}
+
+pub(super) fn image_with_acls(
+    mut image: MetadataImage,
+    entries: impl IntoIterator<Item = AclEntry>,
+) -> MetadataImage {
+    for entry in entries {
+        image.apply(&MetadataRecord::V1AccessControlEntry(entry));
+    }
+    image
+}
 
 pub(super) fn no_super() -> HashSet<String> {
     HashSet::new()
@@ -78,25 +192,18 @@ pub(super) fn req<'a>(
     name: &'a str,
     op: AclOperation,
 ) -> AuthorizationRequest<'a> {
-    AuthorizationRequest {
-        principal: p,
-        host,
-        resource_type: ResourceType::Topic,
-        resource_name: name,
-        operation: op,
-    }
+    req_on(p, host, ResourceType::Topic, name, op)
 }
 
 pub(super) fn topic_acl_op(permission: PermissionType, op: AclOperation, name: &str) -> AclEntry {
-    AclEntry {
-        resource_type: ResourceType::Topic,
-        resource_name: name.into(),
-        pattern_type: PatternType::Literal,
-        principal: "User:alice".into(),
-        host: "*".into(),
-        operation: op,
-        permission_type: permission,
-    }
+    topic_acl(
+        permission,
+        op,
+        "User:alice",
+        "*",
+        PatternType::Literal,
+        name,
+    )
 }
 
 pub(super) fn acl_op_on(
@@ -107,12 +214,7 @@ pub(super) fn acl_op_on(
 ) -> AclEntry {
     AclEntry {
         resource_type: rt,
-        resource_name: name.into(),
-        pattern_type: PatternType::Literal,
-        principal: "User:alice".into(),
-        host: "*".into(),
-        operation: op,
-        permission_type: permission,
+        ..topic_acl_op(permission, op, name)
     }
 }
 

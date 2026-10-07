@@ -1,18 +1,17 @@
 //! KIP-516: `OffsetCommit` v10 and `OffsetFetch` v8+ keyed by `topic_id`.
 use assert2::{assert, check};
+
+use crate::support::{
+    offsets::{offset_commit_topic, offset_fetch_group, offset_fetch_request, offset_fetch_topic},
+    topics::{creatable_topic, create_topic_request},
+};
 mod support;
 
 use krabka_protocol::{
     owned::{
-        create_topics_request::{CreatableTopic, CreateTopicsRequest},
-        offset_commit_request::{
-            OffsetCommitRequest, OffsetCommitRequestPartition, OffsetCommitRequestTopic,
-        },
+        offset_commit_request::{OffsetCommitRequest, OffsetCommitRequestPartition},
         offset_commit_response::{
             OffsetCommitResponse, OffsetCommitResponsePartition, OffsetCommitResponseTopic,
-        },
-        offset_fetch_request::{
-            OffsetFetchRequest, OffsetFetchRequestGroup, OffsetFetchRequestTopics,
         },
         offset_fetch_response::{
             OffsetFetchResponse, OffsetFetchResponseGroup, OffsetFetchResponsePartitions,
@@ -26,28 +25,16 @@ use support::topic_id_for;
 /// Kafka's `UNKNOWN_TOPIC_ID` error code.
 const UNKNOWN_TOPIC_ID: i16 = 100;
 
-/// Boots one broker and waits until its group coordinator serves
-/// `__consumer_offsets`. No broker creates that topic when it starts.
-async fn start() -> support::InProcess {
-    let p = support::start().await;
-    p.broker.wait_until_group_coordinator_ready().await;
-    p
-}
+use crate::support::start_ready_group as start;
 
 #[tokio::test]
 async fn offset_commit_and_fetch_by_topic_id_round_trip() {
     let p = start().await;
     p.client
-        .send(CreateTopicsRequest {
-            topics: vec![CreatableTopic {
-                name: "o_topic".into(),
-                num_partitions: 1,
-                replication_factor: 1,
-                ..Default::default()
-            }],
-            timeout_ms: 5_000,
-            ..Default::default()
-        })
+        .send(create_topic_request(
+            creatable_topic("o_topic", 1, 1),
+            5_000,
+        ))
         .await
         .expect("create topic");
     let id = topic_id_for(&p.client, "o_topic").await;
@@ -57,16 +44,15 @@ async fn offset_commit_and_fetch_by_topic_id_round_trip() {
     p.client
         .send(OffsetCommitRequest {
             group_id: "g1".into(),
-            topics: vec![OffsetCommitRequestTopic {
-                name: String::new(),
-                topic_id: id,
-                partitions: vec![OffsetCommitRequestPartition {
+            topics: vec![offset_commit_topic(
+                String::new(),
+                id,
+                vec![OffsetCommitRequestPartition {
                     partition_index: 0,
                     committed_offset: 42,
                     ..Default::default()
                 }],
-                ..Default::default()
-            }],
+            )],
             ..Default::default()
         })
         .await
@@ -75,19 +61,10 @@ async fn offset_commit_and_fetch_by_topic_id_round_trip() {
     // Fetch back via v8+ multi-group shape keyed by topic_id.
     let resp = p
         .client
-        .send(OffsetFetchRequest {
-            groups: vec![OffsetFetchRequestGroup {
-                group_id: "g1".into(),
-                topics: Some(vec![OffsetFetchRequestTopics {
-                    name: String::new(),
-                    topic_id: id,
-                    partition_indexes: vec![0],
-                    ..Default::default()
-                }]),
-                ..Default::default()
-            }],
-            ..Default::default()
-        })
+        .send(offset_fetch_request(offset_fetch_group(
+            "g1",
+            Some(vec![offset_fetch_topic(String::new(), id, vec![0])]),
+        )))
         .await
         .expect("offset fetch");
 
@@ -128,19 +105,10 @@ async fn offset_fetch_unresolved_topic_id_returns_unknown_topic_id() {
     for (label, topic_id) in cases {
         let resp = p
             .client
-            .send(OffsetFetchRequest {
-                groups: vec![OffsetFetchRequestGroup {
-                    group_id: "g2".into(),
-                    topics: Some(vec![OffsetFetchRequestTopics {
-                        name: String::new(),
-                        topic_id,
-                        partition_indexes: vec![0],
-                        ..Default::default()
-                    }]),
-                    ..Default::default()
-                }],
-                ..Default::default()
-            })
+            .send(offset_fetch_request(offset_fetch_group(
+                "g2",
+                Some(vec![offset_fetch_topic(String::new(), topic_id, vec![0])]),
+            )))
             .await
             .expect("offset fetch");
         actual.push((label, resp));
@@ -180,16 +148,10 @@ async fn offset_fetch_unresolved_topic_id_returns_unknown_topic_id() {
 async fn offset_commit_unresolved_topic_id_returns_unknown_topic_id() {
     let p = start().await;
     p.client
-        .send(CreateTopicsRequest {
-            topics: vec![CreatableTopic {
-                name: "oc_known".into(),
-                num_partitions: 1,
-                replication_factor: 1,
-                ..Default::default()
-            }],
-            timeout_ms: 5_000,
-            ..Default::default()
-        })
+        .send(create_topic_request(
+            creatable_topic("oc_known", 1, 1),
+            5_000,
+        ))
         .await
         .expect("create topic");
     let known = topic_id_for(&p.client, "oc_known").await;
@@ -201,15 +163,16 @@ async fn offset_commit_unresolved_topic_id_returns_unknown_topic_id() {
         ),
         ("zero id", WireUuid::ZERO),
     ];
-    let row = |topic_id, committed_offset| OffsetCommitRequestTopic {
-        name: String::new(),
-        topic_id,
-        partitions: vec![OffsetCommitRequestPartition {
-            partition_index: 0,
-            committed_offset,
-            ..Default::default()
-        }],
-        ..Default::default()
+    let row = |topic_id, committed_offset| {
+        offset_commit_topic(
+            String::new(),
+            topic_id,
+            vec![OffsetCommitRequestPartition {
+                partition_index: 0,
+                committed_offset,
+                ..Default::default()
+            }],
+        )
     };
     let answer = |topic_id, error_code| OffsetCommitResponseTopic {
         name: String::new(),
@@ -251,16 +214,10 @@ async fn offset_commit_unresolved_topic_id_returns_unknown_topic_id() {
 async fn offset_fetch_all_echoes_topic_id() {
     let p = start().await;
     p.client
-        .send(CreateTopicsRequest {
-            topics: vec![CreatableTopic {
-                name: "fa_topic".into(),
-                num_partitions: 1,
-                replication_factor: 1,
-                ..Default::default()
-            }],
-            timeout_ms: 5_000,
-            ..Default::default()
-        })
+        .send(create_topic_request(
+            creatable_topic("fa_topic", 1, 1),
+            5_000,
+        ))
         .await
         .expect("create topic");
     let id = topic_id_for(&p.client, "fa_topic").await;
@@ -268,16 +225,15 @@ async fn offset_fetch_all_echoes_topic_id() {
     p.client
         .send(OffsetCommitRequest {
             group_id: "g3".into(),
-            topics: vec![OffsetCommitRequestTopic {
-                name: String::new(),
-                topic_id: id,
-                partitions: vec![OffsetCommitRequestPartition {
+            topics: vec![offset_commit_topic(
+                String::new(),
+                id,
+                vec![OffsetCommitRequestPartition {
                     partition_index: 0,
                     committed_offset: 7,
                     ..Default::default()
                 }],
-                ..Default::default()
-            }],
+            )],
             ..Default::default()
         })
         .await
@@ -286,14 +242,7 @@ async fn offset_fetch_all_echoes_topic_id() {
     // Fetch-all: `topics: None` for the group.
     let resp = p
         .client
-        .send(OffsetFetchRequest {
-            groups: vec![OffsetFetchRequestGroup {
-                group_id: "g3".into(),
-                topics: None,
-                ..Default::default()
-            }],
-            ..Default::default()
-        })
+        .send(offset_fetch_request(offset_fetch_group("g3", None)))
         .await
         .expect("offset fetch");
     let grp = resp

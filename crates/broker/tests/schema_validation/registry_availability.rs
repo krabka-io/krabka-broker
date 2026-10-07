@@ -6,14 +6,11 @@
 //! topic's setting a lie. `fail_open` is the deliberate opt-out, and it is the
 //! only configuration here that admits an unresolvable record.
 
-use assert2::check;
-use krabka_broker::{BrokerConfig, file_config::FileConfig};
+use krabka_broker::BrokerConfig;
 use krabka_client_core::Client;
 use wiremock::{Mock, MockServer, ResponseTemplate, matchers::method};
 
-use crate::harness::{
-    INVALID_RECORD, KNOWN_ID, VALIDATED, batch_with_value, boot, create_topic, framed, produce,
-};
+use crate::harness::{INVALID_RECORD, KNOWN_ID, VALIDATED, boot, create_topic, framed};
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_broker_with_no_registry_rejects_a_topic_that_asks_for_validation() {
@@ -31,11 +28,7 @@ async fn an_unreachable_registry_fails_closed_by_default() {
     // A server that accepts the connection and then answers 500 for
     // everything: the registry failing to answer, rather than answering "not
     // registered".
-    let registry = MockServer::start().await;
-    Mock::given(method("GET"))
-        .respond_with(ResponseTemplate::new(500))
-        .mount(&registry)
-        .await;
+    let registry = unavailable_registry().await;
 
     let (broker, client, _dir) = boot(&registry.uri()).await;
     expect_fail_closed(&broker, &client).await;
@@ -44,39 +37,34 @@ async fn an_unreachable_registry_fails_closed_by_default() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn fail_open_admits_a_record_the_registry_could_not_answer_for() {
-    let registry = MockServer::start().await;
-    Mock::given(method("GET"))
-        .respond_with(ResponseTemplate::new(500))
-        .mount(&registry)
-        .await;
+    let registry = unavailable_registry().await;
 
     let dir = tempfile::tempdir().expect("tempdir");
     let mut config = BrokerConfig::for_tests(dir.path().to_path_buf());
-    let file: FileConfig = toml::from_str(&format!(
-        r#"
+    crate::harness::apply_registry_config(
+        &mut config,
+        &format!(
+            r#"
         [schema_registry]
         url = "{}"
         fail_open = true
         "#,
-        registry.uri()
-    ))
-    .expect("broker.toml parses");
-    file.apply_to(&mut config)
-        .expect("[schema_registry] applies");
+            registry.uri()
+        ),
+    );
 
     let (broker, client) = crate::harness::boot_config(config).await;
     let id = create_topic(&broker, &client, "validated", VALIDATED).await;
 
-    let out = produce(
+    crate::harness::check_value_append(
+        &broker,
         &client,
         "validated",
         id,
-        batch_with_value(Some(framed(KNOWN_ID, b"anything"))),
+        Some(framed(KNOWN_ID, b"anything")),
+        (0, Some(1)),
     )
     .await;
-
-    check!(out.error_code == 0, "{out:?}");
-    check!(broker.local_log_end_offset("validated", 0) == Some(1));
 
     broker.shutdown().await;
 }
@@ -84,14 +72,22 @@ async fn fail_open_admits_a_record_the_registry_could_not_answer_for() {
 async fn expect_fail_closed(broker: &krabka_broker::BrokerHandle, client: &Client) {
     let id = create_topic(broker, client, "validated", VALIDATED).await;
 
-    let out = produce(
+    crate::harness::check_value_append(
+        broker,
         client,
         "validated",
         id,
-        batch_with_value(Some(framed(KNOWN_ID, b"anything"))),
+        Some(framed(KNOWN_ID, b"anything")),
+        (INVALID_RECORD, Some(0)),
     )
     .await;
+}
 
-    check!(out.error_code == INVALID_RECORD, "{out:?}");
-    check!(broker.local_log_end_offset("validated", 0) == Some(0));
+async fn unavailable_registry() -> MockServer {
+    let registry = MockServer::start().await;
+    Mock::given(method("GET"))
+        .respond_with(ResponseTemplate::new(500))
+        .mount(&registry)
+        .await;
+    registry
 }

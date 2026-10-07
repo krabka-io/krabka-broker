@@ -80,6 +80,23 @@ mod publish_race {
         async fn cancel(&self) {}
     }
 
+    fn registration_config(log_dir: &std::path::Path) -> BrokerConfig {
+        BrokerConfig {
+            node_id: NodeId(9),
+            ..BrokerConfig::for_tests(log_dir.to_path_buf())
+        }
+    }
+
+    fn spawn_registration(
+        config: BrokerConfig,
+        image_tx: &watch::Sender<Arc<MetadataImage>>,
+    ) -> tokio::task::JoinHandle<Result<Option<i64>, BrokerError>> {
+        let source = DelayedPublishSource {
+            image_tx: image_tx.clone(),
+        };
+        tokio::spawn(async move { register_broker(&config, &source).await })
+    }
+
     /// Without the wait this regression test's fixture would time out on the
     /// side that matters: `register_broker` must not return while
     /// `current_image()` still holds no registration for this node at all --
@@ -91,20 +108,13 @@ mod publish_race {
         // `register_broker` mints and persists a directory id in each log
         // dir, so the config needs a real one, not the working directory.
         let log_dir = tempdir().expect("tempdir");
-        let config = BrokerConfig {
-            node_id: NodeId(9),
-            ..BrokerConfig::for_tests(log_dir.path().to_path_buf())
-        };
+        let config = registration_config(log_dir.path());
         // The controller stamps the offset the registration commits at.
         let mut registration = self_registration_record(&config);
         registration.broker_epoch = 0;
         let (image_tx, _keep_alive) =
             watch::channel(Arc::new(MetadataImage::new(uuid::Uuid::nil())));
-        let source = DelayedPublishSource {
-            image_tx: image_tx.clone(),
-        };
-
-        let mut call = tokio::spawn(async move { register_broker(&config, &source).await });
+        let mut call = spawn_registration(config, &image_tx);
 
         // `submit_change` inside `register_broker` already returned `Ok`, but
         // the image the test controls has not published the registration
@@ -145,10 +155,7 @@ mod publish_race {
         // `register_broker` mints and persists a directory id in each log
         // dir, so the config needs a real one, not the working directory.
         let log_dir = tempdir().expect("tempdir");
-        let config = BrokerConfig {
-            node_id: NodeId(9),
-            ..BrokerConfig::for_tests(log_dir.path().to_path_buf())
-        };
+        let config = registration_config(log_dir.path());
         let mut stale = self_registration_record(&config);
         stale.broker_epoch = 3;
         stale.fenced = false;
@@ -158,11 +165,7 @@ mod publish_race {
         let mut initial = MetadataImage::new(uuid::Uuid::nil());
         initial.apply(&MetadataRecord::V1BrokerRegistration(stale.clone()));
         let (image_tx, _keep_alive) = watch::channel(Arc::new(initial));
-        let source = DelayedPublishSource {
-            image_tx: image_tx.clone(),
-        };
-
-        let mut call = tokio::spawn(async move { register_broker(&config, &source).await });
+        let mut call = spawn_registration(config, &image_tx);
 
         tokio::time::sleep(Duration::from_millis(50)).await;
         assert!(
@@ -209,10 +212,7 @@ mod publish_race {
         // `register_broker` mints and persists a directory id in each log
         // dir, so the config needs a real one, not the working directory.
         let log_dir = tempdir().expect("tempdir");
-        let config = BrokerConfig {
-            node_id: NodeId(9),
-            ..BrokerConfig::for_tests(log_dir.path().to_path_buf())
-        };
+        let config = registration_config(log_dir.path());
         let (image_tx, _keep_alive) =
             watch::channel(Arc::new(MetadataImage::new(uuid::Uuid::nil())));
         let source = DelayedPublishSource { image_tx };

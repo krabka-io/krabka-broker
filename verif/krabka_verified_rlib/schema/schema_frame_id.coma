@@ -1,21 +1,21 @@
-(* #"/workspace/crates/verified/src/schema.rs" 82 0 82 88 *)
+(* #"/workspace/crates/verified/src/schema.rs" 75 0 75 88 *)
 
 let%span sconvert = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/convert.rs" 274 26 274 51
-let%span sschema = "/workspace/crates/verified/src/schema.rs" 83 16 83 17
-let%span sschema'0 = "/workspace/crates/verified/src/schema.rs" 87 8 87 23
-let%span sschema'1 = "/workspace/crates/verified/src/schema.rs" 87 26 87 36
-let%span sschema'2 = "/workspace/crates/verified/src/schema.rs" 87 8 87 36
-let%span sschema'3 = "/workspace/crates/verified/src/schema.rs" 88 14 88 29
-let%span sschema'4 = "/workspace/crates/verified/src/schema.rs" 88 32 88 38
-let%span sschema'5 = "/workspace/crates/verified/src/schema.rs" 88 14 88 38
-let%span sschema'6 = "/workspace/crates/verified/src/schema.rs" 87 8 88 38
-let%span sschema'7 = "/workspace/crates/verified/src/schema.rs" 89 14 89 29
-let%span sschema'8 = "/workspace/crates/verified/src/schema.rs" 89 32 89 35
-let%span sschema'9 = "/workspace/crates/verified/src/schema.rs" 89 14 89 35
-let%span sschema'10 = "/workspace/crates/verified/src/schema.rs" 87 8 89 35
-let%span sschema'11 = "/workspace/crates/verified/src/schema.rs" 90 14 90 29
-let%span sschema'12 = "/workspace/crates/verified/src/schema.rs" 87 8 90 29
-let%span sschema'13 = "/workspace/crates/verified/src/schema.rs" 76 10 80 1
+let%span sschema = "/workspace/crates/verified/src/schema.rs" 76 16 76 17
+let%span sschema'0 = "/workspace/crates/verified/src/schema.rs" 80 8 80 23
+let%span sschema'1 = "/workspace/crates/verified/src/schema.rs" 80 26 80 36
+let%span sschema'2 = "/workspace/crates/verified/src/schema.rs" 80 8 80 36
+let%span sschema'3 = "/workspace/crates/verified/src/schema.rs" 81 14 81 29
+let%span sschema'4 = "/workspace/crates/verified/src/schema.rs" 81 32 81 38
+let%span sschema'5 = "/workspace/crates/verified/src/schema.rs" 81 14 81 38
+let%span sschema'6 = "/workspace/crates/verified/src/schema.rs" 80 8 81 38
+let%span sschema'7 = "/workspace/crates/verified/src/schema.rs" 82 14 82 29
+let%span sschema'8 = "/workspace/crates/verified/src/schema.rs" 82 32 82 35
+let%span sschema'9 = "/workspace/crates/verified/src/schema.rs" 82 14 82 35
+let%span sschema'10 = "/workspace/crates/verified/src/schema.rs" 80 8 82 35
+let%span sschema'11 = "/workspace/crates/verified/src/schema.rs" 83 14 83 29
+let%span sschema'12 = "/workspace/crates/verified/src/schema.rs" 80 8 83 29
+let%span sschema'13 = "/workspace/crates/verified/src/schema.rs" 69 10 73 1
 
 use creusot.int.UInt8
 use creusot.int.UInt32
@@ -33,7 +33,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let schema_frame_id [#"/workspace/crates/verified/src/schema.rs" 82 0 82 88] (magic: UInt8.t) (id_0: UInt8.t)
+let schema_frame_id [#"/workspace/crates/verified/src/schema.rs" 75 0 75 88] (magic: UInt8.t) (id_0: UInt8.t)
   (id_1: UInt8.t) (id_2: UInt8.t) (id_3: UInt8.t) (return (x: t_Option_u32)) = (! bb0
   [ bb0 = s0
     [ s0 = [ &_13 <- magic <> ([%#sschema] (0: UInt8.t)) ] s1

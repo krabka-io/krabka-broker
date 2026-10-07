@@ -72,10 +72,7 @@ proptest! {
         records in proptest::collection::btree_map(any::<u32>(), any::<i64>(), 0..24),
         min in any::<u32>(), target in any::<i64>(), step in 1usize..8,
     ) {
-        let offsets: Vec<_> = records.keys().copied().collect();
-        let times: Vec<_> = records.values().copied().collect();
-        let rows: Vec<_> = (0..times.len()).step_by(step)
-            .map(|i| (*times[..=i].iter().max().unwrap(), offsets[i])).collect();
+        let (offsets, times, rows) = indexed_timestamp_records(&records, step);
         check(&rows, &offsets, &times, i64::from(u32::MAX), min, target);
     }
 }

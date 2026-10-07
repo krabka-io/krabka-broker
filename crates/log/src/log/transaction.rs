@@ -11,10 +11,7 @@ use krabka_protocol::records::RecordBatch;
 
 use super::{
     Log,
-    control::{
-        ABORT_CONTROL_TYPE, COMMIT_CONTROL_TYPE, parse_control_marker_coordinator_epoch,
-        parse_control_marker_type,
-    },
+    control::{marker_coordinator_epoch, transaction_marker_flags},
 };
 use crate::{error::LogError, txn_index::AbortedTxn};
 
@@ -96,13 +93,7 @@ impl Log {
         transaction_stamp: Option<u64>,
     ) -> Result<(), LogError> {
         // Read the inner control record: key = (version: i16, type: i16) BE.
-        let marker_type = batch
-            .records
-            .first()
-            .and_then(|record| record.key.as_deref())
-            .and_then(parse_control_marker_type);
-        let is_abort = marker_type == Some(ABORT_CONTROL_TYPE);
-        let is_commit = marker_type == Some(COMMIT_CONTROL_TYPE);
+        let (is_abort, is_commit) = transaction_marker_flags(batch);
         let closes = krabka_verified::transaction_marker_closes(
             is_abort,
             is_commit,
@@ -110,11 +101,7 @@ impl Log {
         );
         if (is_abort || is_commit)
             && producer_id.get() >= 0
-            && let Some(epoch) = batch
-                .records
-                .first()
-                .and_then(|record| record.value.as_deref())
-                .and_then(parse_control_marker_coordinator_epoch)
+            && let Some(epoch) = marker_coordinator_epoch(batch)
         {
             self.coordinator_epochs.insert(producer_id, epoch);
         }
@@ -194,13 +181,12 @@ mod tests {
 
     use super::*;
     use crate::{
-        config::LogConfig,
         log::test_support::{
-            abort_marker, commit_marker, sample_batch, test_batch_at, test_log, tiny_segments,
-            transaction_fields, transactional_batch, verbatim_from,
+            abort_marker, append_transaction, commit_marker, sample_batch, test_batch_at, test_log,
+            tiny_segments, transaction_entries, transaction_fields, transactional_batch,
+            verbatim_from,
         },
         name,
-        txn_index::TxnIndex,
     };
 
     // ---- transactional LSO / txnindex tests ----
@@ -230,11 +216,8 @@ mod tests {
     fn negative_producer_ids_never_create_transaction_state() {
         let dir = tempdir().unwrap();
         {
-            let mut log = Log::open(dir.path(), LogConfig::default()).unwrap();
-            log.set_stamp_source(std::sync::Arc::new(
-                crate::stamp_source::MonotonicStampSource::new(40, 1),
-            ))
-            .unwrap();
+            let mut log = crate::test_support::open_log(dir.path());
+            crate::log::test_support::install_stamps(&mut log, 40, 1);
 
             let mut owned = sample_batch(1);
             owned.producer_id = -2;
@@ -261,7 +244,7 @@ mod tests {
             assert2::assert!(log.producer_state_snapshot().is_empty());
         }
 
-        let reopened = Log::open(dir.path(), LogConfig::default()).unwrap();
+        let reopened = crate::test_support::open_log(dir.path());
         assert2::assert!(reopened.lso() == reopened.log_end_offset());
         assert2::assert!(transaction_fields(&reopened, ProducerId(-2)) == (-1, None));
         assert2::assert!(transaction_fields(&reopened, ProducerId(-3)) == (-1, None));
@@ -277,20 +260,11 @@ mod tests {
         let mut a = abort_marker(1000, 0);
         log.append(&mut a).unwrap();
 
-        let idx = TxnIndex::open(dir.path().join("00000000000000000000.txnindex")).unwrap();
-        let entries = idx.entries();
+        let entries = transaction_entries(dir.path(), "00000000000000000000.txnindex");
         // Txn batch was the first append: start_offset = 0.
         // last_offset = abort marker's base_offset + last_offset_delta = 3 + 0 = 3.
         // (The 3-record txn batch occupies offsets 0-2; the marker lands at offset 3.)
-        assert2::assert!(
-            entries
-                == [AbortedTxn {
-                    start_offset: Offset(0),
-                    last_offset: Offset(3),
-                    producer_id: ProducerId(1000),
-                    last_stable_offset: Offset(4),
-                }]
-        );
+        assert2::assert!(entries == [crate::test_support::aborted_txn(1000, 0, 3, 4)]);
     }
 
     /// An earlier completed transaction, still held in `unreplicated`
@@ -316,20 +290,11 @@ mod tests {
         log.append(&mut t2).unwrap();
         log.append(&mut abort_marker(2000, 0)).unwrap();
 
-        let idx = TxnIndex::open(dir.path().join("00000000000000000000.txnindex")).unwrap();
-        let entries = idx.entries();
+        let entries = transaction_entries(dir.path(), "00000000000000000000.txnindex");
         // Producer 1000's transaction started at offset 0: that is the
         // earlier unreplicated start, and it must be the recorded LSO, not
         // producer 2000's own last_offset + 1.
-        assert2::assert!(
-            entries
-                == [AbortedTxn {
-                    start_offset: Offset(3),
-                    last_offset: Offset(4),
-                    producer_id: ProducerId(2000),
-                    last_stable_offset: Offset(0),
-                }]
-        );
+        assert2::assert!(entries == [crate::test_support::aborted_txn(2000, 3, 4, 0)]);
     }
 
     #[test]
@@ -345,12 +310,7 @@ mod tests {
 
         assert2::assert!(
             log.aborted_in_range(Offset(0), marker_base)
-                == [AbortedTxn {
-                    start_offset: Offset(0),
-                    last_offset: Offset(3),
-                    producer_id: ProducerId(1000),
-                    last_stable_offset: Offset(4),
-                }]
+                == [crate::test_support::aborted_txn(1000, 0, 3, 4)]
         );
     }
 
@@ -370,9 +330,9 @@ mod tests {
         a.last_offset_delta = 1;
         log.append(&mut a).unwrap();
 
-        let idx = TxnIndex::open(dir.path().join("00000000000000000000.txnindex")).unwrap();
+        let entries = transaction_entries(dir.path(), "00000000000000000000.txnindex");
         assert2::assert!(
-            idx.entries()
+            entries
                 == [AbortedTxn {
                     start_offset: Offset(0),
                     last_offset: Offset(4), // 3 + 1, not 3 - 1
@@ -403,9 +363,7 @@ mod tests {
 
     #[test]
     fn lso_held_by_remaining_producer_after_partial_commit() {
-        use tempfile::TempDir;
-        let dir = TempDir::new().unwrap();
-        let mut log = Log::open(dir.path(), LogConfig::default()).unwrap();
+        let (_dir, mut log) = test_log();
 
         // Open two producers' transactions in parallel.
         let mut t1 = transactional_batch(1000, 0, &["a", "b"]);
@@ -433,9 +391,8 @@ mod tests {
         for case in ["malformed", "different-producer"] {
             let dir = tempdir().unwrap();
             {
-                let mut log = Log::open(dir.path(), LogConfig::default()).unwrap();
-                log.append(&mut transactional_batch(1000, 0, &["a", "b"]))
-                    .unwrap();
+                let mut log = crate::test_support::open_log(dir.path());
+                append_transaction(&mut log, (1000, 0), &["a", "b"]);
                 let held = log.lso();
                 let mut marker = if case == "malformed" {
                     let mut marker = commit_marker(1000, 0);
@@ -451,7 +408,7 @@ mod tests {
                     "case {case}"
                 );
             }
-            let reopened = Log::open(dir.path(), LogConfig::default()).unwrap();
+            let reopened = crate::test_support::open_log(dir.path());
             assert2::assert!(reopened.lso() == Offset(0), "case {case}");
             assert2::assert!(
                 reopened.pending_transaction_start(ProducerId(1000)) == Some(Offset(0)),
@@ -535,13 +492,12 @@ mod tests {
     fn a_reopened_log_holds_a_complete_transaction_until_the_high_watermark_passes() {
         let dir = tempdir().unwrap();
         {
-            let mut log = Log::open(dir.path(), LogConfig::default()).unwrap();
+            let mut log = crate::test_support::open_log(dir.path());
             log.append(&mut sample_batch(10)).unwrap(); // offsets 0 to 9
-            log.append(&mut transactional_batch(1000, 0, &["a", "b"]))
-                .unwrap(); // offsets 10 and 11
+            append_transaction(&mut log, (1000, 0), &["a", "b"]); // offsets 10 and 11
             log.append(&mut abort_marker(1000, 0)).unwrap(); // offset 12
         }
-        let mut reopened = Log::open(dir.path(), LogConfig::default()).unwrap();
+        let mut reopened = crate::test_support::open_log(dir.path());
         assert2::assert!(
             [12, 13, 11].map(|hw| reopened.last_stable_offset(Offset(hw)))
                 == [Offset(10), Offset(13), Offset(11)]

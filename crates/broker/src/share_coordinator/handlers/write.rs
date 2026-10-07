@@ -4,7 +4,6 @@
 //! keeps the stored state epoch and leader epoch. A key with no state returns
 //! `INVALID_REQUEST`, and epoch fencing returns the per-partition error code.
 
-use futures_util::future::join_all;
 use krabka_log::Offset;
 use krabka_metadata::MetadataImage;
 use krabka_protocol::owned::{
@@ -15,42 +14,20 @@ use krabka_protocol::owned::{
 };
 
 use crate::{
-    broker::Broker,
     codes,
-    error::BrokerError,
     share_coordinator::{
         coordinator::{ShareCoordinator, ShareWrite},
         persistence::StateBatch,
     },
 };
 
-/// Checks `ClusterAction` on the cluster, then serves the request.
-///
-/// Kafka's `KafkaApis` answers a denied principal with
-/// `WriteShareGroupStateResponse.toGlobalErrorResponse`: `CLUSTER_AUTHORIZATION_FAILED` on
-/// every requested partition, and the share coordinator does not run.
-pub(crate) async fn handle(
-    broker: &Broker,
-    req: WriteShareGroupStateRequest,
-    _version: i16,
-    ctx: &crate::handlers::RequestContext<'_>,
-) -> Result<WriteShareGroupStateResponse, BrokerError> {
-    Ok(if super::cluster_action_denied(broker, ctx) {
-        super::cluster_authorization_failed!(
-            req,
-            WriteShareGroupStateResponse,
-            WriteStateResult,
-            PartitionResult
-        )
-    } else {
-        write_state(
-            &broker.share_coordinator,
-            &broker.controller.current_image(),
-            req,
-        )
-        .await
-    })
-}
+super::share_state_handler!(
+    WriteShareGroupStateRequest,
+    WriteShareGroupStateResponse,
+    WriteStateResult,
+    PartitionResult,
+    write_state
+);
 
 /// Applies every partition of `req`, as Kafka's
 /// `ShareCoordinatorService.writeState` does.
@@ -62,62 +39,35 @@ async fn write_state(
     image: &MetadataImage,
     req: WriteShareGroupStateRequest,
 ) -> WriteShareGroupStateResponse {
-    if req.topics.is_empty()
-        || req.topics.iter().any(|topic| topic.partitions.is_empty())
-        || req.group_id.is_empty()
-    {
+    if super::empty_partition_data!(req) || req.group_id.is_empty() {
         return WriteShareGroupStateResponse::default();
     }
-    let group_id = req.group_id.as_str();
-
-    // Kafka's `ShareCoordinatorService` schedules one operation for each
-    // partition and answers when every one of them completes. Each operation
-    // waits until its records commit, so the partitions run together.
-    let results: Vec<WriteStateResult> = join_all(req.topics.into_iter().map(|topic| async move {
-        let topic_id = uuid::Uuid::from_bytes(topic.topic_id.0);
-        let partitions = join_all(topic.partitions.into_iter().map(|pd| async move {
-            let request = ShareWrite {
-                state_epoch: pd.state_epoch,
-                leader_epoch: pd.leader_epoch,
-                start_offset: Offset(pd.start_offset),
-                delivery_complete_count: pd.delivery_complete_count,
-                batches: pd
-                    .state_batches
-                    .iter()
-                    .map(|b| StateBatch {
-                        first_offset: Offset(b.first_offset),
-                        last_offset: Offset(b.last_offset),
-                        delivery_state: b.delivery_state,
-                        delivery_count: b.delivery_count,
-                    })
-                    .collect(),
-            };
-            let result = coordinator
-                .write(image, group_id, topic_id, pd.partition, request)
-                .await;
-            match result {
-                Ok(()) => PartitionResult {
-                    partition: pd.partition,
-                    error_code: codes::NONE,
-                    error_message: None,
-                    ..Default::default()
-                },
-                Err(error) => PartitionResult {
-                    partition: pd.partition,
-                    error_code: error.code(),
-                    error_message: Some(error.row_message("write")),
-                    ..Default::default()
-                },
-            }
-        }))
-        .await;
-        WriteStateResult {
-            topic_id: topic.topic_id,
-            partitions,
-            ..Default::default()
+    let results = super::state_results!(req, WriteStateResult, |group_id, topic_id, pd| {
+        let request = ShareWrite {
+            state_epoch: pd.state_epoch,
+            leader_epoch: pd.leader_epoch,
+            start_offset: Offset(pd.start_offset),
+            delivery_complete_count: pd.delivery_complete_count,
+            batches: pd.state_batches.iter().map(StateBatch::from).collect(),
+        };
+        let result = coordinator
+            .write(image, group_id, topic_id, pd.partition, request)
+            .await;
+        match result {
+            Ok(()) => PartitionResult {
+                partition: pd.partition,
+                error_code: codes::NONE,
+                error_message: None,
+                ..Default::default()
+            },
+            Err(error) => PartitionResult {
+                partition: pd.partition,
+                error_code: error.code(),
+                error_message: Some(error.row_message("write")),
+                ..Default::default()
+            },
         }
-    }))
-    .await;
+    });
 
     WriteShareGroupStateResponse {
         results,
@@ -137,7 +87,6 @@ mod tests {
     };
 
     use super::*;
-    use crate::share_coordinator::coordinator::test_support::image_with_topic;
 
     const TOPIC: uuid::Uuid = uuid::Uuid::from_bytes([51; 16]);
     const WIRE_TOPIC: ProtoUuid = ProtoUuid([51; 16]);
@@ -180,16 +129,12 @@ mod tests {
         }
     }
 
-    fn response(partitions: Vec<PartitionResult>) -> WriteShareGroupStateResponse {
-        WriteShareGroupStateResponse {
-            results: vec![WriteStateResult {
-                topic_id: WIRE_TOPIC,
-                partitions,
-                unknown_tagged_fields: UnknownTaggedFields(vec![]),
-            }],
-            unknown_tagged_fields: UnknownTaggedFields(vec![]),
-        }
-    }
+    super::super::test_support::response_fixture!(
+        WriteShareGroupStateResponse,
+        WriteStateResult,
+        PartitionResult,
+        WIRE_TOPIC
+    );
 
     /// The whole `WriteShareGroupStateResponse` for each request shape, over
     /// one initialized key (partition 4, state epoch 17), and the stored
@@ -253,20 +198,9 @@ mod tests {
 
         for (index, (led, req, expected, summary)) in rows.into_iter().enumerate() {
             let dir = tempfile::TempDir::new().expect("tempdir");
-            let coordinator = super::super::test_support::coordinator(dir.path());
-            let image = image_with_topic(TOPIC, 8);
-            coordinator.lead_all_partitions_for_test().await;
-            coordinator
-                .initialize(&image, "share-group", TOPIC, 4, 17, Offset(90))
-                .await
-                .expect("initialize state");
-            if !led {
-                coordinator
-                    .refresh_leader_partitions(&krabka_metadata::MetadataImage::default())
-                    .await
-                    .finished()
-                    .await;
-            }
+            let (coordinator, image) =
+                super::super::test_support::initialized_state(dir.path(), TOPIC, 8, 4).await;
+            super::super::test_support::retain_leadership(&coordinator, led).await;
 
             let resp = write_state(&coordinator, &image, req).await;
             check!(resp == expected, "row {index}");

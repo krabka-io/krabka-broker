@@ -4,9 +4,7 @@
 use std::sync::Arc;
 
 use assert2::assert;
-use krabka_protocol::{
-    UnknownTaggedFields, owned::update_features_response::UpdatableFeatureResult,
-};
+use krabka_protocol::owned::update_features_response::UpdatableFeatureResult;
 
 use super::*;
 use crate::{
@@ -21,31 +19,26 @@ const PREFIX: &str =
     "The update failed for all features since the following feature had an error: ";
 
 fn refused(message: &str) -> UpdateFeaturesResponse {
-    UpdateFeaturesResponse {
-        throttle_time_ms: 0,
+    unthrottled_wire!(UpdateFeaturesResponse {
         error_code: codes::INVALID_UPDATE_VERSION,
         error_message: Some(format!("{PREFIX}{message}")),
         results: vec![],
-        unknown_tagged_fields: UnknownTaggedFields(Vec::new()),
-    }
+    })
 }
 
 fn accepted(features: &[&str]) -> UpdateFeaturesResponse {
-    UpdateFeaturesResponse {
-        throttle_time_ms: 0,
+    unthrottled_wire!(UpdateFeaturesResponse {
         error_code: codes::NONE,
         error_message: None,
         results: features
             .iter()
-            .map(|&feature| UpdatableFeatureResult {
+            .map(|&feature| tagged_wire!(UpdatableFeatureResult {
                 feature: feature.into(),
                 error_code: codes::NONE,
                 error_message: Some("NONE".into()),
-                unknown_tagged_fields: UnknownTaggedFields(Vec::new()),
-            })
+            }))
             .collect(),
-        unknown_tagged_fields: UnknownTaggedFields(Vec::new()),
-    }
+    })
 }
 
 #[tokio::test]
@@ -57,13 +50,11 @@ async fn handle_denies_cluster_alter_with_top_level_error() {
 
     let (resp, broker_handle, _dir) = Box::pin(call_with(Arc::new(DenyAll), req)).await;
 
-    let expected = UpdateFeaturesResponse {
-        throttle_time_ms: 0,
+    let expected = unthrottled_wire!(UpdateFeaturesResponse {
         error_code: codes::CLUSTER_AUTHORIZATION_FAILED,
         error_message: Some("Cluster authorization failed.".to_string()),
         results: vec![],
-        unknown_tagged_fields: UnknownTaggedFields(Vec::new()),
-    };
+    });
     assert!(resp == expected);
     broker_handle.shutdown().await;
 }

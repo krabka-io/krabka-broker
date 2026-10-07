@@ -1,4 +1,4 @@
-(* #"/workspace/crates/verified/src/freeze.rs" 33 27 33 32 *)
+(* #"/workspace/crates/verified/src/freeze.rs" 7 19 7 36 *)
 
 (* <freeze::FreezeSignatureDecision as std::clone::Clone> *)
 
@@ -17,7 +17,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let clone_FreezeSignatureDecision [#"/workspace/crates/verified/src/freeze.rs" 33 27 33 32]
+let clone_FreezeSignatureDecision [#"/workspace/crates/verified/src/freeze.rs" 7 19 7 36]
   (self: t_FreezeSignatureDecision) (return (x: t_FreezeSignatureDecision)) = (! bb0
   [ bb0 = s0 [ s0 = [ &_ret <- self ] s1 | s1 = return {_ret} ] ]
   [ & _ret: t_FreezeSignatureDecision = Any.any_l () | & self: t_FreezeSignatureDecision = self ])

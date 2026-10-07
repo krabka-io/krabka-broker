@@ -257,6 +257,30 @@ fn prepared_entry(tid: &str, pid: i64, epoch: i16) -> TxnEntry {
     e
 }
 
+async fn sweep_candidates(backend: &MockReaperBackend, candidates: &[&str]) -> Vec<String> {
+    sweep_with_backend(
+        backend,
+        candidates.iter().map(|tid| (*tid).to_owned()).collect(),
+        1_000,
+        TxnVersion::Verified,
+    )
+    .await
+}
+
+/// A sweep that stops before markers must not dispatch them or complete a transaction.
+fn forbid_abort_completion(backend: &mut MockReaperBackend) {
+    backend.expect_dispatch_abort_markers().never();
+    backend.expect_complete_abort().never();
+}
+
+/// The prepared abort fixture returned when the preparation phase admits an idle tid.
+fn prepare_expired_abort(backend: &mut MockReaperBackend) {
+    backend.expect_is_coordinator_for().returning(|_| true);
+    backend
+        .expect_prepare_abort()
+        .returning(|t, _, _| Some(prepared_entry(t, 1000, 3)));
+}
+
 #[tokio::test]
 async fn sweep_runs_full_three_phase_abort_for_an_expired_tid() {
     let mut backend = MockReaperBackend::new();
@@ -279,13 +303,7 @@ async fn sweep_runs_full_three_phase_abort_for_an_expired_tid() {
         .withf(|e, _, _| e.transactional_id == "tid-a")
         .returning(|e, _, _| Some(e.clone()));
 
-    let out = sweep_with_backend(
-        &backend,
-        vec!["tid-a".to_owned()],
-        1_000,
-        TxnVersion::Verified,
-    )
-    .await;
+    let out = sweep_candidates(&backend, &["tid-a"]).await;
     check!(out == vec!["tid-a".to_owned()]);
 }
 
@@ -295,16 +313,9 @@ async fn sweep_skips_tids_this_broker_does_not_coordinate() {
     backend.expect_is_coordinator_for().returning(|_| false);
     // No prepare / dispatch / complete must be reached.
     backend.expect_prepare_abort().never();
-    backend.expect_dispatch_abort_markers().never();
-    backend.expect_complete_abort().never();
+    forbid_abort_completion(&mut backend);
 
-    let out = sweep_with_backend(
-        &backend,
-        vec!["tid-a".to_owned()],
-        1_000,
-        TxnVersion::Verified,
-    )
-    .await;
+    let out = sweep_candidates(&backend, &["tid-a"]).await;
     assert!(out.is_empty());
 }
 
@@ -317,26 +328,16 @@ async fn sweep_skips_tid_when_prepare_declines_and_does_not_dispatch() {
         .expect_prepare_abort()
         .times(1)
         .returning(|_, _, _| None);
-    backend.expect_dispatch_abort_markers().never();
-    backend.expect_complete_abort().never();
+    forbid_abort_completion(&mut backend);
 
-    let out = sweep_with_backend(
-        &backend,
-        vec!["tid-a".to_owned()],
-        1_000,
-        TxnVersion::Verified,
-    )
-    .await;
+    let out = sweep_candidates(&backend, &["tid-a"]).await;
     assert!(out.is_empty());
 }
 
 #[tokio::test]
 async fn sweep_does_not_report_tid_when_complete_loses_the_race() {
     let mut backend = MockReaperBackend::new();
-    backend.expect_is_coordinator_for().returning(|_| true);
-    backend
-        .expect_prepare_abort()
-        .returning(|t, _, _| Some(prepared_entry(t, 1000, 3)));
+    prepare_expired_abort(&mut backend);
     // Markers still fan out (Phase 2 ran)...
     backend
         .expect_dispatch_abort_markers()
@@ -348,13 +349,7 @@ async fn sweep_does_not_report_tid_when_complete_loses_the_race() {
         .times(1)
         .returning(|_, _, _| None);
 
-    let out = sweep_with_backend(
-        &backend,
-        vec!["tid-a".to_owned()],
-        1_000,
-        TxnVersion::Verified,
-    )
-    .await;
+    let out = sweep_candidates(&backend, &["tid-a"]).await;
     assert!(out.is_empty());
 }
 
@@ -374,33 +369,18 @@ async fn sweep_aborts_each_expired_tid_independently() {
         .expect_complete_abort()
         .returning(|e, _, _| Some(e.clone()));
 
-    let out = sweep_with_backend(
-        &backend,
-        vec!["tid-a".to_owned(), "tid-b".to_owned()],
-        1_000,
-        TxnVersion::Verified,
-    )
-    .await;
+    let out = sweep_candidates(&backend, &["tid-a", "tid-b"]).await;
     check!(out == vec!["tid-a".to_owned()]);
 }
 
 #[tokio::test]
 async fn sweep_does_not_complete_when_marker_fanout_fails() {
     let mut backend = MockReaperBackend::new();
-    backend.expect_is_coordinator_for().returning(|_| true);
-    backend
-        .expect_prepare_abort()
-        .returning(|t, _, _| Some(prepared_entry(t, 1000, 3)));
+    prepare_expired_abort(&mut backend);
     backend.expect_dispatch_abort_markers().returning(|_| false);
     backend.expect_complete_abort().never();
 
-    let out = sweep_with_backend(
-        &backend,
-        vec!["tid-a".to_owned()],
-        1_000,
-        TxnVersion::Verified,
-    )
-    .await;
+    let out = sweep_candidates(&backend, &["tid-a"]).await;
 
     assert!(out.is_empty());
 }

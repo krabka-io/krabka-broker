@@ -4,9 +4,7 @@
 //! failed tool reports its captured output, and builds the host-side files that
 //! those containers bind-mount.
 
-#[cfg(unix)]
-use std::os::unix::fs::PermissionsExt as _;
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 
 use assert2::assert;
 
@@ -41,6 +39,46 @@ pub(crate) fn create_console_topic(
     docker_run_kafka_tool_with_image_and_mounts(image, mounts, &args);
 }
 
+/// Describe the topic overrides submitted by an application.
+pub(crate) fn describe_console_topic_configs(bootstrap: &str, topic: &str) -> String {
+    let out = docker_run_kafka_tool_with_image(
+        KAFKA_IMAGE_TXN,
+        &[
+            "kafka-configs",
+            "--describe",
+            "--entity-type",
+            "topics",
+            "--entity-name",
+            topic,
+            "--bootstrap-server",
+            bootstrap,
+        ],
+    );
+    let text = String::from_utf8_lossy(&out.stdout).into_owned();
+    eprintln!("KRABKA[test] kafka-configs --describe {topic}:\n{text}");
+    text
+}
+
+/// Create an application's single-partition topic at its own bootstrap endpoint.
+pub(crate) fn create_console_topic_at(bootstrap: &str, topic: &str) {
+    docker_run_kafka_tool_with_image(
+        KAFKA_IMAGE_TXN,
+        &[
+            "kafka-topics",
+            "--create",
+            "--if-not-exists",
+            "--topic",
+            topic,
+            "--partitions",
+            "1",
+            "--replication-factor",
+            "1",
+            "--bootstrap-server",
+            bootstrap,
+        ],
+    );
+}
+
 /// Produce the supplied console records, with the listener's optional client properties.
 pub(crate) fn produce_console(
     image: &str,
@@ -70,6 +108,150 @@ pub(crate) fn produce_console(
     )
 }
 
+/// Run an authenticated topic round-trip and retain its properties file for the caller.
+pub(crate) fn console_round_trip_with_props(
+    image: &str,
+    topic: &str,
+    props: &str,
+) -> ClientPropsFile {
+    let props_file = write_client_props(props);
+    let mount = props_file.mount_str();
+    create_console_topic(image, &[&mount], topic, 1, 1);
+    authenticated_console_round_trip(image, &[&mount], topic);
+    props_file
+}
+
+/// Provision a TLS SCRAM user and its separate topic Read and Write ACLs.
+pub(crate) fn provision_ssl_topic(
+    admin: (&str, &str),
+    user: (&str, &str),
+    truststore_mount: &str,
+    topic: &str,
+    replicas: i16,
+) -> (ClientPropsFile, ClientPropsFile) {
+    let (admin_props, user_props) =
+        provision_ssl_scram_sha512(admin.0, admin.1, user.0, user.1, truststore_mount);
+    create_console_topic(
+        KAFKA_IMAGE_TXN,
+        &[&admin_props.mount_str(), truststore_mount],
+        topic,
+        1,
+        replicas,
+    );
+    for op in ["Read", "Write"] {
+        docker_run_kafka_tool_with_image_and_mounts(
+            KAFKA_IMAGE_TXN,
+            &[&admin_props.mount_str(), truststore_mount],
+            &[
+                "kafka-acls",
+                "--add",
+                "--allow-principal",
+                &format!("User:{}", user.0),
+                "--operation",
+                op,
+                "--topic",
+                topic,
+                "--bootstrap-server",
+                super::ports::broker0_advertised(),
+                "--command-config",
+                "/client.properties",
+            ],
+        );
+    }
+    (admin_props, user_props)
+}
+
+/// Assert a console producer's two captured streams with the common diagnostic.
+pub(crate) fn assert_console_produced(output: &std::process::Output) {
+    assert!(
+        output.status.success(),
+        "producer failed: stdout={} stderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+/// A successful plain console produce, with its stderr-only diagnostic.
+pub(crate) fn produce_console_checked(image: &str, topic: &str, payload: &[u8]) {
+    let out = produce_console(image, &[], topic, false, payload);
+    assert!(
+        out.status.success(),
+        "producer failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+/// Exact expected values, independently supplied by the scenario that produced them.
+pub(crate) fn assert_console_values(stdout: &str, expected: &[&str], label: &str) {
+    for needle in expected {
+        assert!(stdout.contains(needle), "{label} {needle}: {stdout:?}");
+    }
+}
+
+/// One partition read, retaining the caller's timeout and extra consumer properties.
+pub(crate) fn consume_console_partition(
+    topic: &str,
+    count: usize,
+    timeout: u32,
+    extra: &[&str],
+) -> std::process::Output {
+    let count = count.to_string();
+    let timeout = timeout.to_string();
+    let mut args = vec![
+        "kafka-console-consumer",
+        "--bootstrap-server",
+        super::ports::broker0_advertised(),
+        "--topic",
+        topic,
+        "--partition",
+        "0",
+        "--from-beginning",
+        "--max-messages",
+        &count,
+        "--timeout-ms",
+        &timeout,
+    ];
+    args.extend_from_slice(extra);
+    docker_run_kafka_tool(&args)
+}
+
+/// One group consumer read with the CLI's group-before-from-beginning ordering.
+pub(crate) fn consume_console_group(
+    topic: &str,
+    group: &str,
+    count: usize,
+    timeout: u32,
+) -> std::process::Output {
+    let count = count.to_string();
+    let timeout = timeout.to_string();
+    docker_run_kafka_tool(&[
+        "kafka-console-consumer",
+        "--bootstrap-server",
+        super::ports::broker0_advertised(),
+        "--topic",
+        topic,
+        "--group",
+        group,
+        "--from-beginning",
+        "--max-messages",
+        &count,
+        "--timeout-ms",
+        &timeout,
+    ])
+}
+
+/// Describe one consumer group through the common admin command.
+pub(crate) fn describe_console_group(group: &str) -> std::process::Output {
+    docker_run_kafka_tool(&[
+        "kafka-consumer-groups",
+        "--describe",
+        "--group",
+        group,
+        "--bootstrap-server",
+        super::ports::broker0_advertised(),
+    ])
+}
+
 /// A numbered sequence of console records, with one record per line.
 pub(crate) fn numbered_payload(prefix: &str, count: usize) -> String {
     use std::fmt::Write as _;
@@ -82,10 +264,7 @@ pub(crate) fn numbered_payload(prefix: &str, count: usize) -> String {
 
 /// PLAIN properties for the JVM admin tools.
 pub(crate) fn write_plain_props(user: &str, password: &str) -> ClientPropsFile {
-    write_client_props(&format!(
-        "security.protocol=SASL_PLAINTEXT\nsasl.mechanism=PLAIN\nsasl.jaas.config={}\n",
-        super::sasl::plain_jaas(user, password)
-    ))
+    write_client_props(&plain_client_properties(user, password))
 }
 
 /// `SASL_SSL` properties with the shared JVM truststore and optional non-idempotent producer.
@@ -143,20 +322,7 @@ pub(crate) fn provision_console_scram(
     docker_run_kafka_tool_with_image_and_mounts(
         image,
         mounts,
-        &[
-            "kafka-configs",
-            "--alter",
-            "--entity-type",
-            "users",
-            "--entity-name",
-            user,
-            "--add-config",
-            &format!("{mechanism}=[password={password}]"),
-            "--bootstrap-server",
-            super::ports::broker0_advertised(),
-            "--command-config",
-            "/client.properties",
-        ],
+        &scram_credential_args(user, &format!("{mechanism}=[password={password}]")),
     );
 }
 
@@ -370,22 +536,7 @@ pub(crate) fn docker_run_kafka_tool_allowing_failure_with_image(
     image: &str,
     args: &[&str],
 ) -> std::process::Output {
-    let out = Command::new("docker")
-        .arg("run")
-        .arg("--rm")
-        .arg("--add-host=host.docker.internal:host-gateway")
-        .arg(image)
-        .args(args)
-        .stderr(Stdio::piped())
-        .stdout(Stdio::piped())
-        .output()
-        .expect("spawn docker run");
-    eprintln!(
-        "KRABKA[test] docker_run image={image} {args:?} status={} stderr_len={}",
-        out.status,
-        out.stderr.len(),
-    );
-    out
+    crate::support::jvm_tool_output(image, args, "test")
 }
 
 /// A finished tool's stdout followed by its stderr, as one text.
@@ -394,9 +545,7 @@ pub(crate) fn docker_run_kafka_tool_allowing_failure_with_image(
 /// per tool -- `kafka-configs` prints its own summary line on stdout and the
 /// exception on stderr -- so a case about a refusal searches both.
 pub(crate) fn tool_output(out: &std::process::Output) -> String {
-    let mut text = String::from_utf8_lossy(&out.stdout).into_owned();
-    text.push_str(&String::from_utf8_lossy(&out.stderr));
-    text
+    crate::support::combined_output(out)
 }
 
 pub(crate) const TRANSACTIONAL_PRODUCER_JAVA: &str = r#"
@@ -623,8 +772,7 @@ pub(crate) fn write_client_props(props: &str) -> ClientPropsFile {
     std::fs::write(tmp.path(), props).expect("write props");
     #[cfg(unix)]
     {
-        std::fs::set_permissions(tmp.path(), std::fs::Permissions::from_mode(0o644))
-            .expect("chmod props");
+        crate::support::chmod_for_container(tmp.path(), 0o644, "chmod props");
     }
     ClientPropsFile { tmp }
 }
@@ -661,18 +809,13 @@ pub(crate) fn docker_run_kafka_tool_with_image_and_mount(
     mount: &str,
     args: &[&str],
 ) -> std::process::Output {
-    let out = Command::new("docker")
-        .arg("run")
-        .arg("--rm")
-        .arg("-v")
-        .arg(mount)
-        .arg("--add-host=host.docker.internal:host-gateway")
-        .arg(image)
-        .args(args)
-        .stderr(Stdio::piped())
-        .stdout(Stdio::piped())
-        .output()
-        .expect("spawn docker run");
+    let out = crate::support::docker_tool_command(
+        image,
+        &["-v", mount, "--add-host=host.docker.internal:host-gateway"],
+    )
+    .args(args)
+    .output()
+    .expect("spawn docker run");
     eprintln!(
         "KRABKA[test] docker_run image={image} mount={mount} {args:?} status={} stderr_len={}",
         out.status,
@@ -695,16 +838,13 @@ pub(crate) fn docker_run_kafka_tool_with_image_and_mounts(
     mounts: &[&str],
     args: &[&str],
 ) -> std::process::Output {
-    let mut cmd = Command::new("docker");
-    cmd.arg("run").arg("--rm");
-    for m in mounts {
-        cmd.arg("-v").arg(m);
+    let mut options = Vec::new();
+    for mount in mounts {
+        options.extend(["-v", *mount]);
     }
-    cmd.arg("--add-host=host.docker.internal:host-gateway")
-        .arg(image)
-        .args(args)
-        .stderr(Stdio::piped())
-        .stdout(Stdio::piped());
+    options.push("--add-host=host.docker.internal:host-gateway");
+    let mut cmd = crate::support::docker_tool_command(image, &options);
+    cmd.args(args);
     let out = cmd.output().expect("spawn docker run");
     eprintln!(
         "KRABKA[test] docker_run image={image} mounts={mounts:?} {args:?} status={} stderr_len={}",
@@ -746,8 +886,7 @@ pub(crate) fn write_temp_file(filename: &str, contents: &str) -> TempFileMount {
     std::fs::write(tmp.path(), contents).expect("write tempfile");
     #[cfg(unix)]
     {
-        std::fs::set_permissions(tmp.path(), std::fs::Permissions::from_mode(0o644))
-            .expect("chmod tempfile");
+        crate::support::chmod_for_container(tmp.path(), 0o644, "chmod tempfile");
     }
     TempFileMount { tmp }
 }
@@ -771,4 +910,157 @@ pub(crate) fn verify_console_reassignment(
             "/client.properties",
         ],
     )
+}
+
+/// PLAIN client configuration, also used by oracle-owned mounted files.
+pub(crate) fn plain_client_properties(user: &str, password: &str) -> String {
+    format!(
+        "security.protocol=SASL_PLAINTEXT\nsasl.mechanism=PLAIN\nsasl.jaas.config={}\n",
+        super::sasl::plain_jaas(user, password)
+    )
+}
+
+/// Describe a configured admin entity through the authenticated JVM tool.
+pub(crate) fn describe_console_entity(
+    mount: &str,
+    entity: &str,
+    name: &str,
+) -> std::process::Output {
+    let desc = docker_run_kafka_tool_with_image_and_mount(
+        KAFKA_IMAGE_TXN,
+        mount,
+        &[
+            "kafka-configs",
+            "--describe",
+            "--entity-type",
+            entity,
+            "--entity-name",
+            name,
+            "--bootstrap-server",
+            super::ports::broker0_advertised(),
+            "--command-config",
+            "/client.properties",
+        ],
+    );
+    assert!(
+        desc.status.success(),
+        "describe failed: {}",
+        String::from_utf8_lossy(&desc.stderr)
+    );
+    desc
+}
+
+/// Topic override command shared by the topic-config scenarios.
+pub(crate) fn alter_console_topic_config(topic: &str, config: &str) {
+    docker_run_kafka_tool(&[
+        "kafka-configs",
+        "--alter",
+        "--entity-type",
+        "topics",
+        "--entity-name",
+        topic,
+        "--add-config",
+        config,
+        "--bootstrap-server",
+        super::ports::broker0_advertised(),
+    ]);
+}
+
+/// A one-record authenticated group consumer with the original denial-case timeout.
+pub(crate) fn denied_console_consumer(
+    mount: &str,
+    topic: &str,
+    group: &str,
+    context: &str,
+) -> std::process::Output {
+    crate::support::jvm_docker_command(
+        KAFKA_IMAGE_TXN,
+        &[mount],
+        &[
+            "kafka-console-consumer",
+            "--bootstrap-server",
+            super::ports::broker0_advertised(),
+            "--topic",
+            topic,
+            "--group",
+            group,
+            "--from-beginning",
+            "--max-messages",
+            "1",
+            "--timeout-ms",
+            "15000",
+            "--consumer.config",
+            "/client.properties",
+        ],
+        false,
+    )
+    .stderr(Stdio::piped())
+    .stdout(Stdio::piped())
+    .output()
+    .expect(context)
+}
+
+/// Provision a SCRAM credential through the single-mounted-file tool variant.
+pub(crate) fn provision_plain_scram(mount: &str, user: &str, password: &str, mechanism: &str) {
+    docker_run_kafka_tool_with_image_and_mount(
+        KAFKA_IMAGE_TXN,
+        mount,
+        &scram_credential_args(user, &format!("{mechanism}=[password={password}]")),
+    );
+}
+
+/// The older console-client image's rf=1 topic constructor at a supplied bootstrap.
+pub(crate) fn create_plain_console_topic_at(bootstrap: &str, topic: &str) {
+    docker_run_kafka_tool(&[
+        "kafka-topics",
+        "--create",
+        "--if-not-exists",
+        "--topic",
+        topic,
+        "--partitions",
+        "1",
+        "--replication-factor",
+        "1",
+        "--bootstrap-server",
+        bootstrap,
+    ]);
+}
+
+/// Read committed records through a selected broker, preserving the durability client's timeout.
+pub(crate) fn consume_committed_at(
+    bootstrap: &str,
+    topic: &str,
+    count: usize,
+) -> std::process::Output {
+    docker_run_kafka_tool(&[
+        "kafka-console-consumer",
+        "--bootstrap-server",
+        bootstrap,
+        "--topic",
+        topic,
+        "--isolation-level",
+        "read_committed",
+        "--from-beginning",
+        "--max-messages",
+        &count.to_string(),
+        "--timeout-ms",
+        "20000",
+    ])
+}
+
+fn scram_credential_args<'a>(user: &'a str, credential: &'a str) -> [&'a str; 12] {
+    [
+        "kafka-configs",
+        "--alter",
+        "--entity-type",
+        "users",
+        "--entity-name",
+        user,
+        "--add-config",
+        credential,
+        "--bootstrap-server",
+        super::ports::broker0_advertised(),
+        "--command-config",
+        "/client.properties",
+    ]
 }

@@ -195,22 +195,12 @@ async fn start_worm_broker(
     s3: krabka_remote_storage::S3Config,
     key_path: &std::path::Path,
 ) -> (krabka_broker::BrokerHandle, tempfile::TempDir) {
-    let _ = tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("krabka_broker=debug,info")),
-        )
-        .with_test_writer()
-        .try_init();
+    crate::support::init_tracing_with("krabka_broker=debug,info");
     let dir = tempfile::tempdir().expect("tempdir for log.dir");
     let listen_addr: std::net::SocketAddr = broker0_listen().parse().expect("allocated addr");
     let controller_addr: std::net::SocketAddr =
         controller_addr_0().parse().expect("allocated addr");
     let config = krabka_broker::BrokerConfig {
-        broker_id: 1,
-        listen_addr,
-        advertised_listener: broker0_advertised().into(),
-        log_dir: dir.path().to_path_buf(),
         // `create_tiered_topic` sends no segment override — the JVM
         // `TopicCommand` in the image it uses cannot name a sub-1-MiB one —
         // so the topic inherits this. See `TIERED_SEGMENT_SIZE`.
@@ -218,15 +208,6 @@ async fn start_worm_broker(
             segment_size: TIERED_SEGMENT_SIZE,
             ..LogConfig::default()
         },
-        node_id: krabka_broker::NodeId(1),
-        controller_listen_addr: controller_addr,
-        controller_quorum_voters: vec![(krabka_broker::NodeId(1), controller_addr.to_string())],
-        heartbeat_interval: krabka_units::millis(3_000),
-        heartbeat_timeout: krabka_units::millis(9_000),
-        replica_lag_time_max: krabka_units::millis(30_000),
-        controller_election_timeout: krabka_units::secs(5),
-        controller_heartbeat_interval: krabka_units::millis(500),
-        bootstrap_mode: krabka_broker::BootstrapMode::Bootstrap,
         remote_storage_backend: Some(krabka_broker::RemoteStorageBackend::S3(s3)),
         remote_storage_worm: Some(krabka_remote_storage::WormConfig {
             signing_key_path: Some(key_path.to_path_buf()),
@@ -242,7 +223,14 @@ async fn start_worm_broker(
         // for the whole test. A restart is what would start a new epoch, and
         // this suite never restarts.
         remote_log_metadata: krabka_broker::RlmmKind::InMemory,
-        ..krabka_broker::BrokerConfig::default().with_internal_topics_for(1)
+        ..support::jvm_broker_config(
+            1,
+            listen_addr,
+            controller_addr,
+            broker0_advertised(),
+            dir.path().to_path_buf(),
+            &[(1, controller_addr)],
+        )
     };
     let handle = krabka_broker::Broker::start(config)
         .await

@@ -71,6 +71,25 @@ impl BrokerMetrics {
         self.metric_series.topics.insert(label.clone());
     }
 
+    /// Count nonzero partition activity and retain its series for later eviction.
+    pub(crate) fn count_partition(
+        &self,
+        family: &Family<PartitionLabel, Counter>,
+        topic: &Arc<str>,
+        partition: i32,
+        amount: u64,
+    ) {
+        if amount == 0 {
+            return;
+        }
+        let label = PartitionLabel {
+            topic: Arc::clone(topic),
+            partition,
+        };
+        family.get_or_create(&label).inc_by(amount);
+        self.track_partition_series(&label);
+    }
+
     /// Adds `by` to the `topic` series of `family`, and tracks that series
     /// for release when the topic goes away.
     pub(crate) fn count_topic(

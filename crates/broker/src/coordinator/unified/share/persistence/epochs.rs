@@ -21,14 +21,11 @@
 //!
 //! Both records end with the message's tagged-field count.
 
-use bytes::{BufMut, Bytes, BytesMut};
+use bytes::BufMut;
 
-use crate::{
-    coordinator::unified::persistence::{
-        flex::{epoch_value, put_empty_tagged_fields, skip_tagged_fields},
-        get_i16, get_i32, get_i64,
-    },
-    error::BrokerError,
+use crate::coordinator::unified::persistence::{
+    flex::{epoch_value, value_codec},
+    get_i32, get_i64,
 };
 
 /// The `MetadataHash` the broker writes. It keeps no subscribed-topic hash of
@@ -41,23 +38,15 @@ pub struct ShareGroupMetadataValue {
     pub epoch: i32,
 }
 
-impl ShareGroupMetadataValue {
-    #[must_use]
-    pub fn encode(self) -> Bytes {
-        let mut buf = BytesMut::new();
-        buf.put_i16(0);
+value_codec! {
+    ShareGroupMetadataValue,
+    encode(self) -> buf {
         buf.put_i32(self.epoch);
         buf.put_i64(METADATA_HASH);
-        put_empty_tagged_fields(&mut buf);
-        buf.freeze()
     }
-    /// # Errors
-    /// Returns an error when log I/O fails, a record or index is corrupt, or the requested offset violates the segment state.
-    pub fn decode(mut buf: &[u8]) -> Result<Self, BrokerError> {
-        let _v = get_i16(&mut buf)?;
-        let epoch = get_i32(&mut buf)?;
-        let _metadata_hash = get_i64(&mut buf)?;
-        skip_tagged_fields(&mut buf)?;
+    decode(buf) {
+        let epoch = get_i32(buf)?;
+        let _metadata_hash = get_i64(buf)?;
         Ok(Self { epoch })
     }
 }
@@ -69,9 +58,12 @@ mod tests {
     use assert2::assert;
 
     use super::*;
-    use crate::coordinator::unified::share::persistence::{
-        KEY_SHARE_GROUP_METADATA, KEY_SHARE_TARGET_ASSIGNMENT_METADATA, ShareGroupKey,
-        encode_share_key, parse_share_key, test_support::peek_version,
+    use crate::coordinator::unified::{
+        share::persistence::{
+            KEY_SHARE_GROUP_METADATA, KEY_SHARE_TARGET_ASSIGNMENT_METADATA, ShareGroupKey,
+            encode_share_key, parse_share_key,
+        },
+        test_support::peek_version,
     };
 
     #[test]

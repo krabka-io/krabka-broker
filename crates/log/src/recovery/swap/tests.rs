@@ -1,6 +1,6 @@
 //! Open-time swap recovery, one directory state per interrupted step.
 
-use std::{collections::BTreeMap, path::Path};
+use std::path::Path;
 
 use assert2::check;
 use bytes::BytesMut;
@@ -8,23 +8,11 @@ use krabka_protocol::records::{Record, RecordBatch};
 use tempfile::tempdir;
 
 use super::{cleaned_path, swap_orphan_recover, swap_path};
-use crate::{error::LogError, name};
-
-/// Every file of a directory, by name, with its contents.
-type Files = BTreeMap<String, Vec<u8>>;
-
-fn listing(dir: &Path) -> Files {
-    std::fs::read_dir(dir)
-        .unwrap()
-        .map(|entry| {
-            let entry = entry.unwrap();
-            (
-                entry.file_name().into_string().unwrap(),
-                std::fs::read(entry.path()).unwrap(),
-            )
-        })
-        .collect()
-}
+use crate::{
+    error::LogError,
+    name,
+    test_support::{Files, directory_files},
+};
 
 /// The encoded bytes of one batch per `(base, last offset delta)`.
 fn batches(spans: &[(i64, i32)]) -> Vec<u8> {
@@ -56,6 +44,23 @@ fn populate(dir: &Path, files: &Files) {
     for (file_name, contents) in files {
         std::fs::write(dir.join(file_name), contents).unwrap();
     }
+}
+
+fn populated_directory(files: &Files) -> tempfile::TempDir {
+    let dir = tempdir().unwrap();
+    populate(dir.path(), files);
+    dir
+}
+
+fn recovered_files(dir: &Path) -> Files {
+    swap_orphan_recover(dir).unwrap();
+    directory_files(dir)
+}
+
+fn check_corrupt_files(files: &Files) {
+    let dir = populated_directory(files);
+    check!(let Err(LogError::Corrupt(_)) = swap_orphan_recover(dir.path()));
+    check!(directory_files(dir.path()) == *files);
 }
 
 /// The segments at 0, 10 and 20 as they were before compaction.
@@ -96,6 +101,12 @@ fn survivor_swaps() -> Files {
     ])
 }
 
+fn originals_with_swaps() -> Files {
+    let mut files = originals();
+    files.append(&mut survivor_swaps());
+    files
+}
+
 /// A crash after the sidecars reached `.swap` but before the log did: the
 /// swap never committed, so the originals win and every swap file goes.
 #[test]
@@ -109,9 +120,7 @@ fn an_uncommitted_swap_is_aborted() {
     files.insert(file(0, "txnindex.cleaned"), b"survivor txn".to_vec());
     populate(dir.path(), &files);
 
-    swap_orphan_recover(dir.path()).unwrap();
-
-    check!(listing(dir.path()) == originals());
+    check!(recovered_files(dir.path()) == originals());
 }
 
 /// A committed swap is completed whichever consumed segments a crash left
@@ -120,7 +129,6 @@ fn an_uncommitted_swap_is_aborted() {
 #[test]
 fn a_committed_swap_is_completed_whatever_originals_remain() {
     for remaining in [&[0, 10][..], &[0], &[10], &[]] {
-        let dir = tempdir().unwrap();
         let mut files: Files = originals()
             .into_iter()
             .filter(|(file_name, _)| {
@@ -131,12 +139,10 @@ fn a_committed_swap_is_completed_whatever_originals_remain() {
             })
             .collect();
         files.append(&mut survivor_swaps());
-        populate(dir.path(), &files);
-
-        swap_orphan_recover(dir.path()).unwrap();
+        let dir = populated_directory(&files);
 
         check!(
-            listing(dir.path()) == compacted(),
+            recovered_files(dir.path()) == compacted(),
             "remaining {remaining:?}"
         );
     }
@@ -145,79 +151,65 @@ fn a_committed_swap_is_completed_whatever_originals_remain() {
 /// A committed swap's own `.txnindex` replaces the stale one at its base.
 #[test]
 fn a_committed_swap_promotes_its_transaction_index() {
-    let dir = tempdir().unwrap();
-    let mut files = originals();
-    files.append(&mut survivor_swaps());
+    let mut files = originals_with_swaps();
     files.insert(file(0, "txnindex.swap"), b"survivor txn".to_vec());
-    populate(dir.path(), &files);
+    let dir = populated_directory(&files);
 
     swap_orphan_recover(dir.path()).unwrap();
 
     let mut expected = compacted();
     expected.insert(file(0, "txnindex"), b"survivor txn".to_vec());
-    check!(listing(dir.path()) == expected);
+    check!(directory_files(dir.path()) == expected);
 }
 
 /// A crash after the log reached its final name: only sidecars remain to
 /// promote, and an index with neither form is created empty.
 #[test]
 fn sidecar_promotion_resumes_after_the_log_rename() {
-    let dir = tempdir().unwrap();
     let mut files = compacted();
     files.remove(&file(0, "index"));
     files.remove(&file(0, "timeindex"));
     files.insert(file(0, "timeindex.swap"), b"survivor time".to_vec());
     files.insert(file(0, "txnindex.swap"), b"survivor txn".to_vec());
-    populate(dir.path(), &files);
+    let dir = populated_directory(&files);
 
     swap_orphan_recover(dir.path()).unwrap();
 
     let mut expected = compacted();
     expected.insert(file(0, "index"), Vec::new());
     expected.insert(file(0, "txnindex"), b"survivor txn".to_vec());
-    check!(listing(dir.path()) == expected);
+    check!(directory_files(dir.path()) == expected);
 
-    swap_orphan_recover(dir.path()).unwrap();
-    check!(listing(dir.path()) == expected, "recovery is idempotent");
+    check!(
+        recovered_files(dir.path()) == expected,
+        "recovery is idempotent"
+    );
 }
 
 /// A `.cleaned` file with no swap is a rewrite that never finished.
 #[test]
 fn stray_cleaned_files_are_deleted() {
-    let dir = tempdir().unwrap();
     let mut files = originals();
     files.insert(file(0, "log.cleaned"), survivor_log());
     files.insert(file(0, "index.cleaned"), Vec::new());
-    populate(dir.path(), &files);
+    let dir = populated_directory(&files);
 
-    swap_orphan_recover(dir.path()).unwrap();
-
-    check!(listing(dir.path()) == originals());
+    check!(recovered_files(dir.path()) == originals());
 }
 
 #[test]
 fn a_torn_committed_swap_is_corrupt_and_nothing_is_deleted() {
-    let dir = tempdir().unwrap();
-    let mut files = originals();
-    files.append(&mut survivor_swaps());
+    let mut files = originals_with_swaps();
     let torn = survivor_log()[..70].to_vec();
     files.insert(file(0, "log.swap"), torn);
-    populate(dir.path(), &files);
-
-    check!(let Err(LogError::Corrupt(_)) = swap_orphan_recover(dir.path()));
-    check!(listing(dir.path()) == files);
+    check_corrupt_files(&files);
 }
 
 #[test]
 fn a_committed_swap_that_overlaps_itself_is_corrupt() {
-    let dir = tempdir().unwrap();
-    let mut files = originals();
-    files.append(&mut survivor_swaps());
+    let mut files = originals_with_swaps();
     files.insert(file(0, "log.swap"), batches(&[(5, 3), (7, 0)]));
-    populate(dir.path(), &files);
-
-    check!(let Err(LogError::Corrupt(_)) = swap_orphan_recover(dir.path()));
-    check!(listing(dir.path()) == files);
+    check_corrupt_files(&files);
 }
 
 #[test]
@@ -241,9 +233,7 @@ fn ignores_malformed_names() {
     ]);
     populate(dir.path(), &files);
 
-    swap_orphan_recover(dir.path()).unwrap();
-
-    check!(listing(dir.path()) == files);
+    check!(recovered_files(dir.path()) == files);
 }
 
 #[test]

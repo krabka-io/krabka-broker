@@ -1,7 +1,7 @@
 (* #"/workspace/crates/verified/src/transaction/marker.rs" 39 0 39 67 *)
 
-let%span sord = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
-let%span sslice = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 331 18 331 22
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sslice = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 331 18 331 22
 let%span smarker = "/workspace/crates/verified/src/transaction/marker.rs" 43 7 43 16
 let%span smarker'0 = "/workspace/crates/verified/src/transaction/marker.rs" 43 19 43 20
 let%span smarker'1 = "/workspace/crates/verified/src/transaction/marker.rs" 46 15 46 16

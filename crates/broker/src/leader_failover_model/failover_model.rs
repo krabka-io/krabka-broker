@@ -122,71 +122,71 @@ impl Model for FailoverModel {
         }
     }
 
-    fn next_state(&self, last: &Self::State, action: Self::Action) -> Option<Self::State> {
-        let mut state = last.clone();
-        match action {
-            FailoverAction::Die(n) => {
-                if last.alive.len() <= 1 || !state.alive.remove(&n) {
-                    return None;
+    krabka_macros::model_transition!(last, action, state; {
+            match action {
+                FailoverAction::Die(n) => {
+                    if last.alive.len() <= 1 || !state.alive.remove(&n) {
+                        return None;
+                    }
                 }
-            }
-            FailoverAction::Revive(n) => {
-                if !state.alive.insert(n) {
-                    return None;
+                FailoverAction::Revive(n) => {
+                    if !state.alive.insert(n) {
+                        return None;
+                    }
                 }
-            }
-            FailoverAction::Failover(dead) => {
-                if state.alive.contains(&dead) {
-                    return None;
-                }
-                let pr = pr_of(&state);
-                let alive: HashSet<NodeId> = state.alive.iter().copied().collect();
-                let decision = failover_one(
-                    &pr,
-                    dead,
-                    &alive,
-                    &self.witnesses,
-                    // The published eligible-leader set, as the production
-                    // scan reads it out of the image. The model carries no
-                    // last-known ELR, so no partition in it lacks a leader.
-                    &PartitionElr {
-                        eligible_leader_replicas: state.elr.clone(),
-                        last_known_elr: Vec::new(),
-                    },
-                    self.strategy,
-                    self.unclean_enabled,
-                );
-                assert_decision(self, &state, dead, &decision);
-                match decision {
-                    FailoverDecision::Elect {
-                        leader,
-                        isr,
-                        unclean,
-                    } => {
-                        if !unclean && !state.isr.contains(&leader) {
-                            state.elected_from_elr = true;
+                FailoverAction::Failover(dead) => {
+                    if state.alive.contains(&dead) {
+                        return None;
+                    }
+                    let pr = pr_of(&state);
+                    let alive: HashSet<NodeId> = state.alive.iter().copied().collect();
+                    let decision = failover_one(
+                        &pr,
+                        dead,
+                        &alive,
+                        &self.witnesses,
+                        // The published eligible-leader set, as the production
+                        // scan reads it out of the image. The model carries no
+                        // last-known ELR, so no partition in it lacks a leader.
+                        &PartitionElr {
+                            eligible_leader_replicas: state.elr.clone(),
+                            last_known_elr: Vec::new(),
+                        },
+                        self.strategy,
+                        self.unclean_enabled,
+                    );
+                    assert_decision(self, &state, dead, &decision);
+                    match decision {
+                        FailoverDecision::Elect {
+                            leader,
+                            isr,
+                            unclean,
+                        } => {
+                            if !unclean && !state.isr.contains(&leader) {
+                                state.elected_from_elr = true;
+                            }
+                            state.leader = leader;
+                            state.isr = isr;
+                            state.leader_epoch += 1;
                         }
-                        state.leader = leader;
-                        state.isr = isr;
-                        state.leader_epoch += 1;
+                        FailoverDecision::ShrinkIsr { isr } => {
+                            state.isr = isr;
+                        }
+                        FailoverDecision::Recover(_)
+                        | FailoverDecision::Unavailable
+                        | FailoverDecision::NoChange => return None,
                     }
-                    FailoverDecision::ShrinkIsr { isr } => {
-                        state.isr = isr;
-                    }
-                    FailoverDecision::Recover(_)
-                    | FailoverDecision::Unavailable
-                    | FailoverDecision::NoChange => return None,
+                    elr::maintain(&self.image, &mut state, &pr);
                 }
-                elr::maintain(&self.image, &mut state, &pr);
+                FailoverAction::ExpandIsr(follower) => {
+                    let pr = pr_of(&state);
+                    state.isr = Self::expanded_isr(&state, follower)?;
+                    elr::maintain(&self.image, &mut state, &pr);
+                }
             }
-            FailoverAction::ExpandIsr(follower) => {
-                let pr = pr_of(&state);
-                state.isr = Self::expanded_isr(&state, follower)?;
-                elr::maintain(&self.image, &mut state, &pr);
-            }
-        }
-        Some(state)
-    }
+            Some(state)
+
+    });
 
     fn properties(&self) -> Vec<Property<Self>> {
         let mut properties = vec![

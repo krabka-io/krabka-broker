@@ -4,21 +4,21 @@
     "Coma": {
       "vc_branch_Option_tup2_i64_i64": {
         "prover": "alt-ergo",
-        "time": 0.004
+        "time": 0.027
       },
-      "vc_closure0": { "prover": "alt-ergo", "time": 0.004 },
-      "vc_elim_Break": { "prover": "alt-ergo", "time": 0.004 },
-      "vc_elim_Continue": { "prover": "alt-ergo", "time": 0.003 },
+      "vc_closure0": { "prover": "alt-ergo", "time": 0.011 },
+      "vc_elim_Break": { "prover": "alt-ergo", "time": 0.019 },
+      "vc_elim_Continue": { "prover": "alt-ergo", "time": 0.006 },
       "vc_from_residual_Option_tup2_i64_i64": {
         "prover": "alt-ergo",
-        "time": 0.004
+        "time": 0.024
       },
-      "vc_is_some_and_i32": { "prover": "alt-ergo", "time": 0.005 },
+      "vc_is_some_and_i32": { "prover": "alt-ergo", "time": 0.011 },
       "vc_restore_record_coordinates": {
         "prover": "alt-ergo",
-        "time": 0.003
+        "time": 0.005
       },
-      "vc_restore_rewritten_record": { "prover": "alt-ergo", "time": 0.07 }
+      "vc_restore_rewritten_record": { "prover": "alt-ergo", "time": 0.096 }
     }
   }
 }

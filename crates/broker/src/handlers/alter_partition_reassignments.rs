@@ -25,14 +25,11 @@
 
 use std::collections::{HashMap, HashSet};
 
-use krabka_protocol::{
-    UnknownTaggedFields,
-    owned::{
-        alter_partition_reassignments_request::AlterPartitionReassignmentsRequest,
-        alter_partition_reassignments_response::{
-            AlterPartitionReassignmentsResponse, ReassignablePartitionResponse,
-            ReassignableTopicResponse,
-        },
+use krabka_protocol::owned::{
+    alter_partition_reassignments_request::AlterPartitionReassignmentsRequest,
+    alter_partition_reassignments_response::{
+        AlterPartitionReassignmentsResponse, ReassignablePartitionResponse,
+        ReassignableTopicResponse,
     },
 };
 use krabka_verified::FreezeMutationKind;
@@ -52,114 +49,106 @@ use self::{
     response::whole_request_error,
 };
 use crate::{
-    broker::Broker,
     codes::{CLUSTER_AUTHORIZATION_FAILED, COORDINATOR_NOT_AVAILABLE, POLICY_VIOLATION},
     freeze::resolve::resolve_freeze_mutation,
-    handlers::{RequestContext, stamp_unset},
+    handlers::stamp_unset,
 };
 
-pub(crate) async fn handle(
-    broker: &Broker,
-    req: AlterPartitionReassignmentsRequest,
-    _version: i16,
-    ctx: &RequestContext<'_>,
-) -> Result<AlterPartitionReassignmentsResponse, crate::error::BrokerError> {
-    let image = broker.controller.current_image();
-    // Whole-request Cluster Alter authorize.
-    if crate::handlers::cluster_alter_denied(broker.config.authorizer.as_ref(), &image, ctx) {
-        return Ok(whole_request_error(
-            &req,
-            CLUSTER_AUTHORIZATION_FAILED,
-            "alter-reassignment denied",
-        ));
-    }
-
-    let env = ReassignEnv {
-        broker,
-        image: &image,
-        ctx,
-        allow_rf_change: req.allow_replication_factor_change,
-    };
-    let mut by_topic: HashMap<String, Vec<ReassignablePartitionResponse>> = HashMap::new();
-    let mut batch = ReassignBatch::default();
-    for topic in &req.topics {
-        let mut rows = Vec::with_capacity(topic.partitions.len());
-        let freeze = resolve_freeze_mutation(
-            &image,
-            &topic.name,
-            true,
-            FreezeMutationKind::ReassignmentAlter,
-        );
-        for p in &topic.partitions {
-            rows.push(alter_one(&env, &mut batch, &topic.name, p, freeze));
+context_handler! {
+    AlterPartitionReassignmentsRequest => AlterPartitionReassignmentsResponse,
+    (broker, req, _version, ctx),
+    {
+        let image = broker.controller.current_image();
+        // Whole-request Cluster Alter authorize.
+        if crate::handlers::cluster_alter_denied(broker.config.authorizer.as_ref(), &image, ctx) {
+            return Ok(whole_request_error(
+                &req,
+                CLUSTER_AUTHORIZATION_FAILED,
+                "alter-reassignment denied",
+            ));
         }
-        by_topic.insert(topic.name.clone(), rows);
-    }
 
-    // KIP-966: starting or cancelling a reassignment rewrites the replica set
-    // and the ISR with it, so the eligible-leader state the controller keeps
-    // rides the same batch. Without it a cancel can leave a replica the
-    // partition no longer has in the published ELR.
-    crate::elr::ElrPublisher::new(&image).extend(&mut batch.records);
+        let env = ReassignEnv {
+            broker,
+            image: &image,
+            ctx,
+            allow_rf_change: req.allow_replication_factor_change,
+        };
+        let mut by_topic: HashMap<String, Vec<ReassignablePartitionResponse>> = HashMap::new();
+        let mut batch = ReassignBatch::default();
+        for topic in &req.topics {
+            let mut rows = Vec::with_capacity(topic.partitions.len());
+            let freeze = resolve_freeze_mutation(
+                &image,
+                &topic.name,
+                true,
+                FreezeMutationKind::ReassignmentAlter,
+            );
+            for p in &topic.partitions {
+                rows.push(alter_one(&env, &mut batch, &topic.name, p, freeze));
+            }
+            by_topic.insert(topic.name.clone(), rows);
+        }
 
-    let mut submit_failure = None;
-    if !batch.records.is_empty() {
-        match batch.require_audit(broker, ctx).await {
-            Ok(()) => {
-                if let Err(error) = broker
-                    .controller
-                    .submit_change(std::mem::take(&mut batch.records))
-                    .await
-                {
-                    let message = format!("submit failed: {error}");
-                    tracing::warn!(%error, "alter-reassignment submit failed");
-                    stamp_unset(
-                        by_topic.values_mut().flatten(),
-                        crate::handlers::submit_failure_code(&error, COORDINATOR_NOT_AVAILABLE),
-                        &message,
-                    );
+        // KIP-966: starting or cancelling a reassignment rewrites the replica set
+        // and the ISR with it, so the eligible-leader state the controller keeps
+        // rides the same batch. Without it a cancel can leave a replica the
+        // partition no longer has in the published ELR.
+        crate::elr::ElrPublisher::new(&image).extend(&mut batch.records);
+
+        let mut submit_failure = None;
+        if !batch.records.is_empty() {
+            match batch.require_audit(broker, ctx).await {
+                Ok(()) => {
+                    if let Err(error) = broker
+                        .controller
+                        .submit_change(std::mem::take(&mut batch.records))
+                        .await
+                    {
+                        let message = format!("submit failed: {error}");
+                        tracing::warn!(%error, "alter-reassignment submit failed");
+                        stamp_unset(
+                            by_topic.values_mut().flatten(),
+                            crate::handlers::submit_failure_code(&error, COORDINATOR_NOT_AVAILABLE),
+                            &message,
+                        );
+                        submit_failure = Some(message);
+                    }
+                }
+                Err(error) => {
+                    let message = format!("privileged action refused: {error}");
+                    stamp_unset(by_topic.values_mut().flatten(), POLICY_VIOLATION, &message);
                     submit_failure = Some(message);
                 }
             }
-            Err(error) => {
-                let message = format!("privileged action refused: {error}");
-                stamp_unset(by_topic.values_mut().flatten(), POLICY_VIOLATION, &message);
-                submit_failure = Some(message);
-            }
         }
+        // KFC-9: audit the approvals this append spent, now that its outcome is
+        // known.
+        batch.audit_applied(broker, ctx, submit_failure.as_deref());
+
+        // A cancel audits itself as a `PrivilegedAction` through the two-person
+        // gate. An ordinary start spends no approval, so every partition the
+        // request actually altered is audited here.
+        crate::handlers::audit_admin_success(
+            broker.audit_log.as_ref(),
+            ctx,
+            "AlterPartitionReassignments",
+            audited_partitions(&by_topic, &batch.altered),
+        );
+
+        let responses: Vec<ReassignableTopicResponse> = by_topic
+            .into_iter()
+            .map(|(name, partitions)| tagged_wire!(ReassignableTopicResponse { name, partitions }))
+            .collect();
+        // Kafka's `ReplicationControlManager.alterPartitionReassignments` sets the
+        // top-level `ErrorMessage` to null explicitly.
+        Ok(unthrottled_wire!(AlterPartitionReassignmentsResponse {
+            allow_replication_factor_change: req.allow_replication_factor_change,
+            error_code: 0,
+            error_message: None,
+            responses,
+        }))
     }
-    // KFC-9: audit the approvals this append spent, now that its outcome is
-    // known.
-    batch.audit_applied(broker, ctx, submit_failure.as_deref());
-
-    // A cancel audits itself as a `PrivilegedAction` through the two-person
-    // gate. An ordinary start spends no approval, so every partition the
-    // request actually altered is audited here.
-    crate::handlers::audit_admin_success(
-        broker.audit_log.as_ref(),
-        ctx,
-        "AlterPartitionReassignments",
-        audited_partitions(&by_topic, &batch.altered),
-    );
-
-    let responses: Vec<ReassignableTopicResponse> = by_topic
-        .into_iter()
-        .map(|(name, partitions)| ReassignableTopicResponse {
-            name,
-            partitions,
-            unknown_tagged_fields: UnknownTaggedFields::default(),
-        })
-        .collect();
-    // Kafka's `ReplicationControlManager.alterPartitionReassignments` sets the
-    // top-level `ErrorMessage` to null explicitly.
-    Ok(AlterPartitionReassignmentsResponse {
-        throttle_time_ms: 0,
-        allow_replication_factor_change: req.allow_replication_factor_change,
-        error_code: 0,
-        error_message: None,
-        responses,
-        unknown_tagged_fields: UnknownTaggedFields::default(),
-    })
 }
 
 /// The partitions an `AlterPartitionReassignments` request actually

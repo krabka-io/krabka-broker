@@ -10,9 +10,7 @@
 #[cfg(test)]
 mod tests {
     use assert2::check;
-    use krabka_protocol::{
-        UnknownTaggedFields, owned::offset_delete_response::OffsetDeleteResponse,
-    };
+    use krabka_protocol::owned::offset_delete_response::OffsetDeleteResponse;
 
     use crate::{codes, handlers::ErrorCodeResponse as _};
 
@@ -23,12 +21,10 @@ mod tests {
             codes::NOT_COORDINATOR,
             codes::GROUP_ID_NOT_FOUND,
         ] {
-            let expected = OffsetDeleteResponse {
+            let expected = unthrottled_wire!(OffsetDeleteResponse {
                 error_code: code,
-                throttle_time_ms: 0,
                 topics: Vec::new(),
-                unknown_tagged_fields: UnknownTaggedFields(Vec::new()),
-            };
+            });
             check!(OffsetDeleteResponse::error(code) == expected);
         }
     }

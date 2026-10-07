@@ -6,7 +6,7 @@
 //! that per-partition row is what the JVM admin client reads.
 
 use assert2::assert;
-use krabka_broker::{Broker, BrokerConfig, authorizer::SimpleAclAuthorizer};
+use krabka_broker::Broker;
 
 use crate::{
     harness::{start_two_dir_broker, wait_all_partitions},
@@ -58,13 +58,12 @@ async fn alter_replica_log_dirs_rejects_unknown_replica() {
 async fn alter_replica_log_dirs_denied_without_cluster_alter() {
     let primary = tempfile::tempdir().unwrap();
     let extra = tempfile::tempdir().unwrap();
-    let mut cfg = BrokerConfig::for_tests(primary.path().to_path_buf());
-    cfg.extra_log_dirs = vec![extra.path().to_path_buf()];
+    let mut cfg = crate::support::storage::two_dir_config(primary.path(), extra.path());
     // Default authorizer for `for_tests` is AllowAll; swap in a deny-
     // everything SimpleAclAuthorizer (empty super-users + empty ACL
     // image) so the Cluster Alter gate engages.
     cfg.super_users = std::collections::HashSet::new();
-    cfg.authorizer = std::sync::Arc::new(SimpleAclAuthorizer::new(cfg.super_users.clone()));
+    crate::support::acl::use_simple_acl_authorizer(&mut cfg);
     let handle = Broker::start(cfg).await.expect("broker start");
     let addr = handle.listen_addr();
 

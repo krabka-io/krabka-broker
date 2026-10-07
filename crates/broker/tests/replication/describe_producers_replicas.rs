@@ -12,35 +12,32 @@
 //! follower that answered from it reported only the producers whose
 //! transaction markers it had replicated.
 
-use std::{
-    net::SocketAddr,
-    time::{Duration, SystemTime, UNIX_EPOCH},
-};
+use std::{net::SocketAddr, time::Duration};
 
 use assert2::assert;
-use bytes::{Bytes, BytesMut};
+use bytes::BytesMut;
 use krabka_broker::{BrokerConfig, BrokerHandle, codes};
-use krabka_client_core::{Client, Connection, ConnectionOptions};
+use krabka_client_core::{Connection, ConnectionOptions};
 use krabka_protocol::{
     Decode, Encode,
     owned::{
-        create_topics_request::CreateTopicsRequest,
         describe_producers_request::{DescribeProducersRequest, TopicRequest},
         describe_producers_response::{
             DescribeProducersResponse, PartitionResponse, ProducerState, TopicResponse,
         },
-        produce_request::{PartitionProduceData, ProduceRequest, TopicProduceData},
+        produce_request::ProduceRequest,
         produce_response::ProduceResponse,
-        write_txn_markers_request::{
-            WritableTxnMarker, WritableTxnMarkerTopic, WriteTxnMarkersRequest,
-        },
+        write_txn_markers_request::WriteTxnMarkersRequest,
     },
     primitives::uuid::Uuid as WireUuid,
-    records::{Attributes, Record, RecordBatch, RecordsPayload},
+    records::{RecordBatch, RecordsPayload},
 };
 use tempfile::TempDir;
 
-use crate::support;
+use crate::{
+    support,
+    support::{produce::single_partition_produce, topics::create_topic_request},
+};
 
 type Cluster = Vec<(BrokerHandle, BrokerConfig, TempDir)>;
 
@@ -75,12 +72,7 @@ const ABORTED: (i64, i16) = (9_003, 4);
 /// The transactional producer whose transaction stays open.
 const OPEN: (i64, i16) = (9_004, 0);
 
-fn now_ms() -> i64 {
-    let since_epoch = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .expect("clock after the epoch");
-    i64::try_from(since_epoch.as_millis()).expect("milliseconds fit an i64")
-}
+use crate::support::records::now_ms;
 
 /// One connection to the broker that binds `address`, so that a request
 /// reaches that broker and no other.
@@ -118,33 +110,12 @@ async fn start_cluster() -> Cluster {
     panic!("cluster start failed after 3 attempts: {last_error:?}");
 }
 
-/// A batch of `producer` (`(id, epoch)`) with `records` records from
-/// `base_sequence`.
-fn batch(
-    (producer_id, producer_epoch): (i64, i16),
-    base_sequence: i32,
-    records: i32,
-    max_timestamp: i64,
-    transactional: bool,
-) -> RecordBatch {
-    RecordBatch {
-        attributes: Attributes::default().with_transactional(transactional),
-        last_offset_delta: records - 1,
-        base_timestamp: max_timestamp,
-        max_timestamp,
-        producer_id,
-        producer_epoch,
-        base_sequence,
-        records: (0..records)
-            .map(|offset_delta| Record {
-                offset_delta,
-                value: Some(Bytes::from(format!("{producer_id}-{offset_delta}"))),
-                ..Default::default()
-            })
-            .collect(),
-        ..RecordBatch::default()
-    }
-}
+// A batch of `producer` (`(id, epoch)`) with `records` records from
+// `base_sequence`.
+krabka_macros::producer_batch_fixture!(
+    batch,
+    ::bytes::Bytes::from(format!("{producer_id}-{offset_delta}"))
+);
 
 fn produce_request(
     topic_id: WireUuid,
@@ -153,19 +124,13 @@ fn produce_request(
 ) -> ProduceRequest {
     ProduceRequest {
         transactional_id: transactional_id.map(Into::into),
-        acks: -1,
-        timeout_ms: 30_000,
-        topic_data: vec![TopicProduceData {
-            name: TOPIC.into(),
+        ..single_partition_produce(
+            TOPIC,
             topic_id,
-            partition_data: vec![PartitionProduceData {
-                index: 0,
-                records: Some(RecordsPayload::V2(vec![batch])),
-                ..Default::default()
-            }],
-            ..Default::default()
-        }],
-        ..Default::default()
+            0,
+            Some(RecordsPayload::V2(vec![batch])),
+            (-1, 30_000),
+        )
     }
 }
 
@@ -205,19 +170,16 @@ async fn end_transaction(
 ) -> i16 {
     let response = leader
         .send(WriteTxnMarkersRequest {
-            markers: vec![WritableTxnMarker {
-                producer_id,
-                producer_epoch,
-                transaction_result: commit,
-                coordinator_epoch: COORDINATOR_EPOCH,
+            markers: vec![crate::support::transactions::transaction_marker(
+                (producer_id, producer_epoch),
+                commit,
+                COORDINATOR_EPOCH,
                 transaction_version,
-                topics: vec![WritableTxnMarkerTopic {
-                    name: TOPIC.into(),
-                    partition_indexes: vec![0],
-                    ..Default::default()
-                }],
-                ..Default::default()
-            }],
+                vec![crate::support::transactions::marker_topic(
+                    TOPIC.into(),
+                    vec![0],
+                )],
+            )],
             ..Default::default()
         })
         .await
@@ -280,17 +242,17 @@ async fn every_replica_describes_the_producers_of_its_log() {
     let cluster = start_cluster().await;
     support::wait_for_all_brokers_registered(&cluster, 3).await;
 
-    let admin = Client::builder()
-        .bootstrap(cluster[0].1.listen_addr.to_string())
-        .build()
-        .await
-        .expect("admin client");
+    let admin = crate::support::client::connect_with_context(
+        cluster[0].1.listen_addr.to_string(),
+        None,
+        "admin client",
+    )
+    .await;
     let created = admin
-        .send(CreateTopicsRequest {
-            topics: vec![support::topic_on(TOPIC, &[&[1, 2, 3]])],
-            timeout_ms: 5_000,
-            ..Default::default()
-        })
+        .send(create_topic_request(
+            support::topic_on(TOPIC, &[&[1, 2, 3]]),
+            5_000,
+        ))
         .await
         .expect("CreateTopics");
     assert!(created.topics[0].error_code == codes::NONE);
@@ -390,7 +352,5 @@ async fn every_replica_describes_the_producers_of_its_log() {
         ) == (vec![expected; 3], true, true)
     );
 
-    for (handle, _, _) in cluster {
-        handle.shutdown().await;
-    }
+    crate::support::shutdown_cluster(cluster).await;
 }

@@ -2,7 +2,7 @@
   "profile": [],
   "proofs": {
     "Coma": {
-      "vc_coalesce_delivery_range": { "prover": "alt-ergo", "time": 0.026 }
+      "vc_coalesce_delivery_range": { "prover": "alt-ergo", "time": 0.02 }
     }
   }
 }

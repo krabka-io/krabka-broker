@@ -4,6 +4,32 @@ use proptest::prelude::*;
 use super::{ProducerDecision, RetainedSequenceRange, rotation_marker_bounds_identity_retry};
 use crate::transaction::InitProducerIdIdentityDecision;
 
+fn check_rotation(
+    identities: (i64, i64),
+    aliases: &[Option<RetainedSequenceRange>],
+    request: (i16, i32, i32),
+    log_empty: bool,
+    trunk: bool,
+) {
+    assert!(
+        rotation_marker_bounds_identity_retry(
+            identities.0,
+            identities.1,
+            aliases,
+            request,
+            log_empty,
+            trunk,
+        ) == (
+            (identities.1, 0),
+            InitProducerIdIdentityDecision::Retry,
+            InitProducerIdIdentityDecision::Fenced,
+            InitProducerIdIdentityDecision::Retry,
+            ProducerDecision::Fenced,
+            ProducerDecision::Append,
+        )
+    );
+}
+
 #[test]
 fn marker_fences_aliases_and_the_next_bump_retires_the_old_identity_retry() {
     for (old, fresh) in [(0, 1), (42, 43), (i64::MAX, 0)] {
@@ -18,24 +44,12 @@ fn marker_fences_aliases_and_the_next_bump_retires_the_old_identity_retry() {
             for epoch in [i16::MIN, 0, i16::MAX - 1] {
                 for log_empty in [false, true] {
                     for trunk in [false, true] {
-                        let result = rotation_marker_bounds_identity_retry(
-                            old,
-                            fresh,
+                        check_rotation(
+                            (old, fresh),
                             &aliases,
                             (epoch, base, delta),
                             log_empty,
                             trunk,
-                        );
-                        assert!(
-                            result
-                                == (
-                                    (fresh, 0),
-                                    InitProducerIdIdentityDecision::Retry,
-                                    InitProducerIdIdentityDecision::Fenced,
-                                    InitProducerIdIdentityDecision::Retry,
-                                    ProducerDecision::Fenced,
-                                    ProducerDecision::Append,
-                                )
                         );
                     }
                 }
@@ -56,13 +70,6 @@ proptest! {
         prop_assume!(old != fresh);
         let retained: Vec<_> = aliases.into_iter().map(|slot| slot.map(|(base_sequence, last_sequence)|
             RetainedSequenceRange { base_sequence, last_sequence })).collect();
-        let result = rotation_marker_bounds_identity_retry(
-            old, fresh, &retained, (epoch, base, delta), log_empty, trunk,
-        );
-        assert!(result == (
-            (fresh, 0), InitProducerIdIdentityDecision::Retry,
-            InitProducerIdIdentityDecision::Fenced, InitProducerIdIdentityDecision::Retry,
-            ProducerDecision::Fenced, ProducerDecision::Append,
-        ));
+        check_rotation((old, fresh), &retained, (epoch, base, delta), log_empty, trunk);
     }
 }

@@ -29,18 +29,9 @@ mod support;
 use std::{io, net::SocketAddr};
 
 use assert2::assert;
-use bytes::BytesMut;
 use kafka_wire::single_record_produce_request;
-use krabka_broker::{Broker, BrokerHandle, authorizer::opa::OpaAuthorizer};
-use krabka_protocol::{
-    Decode, Encode,
-    owned::{
-        create_topics_request::{CreatableTopic, CreateTopicsRequest},
-        create_topics_response::CreateTopicsResponse,
-        produce_request::ProduceRequest,
-        produce_response::ProduceResponse,
-    },
-};
+use krabka_broker::{BrokerHandle, authorizer::opa::OpaAuthorizer};
+use krabka_protocol::owned::{produce_request::ProduceRequest, produce_response::ProduceResponse};
 use krabka_security::SaslMechanism;
 use tempfile::TempDir;
 use wiremock::{Mock, MockServer, ResponseTemplate, matchers::method};
@@ -54,7 +45,6 @@ const ERR_TOPIC_AUTHORIZATION_FAILED: i16 = 29;
 //   * CreateTopics v7 — flexible (FLEXIBLE_MIN=5), topic id round-trips.
 //   * Produce v11 — flexible (FLEXIBLE_MIN=9), still uses topic `name`
 //     rather than topic_id (v >= 13 introduces the latter).
-const CREATE_TOPICS_VERSION: i16 = 7;
 const PRODUCE_VERSION: i16 = 11;
 
 /// The client id every request header in this suite carries.
@@ -79,9 +69,7 @@ const CLIENT_ID: &str = "krabka-opa-test";
 fn start_broker_with_opa_authorizer(
     opa_url: String,
 ) -> impl std::future::Future<Output = (BrokerHandle, TempDir, SocketAddr)> {
-    let log_dir = tempfile::tempdir().unwrap();
-    let mut cfg = crate::support::sasl_plaintext_config(log_dir.path().to_path_buf());
-    cfg.enabled_sasl_mechanisms = vec![SaslMechanism::Plain];
+    let (log_dir, mut cfg) = crate::support::sasl::sasl_temp_config(vec![SaslMechanism::Plain]);
     cfg.plain_credentials
         .insert("admin".to_string(), "admin-secret".to_string());
     cfg.plain_credentials
@@ -123,41 +111,12 @@ fn start_broker_with_opa_authorizer(
     .expect("OpaAuthorizer::new must succeed inside a tokio runtime");
     cfg.authorizer = std::sync::Arc::new(opa);
 
-    Box::pin(async move {
-        let handle = Broker::start(cfg).await.expect("broker must start");
-        let addr = handle.listen_addr();
-        (handle, log_dir, addr)
-    })
+    Box::pin(crate::support::sasl::start_broker(cfg, log_dir))
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Wire driver helpers.
 // ─────────────────────────────────────────────────────────────────────────────
-
-async fn drive_create_topics_as_plain(
-    addr: SocketAddr,
-    user: &str,
-    password: &[u8],
-    req: CreateTopicsRequest,
-) -> Result<CreateTopicsResponse, io::Error> {
-    let mut stream = kafka_wire::sasl_plain_authenticate(addr, CLIENT_ID, user, password).await?;
-    let mut body = BytesMut::new();
-    req.encode(&mut body, CREATE_TOPICS_VERSION)
-        .map_err(|e| io::Error::other(format!("CreateTopics encode: {e}")))?;
-    let resp_bytes = kafka_wire::round_trip(
-        &mut stream,
-        19,
-        CREATE_TOPICS_VERSION,
-        4,
-        CLIENT_ID,
-        true,
-        &body,
-    )
-    .await?;
-    let mut cur: &[u8] = &resp_bytes;
-    CreateTopicsResponse::decode(&mut cur, CREATE_TOPICS_VERSION)
-        .map_err(|e| io::Error::other(format!("CreateTopics decode: {e}")))
-}
 
 async fn drive_produce_as_plain(
     addr: SocketAddr,
@@ -165,40 +124,22 @@ async fn drive_produce_as_plain(
     password: &[u8],
     req: ProduceRequest,
 ) -> Result<ProduceResponse, io::Error> {
-    let mut stream = kafka_wire::sasl_plain_authenticate(addr, CLIENT_ID, user, password).await?;
-    let mut body = BytesMut::new();
-    req.encode(&mut body, PRODUCE_VERSION)
-        .map_err(|e| io::Error::other(format!("Produce encode: {e}")))?;
-    let resp_bytes =
-        kafka_wire::round_trip(&mut stream, 0, PRODUCE_VERSION, 4, CLIENT_ID, true, &body).await?;
-    let mut cur: &[u8] = &resp_bytes;
-    ProduceResponse::decode(&mut cur, PRODUCE_VERSION)
-        .map_err(|e| io::Error::other(format!("Produce decode: {e}")))
+    kafka_wire::request_as_plain(
+        addr,
+        CLIENT_ID,
+        (user, password),
+        &req,
+        (0, PRODUCE_VERSION),
+        "Produce",
+    )
+    .await
 }
 
 /// Drives `CreateTopics(name, 1 partition, rf=1)` over a SASL/PLAIN admin
 /// session. Admin is the super-user in both tests, so the call bypasses the OPA
 /// mock and the topic materialises whatever OPA answers.
 async fn create_topic_as_admin(addr: SocketAddr, name: &str) {
-    let req = CreateTopicsRequest {
-        topics: vec![CreatableTopic {
-            name: name.to_string(),
-            num_partitions: 1,
-            replication_factor: 1,
-            ..Default::default()
-        }],
-        timeout_ms: 5_000,
-        ..Default::default()
-    };
-    let resp = drive_create_topics_as_plain(addr, "admin", b"admin-secret", req)
-        .await
-        .expect("CreateTopics as super-user must round-trip");
-    assert!(resp.topics.len() == 1, "one topic in response");
-    assert!(
-        resp.topics[0].error_code == 0,
-        "CreateTopics({name}) must succeed: {:?}",
-        resp.topics[0].error_message
-    );
+    crate::kafka_wire::create_topic_as_super_user(addr, CLIENT_ID, name, 1).await;
 }
 
 /// Waits on `handle`, event-driven, until the local writer-actor of `topic`
@@ -252,16 +193,7 @@ async fn produce_when_partition_ready(
 /// goes through OPA, which always denies it.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn produce_blocked_by_opa_returns_topic_authorization_failed() {
-    let opa = MockServer::start().await;
-    Mock::given(method("POST"))
-        .respond_with(
-            ResponseTemplate::new(200).set_body_json(serde_json::json!({"result": false})),
-        )
-        .mount(&opa)
-        .await;
-    let opa_url = format!("{}/v1/data/kafka/authz/allow", opa.uri());
-
-    let (handle, _dir, addr) = start_broker_with_opa_authorizer(opa_url).await;
+    let (_opa, handle, _dir, addr) = opa_fixture(false).await;
 
     // Bootstrap the topic via admin (super-user → OPA bypassed).
     create_topic_as_admin(addr, "blocked-topic").await;
@@ -278,12 +210,7 @@ async fn produce_blocked_by_opa_returns_topic_authorization_failed() {
 
     handle.shutdown().await;
 
-    assert!(resp.responses.len() == 1, "one topic in response");
-    assert!(
-        resp.responses[0].partition_responses.len() == 1,
-        "one partition row in response"
-    );
-    let p = &resp.responses[0].partition_responses[0];
+    let p = crate::support::produce::single_partition_response(&resp);
     assert!(
         p.error_code == ERR_TOPIC_AUTHORIZATION_FAILED,
         "OPA denied alice's Write on blocked-topic, expected \
@@ -304,14 +231,7 @@ async fn produce_blocked_by_opa_returns_topic_authorization_failed() {
 /// `MetadataImage`, so the test needs no fixed sleep.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn produce_allowed_by_opa_succeeds() {
-    let opa = MockServer::start().await;
-    Mock::given(method("POST"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"result": true})))
-        .mount(&opa)
-        .await;
-    let opa_url = format!("{}/v1/data/kafka/authz/allow", opa.uri());
-
-    let (handle, _dir, addr) = start_broker_with_opa_authorizer(opa_url).await;
+    let (_opa, handle, _dir, addr) = opa_fixture(true).await;
 
     create_topic_as_admin(addr, "permitted-topic").await;
 
@@ -322,15 +242,23 @@ async fn produce_allowed_by_opa_succeeds() {
 
     handle.shutdown().await;
 
-    assert!(resp.responses.len() == 1, "one topic in response");
-    assert!(
-        resp.responses[0].partition_responses.len() == 1,
-        "one partition row in response"
-    );
-    let p = &resp.responses[0].partition_responses[0];
+    let p = crate::support::produce::single_partition_response(&resp);
     assert!(
         p.error_code == 0,
         "OPA allowed alice's Write on permitted-topic, expected \
          error_code=0, got {p:?}"
     );
+}
+
+async fn opa_fixture(allowed: bool) -> (MockServer, BrokerHandle, TempDir, SocketAddr) {
+    let opa = MockServer::start().await;
+    Mock::given(method("POST"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(serde_json::json!({"result": allowed})),
+        )
+        .mount(&opa)
+        .await;
+    let url = format!("{}/v1/data/kafka/authz/allow", opa.uri());
+    let (broker, dir, addr) = start_broker_with_opa_authorizer(url).await;
+    (opa, broker, dir, addr)
 }

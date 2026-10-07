@@ -114,21 +114,18 @@ mod tests {
     use krabka_ids::Offset;
 
     use super::*;
-    use crate::{
-        config::LogConfig,
-        log::test_support::{rolling_test_log, sample_batch},
-    };
+    use crate::log::test_support::{rolling_test_log, sample_batch};
 
     #[test]
     fn sync_persists_appended_records() {
         let dir = tempfile::tempdir().unwrap();
         {
-            let mut log = Log::open(dir.path(), LogConfig::default()).unwrap();
+            let mut log = crate::test_support::open_log(dir.path());
             log.append(&mut sample_batch(3)).unwrap();
             log.sync().unwrap(); // fsync without relying on flush_on_append
         }
         // Reopen from disk: the synced records are present.
-        let log = Log::open(dir.path(), LogConfig::default()).unwrap();
+        let log = crate::test_support::open_log(dir.path());
         assert2::assert!(log.log_end_offset() == Offset(3));
     }
 
@@ -148,10 +145,10 @@ mod tests {
         ] {
             let dir = tempfile::tempdir().unwrap();
             let mut log = match case {
-                Case::InitialCreation => Log::open(dir.path(), LogConfig::default()).unwrap(),
+                Case::InitialCreation => crate::test_support::open_log(dir.path()),
                 Case::ReopenBeforePriorSync => {
-                    drop(Log::open(dir.path(), LogConfig::default()).unwrap());
-                    Log::open(dir.path(), LogConfig::default()).unwrap()
+                    drop(crate::test_support::open_log(dir.path()));
+                    crate::test_support::open_log(dir.path())
                 }
                 Case::Rollover => {
                     let mut log = rolling_test_log(dir.path());

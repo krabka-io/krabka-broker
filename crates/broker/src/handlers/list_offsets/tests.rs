@@ -35,18 +35,12 @@ fn topic_describe_denied_yields_topic_authorization_failed_rows() {
         ListOffsetsPartitionResponse, ListOffsetsResponse, ListOffsetsTopicResponse,
     };
 
-    let authorizer = crate::authorizer::SimpleAclAuthorizer::new(std::collections::HashSet::new());
-    let image = krabka_metadata::MetadataImage::new(uuid::Uuid::nil());
-    let principal = crate::test_support::principal("ANONYMOUS");
-    let peer = peer();
-
-    let ctx = crate::handlers::RequestContext::new(
-        &principal,
-        &peer,
-        "client-a",
-        "connection-a",
-        false,
-        "PLAINTEXT",
+    empty_acl_fixture!(
+        (authorizer, image),
+        (principal, peer, ctx),
+        crate::test_support::principal("ANONYMOUS"),
+        client_id = "client-a",
+        connection_id = "connection-a"
     );
     assert!(crate::handlers::acl_denied(
         &authorizer,
@@ -83,12 +77,24 @@ fn topic_describe_denied_yields_topic_authorization_failed_rows() {
     assert!(decoded.topics[0].partitions[0].error_code == codes::TOPIC_AUTHORIZATION_FAILED);
 }
 
+macro_rules! answer_request {
+    (($request:ident, $bytes:ident, $response:ident), $broker:ident, $version:ident, $ctx:ident) => {
+        let $request = encode_request(&$request, $version);
+        let $bytes = handle(&$broker, $version, &$request, &$ctx)
+            .await
+            .expect("handle");
+        let $response = decode_response(&$bytes, $version);
+    };
+}
+
 #[tokio::test]
 async fn denied_handler_preserves_topic_and_partition_response_fields() {
     let version = krabka_protocol::owned::list_offsets_response::MAX_VERSION;
-    let (broker_handle, _dir) = start_broker(Arc::new(DenyAll)).await;
-    let broker = broker_handle.broker_arc_for_test();
-    test_ctx!(ctx, "alice");
+    broker_fixture!(
+        (broker_handle, _dir, broker),
+        deny_all,
+        context(ctx, "alice")
+    );
     let req = ListOffsetsRequest {
         replica_id: -1,
         isolation_level: 0,
@@ -113,28 +119,23 @@ async fn denied_handler_preserves_topic_and_partition_response_fields() {
         timeout_ms: 30_000,
         ..Default::default()
     };
-    let req = encode_request(&req, version);
+    answer_request!((req, bytes, resp), broker, version, ctx);
 
-    let bytes = handle(&broker, version, &req, &ctx).await.expect("handle");
-    let resp = decode_response(&bytes, version);
-
-    let denied_row = |partition_index: i32| ListOffsetsPartitionResponse {
-        partition_index,
-        error_code: codes::TOPIC_AUTHORIZATION_FAILED,
-        timestamp: -1,
-        offset: -1,
-        leader_epoch: -1,
-        unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(vec![]),
+    let denied_row = |partition_index: i32| {
+        tagged_wire!(ListOffsetsPartitionResponse {
+            partition_index,
+            error_code: codes::TOPIC_AUTHORIZATION_FAILED,
+            timestamp: -1,
+            offset: -1,
+            leader_epoch: -1,
+        })
     };
-    let expected = ListOffsetsResponse {
-        throttle_time_ms: 0,
-        topics: vec![ListOffsetsTopicResponse {
+    let expected = unthrottled_wire!(ListOffsetsResponse {
+        topics: vec![tagged_wire!(ListOffsetsTopicResponse {
             name: "orders".to_string(),
             partitions: vec![denied_row(0), denied_row(2)],
-            unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(vec![]),
-        }],
-        unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(vec![]),
-    };
+        })],
+    });
     assert!(resp == expected, "{resp:?}");
     broker_handle.shutdown().await;
 }
@@ -179,12 +180,12 @@ async fn denied_topic_rows_are_appended_after_authorized_rows_regardless_of_requ
     ];
 
     for case in cases {
-        let (broker_handle, _dir) =
+        broker_fixture!(
+            (broker_handle, _dir, broker),
             start_broker(Arc::new(DenyNamed(std::collections::HashSet::from([
                 case.denied
             ]))))
-            .await;
-        let broker = broker_handle.broker_arc_for_test();
+        );
         test_ctx!(ctx, "alice");
 
         let req = ListOffsetsRequest {
@@ -207,10 +208,7 @@ async fn denied_topic_rows_are_appended_after_authorized_rows_regardless_of_requ
             timeout_ms: 30_000,
             ..Default::default()
         };
-        let req = encode_request(&req, version);
-
-        let bytes = handle(&broker, version, &req, &ctx).await.expect("handle");
-        let resp = decode_response(&bytes, version);
+        answer_request!((req, bytes, resp), broker, version, ctx);
 
         let mut expected_order: Vec<&str> = case
             .request_topics
@@ -244,8 +242,6 @@ async fn denied_topic_rows_are_appended_after_authorized_rows_regardless_of_requ
 
 #[tokio::test]
 async fn duplicate_partitions_get_invalid_request_on_every_row() {
-    use krabka_protocol::owned::create_topics_request::{CreatableTopic, CreateTopicsRequest};
-
     use super::test_support::client_for;
 
     const TOPIC: &str = "list-offsets-duplicate";
@@ -253,16 +249,13 @@ async fn duplicate_partitions_get_invalid_request_on_every_row() {
     let (broker_handle, _dir) = start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
     let client = client_for(&broker_handle).await;
     client
-        .send(CreateTopicsRequest {
-            topics: vec![CreatableTopic {
-                name: TOPIC.to_string(),
-                num_partitions: 2,
-                replication_factor: 1,
-                ..Default::default()
-            }],
-            timeout_ms: 5_000,
-            ..Default::default()
-        })
+        .send(crate::handlers::test_support::configured_topic_request(
+            TOPIC,
+            &[],
+            2,
+            1,
+            5_000,
+        ))
         .await
         .expect("CreateTopics");
     broker_handle.wait_until_partition_present(TOPIC, 0).await;

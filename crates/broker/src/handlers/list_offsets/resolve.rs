@@ -28,7 +28,7 @@ use krabka_verified::{
 use super::{
     bound::{FetchBound, fetchable_offsets},
     diskless::diskless_earliest_candidate,
-    leadership::resolve_leadership,
+    leadership::resolve_for_broker,
     local::{latest_offset, leader_epoch_for_offset},
     remote::await_remote,
     response::error_response,
@@ -346,17 +346,12 @@ pub(super) async fn resolve_partition(
     // partition at all, and `KAFKA_STORAGE_ERROR` when the partition's log
     // directory is offline. See
     // [`resolve_leadership`](super::leadership::resolve_leadership).
-    let partition = match resolve_leadership(
+    let partition = match resolve_for_broker(
+        broker,
         topic_name,
         index,
         bound.replica_id(),
         request.current_leader_epoch,
-        super::leadership::LeadershipContext {
-            partitions: &broker.partitions,
-            log_dir_status: &broker.log_dir_status,
-            image: &broker.controller.current_image(),
-            node_id: broker.config.node_id,
-        },
     ) {
         Ok(partition) => partition,
         Err(error_code) => return error_response(index, error_code),
@@ -592,10 +587,7 @@ mod tests {
         const CURRENT_EPOCH: i32 = 3;
         const RECORDS: usize = 4;
 
-        let (broker, _dir) = crate::test_support::start_broker_no_audit().await;
-        let client = client_for(&broker).await;
-        create_topic(&client, TOPIC, Vec::new()).await;
-        broker.wait_until_partition_present(TOPIC, 0).await;
+        list_offsets_topic_fixture!((broker, _dir, client), TOPIC);
         broker
             .produce_records_for_test(TOPIC, 0, RECORDS)
             .await
@@ -664,10 +656,7 @@ mod tests {
     async fn non_tiered_sentinels_use_ordinary_earliest_and_unknown_remote_offsets() {
         const TOPIC: &str = "list-offsets-local";
 
-        let (broker, _dir) = crate::test_support::start_broker_no_audit().await;
-        let client = client_for(&broker).await;
-        create_topic(&client, TOPIC, Vec::new()).await;
-        broker.wait_until_partition_present(TOPIC, 0).await;
+        list_offsets_topic_fixture!((broker, _dir, client), TOPIC);
         broker
             .produce_records_for_test(TOPIC, 0, 8)
             .await
@@ -1101,10 +1090,7 @@ mod tests {
         const READ_UNCOMMITTED: i8 = 0;
         const READ_COMMITTED: i8 = 1;
 
-        let (broker, _dir) = crate::test_support::start_broker_no_audit().await;
-        let client = client_for(&broker).await;
-        create_topic(&client, TOPIC, Vec::new()).await;
-        broker.wait_until_partition_present(TOPIC, 0).await;
+        list_offsets_topic_fixture!((broker, _dir, client), TOPIC);
         let broker_arc = broker.broker_arc_for_test();
         let partition = broker_arc
             .partitions

@@ -6,7 +6,7 @@
 //! holds `Alter` on a topic is the producing team, and a freeze has to hold
 //! against exactly that team, so neither alter path may set the key or clear it.
 
-use assert2::{assert, check};
+use assert2::check;
 use krabka_broker::codes;
 use krabka_client_core::Client;
 use krabka_protocol::{
@@ -16,7 +16,6 @@ use krabka_protocol::{
             AlterConfigsRequest, AlterConfigsResource as AlterResource,
             AlterableConfig as AlterConfig,
         },
-        describe_configs_request::{DescribeConfigsRequest, DescribeConfigsResource},
         describe_configs_response::DescribeConfigsResourceResult,
         incremental_alter_configs_request::{
             AlterConfigsResource as IncrementalResource, AlterableConfig as IncrementalConfig,
@@ -28,7 +27,7 @@ use krabka_protocol::{
 use crate::{
     control_plane::freeze_scope,
     support,
-    wire::{CONTROL, accepted, create_topic, produce_outcome, refused},
+    wire::{CONTROL, accepted, create_topic, refused},
 };
 
 /// Kafka's `RESOURCE_TYPE` for a topic, which both config paths take.
@@ -77,26 +76,7 @@ async fn incremental_alter_configs(
     operation: i8,
     value: Option<&str>,
 ) -> AlterOutcome {
-    let response = client
-        .send(IncrementalAlterConfigsRequest {
-            resources: vec![IncrementalResource {
-                resource_type: RESOURCE_TYPE_TOPIC,
-                resource_name: topic.to_owned(),
-                configs: vec![IncrementalConfig {
-                    name: WRITE_FREEZE.to_owned(),
-                    config_operation: operation,
-                    value: value.map(ToOwned::to_owned),
-                    ..Default::default()
-                }],
-                ..Default::default()
-            }],
-            validate_only: false,
-            ..Default::default()
-        })
-        .await
-        .expect("IncrementalAlterConfigs");
-    let row = &response.responses[0];
-    (row.error_code, row.error_message.clone())
+    crate::support::configs::alter_topic_config(client, topic, WRITE_FREEZE, operation, value).await
 }
 
 /// Neither config path can set a freeze, and neither can clear one.
@@ -112,9 +92,7 @@ async fn incremental_alter_configs(
 /// broken.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn neither_alter_path_can_set_or_clear_a_freeze() {
-    let p = support::start().await;
-    let frozen = create_topic(&p.broker, &p.client, "orders").await;
-    let control = create_topic(&p.broker, &p.client, CONTROL).await;
+    let (p, frozen, control) = crate::wire::controlled_fixture("orders").await;
     freeze_scope(&p.client, PATTERN_TYPE_LITERAL, "orders", "cutover").await;
 
     let refusal = (
@@ -146,11 +124,8 @@ async fn neither_alter_path_can_set_or_clear_a_freeze() {
     );
 
     // The registry is untouched by all four, and the control topic gained none.
-    check!(
-        produce_outcome(&p.broker, &p.client, "orders", frozen).await
-            == refused("literal", "orders", "cutover", 0)
-    );
-    check!(produce_outcome(&p.broker, &p.client, CONTROL, control).await == accepted(1));
+    crate::wire::check_produce!(&p.broker, &p.client, "orders", frozen => refused("literal", "orders", "cutover", 0));
+    crate::wire::check_produce!(&p.broker, &p.client, CONTROL, control => accepted(1));
 
     // The alter path itself still works, so the four refusals above are about
     // the key and not about the API.
@@ -189,31 +164,7 @@ async fn client_alter_retention(client: &Client, topic: &str) -> AlterOutcome {
 
 /// Read one topic's `write.freeze` entry through `DescribeConfigs`.
 async fn write_freeze_config(client: &Client, topic: &str) -> DescribeConfigsResourceResult {
-    let response = client
-        .send(DescribeConfigsRequest {
-            resources: vec![DescribeConfigsResource {
-                resource_type: RESOURCE_TYPE_TOPIC,
-                resource_name: topic.to_owned(),
-                configuration_keys: Some(vec![WRITE_FREEZE.to_owned()]),
-                ..Default::default()
-            }],
-            include_synonyms: false,
-            include_documentation: false,
-            ..Default::default()
-        })
-        .await
-        .expect("DescribeConfigs");
-    let result = &response.results[0];
-    assert!(
-        result.error_code == codes::NONE,
-        "DescribeConfigs({topic}): {result:?}"
-    );
-    result
-        .configs
-        .iter()
-        .find(|entry| entry.name == WRITE_FREEZE)
-        .cloned()
-        .unwrap_or_else(|| panic!("no {WRITE_FREEZE} entry for {topic}"))
+    crate::support::configs::topic_config(client, topic, WRITE_FREEZE).await
 }
 
 /// `kafka-configs --describe` shows the freeze, read-only, naming the scope.

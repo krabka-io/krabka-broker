@@ -138,8 +138,7 @@ proptest! {
         wal in 0i64..101, local in 0i64..101,
         delivery in any::<bool>(), snapshots in prop::collection::vec(-1i64..104, 0..16), target in any::<i64>(),
     ) {
-        let offsets: Vec<_> = records.keys().copied().collect(); let times: Vec<_> = records.values().copied().collect();
-        let rows: Vec<_> = (0..offsets.len()).map(|i| (i, i)).collect();
+        let (offsets, times, rows) = timestamp_records(&records, 1, 0);
         let f = DeleteRecordsTrimFacts { requested, current_start: current, high_watermark: 100, log_end: 100,
             has_delivery_watermark: delivery, delivery_watermark: wal.max(local) };
         check_read(f, (wal, local), &snapshots, (&offsets, &times, &rows), 0, target);
@@ -154,8 +153,7 @@ proptest! {
     ) {
         let hw = indexed + hw_extra + lag.max(0);
         let wal = i64::from(wal_seed) % (indexed + 1); let local = i64::from(local_seed) % (indexed + 1);
-        let offsets: Vec<_> = records.keys().copied().collect(); let times: Vec<_> = records.values().copied().collect();
-        let rows: Vec<_> = (0..offsets.len()).step_by(2).map(|i| (i, i)).collect();
+        let (offsets, times, rows) = timestamp_records(&records, 2, 0);
         check_eviction((indexed, hw, lag, wal, local), &trace, (&offsets, &times, &rows), 0, floor, target);
     }
 }
@@ -170,11 +168,7 @@ fn producer_replay_cursor_cannot_replace_the_logical_read_floor() {
         has_delivery_watermark: false,
         delivery_watermark: 0,
     };
-    let window = (
-        &[0, 2, 8][..],
-        &[100, 100, 100][..],
-        &[(0, 0), (1, 1), (2, 2)][..],
-    );
+    let window = constant_time_window(&[0, 2, 8]);
     check_read(f, (0, 0), &[0, 1, 6, 6, 11], window, 0, 100);
     assert!(
         completed_trim_preserves_retained_timestamp(f, (0, 0), &[6], window, 0, 100)
@@ -200,11 +194,7 @@ fn producer_replay_cursor_cannot_replace_the_logical_read_floor() {
 
 #[test]
 fn physical_eviction_preserves_remote_matches_and_reports_disabled_state_exactly() {
-    let window = (
-        &[1, 3, 9][..],
-        &[100, 100, 100][..],
-        &[(0, 0), (1, 1), (2, 2)][..],
-    );
+    let window = constant_time_window(&[1, 3, 9]);
     for trace in [
         &[][..],
         &[false, false],

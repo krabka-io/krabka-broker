@@ -9,9 +9,9 @@
 use std::time::Duration;
 
 use assert2::assert;
-use krabka_client_core::Client;
 
 use crate::{
+    support::client::connect_client,
     upgrade_classic::join_request,
     upgrade_harness::{
         ERR_GROUP_ID_NOT_FOUND, ERR_MEMBER_ID_REQUIRED, boot, connect, create_topic,
@@ -53,12 +53,7 @@ async fn classic_group_with_live_member_rejects_streams_heartbeat() {
     let join_bootstrap = bootstrap.clone();
     let mid = member_id.clone();
     let _join_task = tokio::spawn(async move {
-        let c = Client::builder()
-            .bootstrap(&join_bootstrap)
-            .client_id("classic-joiner")
-            .build()
-            .await
-            .unwrap();
+        let c = connect_client(&join_bootstrap, Some("classic-joiner")).await;
         let _ =
             tokio::time::timeout(Duration::from_secs(30), c.send(join_request("g2", &mid))).await;
     });

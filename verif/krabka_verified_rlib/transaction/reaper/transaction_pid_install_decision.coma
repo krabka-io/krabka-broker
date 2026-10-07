@@ -1,18 +1,19 @@
-(* #"/workspace/crates/verified/src/transaction/reaper.rs" 123 0 131 34 *)
+(* #"/workspace/crates/verified/src/transaction/reaper.rs" 115 0 123 34 *)
 
-let%span sord = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
-let%span sreaper = "/workspace/crates/verified/src/transaction/reaper.rs" 134 28 134 29
-let%span sreaper'0 = "/workspace/crates/verified/src/transaction/reaper.rs" 134 50 134 51
-let%span sreaper'1 = "/workspace/crates/verified/src/transaction/reaper.rs" 136 37 136 39
-let%span sreaper'2 = "/workspace/crates/verified/src/transaction/reaper.rs" 136 66 136 68
-let%span sreaper'3 = "/workspace/crates/verified/src/transaction/reaper.rs" 137 32 137 33
-let%span sreaper'4 = "/workspace/crates/verified/src/transaction/reaper.rs" 137 60 137 61
-let%span sreaper'5 = "/workspace/crates/verified/src/transaction/reaper.rs" 140 61 140 62
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sreaper = "/workspace/crates/verified/src/transaction/reaper.rs" 126 28 126 29
+let%span sreaper'0 = "/workspace/crates/verified/src/transaction/reaper.rs" 126 50 126 51
+let%span sreaper'1 = "/workspace/crates/verified/src/transaction/reaper.rs" 128 37 128 39
+let%span sreaper'2 = "/workspace/crates/verified/src/transaction/reaper.rs" 128 66 128 68
+let%span sreaper'3 = "/workspace/crates/verified/src/transaction/reaper.rs" 129 32 129 33
+let%span sreaper'4 = "/workspace/crates/verified/src/transaction/reaper.rs" 129 60 129 61
+let%span sreaper'5 = "/workspace/crates/verified/src/transaction/reaper.rs" 132 61 132 62
 let%span sreaper'6 = "/workspace/crates/verified/src/transaction/reaper.rs" 96 10 97 25
 let%span sreaper'7 = "/workspace/crates/verified/src/transaction/reaper.rs" 98 10 99 71
 let%span sreaper'8 = "/workspace/crates/verified/src/transaction/reaper.rs" 100 10 105 70
-let%span sreaper'9 = "/workspace/crates/verified/src/transaction/reaper.rs" 106 10 113 64
-let%span sreaper'10 = "/workspace/crates/verified/src/transaction/reaper.rs" 114 10 121 57
+let%span sreaper'9 = "/workspace/crates/verified/src/transaction/reaper.rs" 106 10 109 64
+let%span sreaper'10 = "/workspace/crates/verified/src/transaction/reaper.rs" 110 10 113 57
+let%span sreaper'11 = "/workspace/crates/verified/src/transaction/reaper.rs" 224 16 225 93
 
 use creusot.int.Int64
 use creusot.int.Int16
@@ -30,11 +31,17 @@ predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other
 
 meta "rewrite_def" predicate ge_log_Int
 
+predicate pid_install_input_valid [#"/workspace/crates/verified/src/transaction/reaper.rs" 217 0 223 9] (partition_matches: bool) (producer: int) (epoch: int) (next_producer: int) (next_epoch: int) =
+  [%#sreaper'11] partition_matches
+  /\ ge_log_Int producer 0
+  /\ ge_log_Int epoch 0
+  /\ (next_producer = - 1 /\ next_epoch = - 1 \/ ge_log_Int next_producer 0 /\ ge_log_Int next_epoch 0)
+
 meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let transaction_pid_install_decision [#"/workspace/crates/verified/src/transaction/reaper.rs" 123 0 131 34]
+let transaction_pid_install_decision [#"/workspace/crates/verified/src/transaction/reaper.rs" 115 0 123 34]
   (partition_matches: bool) (producer_id: Int64.t) (producer_epoch: Int16.t) (next_producer_id: Int64.t)
   (next_producer_epoch: Int16.t) (current_owner_matches: bool) (next_owner_matches: bool)
   (return (x: t_TransactionPidInstallDecision)) = (! bb0
@@ -95,17 +102,9 @@ let transaction_pid_install_decision [#"/workspace/crates/verified/src/transacti
       /\ not (Int64.to_int next_producer_id = - 1 /\ Int16.to_int next_producer_epoch = - 1
       \/ ge_log_Int (Int64.to_int next_producer_id) 0 /\ ge_log_Int (Int16.to_int next_producer_epoch) 0)))
     /\ ([@stop_split] [@expl:transaction_pid_install_decision ensures #3] [%#sreaper'9] (result = RejectCollision)
-      = (partition_matches
-      /\ ge_log_Int (Int64.to_int producer_id) 0
-      /\ ge_log_Int (Int16.to_int producer_epoch) 0
-      /\ (Int64.to_int next_producer_id = - 1 /\ Int16.to_int next_producer_epoch = - 1
-        \/ ge_log_Int (Int64.to_int next_producer_id) 0 /\ ge_log_Int (Int16.to_int next_producer_epoch) 0)
+      = (pid_install_input_valid partition_matches (Int64.to_int producer_id) (Int16.to_int producer_epoch) (Int64.to_int next_producer_id) (Int16.to_int next_producer_epoch)
       /\ (not current_owner_matches \/ ge_log_Int (Int64.to_int next_producer_id) 0 /\ not next_owner_matches)))
     /\ ([@stop_split] [@expl:transaction_pid_install_decision ensures #4] [%#sreaper'10] (result = Apply)
-    = (partition_matches
-    /\ ge_log_Int (Int64.to_int producer_id) 0
-    /\ ge_log_Int (Int16.to_int producer_epoch) 0
-    /\ (Int64.to_int next_producer_id = - 1 /\ Int16.to_int next_producer_epoch = - 1
-      \/ ge_log_Int (Int64.to_int next_producer_id) 0 /\ ge_log_Int (Int16.to_int next_producer_epoch) 0)
+    = (pid_install_input_valid partition_matches (Int64.to_int producer_id) (Int16.to_int producer_epoch) (Int64.to_int next_producer_id) (Int16.to_int next_producer_epoch)
     /\ current_owner_matches /\ (Int64.to_int next_producer_id < 0 \/ next_owner_matches)))}
     (! return {result}) ]

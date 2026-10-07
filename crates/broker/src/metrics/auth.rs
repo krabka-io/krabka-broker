@@ -148,9 +148,7 @@ mod tests {
 
         m.record_client_software("render-lib", "2.0.0");
 
-        let mut body = String::new();
-        let registry = m.registry.lock().await;
-        prometheus_client::encoding::text::encode(&mut body, &registry).unwrap();
+        crate::metrics::test_support::render_registry!(m, body, registry; unwrap());
         assert!(body.contains(
             "krabka_broker_client_software_versions_total{software_name=\"render-lib\",software_version=\"2.0.0\"} 1"
         ));

@@ -7,15 +7,11 @@ use std::sync::Arc;
 use assert2::{assert, check};
 use krabka_ids::PartitionIndex;
 use krabka_log::ProducerId;
-use krabka_metadata::{MetadataImage, MetadataRecord, NodeId, PartitionRecord, TopicRecord};
+use krabka_metadata::{MetadataImage, NodeId};
 use tempfile::TempDir;
-use uuid::Uuid;
 
 use super::*;
-use crate::{
-    partition_registry::PartitionRegistry,
-    txn::{bootstrap, state::TopicPartition},
-};
+use crate::txn::state::TopicPartition;
 
 const TID: &str = "tid-completion";
 const DATA_TOPIC: &str = "orders";
@@ -115,23 +111,31 @@ fn completion_decision_accepts_only_the_exact_prepared_snapshot() {
 }
 
 fn image(leader: NodeId, leader_epoch: i32) -> MetadataImage {
-    let mut image = MetadataImage::new(Uuid::nil());
-    image.apply(&MetadataRecord::V1Topic(TopicRecord {
-        name: bootstrap::TOPIC.to_owned(),
-        topic_id: Uuid::from_u128(1),
-        partitions: 1,
-        replication_factor: 1,
-    }));
-    image.apply(&MetadataRecord::V1Partition(PartitionRecord {
-        topic: bootstrap::TOPIC.to_owned(),
-        partition: 0,
-        leader,
-        replicas: vec![leader],
-        isr: vec![leader],
-        leader_epoch: krabka_metadata::LeaderEpoch(leader_epoch),
-        ..Default::default()
-    }));
-    image
+    super::super::test_support::state_image(leader, leader_epoch, &[leader])
+}
+
+async fn loaded_coordinator(
+    dir: &std::path::Path,
+    with_data_partition: bool,
+) -> Arc<TxnCoordinator> {
+    let partitions = super::super::test_support::state_registry(dir);
+    if with_data_partition {
+        let data = crate::test_support::open_partition(dir, DATA_TOPIC, 0);
+        // The metadata reconcile installs this broker, node 1, as the leader.
+        data.install_leader_change(1, 0).await;
+        partitions.insert(DATA_TOPIC.into(), PartitionIndex(0), data);
+    }
+    let coordinator = Arc::new(super::super::test_support::coordinator_with_registry(
+        NodeId(1),
+        partitions,
+        1,
+    ));
+    coordinator
+        .refresh_leader_partitions(&image(NodeId(1), 0))
+        .await
+        .finished()
+        .await;
+    coordinator
 }
 
 /// A coordinator that persisted `entry` as the leader of
@@ -144,31 +148,7 @@ async fn coordinator(
     with_data_partition: bool,
 ) -> (Arc<TxnCoordinator>, TempDir) {
     let dir = tempfile::tempdir().expect("tempdir");
-    let partitions = Arc::new(PartitionRegistry::new());
-    partitions.insert(
-        bootstrap::TOPIC.into(),
-        PartitionIndex(0),
-        crate::test_support::open_partition(dir.path(), bootstrap::TOPIC, 0),
-    );
-    if with_data_partition {
-        let data = crate::test_support::open_partition(dir.path(), DATA_TOPIC, 0);
-        // The metadata reconcile installs this broker, node 1, as the leader,
-        // so the partition takes markers.
-        data.install_leader_change(1, 0).await;
-        partitions.insert(DATA_TOPIC.into(), PartitionIndex(0), data);
-    }
-    let coordinator = Arc::new(TxnCoordinator::new(
-        NodeId(1),
-        partitions,
-        Arc::new(crate::producer_id_manager::ProducerIdManager::new()),
-        1,
-        krabka_units::mebibytes(1),
-    ));
-    coordinator
-        .refresh_leader_partitions(&image(NodeId(1), 0))
-        .await
-        .finished()
-        .await;
+    let coordinator = loaded_coordinator(dir.path(), with_data_partition).await;
     coordinator
         .put(entry, TxnVersion::Verified)
         .await
@@ -285,28 +265,7 @@ async fn a_client_transaction_version_zero_completion_stays_classic() {
     let epoch_before = entry.producer_epoch;
 
     let dir = tempfile::tempdir().expect("tempdir");
-    let partitions = Arc::new(PartitionRegistry::new());
-    partitions.insert(
-        bootstrap::TOPIC.into(),
-        PartitionIndex(0),
-        crate::test_support::open_partition(dir.path(), bootstrap::TOPIC, 0),
-    );
-    let data = crate::test_support::open_partition(dir.path(), DATA_TOPIC, 0);
-    // The metadata reconcile installs this broker, node 1, as the leader.
-    data.install_leader_change(1, 0).await;
-    partitions.insert(DATA_TOPIC.into(), PartitionIndex(0), data);
-    let coordinator = Arc::new(TxnCoordinator::new(
-        NodeId(1),
-        partitions,
-        Arc::new(crate::producer_id_manager::ProducerIdManager::new()),
-        1,
-        krabka_units::mebibytes(1),
-    ));
-    coordinator
-        .refresh_leader_partitions(&image(NodeId(1), 0))
-        .await
-        .finished()
-        .await;
+    let coordinator = loaded_coordinator(dir.path(), true).await;
     coordinator
         .put(entry, TxnVersion::Classic)
         .await

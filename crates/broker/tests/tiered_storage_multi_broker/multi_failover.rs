@@ -13,7 +13,6 @@ use std::time::{Duration, Instant};
 
 use assert2::assert;
 use krabka_broker::BrokerHandle;
-use krabka_client_core::Client;
 
 use crate::{
     RECORDS, TOPIC,
@@ -24,6 +23,7 @@ use crate::{
     multi_workload::{
         await_follower_local_eviction, create_tiered_topic, produce_and_await_remote_segments,
     },
+    support::client::connect_owned,
 };
 
 /// In-process multi-broker tiered metadata-sharing proof.
@@ -53,12 +53,7 @@ async fn tiered_storage_metadata_sharing_via_survivor() {
 
     // Build an admin client against broker 1 for CreateTopics + Produce.
     let b1_bootstrap = format!("127.0.0.1:{}", b1.listen_addr().port());
-    let admin = Client::builder()
-        .bootstrap(&b1_bootstrap)
-        .client_id("tiered-multi-admin")
-        .build()
-        .await
-        .expect("admin client");
+    let admin = connect_owned(&b1_bootstrap, "tiered-multi-admin", "admin client").await;
 
     create_tiered_topic(&admin, &b1, &b2).await;
     eprintln!("ITEST: tiered config propagated; discovering partition leader");

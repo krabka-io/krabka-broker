@@ -136,64 +136,64 @@ impl Model for WalModel {
         }
     }
 
-    fn next_state(&self, last: &Self::State, action: Self::Action) -> Option<Self::State> {
-        let mut state = last.clone();
-        state.steps += 1;
-        match action {
-            Action::Append => {
-                state.logs = drive_append(&state);
-                state.last_ack_failed = false;
-            }
-            Action::Acknowledge => {
-                let expected_success = ack_has_a_majority(&state);
-                let (logs, result) = drive_ack(&state);
-                assert2::assert!(
-                    result.is_ok() == expected_success,
-                    "an acknowledgement succeeds exactly when a majority can hold the leader's log"
-                );
-                state.logs = logs;
-                match result {
-                    Ok(hwm) => {
-                        assert2::assert!(hwm >= state.committed.len());
-                        assert2::assert!(
-                            state.logs[state.leader][..state.committed.len()]
-                                == state.committed[..]
-                        );
-                        state.hwm = hwm;
-                        state.committed = state.logs[state.leader][..hwm].to_vec();
-                        state.last_ack_failed = false;
-                    }
-                    Err(()) => {
-                        state.last_ack_failed = true;
+    krabka_macros::model_transition!(last, action, state; {
+            state.steps += 1;
+            match action {
+                Action::Append => {
+                    state.logs = drive_append(&state);
+                    state.last_ack_failed = false;
+                }
+                Action::Acknowledge => {
+                    let expected_success = ack_has_a_majority(&state);
+                    let (logs, result) = drive_ack(&state);
+                    assert2::assert!(
+                        result.is_ok() == expected_success,
+                        "an acknowledgement succeeds exactly when a majority can hold the leader's log"
+                    );
+                    state.logs = logs;
+                    match result {
+                        Ok(hwm) => {
+                            assert2::assert!(hwm >= state.committed.len());
+                            assert2::assert!(
+                                state.logs[state.leader][..state.committed.len()]
+                                    == state.committed[..]
+                            );
+                            state.hwm = hwm;
+                            state.committed = state.logs[state.leader][..hwm].to_vec();
+                            state.last_ack_failed = false;
+                        }
+                        Err(()) => {
+                            state.last_ack_failed = true;
+                        }
                     }
                 }
+                Action::Fail(voter) => {
+                    state.live &= !(1 << voter);
+                }
+                Action::Revive(voter) => {
+                    state.live |= 1 << voter;
+                }
+                Action::Elect(voter) => {
+                    state.leader = voter;
+                    state.leader_epoch += 1;
+                    state.last_ack_failed = false;
+                }
+                Action::CrashRecover => {
+                    let (logs, hwm) = drive_recovery(&state);
+                    state.logs = logs;
+                    assert2::assert!(hwm >= state.committed.len());
+                    assert2::assert!(
+                        state.logs[state.leader][..state.committed.len()] == state.committed[..]
+                    );
+                    state.hwm = hwm;
+                    state.committed = state.logs[state.leader][..hwm].to_vec();
+                    state.last_ack_failed = false;
+                    state.recovered = true;
+                }
             }
-            Action::Fail(voter) => {
-                state.live &= !(1 << voter);
-            }
-            Action::Revive(voter) => {
-                state.live |= 1 << voter;
-            }
-            Action::Elect(voter) => {
-                state.leader = voter;
-                state.leader_epoch += 1;
-                state.last_ack_failed = false;
-            }
-            Action::CrashRecover => {
-                let (logs, hwm) = drive_recovery(&state);
-                state.logs = logs;
-                assert2::assert!(hwm >= state.committed.len());
-                assert2::assert!(
-                    state.logs[state.leader][..state.committed.len()] == state.committed[..]
-                );
-                state.hwm = hwm;
-                state.committed = state.logs[state.leader][..hwm].to_vec();
-                state.last_ack_failed = false;
-                state.recovered = true;
-            }
-        }
-        Some(state)
-    }
+            Some(state)
+
+    });
 
     fn properties(&self) -> Vec<Property<Self>> {
         vec![

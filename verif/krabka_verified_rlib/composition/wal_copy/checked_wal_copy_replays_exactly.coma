@@ -1,84 +1,86 @@
-(* #"/workspace/crates/verified/src/composition/wal_copy.rs" 69 0 76 23 *)
+(* #"/workspace/crates/verified/src/composition/wal_copy.rs" 73 0 80 23 *)
 
-let%span sord = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
-let%span sord'0 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
-let%span swell_founded = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/well_founded.rs" 43 8 43 33
-let%span sslice = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 331 18 331 22
-let%span sops = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/ops.rs" 688 18 691 9
-let%span sops'0 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/ops.rs" 702 25 702 33
-let%span sops'1 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/ops.rs" 701 18 701 32
-let%span svec = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 18 14 18 41
-let%span svec'0 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 202 18 202 34
-let%span svec'1 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 114 18 114 40
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span swell_founded = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/well_founded.rs" 43 8 43 33
+let%span sslice = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 331 18 331 22
+let%span sops = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/ops.rs" 688 18 691 9
+let%span sops'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/ops.rs" 702 25 702 33
+let%span sops'1 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/ops.rs" 701 18 701 32
+let%span svec = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 18 14 18 41
+let%span svec'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 202 18 202 34
+let%span svec'1 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 114 18 114 40
 let%span sfuture_log_swap_admission = "/workspace/crates/verified/src/storage/future_log_swap_admission.rs" 9 10 22 1
-let%span sproduce = "/workspace/crates/verified/src/produce.rs" 18 10 26 1
-let%span sindex_frontier = "/workspace/crates/verified/src/local_recovery/index_frontier.rs" 102 10 120 1
-let%span swal_copy = "/workspace/crates/verified/src/composition/wal_copy.rs" 77 7 77 19
-let%span swal_copy'0 = "/workspace/crates/verified/src/composition/wal_copy.rs" 77 23 77 35
-let%span swal_copy'1 = "/workspace/crates/verified/src/composition/wal_copy.rs" 77 47 77 48
-let%span swal_copy'2 = "/workspace/crates/verified/src/composition/wal_copy.rs" 82 16 82 22
-let%span swal_copy'3 = "/workspace/crates/verified/src/composition/wal_copy.rs" 98 14 98 32
-let%span swal_copy'4 = "/workspace/crates/verified/src/composition/wal_copy.rs" 99 14 99 26
-let%span swal_copy'5 = "/workspace/crates/verified/src/composition/wal_copy.rs" 90 16 97 41
-let%span swal_copy'6 = "/workspace/crates/verified/src/composition/wal_copy.rs" 89 16 89 70
-let%span swal_copy'7 = "/workspace/crates/verified/src/composition/wal_copy.rs" 88 16 88 76
-let%span swal_copy'8 = "/workspace/crates/verified/src/composition/wal_copy.rs" 86 16 87 60
-let%span swal_copy'9 = "/workspace/crates/verified/src/composition/wal_copy.rs" 85 16 85 71
-let%span swal_copy'10 = "/workspace/crates/verified/src/composition/wal_copy.rs" 84 16 84 49
-let%span swal_copy'11 = "/workspace/crates/verified/src/composition/wal_copy.rs" 83 16 83 35
-let%span swal_copy'12 = "/workspace/crates/verified/src/composition/wal_copy.rs" 102 12 102 78
-let%span swal_copy'13 = "/workspace/crates/verified/src/composition/wal_copy.rs" 107 11 107 20
-let%span swal_copy'14 = "/workspace/crates/verified/src/composition/wal_copy.rs" 107 11 107 22
-let%span swal_copy'15 = "/workspace/crates/verified/src/composition/wal_copy.rs" 110 60 110 69
-let%span swal_copy'16 = "/workspace/crates/verified/src/composition/wal_copy.rs" 110 60 110 71
-let%span swal_copy'17 = "/workspace/crates/verified/src/composition/wal_copy.rs" 110 73 110 82
-let%span swal_copy'18 = "/workspace/crates/verified/src/composition/wal_copy.rs" 110 73 110 84
-let%span swal_copy'19 = "/workspace/crates/verified/src/composition/wal_copy.rs" 110 27 110 85
-let%span swal_copy'20 = "/workspace/crates/verified/src/composition/wal_copy.rs" 110 27 110 86
-let%span swal_copy'21 = "/workspace/crates/verified/src/composition/wal_copy.rs" 111 64 111 73
-let%span swal_copy'22 = "/workspace/crates/verified/src/composition/wal_copy.rs" 111 64 111 75
-let%span swal_copy'23 = "/workspace/crates/verified/src/composition/wal_copy.rs" 111 77 111 86
-let%span swal_copy'24 = "/workspace/crates/verified/src/composition/wal_copy.rs" 111 77 111 88
-let%span swal_copy'25 = "/workspace/crates/verified/src/composition/wal_copy.rs" 111 31 111 89
-let%span swal_copy'26 = "/workspace/crates/verified/src/composition/wal_copy.rs" 111 31 111 90
-let%span swal_copy'27 = "/workspace/crates/verified/src/composition/wal_copy.rs" 113 13 113 22
-let%span swal_copy'28 = "/workspace/crates/verified/src/composition/wal_copy.rs" 113 13 113 24
-let%span swal_copy'29 = "/workspace/crates/verified/src/composition/wal_copy.rs" 113 33 113 42
-let%span swal_copy'30 = "/workspace/crates/verified/src/composition/wal_copy.rs" 113 32 113 44
-let%span swal_copy'31 = "/workspace/crates/verified/src/composition/wal_copy.rs" 114 13 114 22
-let%span swal_copy'32 = "/workspace/crates/verified/src/composition/wal_copy.rs" 114 13 114 24
-let%span swal_copy'33 = "/workspace/crates/verified/src/composition/wal_copy.rs" 114 40 114 49
-let%span swal_copy'34 = "/workspace/crates/verified/src/composition/wal_copy.rs" 114 39 114 51
-let%span swal_copy'35 = "/workspace/crates/verified/src/composition/wal_copy.rs" 112 12 115 9
-let%span swal_copy'36 = "/workspace/crates/verified/src/composition/wal_copy.rs" 118 58 118 67
-let%span swal_copy'37 = "/workspace/crates/verified/src/composition/wal_copy.rs" 118 58 118 69
-let%span swal_copy'38 = "/workspace/crates/verified/src/composition/wal_copy.rs" 118 71 118 80
-let%span swal_copy'39 = "/workspace/crates/verified/src/composition/wal_copy.rs" 118 71 118 82
-let%span swal_copy'40 = "/workspace/crates/verified/src/composition/wal_copy.rs" 118 30 118 83
-let%span swal_copy'41 = "/workspace/crates/verified/src/composition/wal_copy.rs" 118 30 118 84
-let%span swal_copy'42 = "/workspace/crates/verified/src/composition/wal_copy.rs" 123 12 123 21
-let%span swal_copy'43 = "/workspace/crates/verified/src/composition/wal_copy.rs" 123 12 123 23
-let%span swal_copy'44 = "/workspace/crates/verified/src/composition/wal_copy.rs" 124 12 124 21
-let%span swal_copy'45 = "/workspace/crates/verified/src/composition/wal_copy.rs" 124 12 124 23
-let%span swal_copy'46 = "/workspace/crates/verified/src/composition/wal_copy.rs" 125 12 125 21
-let%span swal_copy'47 = "/workspace/crates/verified/src/composition/wal_copy.rs" 125 12 125 23
-let%span swal_copy'48 = "/workspace/crates/verified/src/composition/wal_copy.rs" 125 12 125 29
-let%span swal_copy'49 = "/workspace/crates/verified/src/composition/wal_copy.rs" 119 19 126 9
-let%span swal_copy'50 = "/workspace/crates/verified/src/composition/wal_copy.rs" 119 19 126 10
-let%span swal_copy'51 = "/workspace/crates/verified/src/composition/wal_copy.rs" 132 13 132 14
-let%span swal_copy'52 = "/workspace/crates/verified/src/composition/wal_copy.rs" 132 8 132 14
-let%span swal_copy'53 = "/workspace/crates/verified/src/composition/wal_copy.rs" 41 10 54 1
-let%span swal_copy'54 = "/workspace/crates/verified/src/composition/wal_copy.rs" 55 10 61 1
-let%span swal_copy'55 = "/workspace/crates/verified/src/composition/wal_copy.rs" 62 10 68 1
-let%span swal_copy'56 = "/workspace/crates/verified/src/composition/wal_copy.rs" 15 10 15 15
-let%span swal_copy'57 = "/workspace/crates/verified/src/composition/wal_copy.rs" 13 11 13 47
-let%span swal_copy'58 = "/workspace/crates/verified/src/composition/wal_copy.rs" 14 10 14 21
-let%span swal_copy'59 = "/workspace/crates/verified/src/composition/wal_copy.rs" 18 8 20 9
-let%span swal_copy'60 = "/workspace/crates/verified/src/composition/wal_copy.rs" 30 10 30 15
-let%span swal_copy'61 = "/workspace/crates/verified/src/composition/wal_copy.rs" 28 11 28 65
-let%span swal_copy'62 = "/workspace/crates/verified/src/composition/wal_copy.rs" 29 10 29 84
-let%span swal_copy'63 = "/workspace/crates/verified/src/composition/wal_copy.rs" 32 4 34 5
-let%span sbatch_equal = "/workspace/crates/verified/src/wal/batch_equal.rs" 170 10 170 83
+let%span sproduce = "/workspace/crates/verified/src/produce.rs" 16 10 24 1
+let%span sindex_frontier = "/workspace/crates/verified/src/local_recovery/index_frontier.rs" 100 10 118 1
+let%span swal_copy = "/workspace/crates/verified/src/composition/wal_copy.rs" 81 7 81 19
+let%span swal_copy'0 = "/workspace/crates/verified/src/composition/wal_copy.rs" 81 23 81 35
+let%span swal_copy'1 = "/workspace/crates/verified/src/composition/wal_copy.rs" 81 47 81 48
+let%span swal_copy'2 = "/workspace/crates/verified/src/composition/wal_copy.rs" 86 16 86 22
+let%span swal_copy'3 = "/workspace/crates/verified/src/composition/wal_copy.rs" 100 14 100 32
+let%span swal_copy'4 = "/workspace/crates/verified/src/composition/wal_copy.rs" 101 14 101 26
+let%span swal_copy'5 = "/workspace/crates/verified/src/composition/wal_copy.rs" 94 16 99 51
+let%span swal_copy'6 = "/workspace/crates/verified/src/composition/wal_copy.rs" 93 16 93 70
+let%span swal_copy'7 = "/workspace/crates/verified/src/composition/wal_copy.rs" 92 16 92 76
+let%span swal_copy'8 = "/workspace/crates/verified/src/composition/wal_copy.rs" 90 16 91 60
+let%span swal_copy'9 = "/workspace/crates/verified/src/composition/wal_copy.rs" 89 16 89 71
+let%span swal_copy'10 = "/workspace/crates/verified/src/composition/wal_copy.rs" 88 16 88 49
+let%span swal_copy'11 = "/workspace/crates/verified/src/composition/wal_copy.rs" 87 16 87 35
+let%span swal_copy'12 = "/workspace/crates/verified/src/composition/wal_copy.rs" 104 12 104 78
+let%span swal_copy'13 = "/workspace/crates/verified/src/composition/wal_copy.rs" 109 11 109 20
+let%span swal_copy'14 = "/workspace/crates/verified/src/composition/wal_copy.rs" 109 11 109 22
+let%span swal_copy'15 = "/workspace/crates/verified/src/composition/wal_copy.rs" 112 60 112 69
+let%span swal_copy'16 = "/workspace/crates/verified/src/composition/wal_copy.rs" 112 60 112 71
+let%span swal_copy'17 = "/workspace/crates/verified/src/composition/wal_copy.rs" 112 73 112 82
+let%span swal_copy'18 = "/workspace/crates/verified/src/composition/wal_copy.rs" 112 73 112 84
+let%span swal_copy'19 = "/workspace/crates/verified/src/composition/wal_copy.rs" 112 27 112 85
+let%span swal_copy'20 = "/workspace/crates/verified/src/composition/wal_copy.rs" 112 27 112 86
+let%span swal_copy'21 = "/workspace/crates/verified/src/composition/wal_copy.rs" 113 64 113 73
+let%span swal_copy'22 = "/workspace/crates/verified/src/composition/wal_copy.rs" 113 64 113 75
+let%span swal_copy'23 = "/workspace/crates/verified/src/composition/wal_copy.rs" 113 77 113 86
+let%span swal_copy'24 = "/workspace/crates/verified/src/composition/wal_copy.rs" 113 77 113 88
+let%span swal_copy'25 = "/workspace/crates/verified/src/composition/wal_copy.rs" 113 31 113 89
+let%span swal_copy'26 = "/workspace/crates/verified/src/composition/wal_copy.rs" 113 31 113 90
+let%span swal_copy'27 = "/workspace/crates/verified/src/composition/wal_copy.rs" 115 13 115 22
+let%span swal_copy'28 = "/workspace/crates/verified/src/composition/wal_copy.rs" 115 13 115 24
+let%span swal_copy'29 = "/workspace/crates/verified/src/composition/wal_copy.rs" 115 33 115 42
+let%span swal_copy'30 = "/workspace/crates/verified/src/composition/wal_copy.rs" 115 32 115 44
+let%span swal_copy'31 = "/workspace/crates/verified/src/composition/wal_copy.rs" 116 13 116 22
+let%span swal_copy'32 = "/workspace/crates/verified/src/composition/wal_copy.rs" 116 13 116 24
+let%span swal_copy'33 = "/workspace/crates/verified/src/composition/wal_copy.rs" 116 40 116 49
+let%span swal_copy'34 = "/workspace/crates/verified/src/composition/wal_copy.rs" 116 39 116 51
+let%span swal_copy'35 = "/workspace/crates/verified/src/composition/wal_copy.rs" 114 12 117 9
+let%span swal_copy'36 = "/workspace/crates/verified/src/composition/wal_copy.rs" 120 58 120 67
+let%span swal_copy'37 = "/workspace/crates/verified/src/composition/wal_copy.rs" 120 58 120 69
+let%span swal_copy'38 = "/workspace/crates/verified/src/composition/wal_copy.rs" 120 71 120 80
+let%span swal_copy'39 = "/workspace/crates/verified/src/composition/wal_copy.rs" 120 71 120 82
+let%span swal_copy'40 = "/workspace/crates/verified/src/composition/wal_copy.rs" 120 30 120 83
+let%span swal_copy'41 = "/workspace/crates/verified/src/composition/wal_copy.rs" 120 30 120 84
+let%span swal_copy'42 = "/workspace/crates/verified/src/composition/wal_copy.rs" 125 12 125 21
+let%span swal_copy'43 = "/workspace/crates/verified/src/composition/wal_copy.rs" 125 12 125 23
+let%span swal_copy'44 = "/workspace/crates/verified/src/composition/wal_copy.rs" 126 12 126 21
+let%span swal_copy'45 = "/workspace/crates/verified/src/composition/wal_copy.rs" 126 12 126 23
+let%span swal_copy'46 = "/workspace/crates/verified/src/composition/wal_copy.rs" 127 12 127 21
+let%span swal_copy'47 = "/workspace/crates/verified/src/composition/wal_copy.rs" 127 12 127 23
+let%span swal_copy'48 = "/workspace/crates/verified/src/composition/wal_copy.rs" 127 12 127 29
+let%span swal_copy'49 = "/workspace/crates/verified/src/composition/wal_copy.rs" 121 19 128 9
+let%span swal_copy'50 = "/workspace/crates/verified/src/composition/wal_copy.rs" 121 19 128 10
+let%span swal_copy'51 = "/workspace/crates/verified/src/composition/wal_copy.rs" 134 13 134 14
+let%span swal_copy'52 = "/workspace/crates/verified/src/composition/wal_copy.rs" 134 8 134 14
+let%span swal_copy'53 = "/workspace/crates/verified/src/composition/wal_copy.rs" 48 10 59 1
+let%span swal_copy'54 = "/workspace/crates/verified/src/composition/wal_copy.rs" 60 10 66 1
+let%span swal_copy'55 = "/workspace/crates/verified/src/composition/wal_copy.rs" 67 10 72 1
+let%span swal_copy'56 = "/workspace/crates/verified/src/composition/wal_copy.rs" 251 16 251 86
+let%span swal_copy'57 = "/workspace/crates/verified/src/composition/wal_copy.rs" 12 16 12 77
+let%span swal_copy'58 = "/workspace/crates/verified/src/composition/wal_copy.rs" 22 10 22 15
+let%span swal_copy'59 = "/workspace/crates/verified/src/composition/wal_copy.rs" 20 11 20 47
+let%span swal_copy'60 = "/workspace/crates/verified/src/composition/wal_copy.rs" 21 10 21 21
+let%span swal_copy'61 = "/workspace/crates/verified/src/composition/wal_copy.rs" 25 8 27 9
+let%span swal_copy'62 = "/workspace/crates/verified/src/composition/wal_copy.rs" 37 10 37 15
+let%span swal_copy'63 = "/workspace/crates/verified/src/composition/wal_copy.rs" 35 11 35 65
+let%span swal_copy'64 = "/workspace/crates/verified/src/composition/wal_copy.rs" 36 10 36 84
+let%span swal_copy'65 = "/workspace/crates/verified/src/composition/wal_copy.rs" 39 4 41 5
+let%span sbatch_equal = "/workspace/crates/verified/src/wal/batch_equal.rs" 169 10 169 83
 
 use creusot.slice.Slice64
 use creusot.int.Int64
@@ -102,11 +104,11 @@ type tup2_i64_u64 = { f0'0: Int64.t; f1'0: UInt64.t }
 
 type t_Option_tup2_i64_u64 = None | Some tup2_i64_u64
 
-predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other <= self
+predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord'0] other <= self
 
 meta "rewrite_def" predicate ge_log_Int
 
-predicate gt_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord'0] other < self
+predicate gt_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other < self
 
 meta "rewrite_def" predicate gt_log_Int
 
@@ -117,6 +119,10 @@ meta "rewrite_def" predicate well_founded_relation_Int
 
 constant const_MAX: Int64.t = (9223372036854775807: Int64.t)
 
+predicate copy_batch_coordinates_valid [#"/workspace/crates/verified/src/composition/wal_copy.rs" 250 0 250 60] (batch: tup3_i64_i32_Vec_u8_Global) =
+  [%#swal_copy'56] ge_log_Int (Int64.to_int batch.f0) 0
+  /\ ge_log_Int (Int32.to_int batch.f1) 0 /\ Int64.to_int batch.f0 + Int32.to_int batch.f1 + 1 <= Int64.to_int const_MAX
+
 constant const_MAX'0: UInt64.t = (18446744073709551615: UInt64.t)
 
 function view_Vec_u8_Global (self: t_Vec_u8_Global) : Seq.seq UInt8.t
@@ -125,41 +131,44 @@ axiom view_Vec_u8_Global_spec:
   forall self: t_Vec_u8_Global [view_Vec_u8_Global self]. [%#svec] Seq.length (view_Vec_u8_Global self)
     <= UInt64.t'int const_MAX'0
 
-function wal_copy_byte_count [#"/workspace/crates/verified/src/composition/wal_copy.rs" 16 0 16 80] (batches: Seq.seq tup3_i64_i32_Vec_u8_Global) (count: int) : int
+predicate copy_batch_equal [#"/workspace/crates/verified/src/composition/wal_copy.rs" 11 0 11 72] (left: tup3_i64_i32_Vec_u8_Global) (right: tup3_i64_i32_Vec_u8_Global) =
+  [%#swal_copy'57] left.f0 = right.f0 /\ left.f1 = right.f1 /\ view_Vec_u8_Global left.f2 = view_Vec_u8_Global right.f2
+
+function wal_copy_byte_count [#"/workspace/crates/verified/src/composition/wal_copy.rs" 23 0 23 80] (batches: Seq.seq tup3_i64_i32_Vec_u8_Global) (count: int) : int
 
 axiom wal_copy_byte_count_def:
-  forall batches: Seq.seq tup3_i64_i32_Vec_u8_Global, count: int [wal_copy_byte_count batches count]. ([%#swal_copy'57] 0
+  forall batches: Seq.seq tup3_i64_i32_Vec_u8_Global, count: int [wal_copy_byte_count batches count]. ([%#swal_copy'59] 0
         <= count
       /\ count <= Seq.length batches)
     -> wal_copy_byte_count batches count
-    = ([%#swal_copy'59] if count = 0 then
+    = ([%#swal_copy'61] if count = 0 then
       0
     else
       wal_copy_byte_count batches (count - 1) + Seq.length (view_Vec_u8_Global (Seq.get batches (count - 1)).f2)
     )
 
 axiom wal_copy_byte_count_spec:
-  forall batches: Seq.seq tup3_i64_i32_Vec_u8_Global, count: int [wal_copy_byte_count batches count]. ([%#swal_copy'57] 0
+  forall batches: Seq.seq tup3_i64_i32_Vec_u8_Global, count: int [wal_copy_byte_count batches count]. ([%#swal_copy'59] 0
         <= count
-      /\ count <= Seq.length batches) -> ([%#swal_copy'58] ge_log_Int (wal_copy_byte_count batches count) 0)
+      /\ count <= Seq.length batches) -> ([%#swal_copy'60] ge_log_Int (wal_copy_byte_count batches count) 0)
 
-function lemma_wal_copy_byte_count_monotone [#"/workspace/crates/verified/src/composition/wal_copy.rs" 31 0 31 89] (batches: Seq.seq tup3_i64_i32_Vec_u8_Global) (lower: int) (upper: int) : ()
+function lemma_wal_copy_byte_count_monotone [#"/workspace/crates/verified/src/composition/wal_copy.rs" 38 0 38 89] (batches: Seq.seq tup3_i64_i32_Vec_u8_Global) (lower: int) (upper: int) : ()
 
 axiom lemma_wal_copy_byte_count_monotone_def:
-  forall batches: Seq.seq tup3_i64_i32_Vec_u8_Global, lower: int, upper: int [lemma_wal_copy_byte_count_monotone batches lower upper]. ([%#swal_copy'61] 0
+  forall batches: Seq.seq tup3_i64_i32_Vec_u8_Global, lower: int, upper: int [lemma_wal_copy_byte_count_monotone batches lower upper]. ([%#swal_copy'63] 0
         <= lower
       /\ lower <= upper /\ upper <= Seq.length batches)
     -> lemma_wal_copy_byte_count_monotone batches lower upper
-    = ([%#swal_copy'63] if lower < upper then
+    = ([%#swal_copy'65] if lower < upper then
       let _ = lemma_wal_copy_byte_count_monotone batches lower (upper - 1) in ()
     else
       ()
     )
 
 axiom lemma_wal_copy_byte_count_monotone_spec:
-  forall batches: Seq.seq tup3_i64_i32_Vec_u8_Global, lower: int, upper: int. ([%#swal_copy'61] 0 <= lower
+  forall batches: Seq.seq tup3_i64_i32_Vec_u8_Global, lower: int, upper: int. ([%#swal_copy'63] 0 <= lower
       /\ lower <= upper /\ upper <= Seq.length batches)
-    -> ([%#swal_copy'62] wal_copy_byte_count batches lower <= wal_copy_byte_count batches upper)
+    -> ([%#swal_copy'64] wal_copy_byte_count batches lower <= wal_copy_byte_count batches upper)
 
 type tup2_i64_i64 = { f0'1: Int64.t; f1'1: Int64.t }
 
@@ -379,7 +388,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let checked_wal_copy_replays_exactly [#"/workspace/crates/verified/src/composition/wal_copy.rs" 69 0 76 23]
+let checked_wal_copy_replays_exactly [#"/workspace/crates/verified/src/composition/wal_copy.rs" 73 0 80 23]
   (source: Slice64.slice tup3_i64_i32_Vec_u8_Global) (stored: Slice64.slice tup3_i64_i32_Vec_u8_Global) (start: Int64.t)
   (target: Int64.t) (position: UInt64.t) (file_end: UInt64.t) (return (x: t_Option_tup2_i64_u64)) = (! bb0
   [ bb0 = s0
@@ -422,10 +431,7 @@ let checked_wal_copy_replays_exactly [#"/workspace/crates/verified/src/compositi
       {[@expl:loop invariant #5] [%#swal_copy'6] UInt64.t'int position <= UInt64.t'int byte_cursor
       /\ UInt64.t'int byte_cursor <= UInt64.t'int file_end}
       {[@expl:loop invariant #6] [%#swal_copy'5] forall j: int. 0 <= j /\ j < UInt64.t'int i
-        -> ge_log_Int (Int64.to_int (Seq.get (Slice64.view source) j).f0) 0
-        /\ ge_log_Int (Int32.to_int (Seq.get (Slice64.view source) j).f1) 0
-        /\ Int64.to_int (Seq.get (Slice64.view source) j).f0 + Int32.to_int (Seq.get (Slice64.view source) j).f1 + 1
-          <= Int64.to_int const_MAX
+        -> copy_batch_coordinates_valid (Seq.get (Slice64.view source) j)
         /\ Int64.to_int (Seq.get (Slice64.view source) j).f0
           = (if j = 0 then
             Int64.to_int start
@@ -435,10 +441,7 @@ let checked_wal_copy_replays_exactly [#"/workspace/crates/verified/src/compositi
             + 1
           )
         /\ gt_log_Int (Seq.length (view_Vec_u8_Global (Seq.get (Slice64.view source) j).f2)) 0
-        /\ (Seq.get (Slice64.view source) j).f0 = (Seq.get (Slice64.view stored) j).f0
-        /\ (Seq.get (Slice64.view source) j).f1 = (Seq.get (Slice64.view stored) j).f1
-        /\ view_Vec_u8_Global (Seq.get (Slice64.view source) j).f2
-        = view_Vec_u8_Global (Seq.get (Slice64.view stored) j).f2}
+        /\ copy_batch_equal (Seq.get (Slice64.view source) j) (Seq.get (Slice64.view stored) j)}
       (! [ &variant_old_bb10 <- [%#swal_copy'3] Seq.length (Slice64.view source) - UInt64.t'int i ] s0)
       [ s0 = len_tup3_i64_i32_Vec_u8_Global [%#swal_copy'4] {source} (fun (_x: UInt64.t) -> [ &_77 <- _x ] s1)
       | s1 = [ &_75 <- UInt64.lt i _77 ] s2
@@ -738,20 +741,15 @@ let checked_wal_copy_replays_exactly [#"/workspace/crates/verified/src/compositi
   | & _214: tup2_i64_u64 = Any.any_l ()
   | & variant_old_bb10: int = Any.any_l () ])
   [ return (result: t_Option_tup2_i64_u64) ->
-  {[@stop_split] [@expl:checked_wal_copy_replays_exactly ensures] ([@stop_split] [@expl:checked_wal_copy_replays_exactly ensures #0] [%#swal_copy'53] match result with
-          | None -> false
-          | Some _ -> true
-          end
+  {[@stop_split] [@expl:checked_wal_copy_replays_exactly ensures] ([@stop_split] [@expl:checked_wal_copy_replays_exactly ensures #0] [%#swal_copy'53] (result
+        <> None)
       = (ge_log_Int (Int64.to_int start) 0
       /\ Seq.length (Slice64.view source) = Seq.length (Slice64.view stored)
       /\ UInt64.t'int position <= UInt64.t'int file_end
       /\ UInt64.t'int position + wal_copy_byte_count (Slice64.view source) (Seq.length (Slice64.view source))
         <= UInt64.t'int file_end
       /\ (forall i: int. 0 <= i /\ i < Seq.length (Slice64.view source)
-          -> ge_log_Int (Int64.to_int (Seq.get (Slice64.view source) i).f0) 0
-          /\ ge_log_Int (Int32.to_int (Seq.get (Slice64.view source) i).f1) 0
-          /\ Int64.to_int (Seq.get (Slice64.view source) i).f0 + Int32.to_int (Seq.get (Slice64.view source) i).f1 + 1
-            <= Int64.to_int const_MAX
+          -> copy_batch_coordinates_valid (Seq.get (Slice64.view source) i)
           /\ Int64.to_int (Seq.get (Slice64.view source) i).f0
             = (if i = 0 then
               Int64.to_int start
@@ -761,10 +759,7 @@ let checked_wal_copy_replays_exactly [#"/workspace/crates/verified/src/compositi
               + 1
             )
           /\ gt_log_Int (Seq.length (view_Vec_u8_Global (Seq.get (Slice64.view source) i).f2)) 0
-          /\ (Seq.get (Slice64.view source) i).f0 = (Seq.get (Slice64.view stored) i).f0
-          /\ (Seq.get (Slice64.view source) i).f1 = (Seq.get (Slice64.view stored) i).f1
-          /\ view_Vec_u8_Global (Seq.get (Slice64.view source) i).f2
-          = view_Vec_u8_Global (Seq.get (Slice64.view stored) i).f2)
+          /\ copy_batch_equal (Seq.get (Slice64.view source) i) (Seq.get (Slice64.view stored) i))
       /\ Int64.to_int target
       = (if Seq.length (Slice64.view source) = 0 then
         Int64.to_int start
@@ -787,9 +782,6 @@ let checked_wal_copy_replays_exactly [#"/workspace/crates/verified/src/compositi
       | None -> true
       | Some _ -> Seq.length (Slice64.view source) = Seq.length (Slice64.view stored)
       /\ (forall i: int. 0 <= i /\ i < Seq.length (Slice64.view source)
-        -> (Seq.get (Slice64.view source) i).f0 = (Seq.get (Slice64.view stored) i).f0
-        /\ (Seq.get (Slice64.view source) i).f1 = (Seq.get (Slice64.view stored) i).f1
-        /\ view_Vec_u8_Global (Seq.get (Slice64.view source) i).f2
-        = view_Vec_u8_Global (Seq.get (Slice64.view stored) i).f2)
+        -> copy_batch_equal (Seq.get (Slice64.view source) i) (Seq.get (Slice64.view stored) i))
       end)}
     (! return {result}) ]

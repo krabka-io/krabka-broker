@@ -1,4 +1,4 @@
-(* #"/workspace/crates/verified/src/reconfiguration.rs" 27 27 27 32 *)
+(* #"/workspace/crates/verified/src/reconfiguration.rs" 14 19 14 36 *)
 
 (* <reconfiguration::ReconfigurationLeadership as std::clone::Clone> *)
 
@@ -10,7 +10,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let clone_ReconfigurationLeadership [#"/workspace/crates/verified/src/reconfiguration.rs" 27 27 27 32]
+let clone_ReconfigurationLeadership [#"/workspace/crates/verified/src/reconfiguration.rs" 14 19 14 36]
   (self: t_ReconfigurationLeadership) (return (x: t_ReconfigurationLeadership)) = (! bb0
   [ bb0 = s0 [ s0 = [ &_ret <- self ] s1 | s1 = return {_ret} ] ]
   [ & _ret: t_ReconfigurationLeadership = Any.any_l () | & self: t_ReconfigurationLeadership = self ])

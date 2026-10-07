@@ -24,9 +24,7 @@ use krabka_protocol::owned::{
 };
 
 use crate::{
-    broker::Broker,
     codes,
-    error::BrokerError,
     handlers::{
         acl_wire::CLUSTER_RESOURCE_NAME, authorized_operations::authorized_operations_bits,
         offline_replicas::listener_endpoint,
@@ -56,128 +54,127 @@ fn wire_broker_id(node_id: u64) -> i32 {
     i32::try_from(node_id).unwrap_or(-1)
 }
 
-pub(crate) async fn handle(
-    broker: &Broker,
-    req: DescribeClusterRequest,
-    version: crate::handlers::ApiVersion,
-    ctx: &crate::handlers::RequestContext<'_>,
-) -> Result<DescribeClusterResponse, BrokerError> {
-    let image = broker.controller.current_image();
+context_handler! {
+    DescribeClusterRequest => DescribeClusterResponse,
+    (broker, req, version, ctx),
+    {
+        let image = broker.controller.current_image();
 
-    // KIP-919 endpoint-type check, matching Kafka's `AuthHelper` exactly. A
-    // broker listener only ever serves `BROKER`; the requested type decides
-    // which error the whole response carries. Neither branch echoes the
-    // requested `endpoint_type` back -- the error response leaves it at the
-    // schema default (`1`), same as Kafka's `AuthHelper.computeDescribeClusterResponse`.
-    if req.endpoint_type == ENDPOINT_TYPE_CONTROLLER {
-        let resp = DescribeClusterResponse {
-            error_code: codes::MISMATCHED_ENDPOINT_TYPE,
-            error_message: Some(
-                "The request was sent to an endpoint of type BROKER, but we wanted an endpoint \
+        // KIP-919 endpoint-type check, matching Kafka's `AuthHelper` exactly. A
+        // broker listener only ever serves `BROKER`; the requested type decides
+        // which error the whole response carries. Neither branch echoes the
+        // requested `endpoint_type` back -- the error response leaves it at the
+        // schema default (`1`), same as Kafka's `AuthHelper.computeDescribeClusterResponse`.
+        if req.endpoint_type == ENDPOINT_TYPE_CONTROLLER {
+            let resp = DescribeClusterResponse {
+                error_code: codes::MISMATCHED_ENDPOINT_TYPE,
+                error_message: Some(
+                    "The request was sent to an endpoint of type BROKER, but we wanted an endpoint \
                  of type CONTROLLER"
-                    .into(),
-            ),
-            ..Default::default()
-        };
-        return Ok(resp);
-    }
-    if req.endpoint_type != ENDPOINT_TYPE_BROKER {
-        // Anything other than BROKER or CONTROLLER is EndpointType.UNKNOWN.
-        // Kafka's v0 schema predates KIP-919's endpoint_type field and has no
-        // `UNSUPPORTED_ENDPOINT_TYPE` in its error-code table, so v0 answers
-        // INVALID_REQUEST instead.
-        let error_code = if version == 0 {
-            codes::INVALID_REQUEST
-        } else {
-            codes::UNSUPPORTED_ENDPOINT_TYPE
-        };
-        let resp = DescribeClusterResponse {
-            error_code,
-            error_message: Some(format!("Unsupported endpoint type {}", req.endpoint_type)),
-            ..Default::default()
-        };
-        return Ok(resp);
-    }
-
-    // KIP-919: a broker listener serves only BROKERS. KIP-1073 excludes known
-    // dead/fenced brokers unless the request opts in, and marks included
-    // unavailable rows as fenced. Unknown liveness entries remain eligible
-    // while a newly elected controller seeds its heartbeat registry.
-    let unavailable = crate::handlers::offline_replicas::unavailable_brokers(broker, &image).await;
-
-    // Kafka lists only the brokers with an endpoint on the request's listener
-    // (`KRaftMetadataCache.getBrokerNodes(listenerName)`); a broker without
-    // one is left out rather than advertised at another listener's address.
-    let listener = ctx.connection_listener_name;
-    let brokers: Vec<DescribeClusterBroker> = image
-        .brokers()
-        .filter(|b| req.include_fenced_brokers || !unavailable.contains(&b.node_id.0))
-        .filter_map(|b| {
-            let endpoint = listener_endpoint(b, listener)?;
-            Some(DescribeClusterBroker {
-                broker_id: wire_broker_id(b.node_id.0),
-                host: endpoint.host.clone(),
-                port: i32::from(endpoint.port),
-                rack: b.rack.clone(),
-                is_fenced: unavailable.contains(&b.node_id.0),
+                        .into(),
+                ),
                 ..Default::default()
-            })
-        })
-        .collect();
-
-    // controller_id: an unfenced registered broker, not the quorum leader.
-    // `Metadata` answers from the same helper. See `handlers::controller_id`.
-    // `AuthHelper.computeDescribeClusterResponse` answers -1 for an id that
-    // the broker list does not hold, so the id is drawn from the brokers with
-    // an endpoint on this listener, and checked against the list.
-    let controller_id =
-        crate::handlers::controller_id::advertised_controller_id_among(&image, &unavailable, |b| {
-            listener_endpoint(b, listener).is_some()
-        });
-    let controller_id = if brokers.iter().any(|b| b.broker_id == controller_id) {
-        controller_id
-    } else {
-        crate::handlers::controller_id::NO_CONTROLLER_ID
-    };
-
-    // KIP-430: only populate the bitfield when the client asked for it;
-    // otherwise leave the wire-default `i32::MIN` ("not present") sentinel.
-    // `Describe` gates only this field (matching Kafka's
-    // `AuthHelper.computeDescribeClusterResponse`), never the rest of the
-    // response: without `Describe` the bitfield reads `0` even though the
-    // principal may hold other Cluster operations.
-    let cluster_authorized_operations = if req.include_cluster_authorized_operations {
-        if crate::handlers::cluster_describe_denied(broker.config.authorizer.as_ref(), &image, ctx)
-        {
-            0
-        } else {
-            authorized_operations_bits(
-                broker.config.authorizer.as_ref(),
-                &image,
-                ctx,
-                ResourceType::Cluster,
-                CLUSTER_RESOURCE_NAME,
-            )
+            };
+            return Ok(resp);
         }
-    } else {
-        i32::MIN
-    };
+        if req.endpoint_type != ENDPOINT_TYPE_BROKER {
+            // Anything other than BROKER or CONTROLLER is EndpointType.UNKNOWN.
+            // Kafka's v0 schema predates KIP-919's endpoint_type field and has no
+            // `UNSUPPORTED_ENDPOINT_TYPE` in its error-code table, so v0 answers
+            // INVALID_REQUEST instead.
+            let error_code = if version == 0 {
+                codes::INVALID_REQUEST
+            } else {
+                codes::UNSUPPORTED_ENDPOINT_TYPE
+            };
+            let resp = DescribeClusterResponse {
+                error_code,
+                error_message: Some(format!("Unsupported endpoint type {}", req.endpoint_type)),
+                ..Default::default()
+            };
+            return Ok(resp);
+        }
 
-    Ok(DescribeClusterResponse {
-        error_code: codes::NONE,
-        error_message: None,
-        // Echo the requested endpoint type (KIP-919). v0 has no such field; the
-        // request default of `1` keeps the response byte-identical there.
-        endpoint_type: req.endpoint_type,
-        // Kafka's `Uuid.toString()` is URL-safe unpadded base64 of the 16 raw
-        // bytes, not `java.util.UUID`'s hyphenated form. See #1042.
-        cluster_id: crate::cluster_id::encode(image.cluster_id()),
-        controller_id,
-        brokers,
-        cluster_authorized_operations,
-        throttle_time_ms: 0,
-        ..Default::default()
-    })
+        // KIP-919: a broker listener serves only BROKERS. KIP-1073 excludes known
+        // dead/fenced brokers unless the request opts in, and marks included
+        // unavailable rows as fenced. Unknown liveness entries remain eligible
+        // while a newly elected controller seeds its heartbeat registry.
+        let unavailable = crate::handlers::offline_replicas::unavailable_brokers(broker, &image).await;
+
+        // Kafka lists only the brokers with an endpoint on the request's listener
+        // (`KRaftMetadataCache.getBrokerNodes(listenerName)`); a broker without
+        // one is left out rather than advertised at another listener's address.
+        let listener = ctx.connection_listener_name;
+        let brokers: Vec<DescribeClusterBroker> = image
+            .brokers()
+            .filter(|b| req.include_fenced_brokers || !unavailable.contains(&b.node_id.0))
+            .filter_map(|b| {
+                let endpoint = listener_endpoint(b, listener)?;
+                Some(DescribeClusterBroker {
+                    broker_id: wire_broker_id(b.node_id.0),
+                    host: endpoint.host.clone(),
+                    port: i32::from(endpoint.port),
+                    rack: b.rack.clone(),
+                    is_fenced: unavailable.contains(&b.node_id.0),
+                    ..Default::default()
+                })
+            })
+            .collect();
+
+        // controller_id: an unfenced registered broker, not the quorum leader.
+        // `Metadata` answers from the same helper. See `handlers::controller_id`.
+        // `AuthHelper.computeDescribeClusterResponse` answers -1 for an id that
+        // the broker list does not hold, so the id is drawn from the brokers with
+        // an endpoint on this listener, and checked against the list.
+        let controller_id =
+            crate::handlers::controller_id::advertised_controller_id_among(&image, &unavailable, |b| {
+                listener_endpoint(b, listener).is_some()
+            });
+        let controller_id = if brokers.iter().any(|b| b.broker_id == controller_id) {
+            controller_id
+        } else {
+            crate::handlers::controller_id::NO_CONTROLLER_ID
+        };
+
+        // KIP-430: only populate the bitfield when the client asked for it;
+        // otherwise leave the wire-default `i32::MIN` ("not present") sentinel.
+        // `Describe` gates only this field (matching Kafka's
+        // `AuthHelper.computeDescribeClusterResponse`), never the rest of the
+        // response: without `Describe` the bitfield reads `0` even though the
+        // principal may hold other Cluster operations.
+        let cluster_authorized_operations = if req.include_cluster_authorized_operations {
+            if crate::handlers::cluster_describe_denied(broker.config.authorizer.as_ref(), &image, ctx)
+            {
+                0
+            } else {
+                authorized_operations_bits(
+                    broker.config.authorizer.as_ref(),
+                    &image,
+                    ctx,
+                    ResourceType::Cluster,
+                    CLUSTER_RESOURCE_NAME,
+                )
+            }
+        } else {
+            i32::MIN
+        };
+
+        Ok(DescribeClusterResponse {
+            error_code: codes::NONE,
+            error_message: None,
+            // Echo the requested endpoint type (KIP-919). v0 has no such field; the
+            // request default of `1` keeps the response byte-identical there.
+            endpoint_type: req.endpoint_type,
+            // Kafka's `Uuid.toString()` is URL-safe unpadded base64 of the 16 raw
+            // bytes, not `java.util.UUID`'s hyphenated form. See #1042.
+            cluster_id: crate::cluster_id::encode(image.cluster_id()),
+            controller_id,
+            brokers,
+            cluster_authorized_operations,
+            throttle_time_ms: 0,
+            ..Default::default()
+        })
+    }
 }
 
 #[cfg(test)]
@@ -190,7 +187,7 @@ mod tests {
 
     use super::*;
     use crate::{
-        broker::BrokerHandle,
+        broker::{Broker, BrokerHandle},
         test_support::{DenyAll, peer, principal},
     };
 
@@ -322,9 +319,11 @@ mod tests {
         ];
 
         for case in cases {
-            let (broker_handle, _dir) = start_broker(Arc::new(DenyAll)).await;
-            let broker = broker_handle.broker_arc_for_test();
-            test_ctx!(ctx, "alice");
+            broker_fixture!(
+                (broker_handle, _dir, broker),
+                deny_all,
+                context(ctx, "alice")
+            );
             let req = DescribeClusterRequest {
                 endpoint_type: case.endpoint_type,
                 ..Default::default()
@@ -334,8 +333,7 @@ mod tests {
                 .await
                 .expect("handle");
 
-            let expected = DescribeClusterResponse {
-                throttle_time_ms: 0,
+            let expected = unthrottled_wire!(DescribeClusterResponse {
                 error_code: case.error_code,
                 error_message: Some(case.error_message.into()),
                 endpoint_type: 1,
@@ -343,8 +341,7 @@ mod tests {
                 controller_id: -1,
                 brokers: vec![],
                 cluster_authorized_operations: i32::MIN,
-                unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(vec![]),
-            };
+            });
             assert!(got == expected, "{}", case.name);
             broker_handle.shutdown().await;
         }
@@ -356,12 +353,7 @@ mod tests {
     /// 0x090a0b0c0d0e0f10L).toString()` produces for the same 16 bytes.
     #[tokio::test]
     async fn reports_cluster_id_in_kafka_base64_form() {
-        let known_cluster_id = uuid::Uuid::from_u128(0x0102_0304_0506_0708_090a_0b0c_0d0e_0f10);
-        let (broker_handle, _dir) = crate::test_support::start_broker_with(|cfg| {
-            cfg.cluster_id = Some(known_cluster_id);
-        })
-        .await;
-        let broker = broker_handle.broker_arc_for_test();
+        known_cluster_fixture!((known_cluster_id, broker_handle, _dir, broker));
         test_ctx!(ctx, "describer");
 
         let resp = handle(&broker, request(false), VERSION, &ctx)
@@ -380,8 +372,10 @@ mod tests {
     #[tokio::test]
     async fn the_authorized_operations_bitfield_is_filled_only_on_opt_in() {
         let authorizer = Arc::new(crate::authorizer::AllowAllAuthorizer);
-        let (broker_handle, _dir) = start_broker(Arc::clone(&authorizer) as _).await;
-        let broker = broker_handle.broker_arc_for_test();
+        broker_fixture!(
+            (broker_handle, _dir, broker),
+            start_broker(Arc::clone(&authorizer) as _)
+        );
         test_ctx!(ctx, "admin");
 
         let resp = handle(&broker, request(true), VERSION, &ctx)
@@ -500,13 +494,14 @@ mod tests {
     /// itself, which serves `PLAINTEXT` only.
     #[tokio::test]
     async fn brokers_without_an_endpoint_on_the_request_listener_are_left_out() {
-        let broker_row = |node_id: i32, listener: &str, port: i32| DescribeClusterBroker {
-            broker_id: node_id,
-            host: format!("{}-{node_id}", listener.to_lowercase()),
-            port,
-            rack: None,
-            is_fenced: false,
-            unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(vec![]),
+        let broker_row = |node_id: i32, listener: &str, port: i32| {
+            tagged_wire!(DescribeClusterBroker {
+                broker_id: node_id,
+                host: format!("{}-{node_id}", listener.to_lowercase()),
+                port,
+                rack: None,
+                is_fenced: false,
+            })
         };
         let cases: [(&str, Vec<DescribeClusterBroker>, &[i32]); 3] = [
             ("EXTERNAL", vec![broker_row(43, "EXTERNAL", 30_001)], &[43]),
@@ -533,8 +528,7 @@ mod tests {
             .await
             .expect("seed broker registrations");
         let broker = broker_handle.broker_arc_for_test();
-        let p = principal("admin");
-        let peer = peer();
+        request_identity!((p, peer), principal("admin"));
 
         for (listener, expected_brokers, controllers) in cases {
             let ctx = crate::handlers::RequestContext::new(
@@ -589,14 +583,13 @@ mod tests {
             .iter()
             .find(|b| b.broker_id == 42)
             .expect("seeded broker row");
-        let expected_seeded_row = DescribeClusterBroker {
+        let expected_seeded_row = tagged_wire!(DescribeClusterBroker {
             broker_id: 42,
             host: "broker-a".into(),
             port: 29092,
             rack: Some("rack-a".into()),
             is_fenced: false,
-            unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(vec![]),
-        };
+        });
         assert!(*seeded_row == expected_seeded_row);
     }
 }

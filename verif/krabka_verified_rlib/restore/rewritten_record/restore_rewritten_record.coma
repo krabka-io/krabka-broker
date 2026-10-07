@@ -1,20 +1,20 @@
-(* #"/workspace/crates/verified/src/restore/rewritten_record.rs" 151 0 155 23 *)
+(* #"/workspace/crates/verified/src/restore/rewritten_record.rs" 143 0 147 23 *)
 
-let%span sord = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
-let%span soption = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/option.rs" 49 19 49 79
-let%span soption'0 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/option.rs" 50 18 53 9
-let%span sops = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/ops.rs" 688 18 691 9
-let%span sops'0 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/ops.rs" 702 25 702 33
-let%span sops'1 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/ops.rs" 701 18 701 32
-let%span srecord_coordinates = "/workspace/crates/verified/src/restore/record_coordinates.rs" 190 10 195 1
-let%span srecord_coordinates'0 = "/workspace/crates/verified/src/restore/record_coordinates.rs" 161 8 164 9
-let%span srecord_coordinates'1 = "/workspace/crates/verified/src/restore/record_coordinates.rs" 176 8 181 65
-let%span srewritten_record = "/workspace/crates/verified/src/restore/rewritten_record.rs" 156 7 156 84
-let%span srewritten_record'0 = "/workspace/crates/verified/src/restore/rewritten_record.rs" 159 22 159 63
-let%span srewritten_record'1 = "/workspace/crates/verified/src/restore/rewritten_record.rs" 159 22 159 64
-let%span srewritten_record'2 = "/workspace/crates/verified/src/restore/rewritten_record.rs" 144 10 149 1
-let%span srewritten_record'3 = "/workspace/crates/verified/src/restore/rewritten_record.rs" 133 8 138 76
-let%span srewritten_record'4 = "/workspace/crates/verified/src/restore/rewritten_record.rs" 156 41 156 51
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span soption = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/option.rs" 49 19 49 79
+let%span soption'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/option.rs" 50 18 53 9
+let%span sops = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/ops.rs" 688 18 691 9
+let%span sops'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/ops.rs" 702 25 702 33
+let%span sops'1 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/ops.rs" 701 18 701 32
+let%span srecord_coordinates = "/workspace/crates/verified/src/restore/record_coordinates.rs" 184 10 189 1
+let%span srecord_coordinates'0 = "/workspace/crates/verified/src/restore/record_coordinates.rs" 156 8 159 9
+let%span srecord_coordinates'1 = "/workspace/crates/verified/src/restore/record_coordinates.rs" 169 8 174 65
+let%span srewritten_record = "/workspace/crates/verified/src/restore/rewritten_record.rs" 148 7 148 84
+let%span srewritten_record'0 = "/workspace/crates/verified/src/restore/rewritten_record.rs" 151 22 151 63
+let%span srewritten_record'1 = "/workspace/crates/verified/src/restore/rewritten_record.rs" 151 22 151 64
+let%span srewritten_record'2 = "/workspace/crates/verified/src/restore/rewritten_record.rs" 136 10 141 1
+let%span srewritten_record'3 = "/workspace/crates/verified/src/restore/rewritten_record.rs" 124 8 129 76
+let%span srewritten_record'4 = "/workspace/crates/verified/src/restore/rewritten_record.rs" 148 41 148 51
 
 use creusot.int.Int32
 use creusot.prelude.Any
@@ -23,7 +23,7 @@ use int.Int
 
 type closure0 = { c0: Int32.t }
 
-let closure0 [#"/workspace/crates/verified/src/restore/rewritten_record.rs" 156 41 156 51] [@coma:extspec]
+let closure0 [#"/workspace/crates/verified/src/restore/rewritten_record.rs" 148 41 148 51] [@coma:extspec]
   (self: closure0) (previous: Int32.t) (return (x: bool)) = bb0
   [ bb0 = s0 [ s0 = [ &_ret <- Int32.ge previous self.c0 ] s1 | s1 = return {_ret} ] ]
   [ & _ret: bool = Any.any_l () | & self: closure0 = self | & previous: Int32.t = previous ]
@@ -82,7 +82,7 @@ meta "rewrite_def" predicate ge_log_Int
 
 constant const_MAX: Int64.t = (9223372036854775807: Int64.t)
 
-function kafka_record_timestamp [#"/workspace/crates/verified/src/restore/record_coordinates.rs" 159 0 159 91] (frame: t_RestoreBatchFrame) (record: t_RestoreRecordDeltas) : int
+function kafka_record_timestamp [#"/workspace/crates/verified/src/restore/record_coordinates.rs" 154 0 154 91] (frame: t_RestoreBatchFrame) (record: t_RestoreRecordDeltas) : int
  = [%#srecord_coordinates'0] match frame.timestamp_type with
     | CreateTime -> Int64.to_int frame.base_timestamp + Int64.to_int record.timestamp_delta
     | LogAppendTime -> Int64.to_int frame.max_timestamp
@@ -90,7 +90,7 @@ function kafka_record_timestamp [#"/workspace/crates/verified/src/restore/record
 
 constant const_MIN: Int64.t = (-9223372036854775808: Int64.t)
 
-predicate restore_record_placeable [#"/workspace/crates/verified/src/restore/record_coordinates.rs" 174 0 174 94] (frame: t_RestoreBatchFrame) (record: t_RestoreRecordDeltas) =
+predicate restore_record_placeable [#"/workspace/crates/verified/src/restore/record_coordinates.rs" 167 0 167 94] (frame: t_RestoreBatchFrame) (record: t_RestoreRecordDeltas) =
   [%#srecord_coordinates'1] ge_log_Int (Int32.to_int frame.last_offset_delta) 0
   /\ ge_log_Int (Int32.to_int record.offset_delta) 0
   /\ Int32.to_int record.offset_delta <= Int32.to_int frame.last_offset_delta
@@ -166,7 +166,7 @@ let elim_Continue (_x: t_ControlFlow_Option_Infallible_tup2_i64_i64) (return (f0
       end}
     any) ]
 
-predicate restore_rewrite_record_legal [#"/workspace/crates/verified/src/restore/rewritten_record.rs" 127 0 131 9] (previous_offset_delta: t_Option_i32) (frame: t_RestoreBatchFrame) (record: t_RestoreRecordDeltas) =
+predicate restore_rewrite_record_legal [#"/workspace/crates/verified/src/restore/rewritten_record.rs" 118 0 122 9] (previous_offset_delta: t_Option_i32) (frame: t_RestoreBatchFrame) (record: t_RestoreRecordDeltas) =
   [%#srewritten_record'3] restore_record_placeable frame record
   /\ match previous_offset_delta with
       | Some previous -> Int32.to_int previous < Int32.to_int record.offset_delta
@@ -178,7 +178,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let restore_rewritten_record [#"/workspace/crates/verified/src/restore/rewritten_record.rs" 151 0 155 23]
+let restore_rewritten_record [#"/workspace/crates/verified/src/restore/rewritten_record.rs" 143 0 147 23]
   (previous_offset_delta: t_Option_i32) (frame: t_RestoreBatchFrame) (record: t_RestoreRecordDeltas)
   (return (x: t_Option_tup2_i64_i64)) = (! bb0
   [ bb0 = s0

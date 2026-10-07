@@ -109,9 +109,7 @@ async fn an_approved_proposal_survives_a_controller_failover() {
         .await;
     check!(stored(&after_client, id).await.consumed_at_ms != 0);
 
-    for (handle, _, _) in cluster {
-        handle.shutdown().await;
-    }
+    crate::support::shutdown_cluster(cluster).await;
 }
 
 /// One unsigned approval by `user`, in the metadata form.

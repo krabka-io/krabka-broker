@@ -127,6 +127,18 @@ mod tests {
         test_support::{DenyAll, principal},
     };
 
+    // Expand the setup in the caller so receiver and metrics keep their scopes.
+    macro_rules! denial_fixture {
+        ($rx:ident, $metrics:ident, $authz:ident, $principal:ident, $host:ident, $image:ident) => {
+            let (log, mut $rx) = krabka_audit::AuditLog::new(8);
+            let $metrics = crate::metrics::BrokerMetrics::new();
+            let $authz = AuditingAuthorizer::new(Arc::new(DenyAll), log, $metrics.clone());
+            let $principal = principal("anonymous");
+            let $host: SocketAddr = "10.0.0.9:5555".parse().unwrap();
+            let $image = krabka_metadata::MetadataImage::default();
+        };
+    }
+
     fn denied_label() -> crate::metrics::AuthorizationDeniedLabel {
         crate::metrics::AuthorizationDeniedLabel {
             operation: "Write".to_string(),
@@ -136,13 +148,7 @@ mod tests {
 
     #[tokio::test]
     async fn deny_decision_emits_audit_record() {
-        let (log, mut rx) = krabka_audit::AuditLog::new(8);
-        let metrics = crate::metrics::BrokerMetrics::new();
-        let authz = AuditingAuthorizer::new(Arc::new(DenyAll), log, metrics.clone());
-
-        let principal = principal("anonymous");
-        let host: SocketAddr = "10.0.0.9:5555".parse().unwrap();
-        let image = krabka_metadata::MetadataImage::default();
+        denial_fixture!(rx, metrics, authz, principal, host, image);
         let result = authz.authorize(
             &image,
             &AuthorizationRequest {
@@ -274,12 +280,7 @@ mod tests {
     /// count, where the same Deny through `authorize` leaves both.
     #[tokio::test]
     async fn a_quiet_deny_leaves_no_audit_record_and_no_count() {
-        let (log, mut rx) = krabka_audit::AuditLog::new(8);
-        let metrics = crate::metrics::BrokerMetrics::new();
-        let authz = AuditingAuthorizer::new(Arc::new(DenyAll), log, metrics.clone());
-        let principal = principal("anonymous");
-        let host: SocketAddr = "10.0.0.9:5555".parse().unwrap();
-        let image = krabka_metadata::MetadataImage::default();
+        denial_fixture!(rx, metrics, authz, principal, host, image);
         let request = AuthorizationRequest {
             principal: &principal,
             host: &host,

@@ -5,10 +5,7 @@ use crate::list_offsets::ListOffsetsSelectionDecision;
 
 fn check_window(window: SparseTimestampWindow<'_>, base: i64, floor: i64, target: i64) {
     let (offsets, times, rows) = window;
-    let expected_rows: Vec<_> = rows
-        .iter()
-        .map(|&(indexed, through)| (*times[..=through].iter().max().unwrap(), offsets[indexed]))
-        .collect();
+    let expected_rows: Vec<_> = prefix_maxima(window);
     let untrimmed = times.iter().position(|time| *time >= target);
     assert!(
         constructed_time_index_preserves_first(offsets, times, rows, target)
@@ -60,13 +57,6 @@ fn check_tiers(
     );
 }
 
-fn sparse_rows(length: usize, step: usize, span: usize) -> Vec<(usize, usize)> {
-    (0..length)
-        .step_by(step)
-        .map(|i| (i, (i + span).min(length - 1)))
-        .collect()
-}
-
 proptest! {
     #[test]
     fn constructed_rows_and_retained_candidates_match_independent_oracles(
@@ -75,9 +65,7 @@ proptest! {
         base in 0i64..=i64::MAX - i64::from(u32::MAX),
         step in 1usize..8, span in 0usize..8,
     ) {
-        let offsets: Vec<_> = records.keys().copied().collect();
-        let times: Vec<_> = records.values().copied().collect();
-        let rows = sparse_rows(records.len(), step, span);
+        let (offsets, times, rows) = timestamp_records(&records, step, span);
         check_window((&offsets, &times, &rows), base, floor, target);
     }
 
@@ -89,9 +77,8 @@ proptest! {
         floor in 0i64..1200, bound in 0i64..1200, epoch in -1i32..=i32::MAX,
         step in 1usize..8, span in 0usize..8,
     ) {
-        let ro: Vec<_> = remote.keys().copied().collect(); let rt: Vec<_> = remote.values().copied().collect();
-        let lo: Vec<_> = local.keys().copied().collect(); let lt: Vec<_> = local.values().copied().collect();
-        let rr = sparse_rows(ro.len(), step, span); let lr = sparse_rows(lo.len(), step, span);
+        let (ro, rt, rr) = timestamp_records(&remote, step, span);
+        let (lo, lt, lr) = timestamp_records(&local, step, span);
         check_tiers((&ro, &rt, &rr), (&lo, &lt, &lr), bases, (target, floor, bound), epoch);
     }
 }

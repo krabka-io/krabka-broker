@@ -126,9 +126,7 @@ mod tests {
         // `Histogram::sum`/`count` are behind prometheus-client's `test-util`
         // feature, so the rendered exposition is what a test reads — the same
         // text an operator scrapes.
-        let mut rendered = String::new();
-        let registry = metrics.registry.lock().await;
-        prometheus_client::encoding::text::encode(&mut rendered, &registry).unwrap();
+        crate::metrics::test_support::render_registry!(metrics, rendered, registry; unwrap());
 
         for expected in [
             "krabka_broker_request_local_duration_seconds_count{api_key=\"Produce\"} 1",

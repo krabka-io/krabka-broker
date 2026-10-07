@@ -4,14 +4,8 @@
 use std::{collections::HashMap, sync::Arc, time::Duration};
 
 use assert2::check;
-use bytes::{BufMut as _, Bytes};
-use krabka_protocol::{
-    Encode as _,
-    owned::{
-        consumer_protocol_subscription::ConsumerProtocolSubscription,
-        offset_delete_response::{self, OffsetDeleteResponse},
-    },
-};
+use bytes::Bytes;
+use krabka_protocol::owned::offset_delete_response::{self, OffsetDeleteResponse};
 
 use super::{
     handle,
@@ -28,25 +22,14 @@ use crate::{
         },
         group::{CoordinatorGroup, GroupKind},
     },
-    test_support::{DenyAll, peer, request_context},
+    test_support::{DenyAll, peer},
 };
 
 async fn create_topic(broker: &BrokerHandle, name: &str) {
     crate::handlers::test_support::create_topic(broker, "offset-delete-test", name, 1).await;
 }
 
-/// A classic `ConsumerProtocolSubscription` blob: the `i16` version, then the
-/// v0 body.
-fn subscription(topics: &[&str]) -> Bytes {
-    let sub = ConsumerProtocolSubscription {
-        topics: topics.iter().map(|s| (*s).to_string()).collect(),
-        ..Default::default()
-    };
-    let mut out = bytes::BytesMut::new();
-    out.put_i16(0);
-    sub.encode(&mut out, 0).unwrap();
-    out.freeze()
-}
+use crate::coordinator::unified::actor::test_support::subscription_blob as subscription;
 
 /// A `Stable` classic group with one member whose selected protocol carries
 /// `metadata`.
@@ -202,9 +185,11 @@ async fn offset_delete_matches_kafka_whole_responses() {
         ),
     ];
 
-    let principal = crate::test_support::principal("alice");
-    let peer = peer();
-    let ctx = request_context(&principal, &peer, "offset-delete-client");
+    request_identity!(
+        (principal, peer, ctx),
+        crate::test_support::principal("alice"),
+        client_id = "offset-delete-client"
+    );
     let version = offset_delete_response::MAX_VERSION;
     let before_ms = crate::time_util::now_ms();
     for (name, broker, group_id, topics, want) in rows {

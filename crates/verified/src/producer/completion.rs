@@ -3,12 +3,10 @@ use creusot_std::prelude::*;
 #[cfg(creusot)]
 mod coverage;
 
-// cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
-#[cfg(creusot)]
-#[cfg_attr(test, mutants::skip)]
-#[logic(open)]
+open_logic! {
 pub fn completion_offset(ends: Seq<i64>, incoming: i64, index: Int) -> Int {
     pearlite! { if index == ends.len() { incoming@ } else { ends[index]@ } }
+}
 }
 
 /// Name source membership so coverage laws have a term for each old origin.
@@ -29,9 +27,9 @@ pub fn completion_source_selected(selected: Seq<usize>, source: Int) -> bool {
 /// The host supplies sorted retained batches and a truthful incoming batch.
 #[requires(ends@.len() <= 5)]
 #[requires(current == None ==> ends@.len() == 0)]
-#[requires(forall<i: Int, j: Int> 0 <= i && i < j && j < ends@.len() ==> ends@[i]@ < ends@[j]@)]
-#[ensures(result.0 == (match current { None => true, Some(value) => value@ <= epoch@ }))]
-#[ensures(result.1@.len() <= 5 && (result.0 ==> result.1@.len() > 0))]
+#[requires(crate::sequence::strictly_increasing(ends@))]
+#[ensures(result.0 == (completion_epoch_accepts(current, epoch)))]
+#[ensures(completion_window_bounded(result.1@, result.0))]
 #[ensures(forall<j: Int> 0 <= j && j < result.1@.len() ==>
     result.1@[j]@ <= ends@.len()
     && (result.1@[j]@ < ends@.len() ==> current != None
@@ -45,12 +43,10 @@ pub fn completion_source_selected(selected: Seq<usize>, source: Int) -> bool {
 #[ensures(forall<i: Int> 0 <= i && i < ends@.len()
     && (match current { Some(value) => epoch@ <= value@, None => false })
     && !completion_source_selected(result.1@, i) ==>
-        result.1@.len() == 5 && (forall<j: Int> 0 <= j && j < result.1@.len() ==>
-            ends@[i]@ < completion_offset(ends@, incoming, result.1@[j]@)))]
+        five_completions_above(ends@, incoming, result.1@, ends@[i]@))]
 #[ensures(result.0 && !(exists<j: Int> 0 <= j && j < result.1@.len()
     && completion_offset(ends@, incoming, result.1@[j]@) == incoming@) ==>
-        result.1@.len() == 5 && (forall<j: Int> 0 <= j && j < result.1@.len() ==>
-            incoming@ < completion_offset(ends@, incoming, result.1@[j]@)))]
+        five_completions_above(ends@, incoming, result.1@, incoming@))]
 #[ensures(!result.0 ==> result.1@.len() == ends@.len()
     && (forall<j: Int> 0 <= j && j < ends@.len() ==> result.1@[j]@ == j))]
 #[must_use]
@@ -124,4 +120,30 @@ pub fn producer_completion_window(
     #[cfg(creusot)]
     proof_assert!(coverage::lemma_inserted_window(ends@, incoming, position@, first@, selected@));
     (accepted, selected)
+}
+
+open_logic! {
+/// A physical completion is accepted only at the current epoch or a newer epoch.
+pub(crate) fn completion_epoch_accepts(current: Option<i16>, incoming: i16) -> bool {
+    pearlite! { match current { None => true, Some(previous) => previous@ <= incoming@ } }
+}
+}
+
+open_logic! {
+/// A completion retains at most five entries and every accepted completion retains one.
+pub(crate) fn completion_window_bounded(selected: Seq<usize>, accepted: bool) -> bool {
+    pearlite! { selected.len() <= 5 && (accepted ==> selected.len() > 0) }
+}
+}
+
+open_logic! {
+/// All five retained completions are strictly above the omitted source.
+fn five_completions_above(
+    ends: Seq<i64>,
+    incoming: i64,
+    selected: Seq<usize>,
+    candidate: Int,
+) -> bool {
+    pearlite! { selected.len() == 5 && (forall<j: Int> 0 <= j && j < selected.len() ==> candidate < completion_offset(ends, incoming, selected[j]@)) }
+}
 }

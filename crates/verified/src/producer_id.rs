@@ -1,28 +1,22 @@
 //! Producer-ID block allocation fencing and exact range construction.
 
-#[cfg(creusot)]
-use std::clone::Clone;
+use creusot_std::prelude::*;
 
-#[cfg(creusot)]
-use creusot_std::prelude::DeepModel;
-use creusot_std::prelude::ensures;
+model_types! {
+    @proof (derive(std::clone::Clone, Copy, DeepModel));
+    pub struct ProducerIdBlockPlan {
+        pub first: i64,
+        pub len: i32,
+        pub next: i64,
+    }
 
-#[cfg_attr(creusot, derive(Clone, Copy, DeepModel))]
-#[cfg_attr(not(creusot), derive(Clone, Copy, Debug, PartialEq, Eq))]
-pub struct ProducerIdBlockPlan {
-    pub first: i64,
-    pub len: i32,
-    pub next: i64,
-}
-
-#[cfg_attr(creusot, derive(Clone, Copy, DeepModel))]
-#[cfg_attr(not(creusot), derive(Clone, Copy, Debug, PartialEq, Eq))]
-pub enum ProducerIdBlockAllocationDecision {
-    BrokerNotRegistered,
-    StaleBrokerEpoch,
-    InvalidFrontier,
-    Exhausted,
-    Allocate(ProducerIdBlockPlan),
+    pub enum ProducerIdBlockAllocationDecision {
+        BrokerNotRegistered,
+        StaleBrokerEpoch,
+        InvalidFrontier,
+        Exhausted,
+        Allocate(ProducerIdBlockPlan),
+    }
 }
 
 /// Fence one broker generation and construct its exact positive contiguous

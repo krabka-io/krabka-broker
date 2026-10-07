@@ -10,7 +10,7 @@ let%span sspool_append_decision'5 = "/workspace/crates/verified/src/audit/spool_
 let%span sspool_append_decision'6 = "/workspace/crates/verified/src/audit/spool_append_decision.rs" 89 10 90 26
 let%span sspool_append_decision'7 = "/workspace/crates/verified/src/audit/spool_append_decision.rs" 91 10 93 63
 let%span sspool_append_decision'8 = "/workspace/crates/verified/src/audit/spool_append_decision.rs" 94 10 95 51
-let%span sord = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
 
 use creusot.int.UInt64
 use creusot.prelude.Any

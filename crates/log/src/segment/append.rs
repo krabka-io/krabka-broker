@@ -14,6 +14,7 @@ use tracing::instrument;
 use super::{
     Segment,
     io::{write_all, write_all_vectored},
+    lifecycle::WriteSnapshot,
 };
 use crate::error::LogError;
 
@@ -61,38 +62,22 @@ impl Segment {
         batch: &RecordBatch,
         index_interval: ByteSize,
     ) -> Result<u64, LogError> {
-        if self.sealed {
-            return Err(LogError::Io(std::io::Error::other("segment is sealed")));
-        }
+        self.ensure_writable()?;
 
         let mut buf = bytes::BytesMut::with_capacity(batch.encoded_len());
         batch.encode(&mut buf)?;
         let bytes = buf.freeze();
 
-        let (last_offset, new_log_size) =
-            self.append_coordinates(batch.base_offset, batch.last_offset_delta, bytes.len())?;
-        let position = self.log_size;
-        let previous = self.write_snapshot();
-        let index_entry = self.index_entry_for(position, last_offset, index_interval)?;
         // The active file cursor is kept at log_size by open/recovery/truncate,
         // so the hot append path does not need an lseek before every write.
-        if let Err(error) = write_all(&*self.io, &self.log_file, &bytes) {
-            self.rollback_failed_write(position, previous)?;
-            return Err(error.into());
-        }
-        self.log_size = new_log_size;
-
-        self.record_batch(last_offset, batch.max_timestamp);
-
-        if let Some(entry) = index_entry
-            && let Err(error) = self.append_index_entries(entry)
-        {
-            self.rollback_failed_write(position, previous)?;
-            return Err(error);
-        }
-
-        tracing::Span::current().record("position", position);
-        Ok(position)
+        self.write_batch(
+            batch.base_offset,
+            batch.last_offset_delta,
+            bytes.len(),
+            batch.max_timestamp,
+            index_interval,
+            |io, file| write_all(io, file, &bytes),
+        )
     }
 
     /// Append a batch **verbatim** and write the producer's exact wire bytes.
@@ -135,9 +120,7 @@ impl Segment {
         leader_epoch: LeaderEpoch,
         index_interval: ByteSize,
     ) -> Result<u64, LogError> {
-        if self.sealed {
-            return Err(LogError::Io(std::io::Error::other("segment is sealed")));
-        }
+        self.ensure_writable()?;
         if bytes.len() < HEADER_LEN {
             return Err(LogError::Corrupt(
                 "verbatim batch shorter than v2 header".into(),
@@ -158,27 +141,61 @@ impl Segment {
         // The protocol patcher writes the raw KIP-320 wire `int32`; unwrap here.
         patch_base_offset_and_leader_epoch(&mut header, base_offset.0, leader_epoch.0);
 
-        let (last_offset, new_log_size) =
-            self.append_coordinates(base_offset.0, last_offset_delta, bytes.len())?;
+        let mut bufs = [IoSlice::new(&header), IoSlice::new(&bytes[HEADER_LEN..])];
+        self.write_batch(
+            base_offset.0,
+            last_offset_delta,
+            bytes.len(),
+            max_timestamp,
+            index_interval,
+            |io, file| write_all_vectored(io, file, &mut bufs),
+        )
+    }
+
+    fn ensure_writable(&self) -> Result<(), LogError> {
+        if self.sealed {
+            return Err(LogError::Io(std::io::Error::other("segment is sealed")));
+        }
+        Ok(())
+    }
+
+    fn write_batch(
+        &mut self,
+        base: i64,
+        delta: i32,
+        len: usize,
+        max_timestamp: i64,
+        index_interval: ByteSize,
+        write: impl FnOnce(&dyn crate::io::LogIo, &std::fs::File) -> std::io::Result<()>,
+    ) -> Result<u64, LogError> {
+        let (last_offset, new_log_size) = self.append_coordinates(base, delta, len)?;
         let position = self.log_size;
         let previous = self.write_snapshot();
         let index_entry = self.index_entry_for(position, last_offset, index_interval)?;
-        let mut bufs = [IoSlice::new(&header), IoSlice::new(&bytes[HEADER_LEN..])];
-        if let Err(error) = write_all_vectored(&*self.io, &self.log_file, &mut bufs) {
+        if let Err(error) = write(&*self.io, &self.log_file) {
             self.rollback_failed_write(position, previous)?;
             return Err(error.into());
         }
         self.log_size = new_log_size;
+        self.finish_append(position, previous, index_entry, last_offset, max_timestamp)
+    }
 
+    /// Publish the completed write and roll back its bytes if an index write fails.
+    fn finish_append(
+        &mut self,
+        position: u64,
+        previous: WriteSnapshot,
+        index_entry: Option<(u32, u32)>,
+        last_offset: i64,
+        max_timestamp: i64,
+    ) -> Result<u64, LogError> {
         self.record_batch(last_offset, max_timestamp);
-
         if let Some(entry) = index_entry
             && let Err(error) = self.append_index_entries(entry)
         {
             self.rollback_failed_write(position, previous)?;
             return Err(error);
         }
-
         tracing::Span::current().record("position", position);
         Ok(position)
     }
@@ -245,13 +262,12 @@ mod tests {
 
     use super::*;
     use crate::segment::test_support::{
-        DENSE_INDEX, NO_LIMIT, sample_batch, test_batch_at, test_segment,
+        DENSE_INDEX, NO_LIMIT, sample_batch, seeded_segment, test_batch_at, test_segment,
     };
 
     #[test]
     fn append_then_read_back() {
-        let dir = tempdir().unwrap();
-        let mut seg = Segment::create(dir.path(), Offset(0)).unwrap();
+        let (_dir, mut seg) = crate::segment::test_support::test_segment();
         let b1 = sample_batch(0, 3, 1_000_000);
         let b2 = sample_batch(3, 2, 2_000_000);
         seg.append(&b1, kibibytes(4)).unwrap();
@@ -263,8 +279,7 @@ mod tests {
 
     #[test]
     fn append_rejects_offset_successor_overflow_before_writing() {
-        let dir = tempdir().unwrap();
-        let mut seg = Segment::create(dir.path(), Offset(i64::MAX)).unwrap();
+        let (dir, mut seg) = crate::segment::test_support::segment_at(i64::MAX);
         let batch = sample_batch(i64::MAX, 1, 100);
 
         let error = seg.append(&batch, DENSE_INDEX).unwrap_err();
@@ -282,8 +297,7 @@ mod tests {
     #[test]
     fn append_after_truncate_writes_at_new_eof() {
         let dir = tempdir().unwrap();
-        let mut seg = Segment::create(dir.path(), Offset(0)).unwrap();
-        seg.append(&sample_batch(0, 1, 100), DENSE_INDEX).unwrap();
+        let mut seg = seeded_segment(dir.path(), 0, &[(0, 1, 100)]);
         let expected_position = seg.size().bytes_u64();
         seg.append(&sample_batch(1, 1, 200), DENSE_INDEX).unwrap();
 
@@ -298,8 +312,7 @@ mod tests {
 
     #[test]
     fn append_to_sealed_segment_errors() {
-        let dir = tempdir().unwrap();
-        let mut seg = Segment::create(dir.path(), Offset(0)).unwrap();
+        let (_dir, mut seg) = crate::segment::test_support::test_segment();
         seg.seal().unwrap();
         assert2::assert!(seg.is_sealed());
         let err = seg

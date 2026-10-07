@@ -54,15 +54,20 @@ mod tests {
 
     use super::*;
 
-    #[test]
-    fn allow_all_returns_allow_for_any_request() {
-        let img = MetadataImage::new(Uuid::nil());
-        let p = Principal {
+    fn request_identity() -> (MetadataImage, Principal, SocketAddr) {
+        let image = MetadataImage::new(Uuid::nil());
+        let principal = Principal {
             name: "alice".into(),
             auth_method: AuthMethod::SaslPlain,
             groups: vec![],
         };
-        let host: SocketAddr = "1.2.3.4:9092".parse().unwrap();
+        let host = "1.2.3.4:9092".parse().unwrap();
+        (image, principal, host)
+    }
+
+    #[test]
+    fn allow_all_returns_allow_for_any_request() {
+        let (img, p, host) = request_identity();
         let req = AuthorizationRequest {
             principal: &p,
             host: &host,
@@ -80,13 +85,7 @@ mod tests {
 
     #[test]
     fn allow_all_authorizes_by_resource_type_for_any_request() {
-        let img = MetadataImage::new(Uuid::nil());
-        let p = Principal {
-            name: "alice".into(),
-            auth_method: AuthMethod::SaslPlain,
-            groups: vec![],
-        };
-        let host: SocketAddr = "1.2.3.4:9092".parse().unwrap();
+        let (img, p, host) = request_identity();
         assert2::assert!(
             AllowAllAuthorizer.authorize_by_resource_type(
                 &img,

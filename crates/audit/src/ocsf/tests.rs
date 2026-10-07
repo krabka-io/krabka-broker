@@ -17,120 +17,67 @@ fn product() -> ProductInfo {
     }
 }
 
+fn check_fields(value: &serde_json::Value, expected: &[(&str, serde_json::Value)]) {
+    for (path, expected) in expected {
+        check!(value.pointer(path) == Some(expected), "field {path}");
+    }
+}
+
 #[test]
 fn authentication_failure_maps_to_3002() {
-    let ev = AuditEvent::Authentication {
-        outcome: AuditOutcome::Failure,
-        mechanism: "SASL/PLAIN".into(),
-        principal: AuditPrincipal {
-            name: "alice".into(),
-            auth_method: "SaslPlain".into(),
-        },
-        source: AuditEndpoint {
-            ip: "10.0.0.1".into(),
-            port: 51120,
-        },
-        reason: Some("authentication failed".into()),
-        time_ms: 1_700_000_000_000,
-    };
+    let ev = crate::test_support::authentication(
+        51120,
+        Some("authentication failed"),
+        1_700_000_000_000,
+    );
     let j = to_ocsf(&ev, &product());
-    check!(
-        (
-            j["class_uid"].clone(),
-            j["category_uid"].clone(),
-            j["status_id"].clone(),
-            j["time"].clone(),
-            j["actor"]["user"]["name"].clone(),
-            j["src_endpoint"]["ip"].clone(),
-            j["src_endpoint"]["port"].clone(),
-            j["auth_protocol"].clone(),
-            j["metadata"]["product"]["vendor_name"].clone(),
-        ) == (
-            serde_json::json!(3002),
-            serde_json::json!(3),
-            serde_json::json!(2),
-            serde_json::json!(1_700_000_000_000_i64),
-            serde_json::json!("alice"),
-            serde_json::json!("10.0.0.1"),
-            serde_json::json!(51120),
-            serde_json::json!("SASL/PLAIN"),
-            serde_json::json!("Krabka"),
-        )
+    check_fields(
+        &j,
+        &[
+            ("/class_uid", serde_json::json!(3002)),
+            ("/category_uid", serde_json::json!(3)),
+            ("/status_id", serde_json::json!(2)),
+            ("/time", serde_json::json!(1_700_000_000_000_i64)),
+            ("/actor/user/name", serde_json::json!("alice")),
+            ("/src_endpoint/ip", serde_json::json!("10.0.0.1")),
+            ("/src_endpoint/port", serde_json::json!(51120)),
+            ("/auth_protocol", serde_json::json!("SASL/PLAIN")),
+            ("/metadata/product/vendor_name", serde_json::json!("Krabka")),
+        ],
     );
 }
 
 #[test]
 fn authorization_denied_maps_to_3003_failure() {
-    let ev = AuditEvent::AuthorizationDenied {
-        principal: AuditPrincipal {
-            name: "bob".into(),
-            auth_method: "MTls".into(),
-        },
-        source: AuditEndpoint {
-            ip: "10.0.0.2".into(),
-            port: 4444,
-        },
-        resource_type: "Topic".into(),
-        resource_name: "secrets".into(),
-        operation: "Write".into(),
-        time_ms: 5,
-    };
+    let ev = crate::test_support::denied(5);
     let j = to_ocsf(&ev, &product());
-    check!(
-        (
-            j["class_uid"].clone(),
-            j["status_id"].clone(),
-            j["type_uid"].clone(),
-            j["actor"]["user"]["name"].clone(),
-            j["resources"][0]["type"].clone(),
-            j["resources"][0]["name"].clone(),
-            j["operation"].clone(),
-        ) == (
-            serde_json::json!(3003),
-            serde_json::json!(2),
-            serde_json::json!(300_302_i64),
-            serde_json::json!("bob"),
-            serde_json::json!("Topic"),
-            serde_json::json!("secrets"),
-            serde_json::json!("Write"),
-        )
+    check_fields(
+        &j,
+        &[
+            ("/class_uid", serde_json::json!(3003)),
+            ("/status_id", serde_json::json!(2)),
+            ("/type_uid", serde_json::json!(300_302_i64)),
+            ("/actor/user/name", serde_json::json!("bob")),
+            ("/resources/0/type", serde_json::json!("Topic")),
+            ("/resources/0/name", serde_json::json!("secrets")),
+            ("/operation", serde_json::json!("Write")),
+        ],
     );
 }
 
 #[test]
 fn admin_operation_maps_to_6003_with_resources() {
-    let ev = AuditEvent::AdminOperation {
-        outcome: AuditOutcome::Success,
-        principal: AuditPrincipal {
-            name: "admin".into(),
-            auth_method: "MTls".into(),
-        },
-        source: AuditEndpoint {
-            ip: "10.0.0.3".into(),
-            port: 9092,
-        },
-        operation: "CreateTopics".into(),
-        resources: vec![AuditResource {
-            resource_type: "Topic".into(),
-            name: "orders".into(),
-        }],
-        time_ms: 6,
-    };
+    let ev = crate::test_support::admin(6);
     let j = to_ocsf(&ev, &product());
-    check!(
-        (
-            j["class_uid"].clone(),
-            j["category_uid"].clone(),
-            j["status_id"].clone(),
-            j["api"]["operation"].clone(),
-            j["resources"][0]["name"].clone(),
-        ) == (
-            serde_json::json!(6003),
-            serde_json::json!(6),
-            serde_json::json!(1),
-            serde_json::json!("CreateTopics"),
-            serde_json::json!("orders"),
-        )
+    check_fields(
+        &j,
+        &[
+            ("/class_uid", serde_json::json!(6003)),
+            ("/category_uid", serde_json::json!(6)),
+            ("/status_id", serde_json::json!(1)),
+            ("/api/operation", serde_json::json!("CreateTopics")),
+            ("/resources/0/name", serde_json::json!("orders")),
+        ],
     );
 }
 
@@ -143,6 +90,34 @@ fn expected_metadata() -> serde_json::Value {
             "version": "0.3.7",
         }
     })
+}
+
+fn unsigned_privilege(
+    identity: (AuditOutcome, PrivilegedPhase, &str, &str, &str),
+    actors: (AuditPrincipal, Vec<AuditPrincipal>),
+    source: &AuditEndpoint,
+    reason: &str,
+    time_ms: i64,
+) -> AuditEvent {
+    let (outcome, phase, action, target, proposal_id) = identity;
+    let (principal, counterparties) = actors;
+    AuditEvent::PrivilegedAction {
+        outcome,
+        phase,
+        action: action.into(),
+        target: target.into(),
+        proposal_id: proposal_id.into(),
+        principal,
+        counterparties,
+        approver_set_fingerprint: "f00dcafe".into(),
+        key_id: String::new(),
+        signature: vec![],
+        signature_verified: false,
+        signed_at_ms: 0,
+        source: source.clone(),
+        reason: reason.into(),
+        time_ms,
+    }
 }
 
 #[test]
@@ -166,23 +141,7 @@ fn privileged_action_maps_to_6003_with_the_whole_body() {
     let cases = [
         (
             "signed freeze, verified, no proposal",
-            AuditEvent::PrivilegedAction {
-                outcome: AuditOutcome::Success,
-                phase: PrivilegedPhase::Applied,
-                action: "topic_freeze".into(),
-                target: "orders".into(),
-                proposal_id: String::new(),
-                principal: alice.clone(),
-                counterparties: vec![],
-                approver_set_fingerprint: String::new(),
-                key_id: "op-1".into(),
-                signature: vec![0xde, 0xad, 0xbe, 0xef],
-                signature_verified: true,
-                signed_at_ms: 0,
-                source: source.clone(),
-                reason: "incident 42".into(),
-                time_ms: 10,
-            },
+            crate::test_support::privileged_freeze(vec![0xde, 0xad, 0xbe, 0xef], 0, 10),
             serde_json::json!({
                 "class_uid": 6003,
                 "category_uid": 6,
@@ -214,23 +173,19 @@ fn privileged_action_maps_to_6003_with_the_whole_body() {
         ),
         (
             "unsigned two-person consumption",
-            AuditEvent::PrivilegedAction {
-                outcome: AuditOutcome::Success,
-                phase: PrivilegedPhase::Consumed,
-                action: "unclean_elect_leaders".into(),
-                target: "orders-3".into(),
-                proposal_id: "bg-7".into(),
-                principal: carol.clone(),
-                counterparties: vec![alice.clone(), bob.clone()],
-                approver_set_fingerprint: "f00dcafe".into(),
-                key_id: String::new(),
-                signature: vec![],
-                signature_verified: false,
-                signed_at_ms: 0,
-                source: source.clone(),
-                reason: String::new(),
-                time_ms: 11,
-            },
+            unsigned_privilege(
+                (
+                    AuditOutcome::Success,
+                    PrivilegedPhase::Consumed,
+                    "unclean_elect_leaders",
+                    "orders-3",
+                    "bg-7",
+                ),
+                (carol.clone(), vec![alice.clone(), bob.clone()]),
+                &source,
+                "",
+                11,
+            ),
             serde_json::json!({
                 "class_uid": 6003,
                 "category_uid": 6,
@@ -265,26 +220,25 @@ fn privileged_action_maps_to_6003_with_the_whole_body() {
         ),
         (
             "bypassed gate reports failure",
-            AuditEvent::PrivilegedAction {
-                outcome: AuditOutcome::Failure,
-                phase: PrivilegedPhase::Bypassed,
-                action: "unclean_recovery".into(),
-                target: "orders-9".into(),
-                proposal_id: String::new(),
-                principal: AuditPrincipal {
-                    name: "broker".into(),
-                    auth_method: "Internal".into(),
-                },
-                counterparties: vec![],
-                approver_set_fingerprint: "f00dcafe".into(),
-                key_id: String::new(),
-                signature: vec![],
-                signature_verified: false,
-                signed_at_ms: 0,
-                source: source.clone(),
-                reason: "background recovery ran without an approval".into(),
-                time_ms: 12,
-            },
+            unsigned_privilege(
+                (
+                    AuditOutcome::Failure,
+                    PrivilegedPhase::Bypassed,
+                    "unclean_recovery",
+                    "orders-9",
+                    "",
+                ),
+                (
+                    AuditPrincipal {
+                        name: "broker".into(),
+                        auth_method: "Internal".into(),
+                    },
+                    vec![],
+                ),
+                &source,
+                "background recovery ran without an approval",
+                12,
+            ),
             serde_json::json!({
                 "class_uid": 6003,
                 "category_uid": 6,

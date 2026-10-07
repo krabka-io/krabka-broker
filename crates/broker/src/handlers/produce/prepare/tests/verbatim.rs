@@ -16,6 +16,25 @@ use crate::{
     partition::ProduceData,
 };
 
+/// Prepare against the fixture topic with the caller's compression, metrics
+/// and version; the macro retains temporary borrows through the full expression.
+macro_rules! prepare_for_topic {
+    ($payload:expr, $compression:expr, $metrics:expr, $version:expr) => {
+        prepare_batch(
+            $payload,
+            $compression,
+            TimestampPolicy::default(),
+            false,
+            DecodeEnv {
+                topic_name: &topic(),
+                metrics: $metrics,
+                policy: RecordDecompressionPolicy::default(),
+            },
+            $version,
+        )
+    };
+}
+
 /// The topic name these cases record under, as the shared handle the metric
 /// label sets clone.
 fn topic() -> Arc<str> {
@@ -94,19 +113,8 @@ fn dispatch_slice(
     leader_epoch: i32,
 ) -> ProduceData {
     let m = crate::metrics::BrokerMetrics::new();
-    let prepared = prepare_batch(
-        PartitionPayload::Slice(slice),
-        topic_compression,
-        TimestampPolicy::default(),
-        false,
-        DecodeEnv {
-            topic_name: &topic(),
-            metrics: &m,
-            policy: RecordDecompressionPolicy::default(),
-        },
-        13,
-    )
-    .unwrap();
+    let prepared =
+        prepare_for_topic!(PartitionPayload::Slice(slice), topic_compression, &m, 13).unwrap();
     build_produce_data(prepared, leader_epoch)
 }
 
@@ -143,19 +151,7 @@ fn passthrough_when_target_codec_equals_current() {
 fn fallback_when_null_field() {
     // A wire-null records field is rejected as INVALID_REQUEST.
     let m = crate::metrics::BrokerMetrics::new();
-    let err = prepare_batch(
-        PartitionPayload::Null,
-        None,
-        TimestampPolicy::default(),
-        false,
-        DecodeEnv {
-            topic_name: &topic(),
-            metrics: &m,
-            policy: RecordDecompressionPolicy::default(),
-        },
-        13,
-    )
-    .unwrap_err();
+    let err = prepare_for_topic!(PartitionPayload::Null, None, &m, 13).unwrap_err();
     assert!(err == crate::codes::INVALID_REQUEST);
 }
 
@@ -175,17 +171,11 @@ fn rejects_client_log_append_time() {
         .attributes
         .with_timestamp_type(TimestampType::LogAppendTime);
     let wire = encode(&b);
-    let err = prepare_batch(
+    let err = prepare_for_topic!(
         PartitionPayload::Slice(wire),
         None,
-        TimestampPolicy::default(),
-        false,
-        DecodeEnv {
-            topic_name: &topic(),
-            metrics: &crate::metrics::BrokerMetrics::new(),
-            policy: RecordDecompressionPolicy::default(),
-        },
-        13,
+        &crate::metrics::BrokerMetrics::new(),
+        13
     )
     .unwrap_err();
     assert!(err == crate::codes::INVALID_TIMESTAMP);
@@ -196,17 +186,11 @@ fn rejects_client_control_batch() {
     let mut b = plain_batch();
     b.attributes = Attributes::default().with_control(true);
     let wire = encode(&b);
-    let err = prepare_batch(
+    let err = prepare_for_topic!(
         PartitionPayload::Slice(wire),
         None,
-        TimestampPolicy::default(),
-        false,
-        DecodeEnv {
-            topic_name: &topic(),
-            metrics: &crate::metrics::BrokerMetrics::new(),
-            policy: RecordDecompressionPolicy::default(),
-        },
-        13,
+        &crate::metrics::BrokerMetrics::new(),
+        13
     )
     .unwrap_err();
     assert!(err == crate::codes::INVALID_RECORD);
@@ -229,17 +213,11 @@ fn rejects_zstd_below_v7_and_admits_it_from_v7_on_both_paths() {
             PartitionPayload::Owned(RecordsPayload::V2(vec![b.clone()])),
         ];
         for payload in payloads {
-            let result = prepare_batch(
+            let result = prepare_for_topic!(
                 payload,
                 None,
-                TimestampPolicy::default(),
-                false,
-                DecodeEnv {
-                    topic_name: &topic(),
-                    metrics: &crate::metrics::BrokerMetrics::new(),
-                    policy: RecordDecompressionPolicy::default(),
-                },
-                version,
+                &crate::metrics::BrokerMetrics::new(),
+                version
             );
             if admitted {
                 assert!(result.is_ok(), "version {version}: {result:?}");
@@ -267,18 +245,7 @@ fn admits_a_nonzero_base_offset_on_both_paths() {
         PartitionPayload::Owned(RecordsPayload::V2(vec![b])),
     ];
     for payload in payloads {
-        let prepared = prepare_batch(
-            payload,
-            None,
-            TimestampPolicy::default(),
-            false,
-            DecodeEnv {
-                topic_name: &topic(),
-                metrics: &crate::metrics::BrokerMetrics::new(),
-                policy: RecordDecompressionPolicy::default(),
-            },
-            13,
-        );
+        let prepared = prepare_for_topic!(payload, None, &crate::metrics::BrokerMetrics::new(), 13);
         assert!(prepared.is_ok());
     }
 }
@@ -315,19 +282,8 @@ fn rejects_invalid_client_batch_metadata_on_header_and_owned_paths() {
             PartitionPayload::Owned(RecordsPayload::V2(vec![batch])),
         ];
         for payload in payloads {
-            let err = prepare_batch(
-                payload,
-                None,
-                TimestampPolicy::default(),
-                false,
-                DecodeEnv {
-                    topic_name: &topic(),
-                    metrics: &crate::metrics::BrokerMetrics::new(),
-                    policy: RecordDecompressionPolicy::default(),
-                },
-                13,
-            )
-            .unwrap_err();
+            let err = prepare_for_topic!(payload, None, &crate::metrics::BrokerMetrics::new(), 13)
+                .unwrap_err();
             assert!(err == crate::codes::INVALID_RECORD, "case: {name}");
         }
     }
@@ -414,17 +370,11 @@ fn an_undecodable_slice_gets_the_code_kafka_gives_it() {
         },
     ];
     for case in cases {
-        let error_code = prepare_batch(
+        let error_code = prepare_for_topic!(
             PartitionPayload::Slice(Bytes::from(case.wire)),
             None,
-            TimestampPolicy::default(),
-            false,
-            DecodeEnv {
-                topic_name: &topic(),
-                metrics: &crate::metrics::BrokerMetrics::new(),
-                policy: RecordDecompressionPolicy::default(),
-            },
-            13,
+            &crate::metrics::BrokerMetrics::new(),
+            13
         )
         .unwrap_err();
         assert!(error_code == case.error_code, "{}", case.name);
@@ -437,17 +387,11 @@ fn rejects_crc_valid_malformed_record_body() {
     wire[HEADER_LEN] = 0; // zero-length first record body
     refresh_batch_crc(&mut wire);
 
-    let error = prepare_batch(
+    let error = prepare_for_topic!(
         PartitionPayload::Slice(Bytes::from(wire)),
         None,
-        TimestampPolicy::default(),
-        false,
-        DecodeEnv {
-            topic_name: &topic(),
-            metrics: &crate::metrics::BrokerMetrics::new(),
-            policy: RecordDecompressionPolicy::default(),
-        },
-        13,
+        &crate::metrics::BrokerMetrics::new(),
+        13
     )
     .unwrap_err();
     assert!(error == crate::codes::INVALID_RECORD);
@@ -461,17 +405,11 @@ fn fallback_on_multiple_batches_in_slice() {
     let mut two = BytesMut::new();
     b.encode(&mut two).unwrap();
     b.encode(&mut two).unwrap();
-    let err = prepare_batch(
+    let err = prepare_for_topic!(
         PartitionPayload::Slice(two.freeze()),
         None,
-        TimestampPolicy::default(),
-        false,
-        DecodeEnv {
-            topic_name: &topic(),
-            metrics: &crate::metrics::BrokerMetrics::new(),
-            policy: RecordDecompressionPolicy::default(),
-        },
-        13,
+        &crate::metrics::BrokerMetrics::new(),
+        13
     )
     .unwrap_err();
     assert!(err == crate::codes::INVALID_RECORD);
@@ -583,19 +521,7 @@ fn header_fields_drive_dedup_on_verbatim_path() {
     let wire = encode(&b);
 
     let m = crate::metrics::BrokerMetrics::new();
-    let prepared = prepare_batch(
-        PartitionPayload::Slice(wire.clone()),
-        None,
-        TimestampPolicy::default(),
-        false,
-        DecodeEnv {
-            topic_name: &topic(),
-            metrics: &m,
-            policy: RecordDecompressionPolicy::default(),
-        },
-        13,
-    )
-    .unwrap();
+    let prepared = prepare_for_topic!(PartitionPayload::Slice(wire.clone()), None, &m, 13).unwrap();
     assert!(matches!(prepared.source, PreparedSource::Verbatim(_)));
     check!(prepared.producer_id == 4242);
     check!(prepared.producer_epoch == 9);

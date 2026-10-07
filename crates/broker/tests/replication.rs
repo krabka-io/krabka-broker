@@ -10,16 +10,20 @@
 
 use assert2::assert;
 use krabka_broker::{BrokerConfig, BrokerHandle};
-use krabka_client_core::Client;
 use krabka_protocol::{
-    owned::{
-        create_topics_request::{CreatableTopic, CreatableTopicConfig, CreateTopicsRequest},
-        produce_request::{PartitionProduceData, ProduceRequest, TopicProduceData},
-    },
+    owned::create_topics_request::{CreatableTopic, CreatableTopicConfig},
     records::{Record, RecordBatch},
 };
 use support::{client::scrape_metrics as scrape, cluster_lock};
 use tempfile::TempDir;
+
+use crate::support::{
+    client::connect_client,
+    offsets::{delete_records_partition, delete_records_request, delete_records_topic},
+    produce::single_partition_produce,
+    records::{batch_from_records, value_record},
+    topics::create_topic_request,
+};
 
 mod support;
 
@@ -40,18 +44,10 @@ async fn create_replicated_partition(
     topic: CreatableTopic,
 ) -> (String, krabka_protocol::primitives::uuid::Uuid) {
     let leader_addr = cluster[0].1.listen_addr.to_string();
-    let admin = Client::builder()
-        .bootstrap(leader_addr.clone())
-        .build()
-        .await
-        .unwrap();
+    let admin = connect_client(leader_addr.clone(), None).await;
     let name = topic.name.clone();
     let response = admin
-        .send(CreateTopicsRequest {
-            topics: vec![topic],
-            timeout_ms: 5_000,
-            ..Default::default()
-        })
+        .send(create_topic_request(topic, 5_000))
         .await
         .unwrap();
     assert!(response.topics[0].error_code == 0);
@@ -70,11 +66,7 @@ async fn metrics_cluster(topic: &str) -> (Cluster, std::net::SocketAddr) {
     .await
     .expect("3-broker cluster");
     support::wait_for_all_brokers_registered(&cluster, 3).await;
-    let admin = Client::builder()
-        .bootstrap(cluster[0].1.listen_addr.to_string())
-        .build()
-        .await
-        .unwrap();
+    let admin = connect_client(cluster[0].1.listen_addr.to_string(), None).await;
     support::client::create_topic_with(&admin, topic, 12, 3, 5_000).await;
     for (handle, _, _) in &cluster {
         for partition in 0..12 {
@@ -91,65 +83,26 @@ async fn metrics_cluster(topic: &str) -> (Cluster, std::net::SocketAddr) {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn replication_factor_three_propagates_to_all_followers() {
     let _g = cluster_lock().lock().await;
-    let cluster = support::start_n_node_with_retry(3).await;
-
-    support::wait_for_all_brokers_registered(&cluster, 3).await;
+    let cluster = crate::support::registered_cluster(3).await;
     let (leader_addr, topic_id) =
         create_replicated_partition(&cluster, support::topic_on("repl", &[&[1, 2, 3]])).await;
 
-    let producer = Client::builder()
-        .bootstrap(leader_addr)
-        .build()
-        .await
-        .unwrap();
-    let batch = RecordBatch {
-        base_offset: 0,
-        last_offset_delta: 19,
-        records: (0..20)
-            .map(|i| Record {
-                offset_delta: i,
-                value: Some(bytes::Bytes::from(format!("v{i}"))),
-                ..Default::default()
-            })
-            .collect(),
-        ..Default::default()
-    };
-    let prod = producer
-        .send(ProduceRequest {
-            acks: -1,
-            timeout_ms: 5_000,
-            topic_data: vec![TopicProduceData {
-                name: "repl".into(),
-                topic_id,
-                partition_data: vec![PartitionProduceData {
-                    index: 0,
-                    records: Some(batch.into()),
-                    ..Default::default()
-                }],
-                ..Default::default()
-            }],
-            ..Default::default()
-        })
-        .await
-        .unwrap();
-    assert!(prod.responses[0].partition_responses[0].error_code == 0);
+    let producer = connect_client(leader_addr, None).await;
+    let batch = support::client::value_batch(20);
+    produce_replicated(&producer, "repl", topic_id, batch).await;
 
     // Wait until every broker's local log shows log_end_offset >= 20.
     for (h, _, _) in &cluster {
         h.wait_until_local_log_end_offset("repl", 0, 20).await;
     }
 
-    for (h, _, _) in cluster {
-        h.shutdown().await;
-    }
+    crate::support::shutdown_cluster(cluster).await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn out_of_range_truncates_and_recovers() {
     let _g = cluster_lock().lock().await;
-    let cluster = support::start_n_node_with_retry(3).await;
-
-    support::wait_for_all_brokers_registered(&cluster, 3).await;
+    let cluster = crate::support::registered_cluster(3).await;
     let (leader_addr, topic_id) =
         create_replicated_partition(&cluster, support::topic_on("oor", &[&[1, 2, 3]])).await;
 
@@ -160,41 +113,17 @@ async fn out_of_range_truncates_and_recovers() {
     // follower would still pull a batch with `base_offset=0` and reject
     // it with `OffsetMismatch`. Per-record batches let
     // `Segment::read(25, ...)` filter out the prefix cleanly.
-    let producer = Client::builder()
-        .bootstrap(leader_addr)
-        .build()
-        .await
-        .unwrap();
+    let producer = connect_client(leader_addr, None).await;
     for i in 0..50i32 {
         let batch = RecordBatch {
             base_offset: 0,
             last_offset_delta: 0,
-            records: vec![Record {
-                offset_delta: 0,
-                value: Some(bytes::Bytes::from(format!("v{i}"))),
-                ..Default::default()
-            }],
-            ..Default::default()
+            ..batch_from_records(vec![value_record(
+                0,
+                Some(bytes::Bytes::from(format!("v{i}"))),
+            )])
         };
-        let prod = producer
-            .send(ProduceRequest {
-                acks: -1,
-                timeout_ms: 5_000,
-                topic_data: vec![TopicProduceData {
-                    name: "oor".into(),
-                    topic_id,
-                    partition_data: vec![PartitionProduceData {
-                        index: 0,
-                        records: Some(batch.into()),
-                        ..Default::default()
-                    }],
-                    ..Default::default()
-                }],
-                ..Default::default()
-            })
-            .await
-            .unwrap();
-        assert!(prod.responses[0].partition_responses[0].error_code == 0);
+        produce_replicated(&producer, "oor", topic_id, batch).await;
     }
 
     // Wait for every broker's local log to catch up to 50.
@@ -226,9 +155,7 @@ async fn out_of_range_truncates_and_recovers() {
         .wait_until_local_log_end_offset("oor", 0, 50)
         .await;
 
-    for (h, _, _) in cluster {
-        h.shutdown().await;
-    }
+    crate::support::shutdown_cluster(cluster).await;
 }
 
 /// A follower that catches up across sealed segments copies every batch of the
@@ -262,38 +189,13 @@ async fn a_follower_that_catches_up_across_segments_copies_every_batch() {
     )
     .await;
 
-    let producer = Client::builder()
-        .bootstrap(leader_addr)
-        .build()
-        .await
-        .unwrap();
+    let producer = connect_client(leader_addr, None).await;
     for _ in 0..BATCHES {
-        let batch = RecordBatch {
-            records: vec![Record {
-                value: Some(bytes::Bytes::from(vec![b'x'; 300_000])),
-                ..Default::default()
-            }],
+        let batch = batch_from_records(vec![Record {
+            value: Some(bytes::Bytes::from(vec![b'x'; 300_000])),
             ..Default::default()
-        };
-        let prod = producer
-            .send(ProduceRequest {
-                acks: -1,
-                timeout_ms: 5_000,
-                topic_data: vec![TopicProduceData {
-                    name: "seams".into(),
-                    topic_id,
-                    partition_data: vec![PartitionProduceData {
-                        index: 0,
-                        records: Some(batch.into()),
-                        ..Default::default()
-                    }],
-                    ..Default::default()
-                }],
-                ..Default::default()
-            })
-            .await
-            .unwrap();
-        assert!(prod.responses[0].partition_responses[0].error_code == 0);
+        }]);
+        produce_replicated(&producer, "seams", topic_id, batch).await;
     }
     let leader = &cluster[0].0;
     let follower = &cluster[1].0;
@@ -315,9 +217,7 @@ async fn a_follower_that_catches_up_across_segments_copies_every_batch() {
     assert!(leader.local_batch_base_offsets_for_test("seams", 0) == Some(every_batch.clone()));
     assert!(follower.local_batch_base_offsets_for_test("seams", 0) == Some(every_batch));
 
-    for (h, _, _) in cluster {
-        h.shutdown().await;
-    }
+    crate::support::shutdown_cluster(cluster).await;
 }
 
 /// KIP-107 (#746): `DeleteRecords` moves the log start offset on every
@@ -328,12 +228,7 @@ async fn a_follower_that_catches_up_across_segments_copies_every_batch() {
 /// serves a deleted record, and a leader change cannot bring one back.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn delete_records_moves_every_replica_log_start_before_it_answers() {
-    use krabka_protocol::owned::{
-        delete_records_request::{
-            DeleteRecordsPartition, DeleteRecordsRequest, DeleteRecordsTopic,
-        },
-        delete_records_response::DeleteRecordsPartitionResult,
-    };
+    use krabka_protocol::owned::delete_records_response::DeleteRecordsPartitionResult;
 
     let _g = cluster_lock().lock().await;
     let cluster = support::start_n_node_with_retry(3).await;
@@ -343,17 +238,12 @@ async fn delete_records_moves_every_replica_log_start_before_it_answers() {
 
     // cluster[0] is node 1, and the topic pins it as the leader of partition 0.
     let leader_addr = cluster[0].1.listen_addr.to_string();
-    let client = Client::builder()
-        .bootstrap(leader_addr)
-        .build()
-        .await
-        .unwrap();
+    let client = connect_client(leader_addr, None).await;
     let resp = client
-        .send(CreateTopicsRequest {
-            topics: vec![support::topic_on("trimmed", &[&[1, 2, 3]])],
-            timeout_ms: 5_000,
-            ..Default::default()
-        })
+        .send(create_topic_request(
+            support::topic_on("trimmed", &[&[1, 2, 3]]),
+            5_000,
+        ))
         .await
         .unwrap();
     assert!(resp.topics[0].error_code == 0);
@@ -362,55 +252,20 @@ async fn delete_records_moves_every_replica_log_start_before_it_answers() {
         h.wait_until_partition_present("trimmed", 0).await;
     }
 
-    let batch = RecordBatch {
-        base_offset: 0,
-        last_offset_delta: 19,
-        records: (0..20)
-            .map(|i| Record {
-                offset_delta: i,
-                value: Some(bytes::Bytes::from(format!("v{i}"))),
-                ..Default::default()
-            })
-            .collect(),
-        ..Default::default()
-    };
-    let prod = client
-        .send(ProduceRequest {
-            acks: -1,
-            timeout_ms: 5_000,
-            topic_data: vec![TopicProduceData {
-                name: "trimmed".into(),
-                topic_id,
-                partition_data: vec![PartitionProduceData {
-                    index: 0,
-                    records: Some(batch.into()),
-                    ..Default::default()
-                }],
-                ..Default::default()
-            }],
-            ..Default::default()
-        })
-        .await
-        .unwrap();
-    assert!(prod.responses[0].partition_responses[0].error_code == 0);
+    let batch = support::client::value_batch(20);
+    produce_replicated(&client, "trimmed", topic_id, batch).await;
     for (h, _, _) in &cluster {
         h.wait_until_local_log_end_offset("trimmed", 0, 20).await;
     }
 
     let deleted = client
-        .send(DeleteRecordsRequest {
-            topics: vec![DeleteRecordsTopic {
-                name: "trimmed".into(),
-                partitions: vec![DeleteRecordsPartition {
-                    partition_index: 0,
-                    offset: 10,
-                    ..Default::default()
-                }],
-                ..Default::default()
-            }],
-            timeout_ms: 30_000,
-            ..Default::default()
-        })
+        .send(delete_records_request(
+            vec![delete_records_topic(
+                "trimmed",
+                vec![delete_records_partition(0, 10)],
+            )],
+            30_000,
+        ))
         .await
         .unwrap();
     assert!(
@@ -430,9 +285,7 @@ async fn delete_records_moves_every_replica_log_start_before_it_answers() {
         .collect();
     assert!(log_starts == vec![Some(10); 3]);
 
-    for (h, _, _) in cluster {
-        h.shutdown().await;
-    }
+    crate::support::shutdown_cluster(cluster).await;
 }
 
 /// KIP-227 + `num.replica.fetchers`: a follower folds every partition it
@@ -469,9 +322,7 @@ async fn a_follower_batches_every_partition_of_one_leader_into_one_session() {
         "one incremental fetch session per follower, not per partition; got {sessions}"
     );
 
-    for (h, _, _) in cluster {
-        h.shutdown().await;
-    }
+    crate::support::shutdown_cluster(cluster).await;
 }
 
 /// The batching's other half: a caught-up follower's request *rate* is bounded
@@ -509,9 +360,7 @@ async fn a_caught_up_follower_fetches_a_few_times_a_second_whatever_it_follows()
         "a caught-up follower must not busy-fetch; leader saw {per_second:.1} Fetch/s"
     );
 
-    for (h, _, _) in cluster {
-        h.shutdown().await;
-    }
+    crate::support::shutdown_cluster(cluster).await;
 }
 
 /// Reads one labelled counter out of a broker's `/metrics` body, summed over
@@ -531,4 +380,23 @@ async fn scrape_gauge(addr: std::net::SocketAddr, name: &str) -> i64 {
         .lines()
         .find_map(|line| line.strip_prefix(name)?.trim().parse::<i64>().ok())
         .unwrap_or(-1)
+}
+
+async fn produce_replicated(
+    client: &krabka_client_core::Client,
+    topic: &str,
+    topic_id: krabka_protocol::primitives::uuid::Uuid,
+    batch: RecordBatch,
+) {
+    let response = client
+        .send(single_partition_produce(
+            topic,
+            topic_id,
+            0,
+            Some(batch.into()),
+            (-1, 5_000),
+        ))
+        .await
+        .unwrap();
+    assert!(response.responses[0].partition_responses[0].error_code == 0);
 }

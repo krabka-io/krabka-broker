@@ -5,10 +5,9 @@ use super::*;
 proptest! {
     #[test]
     fn charge_refund_agrees_with_a_signed_ledger_and_detects_storage_loss(
-        raw_available in any::<u64>(), debt in any::<u64>(), burst in any::<u64>(),
-        owes in any::<bool>(), refill in any::<u64>(), requested in any::<u64>(), probe in any::<u64>(),
+        (initial, burst, refill, requested) in quota_charge_cases(), probe in any::<u64>(),
     ) {
-        let (available, debt) = if owes { (0, debt) } else { (raw_available.min(burst), 0) };
+        let (available, debt) = initial;
         let balance = (i128::from(available) - i128::from(debt) + i128::from(refill)).min(i128::from(burst));
         let after_charge = balance - i128::from(requested);
         let expected = if after_charge < -i128::from(u64::MAX) {
@@ -24,11 +23,9 @@ proptest! {
 
     #[test]
     fn bounded_charge_and_repayment_agree_with_a_signed_ledger(
-        raw_available in any::<u64>(), debt in any::<u64>(), burst in any::<u64>(), owes in any::<bool>(),
-        refill in any::<u64>(), requested in any::<u64>(), cap in any::<u64>(),
+        (initial, burst, refill, requested) in quota_charge_cases(), cap in any::<u64>(),
         extra_repayment in any::<u64>(), probe in any::<u64>(),
     ) {
-        let initial = if owes { (0, debt) } else { (raw_available.min(burst), 0) };
         let repayment = cap.saturating_add(extra_repayment);
         let refilled = (i128::from(initial.0) - i128::from(initial.1) + i128::from(refill)).min(i128::from(burst));
         let charged = (refilled - i128::from(requested)).max(-i128::from(cap));

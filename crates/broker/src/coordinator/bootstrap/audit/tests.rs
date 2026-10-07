@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use assert2::{assert, check};
-use krabka_metadata::{BrokerRegistrationRecord, LeaderEpoch, MetadataError};
+use krabka_metadata::{BrokerRegistrationRecord, MetadataError};
 
 use super::*;
 use crate::{config::NodeRole, coordinator::AUDIT_TOPIC, test_support::FakeMetadataSource};
@@ -11,6 +11,8 @@ const CONTROLLER: NodeId = NodeId(3001);
 const CONTROLLER_ONLY: &[NodeRole] = &[NodeRole::Controller];
 const COMBINED: &[NodeRole] = &[NodeRole::Controller, NodeRole::Broker];
 const BROKER_ONLY: &[NodeRole] = &[NodeRole::Broker];
+
+krabka_macros::single_replica_partition_fixture!(partition_record);
 
 fn node(node_id: NodeId, roles: &[NodeRole]) -> BrokerConfig {
     let mut config = BrokerConfig::for_tests(PathBuf::new());
@@ -39,18 +41,11 @@ fn audit_batch(topic_id: uuid::Uuid, replicas: &[u64]) -> Vec<MetadataRecord> {
         replication_factor: 1,
     })];
     for (partition, &replica) in (0_i32..).zip(replicas) {
-        batch.push(MetadataRecord::V1Partition(PartitionRecord {
-            topic: AUDIT_TOPIC.into(),
+        batch.push(MetadataRecord::V1Partition(partition_record(
+            AUDIT_TOPIC,
             partition,
-            leader: NodeId(replica),
-            replicas: vec![NodeId(replica)],
-            isr: vec![NodeId(replica)],
-            leader_epoch: LeaderEpoch(0),
-            adding_replicas: vec![],
-            removing_replicas: vec![],
-            directories: vec![],
-            partition_epoch: 0,
-        }));
+            NodeId(replica),
+        )));
     }
     batch
 }

@@ -9,8 +9,7 @@
 use std::{sync::Arc, time::Duration};
 
 use assert2::assert;
-use krabka_broker::{Broker, BrokerConfig, config::ListenerSpec, metrics::ShareGroupLabel};
-use krabka_client_core::Client;
+use krabka_broker::{Broker, BrokerConfig, metrics::ShareGroupLabel};
 use krabka_protocol::owned::{
     alter_share_group_offsets_request::{
         AlterShareGroupOffsetsRequest, AlterShareGroupOffsetsRequestPartition,
@@ -21,7 +20,10 @@ use krabka_protocol::owned::{
 };
 use krabka_security::ListenerProtocol;
 
-use crate::harness::{TOPIC, create_topic, produce_five, scrape, test_lock};
+use crate::{
+    harness::{TOPIC, create_topic, produce_five, scrape, test_lock},
+    support::client::connect_client,
+};
 
 const GROUP: &str = "backlog-workers";
 
@@ -30,15 +32,10 @@ async fn backlog_is_scraped_and_survives_scale_to_zero() {
     let _guard = test_lock().lock().await;
     let dir = tempfile::tempdir().unwrap();
     let mut config = BrokerConfig::for_tests(dir.path().to_path_buf());
-    config.listeners = vec![ListenerSpec {
-        name: "PLAINTEXT".into(),
-        bind_addr: "127.0.0.1:0".parse().unwrap(),
-        advertised: "127.0.0.1:0".into(),
-        protocol: ListenerProtocol::Plaintext,
-        tls_config: None,
-        sasl_mechanisms: None,
-        principal_mapper: krabka_broker::SslPrincipalMapper::default(),
-    }];
+    config.listeners = vec![crate::support::listeners::loopback_listener(
+        "PLAINTEXT",
+        ListenerProtocol::Plaintext,
+    )];
     config.inter_broker_listener_name = "PLAINTEXT".into();
     config.metrics_listen_addr = Some("127.0.0.1:0".parse().unwrap());
     config.share_coordinator.state_topic_num_partitions = 1;
@@ -49,14 +46,8 @@ async fn backlog_is_scraped_and_survives_scale_to_zero() {
     // starts. The share group needs both coordinators.
     broker.wait_until_group_coordinator_ready().await;
     broker.wait_until_share_coordinator_ready().await;
-    let client = Arc::new(
-        Client::builder()
-            .bootstrap(broker.listen_addr().to_string())
-            .client_id("backlog-itest")
-            .build()
-            .await
-            .unwrap(),
-    );
+    let client =
+        Arc::new(connect_client(broker.listen_addr().to_string(), Some("backlog-itest")).await);
     create_topic(&client, 1, 1).await;
     broker.wait_until_partition_present(TOPIC, 0).await;
     let topic_id = broker

@@ -256,16 +256,13 @@ mod tests {
 
     #[test]
     fn applies_inter_broker_principal_node_ids() {
-        let file: FileConfig = toml::from_str(
+        let cfg = crate::file_config::test_support::configured_unwrap_parse(
             r"
 [inter_broker_principal_node_ids]
 admin = 1
 ",
         )
         .unwrap();
-        let mut cfg = crate::config::BrokerConfig::default();
-
-        file.apply_to(&mut cfg).unwrap();
 
         assert!(cfg.inter_broker_principal_node_ids.get("admin") == Some(&krabka_raft::NodeId(1)));
     }
@@ -501,8 +498,6 @@ protocol = "Plaintext"
     }
     #[test]
     fn apply_to_fills_heartbeat_and_lag_tunables() {
-        use crate::config::BrokerConfig;
-
         let src = r#"
 heartbeat_interval = "500ms"
 heartbeat_timeout = "1500ms"
@@ -510,10 +505,7 @@ replica_lag_time_max = "2s"
 controller_election_timeout = "500ms"
 controller_heartbeat_interval = "100ms"
 "#;
-        let file: FileConfig = toml::from_str(src).unwrap();
-        let mut cfg = BrokerConfig::default();
-
-        file.apply_to(&mut cfg).unwrap();
+        let cfg = crate::file_config::test_support::configured_unwrap_parse(src).unwrap();
 
         check!(cfg.heartbeat_interval == millis(500));
         check!(cfg.heartbeat_timeout == millis(1500));

@@ -64,7 +64,6 @@ mod tests {
 
     use assert2::assert;
     use krabka_log::{Log, LogConfig};
-    use krabka_protocol::records::{Record, RecordBatch};
 
     use super::*;
     use crate::partition::ProduceData;
@@ -125,17 +124,5 @@ mod tests {
         ProduceData::Owned(sample_batch(n))
     }
 
-    fn sample_batch(n: i32) -> RecordBatch {
-        let mut b = RecordBatch {
-            last_offset_delta: n - 1,
-            ..RecordBatch::default()
-        };
-        for i in 0..n {
-            b.records.push(Record {
-                offset_delta: i,
-                ..Default::default()
-            });
-        }
-        b
-    }
+    use crate::test_support::default_records_batch as sample_batch;
 }

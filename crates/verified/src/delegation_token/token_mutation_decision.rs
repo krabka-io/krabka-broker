@@ -100,6 +100,15 @@ pub fn token_api_admission(
     }
 }
 
+open_logic! {
+fn token_generation_live(facts: TokenMutationFacts) -> bool {
+    pearlite! { facts.now_ms@ >= 0
+    && facts.expected_expiry_ms@ >= facts.now_ms@
+    && facts.max_timestamp_ms@ >= facts.now_ms@
+    && facts.expected_expiry_ms@ <= facts.max_timestamp_ms@ }
+}
+}
+
 /// Fence a token mutation against its exact committed generation.
 ///
 /// A retained log tail wins over retry classification. Exact already-applied
@@ -114,18 +123,12 @@ pub fn token_api_admission(
         && match facts.kind {
             TokenMutationKind::Delete => true,
             TokenMutationKind::Renew =>
-                facts.now_ms@ >= 0
-                    && facts.expected_expiry_ms@ >= facts.now_ms@
-                    && facts.max_timestamp_ms@ >= facts.now_ms@
-                    && facts.expected_expiry_ms@ <= facts.max_timestamp_ms@
+                token_generation_live(facts)
                     && facts.incoming_expiry_ms@ != facts.expected_expiry_ms@
                     && facts.incoming_expiry_ms@ >= facts.now_ms@
                     && facts.incoming_expiry_ms@ <= facts.max_timestamp_ms@,
             TokenMutationKind::Expire =>
-                facts.now_ms@ >= 0
-                    && facts.expected_expiry_ms@ >= facts.now_ms@
-                    && facts.max_timestamp_ms@ >= facts.now_ms@
-                    && facts.expected_expiry_ms@ <= facts.max_timestamp_ms@
+                token_generation_live(facts)
                     && facts.incoming_expiry_ms@ >= 0
                     && facts.incoming_expiry_ms@ <= facts.max_timestamp_ms@,
         }))]
@@ -137,10 +140,7 @@ pub fn token_api_admission(
             || (facts.kind == TokenMutationKind::Renew
                 && facts.state == TokenMutationState::Expected
                 && facts.incoming_expiry_ms@ == facts.expected_expiry_ms@
-                && facts.now_ms@ >= 0
-                && facts.expected_expiry_ms@ >= facts.now_ms@
-                && facts.max_timestamp_ms@ >= facts.now_ms@
-                && facts.expected_expiry_ms@ <= facts.max_timestamp_ms@))))]
+                && token_generation_live(facts)))))]
 #[must_use]
 pub fn token_mutation_decision(facts: TokenMutationFacts) -> TokenMutationDecision {
     if facts.uncommitted_tail {

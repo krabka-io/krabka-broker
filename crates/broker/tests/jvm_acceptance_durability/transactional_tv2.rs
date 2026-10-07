@@ -34,8 +34,6 @@
 //! because the helper commits and aborts and then exits: nothing in it can be
 //! made to hold a transaction open while a container runs beside it.
 
-#[cfg(unix)]
-use std::os::unix::fs::PermissionsExt as _;
 use std::{
     net::SocketAddr,
     process::Output,
@@ -141,12 +139,12 @@ async fn harness(client_id: &str, topics: &[&str]) -> Harness {
         .metrics_addr()
         .expect("the broker was configured with a metrics listener");
     let host_bootstrap = broker.listen_addr().to_string();
-    let admin = Client::builder()
-        .bootstrap(host_bootstrap.clone())
-        .client_id(client_id)
-        .build()
-        .await
-        .expect("in-process admin client");
+    let admin = crate::support::client::connect_owned(
+        host_bootstrap.clone(),
+        client_id,
+        "in-process admin client",
+    )
+    .await;
 
     // Precondition. Everything in these cases reads as a KIP-890 claim only
     // because the cluster finalized `transaction.version` at level 2; at TV_0
@@ -323,21 +321,7 @@ async fn assert_the_tool_agrees_with_the_broker(bootstrap: &str, admin: &Client)
          ListTransactions answer {listed:?}: {row:?}",
     );
 
-    let row = tool_row(
-        &kafka_transactions(bootstrap, &["describe", "--transactional-id", OPEN_TID]),
-        &[
-            "CoordinatorId",
-            "TransactionalId",
-            "ProducerId",
-            "ProducerEpoch",
-            "TransactionState",
-            "TransactionTimeoutMs",
-            "CurrentTransactionStartTimeMs",
-            "TransactionDurationMs",
-            "TopicPartitions",
-        ],
-        "1",
-    );
+    let row = describe_open_transaction_row(bootstrap);
     assert!(
         row[1..5]
             == [
@@ -360,20 +344,7 @@ async fn assert_the_tool_agrees_with_the_broker(bootstrap: &str, admin: &Client)
         "one producer wrote to {HANGING_TOPIC}-0: {in_process:?}",
     );
     let open_producer_state = in_process[0].clone();
-    let row = tool_row(
-        &kafka_transactions(
-            bootstrap,
-            &[
-                "describe-producers",
-                "--topic",
-                HANGING_TOPIC,
-                "--partition",
-                "0",
-            ],
-        ),
-        &DESCRIBE_PRODUCERS_HEADERS,
-        &open_producer_state.producer_id.to_string(),
-    );
+    let row = describe_open_producer_row(bootstrap, open_producer_state.producer_id);
     assert!(
         row[..3]
             == [
@@ -485,20 +456,7 @@ async fn the_transactions_tool_agrees_with_the_broker_and_can_abort() {
             &open_producer_state.current_txn_start_offset.to_string(),
         ],
     );
-    let row = tool_row(
-        &kafka_transactions(
-            bootstrap,
-            &[
-                "describe-producers",
-                "--topic",
-                HANGING_TOPIC,
-                "--partition",
-                "0",
-            ],
-        ),
-        &DESCRIBE_PRODUCERS_HEADERS,
-        &open_producer_state.producer_id.to_string(),
-    );
+    let row = describe_open_producer_row(bootstrap, open_producer_state.producer_id);
     assert!(
         row[5] == "None",
         "the aborted transaction must no longer be open on the partition: {row:?}",
@@ -514,21 +472,7 @@ async fn the_transactions_tool_agrees_with_the_broker_and_can_abort() {
         .expect("abort the open transaction");
     let deadline = Instant::now() + SETTLE_DEADLINE;
     loop {
-        let row = tool_row(
-            &kafka_transactions(bootstrap, &["describe", "--transactional-id", OPEN_TID]),
-            &[
-                "CoordinatorId",
-                "TransactionalId",
-                "ProducerId",
-                "ProducerEpoch",
-                "TransactionState",
-                "TransactionTimeoutMs",
-                "CurrentTransactionStartTimeMs",
-                "TransactionDurationMs",
-                "TopicPartitions",
-            ],
-            "1",
-        );
+        let row = describe_open_transaction_row(bootstrap);
         if row[4] == "CompleteAbort" {
             break;
         }
@@ -597,10 +541,8 @@ fn compile_transactional_producer() -> tempfile::TempDir {
     std::fs::write(&source, TRANSACTIONAL_PRODUCER_JAVA).expect("write the Java helper");
     #[cfg(unix)]
     {
-        std::fs::set_permissions(work.path(), std::fs::Permissions::from_mode(0o777))
-            .expect("chmod the work directory");
-        std::fs::set_permissions(&source, std::fs::Permissions::from_mode(0o644))
-            .expect("chmod the Java helper");
+        crate::support::chmod_for_container(work.path(), 0o777, "chmod the work directory");
+        crate::support::chmod_for_container(&source, 0o644, "chmod the Java helper");
     }
 
     let out = docker_run_kafka_tool_with_image_and_mount(
@@ -861,4 +803,39 @@ fn series_value(body: &str, series: &str) -> Option<f64> {
                 .unwrap_or_else(|_| panic!("unparseable metric line: {line}")),
         )
     })
+}
+
+fn describe_open_transaction_row(bootstrap: &str) -> Vec<String> {
+    tool_row(
+        &kafka_transactions(bootstrap, &["describe", "--transactional-id", OPEN_TID]),
+        &[
+            "CoordinatorId",
+            "TransactionalId",
+            "ProducerId",
+            "ProducerEpoch",
+            "TransactionState",
+            "TransactionTimeoutMs",
+            "CurrentTransactionStartTimeMs",
+            "TransactionDurationMs",
+            "TopicPartitions",
+        ],
+        "1",
+    )
+}
+
+fn describe_open_producer_row(bootstrap: &str, producer_id: i64) -> Vec<String> {
+    tool_row(
+        &kafka_transactions(
+            bootstrap,
+            &[
+                "describe-producers",
+                "--topic",
+                HANGING_TOPIC,
+                "--partition",
+                "0",
+            ],
+        ),
+        &DESCRIBE_PRODUCERS_HEADERS,
+        &producer_id.to_string(),
+    )
 }

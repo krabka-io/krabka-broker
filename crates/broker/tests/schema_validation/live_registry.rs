@@ -13,10 +13,7 @@ use bytes::{Buf, BufMut, Bytes};
 use krabka_broker::schema_validation::SchemaValidator;
 use krabka_client_core::Client;
 use krabka_protocol::{
-    owned::{
-        fetch_request::{FetchPartition, FetchRequest, FetchTopic},
-        produce_response::PartitionProduceResponse,
-    },
+    owned::{fetch_request::FetchRequest, produce_response::PartitionProduceResponse},
     primitives::uuid::Uuid as WireUuid,
 };
 use krabka_schema_registry::{
@@ -46,11 +43,12 @@ use tokio::{sync::watch, task::JoinHandle};
 use tokio_util::sync::CancellationToken;
 
 use crate::{
-    harness::{
-        INVALID_RECORD, batch_with_value, create_topic_on, create_topic_rf, framed,
-        order_avro_body, produce,
-    },
+    harness::{INVALID_RECORD, create_topic_on, create_topic_rf, framed, order_avro_body},
     support,
+    support::{
+        client::connect_client,
+        fetch::{fetch_partition, single_partition_fetch},
+    },
 };
 
 const REGISTRY_USERNAME: &str = "broker";
@@ -239,7 +237,7 @@ async fn produce_when_ready(
 ) -> PartitionProduceResponse {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
     loop {
-        let response = produce(client, topic, topic_id, batch_with_value(value.clone())).await;
+        let response = crate::harness::produce_value(client, topic, topic_id, value.clone()).await;
         if !matches!(response.error_code, 3 | 6 | 100) {
             return response;
         }
@@ -326,21 +324,12 @@ async fn fetch_values(
     let response = client
         .send(FetchRequest {
             replica_id: -1,
-            max_wait_ms: 1_000,
-            min_bytes: 1,
-            max_bytes: 1 << 20,
-            topics: vec![FetchTopic {
-                topic: topic.into(),
+            ..single_partition_fetch(
+                topic,
                 topic_id,
-                partitions: vec![FetchPartition {
-                    partition: 0,
-                    fetch_offset: 0,
-                    partition_max_bytes: 1 << 20,
-                    ..Default::default()
-                }],
-                ..Default::default()
-            }],
-            ..Default::default()
+                fetch_partition(0, 0, 1 << 20),
+                (1_000, 1, 1 << 20),
+            )
         })
         .await
         .unwrap();
@@ -358,12 +347,7 @@ async fn fetch_values(
 }
 
 async fn client(bootstrap: &str) -> Client {
-    Client::builder()
-        .bootstrap(bootstrap)
-        .client_id("m19-live-registry")
-        .build()
-        .await
-        .unwrap()
+    connect_client(bootstrap, Some("m19-live-registry")).await
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 6)]
@@ -641,13 +625,8 @@ async fn rf_three_validation_survives_registry_and_broker_failover() {
             .0
             .local_log_end_offset("avro", 0)
             .unwrap();
-        let response = produce(
-            &leader_client,
-            "avro",
-            avro_topic,
-            batch_with_value(Some(invalid)),
-        )
-        .await;
+        let response =
+            crate::harness::produce_value(&leader_client, "avro", avro_topic, Some(invalid)).await;
         check!(
             response.error_code == INVALID_RECORD,
             "{case}: {response:?}"
@@ -726,18 +705,16 @@ async fn rf_three_validation_survives_registry_and_broker_failover() {
         registry.stop().await;
     }
     let before = new_leader.0.local_log_end_offset("avro", 0).unwrap();
-    let unavailable = produce(
+    let unavailable = crate::harness::produce_value(
         &failover_client,
         "avro",
         avro_topic,
-        batch_with_value(Some(framed(evolved_id + 10_000, &order_avro_body()))),
+        Some(framed(evolved_id + 10_000, &order_avro_body())),
     )
     .await;
     check!(unavailable.error_code == INVALID_RECORD, "{unavailable:?}");
     check!(new_leader.0.local_log_end_offset("avro", 0) == Some(before));
 
-    for (broker, _, _) in cluster {
-        broker.shutdown().await;
-    }
+    crate::support::shutdown_cluster(cluster).await;
     drop(victim_dir);
 }

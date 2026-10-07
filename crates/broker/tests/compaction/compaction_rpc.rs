@@ -13,11 +13,9 @@ use bytes::{Bytes, BytesMut};
 use krabka_protocol::{
     Decode, Encode,
     owned::{
-        create_topics_request::{CreatableTopic, CreatableTopicConfig, CreateTopicsRequest},
+        create_topics_request::{CreatableTopicConfig, CreateTopicsRequest},
         create_topics_response::CreateTopicsResponse,
-        metadata_request::{MetadataRequest, MetadataRequestTopic},
         metadata_response::MetadataResponse,
-        produce_request::{PartitionProduceData, ProduceRequest, TopicProduceData},
         produce_response::ProduceResponse,
     },
     primitives::uuid::Uuid,
@@ -25,7 +23,13 @@ use krabka_protocol::{
 };
 use tokio::net::TcpStream;
 
-use crate::{CLIENT_ID, kafka_wire};
+use crate::{
+    CLIENT_ID, kafka_wire,
+    support::{
+        produce::single_partition_produce,
+        records::{batch_from_records, value_record},
+    },
+};
 
 /// Create a topic with config overrides, on PLAINTEXT and with no SASL.
 pub(crate) async fn create_topic_with_configs(
@@ -36,11 +40,11 @@ pub(crate) async fn create_topic_with_configs(
     configs: Vec<(&str, &str)>,
 ) {
     let req = CreateTopicsRequest {
-        topics: vec![CreatableTopic {
-            name: topic.to_string(),
-            num_partitions: partitions,
-            replication_factor: rf,
-            configs: configs
+        topics: vec![crate::support::topics::creatable_topic_with_configs(
+            topic.to_string(),
+            partitions,
+            rf,
+            configs
                 .into_iter()
                 .map(|(name, value)| CreatableTopicConfig {
                     name: name.to_string(),
@@ -48,8 +52,7 @@ pub(crate) async fn create_topic_with_configs(
                     ..Default::default()
                 })
                 .collect(),
-            ..Default::default()
-        }],
+        )],
         timeout_ms: 5_000,
         ..Default::default()
     };
@@ -74,13 +77,7 @@ pub(crate) async fn create_topic_with_configs(
 
 /// Get `topic_id` with Metadata. Produce and Fetch v9+ need it.
 pub(crate) async fn get_topic_id(addr: SocketAddr, topic: &str) -> Uuid {
-    let req = MetadataRequest {
-        topics: Some(vec![MetadataRequestTopic {
-            name: Some(topic.to_string()),
-            ..Default::default()
-        }]),
-        ..Default::default()
-    };
+    let req = crate::support::discovery::named_topic_metadata(topic.to_string());
     let version: i16 = 12; // flexible
     let mut stream = TcpStream::connect(addr).await.expect("connect");
     let resp: MetadataResponse =
@@ -103,32 +100,21 @@ pub(crate) async fn produce_record(
     value: &[u8],
 ) {
     let record = Record {
-        offset_delta: 0,
         key: Some(Bytes::copy_from_slice(key)),
-        value: Some(Bytes::copy_from_slice(value)),
-        ..Default::default()
+        ..value_record(0, Some(Bytes::copy_from_slice(value)))
     };
     let batch = RecordBatch {
         last_offset_delta: 0,
-        records: vec![record],
-        ..Default::default()
+        ..batch_from_records(vec![record])
     };
 
-    let req = ProduceRequest {
-        acks: 1,
-        timeout_ms: 5_000,
-        topic_data: vec![TopicProduceData {
-            name: topic.to_string(),
-            topic_id,
-            partition_data: vec![PartitionProduceData {
-                index: 0,
-                records: Some(batch.into()),
-                ..Default::default()
-            }],
-            ..Default::default()
-        }],
-        ..Default::default()
-    };
+    let req = single_partition_produce(
+        topic.to_string(),
+        topic_id,
+        0,
+        Some(batch.into()),
+        (1, 5_000),
+    );
 
     let version: i16 = 9; // flexible, pre-KIP-516 (no topic_id required on the wire at v9)
     let mut stream = TcpStream::connect(addr).await.expect("connect");

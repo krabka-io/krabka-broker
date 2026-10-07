@@ -23,7 +23,7 @@
 //! compact, and every struct as well as the message ends with a tagged-field
 //! count.
 
-use bytes::{BufMut, Bytes, BytesMut};
+use bytes::{BufMut, BytesMut};
 
 use super::codec::{
     decode_i16_list, decode_key_value_list, encode_i16_list, encode_key_value_list,
@@ -33,6 +33,7 @@ use crate::{
         flex::{
             get_compact_array, get_compact_string, get_string_array, put_compact_array,
             put_compact_string, put_empty_tagged_fields, put_string_array, skip_tagged_fields,
+            value_codec,
         },
         get_i16, get_i32,
     },
@@ -161,25 +162,17 @@ pub struct StreamsGroupTopologyValue {
     pub subtopologies: Vec<StoredSubtopology>,
 }
 
-impl StreamsGroupTopologyValue {
-    #[must_use]
-    pub fn encode(&self) -> Bytes {
-        let mut buf = BytesMut::new();
-        buf.put_i16(0);
+value_codec! {
+    StreamsGroupTopologyValue,
+    encode(&self) -> buf {
         buf.put_i32(self.epoch);
-        put_compact_array(&mut buf, self.subtopologies.iter(), |buf, s| {
+        put_compact_array(buf, self.subtopologies.iter(), |buf, s| {
             s.encode_into(buf);
         });
-        put_empty_tagged_fields(&mut buf);
-        buf.freeze()
     }
-    /// # Errors
-    /// Returns an error when log I/O fails, a record or index is corrupt, or the requested offset violates the segment state.
-    pub fn decode(mut buf: &[u8]) -> Result<Self, BrokerError> {
-        let _v = get_i16(&mut buf)?;
-        let epoch = get_i32(&mut buf)?;
-        let subtopologies = get_compact_array(&mut buf, StoredSubtopology::decode_from)?;
-        skip_tagged_fields(&mut buf)?;
+    decode(buf) {
+        let epoch = get_i32(buf)?;
+        let subtopologies = get_compact_array(buf, StoredSubtopology::decode_from)?;
         Ok(Self {
             epoch,
             subtopologies,
@@ -192,9 +185,14 @@ mod tests {
     use assert2::assert;
 
     use super::*;
-    use crate::coordinator::unified::streams::persistence::{
-        KEY_STREAMS_TOPOLOGY, StreamsGroupKey, encode_topology_key, parse_streams_key,
-        test_support::peek_version,
+    use crate::coordinator::unified::{
+        streams::{
+            persistence::{
+                KEY_STREAMS_TOPOLOGY, StreamsGroupKey, encode_topology_key, parse_streams_key,
+            },
+            topology::test_support::{example_subtopology, sub},
+        },
+        test_support::{peek_version, wire_bytes},
     };
 
     #[test]
@@ -211,40 +209,7 @@ mod tests {
 
         let v = StreamsGroupTopologyValue {
             epoch: 2,
-            subtopologies: vec![
-                StoredSubtopology {
-                    subtopology_id: "0".into(),
-                    source_topics: vec!["in-a".into(), "in-b".into()],
-                    source_topic_regex: vec!["^orders-.*".into()],
-                    repartition_sink_topics: vec!["rp-1".into()],
-                    state_changelog_topics: vec![StoredTopicInfo {
-                        name: "store-changelog".into(),
-                        partitions: 4,
-                        replication_factor: 3,
-                        topic_configs: vec![("cleanup.policy".into(), "compact".into())],
-                    }],
-                    repartition_source_topics: vec![StoredTopicInfo {
-                        name: "rp-1".into(),
-                        partitions: 4,
-                        replication_factor: 3,
-                        topic_configs: vec![],
-                    }],
-                    copartition_groups: vec![StoredCopartitionGroup {
-                        source_topics: vec![0, 1],
-                        source_topic_regex: vec![0],
-                        repartition_source_topics: vec![0],
-                    }],
-                },
-                StoredSubtopology {
-                    subtopology_id: "1".into(),
-                    source_topics: vec![],
-                    source_topic_regex: vec![],
-                    repartition_sink_topics: vec![],
-                    state_changelog_topics: vec![],
-                    repartition_source_topics: vec![],
-                    copartition_groups: vec![],
-                },
-            ],
+            subtopologies: vec![example_subtopology(), sub("1")],
         };
         assert!(StreamsGroupTopologyValue::decode(&v.encode()).unwrap() == v);
     }
@@ -268,23 +233,24 @@ mod tests {
                 copartition_groups: vec![],
             }],
         };
-        let mut want: Vec<u8> = vec![0x00, 0x00];
-        want.extend_from_slice(&1i32.to_be_bytes()); // Epoch
-        want.push(0x02); // one Subtopology
-        want.extend_from_slice(b"\x020"); // SubtopologyId
-        want.extend_from_slice(b"\x02\x02s"); // SourceTopics
-        want.push(0x01); // empty SourceTopicRegex
-        want.push(0x02); // one StateChangelogTopics entry
-        want.extend_from_slice(b"\x02c"); // Name
-        want.extend_from_slice(&0i32.to_be_bytes()); // Partitions
-        want.extend_from_slice(&3i16.to_be_bytes()); // ReplicationFactor
-        want.push(0x01); // empty TopicConfigs
-        want.push(0x00); // TopicInfo tagged fields
-        want.push(0x01); // empty RepartitionSinkTopics
-        want.push(0x01); // empty RepartitionSourceTopics
-        want.push(0x01); // empty CopartitionGroups
-        want.push(0x00); // Subtopology tagged fields
-        want.push(0x00); // message tagged fields
+        let want = wire_bytes(&[
+            "0000", "00000001", // Epoch
+            "02",       // one Subtopology
+            "0230",     // SubtopologyId
+            "020273",   // SourceTopics
+            "01",       // empty SourceTopicRegex
+            "02",       // one StateChangelogTopics entry
+            "0263",     // Name
+            "00000000", // Partitions
+            "0003",     // ReplicationFactor
+            "01",       // empty TopicConfigs
+            "00",       // TopicInfo tagged fields
+            "01",       // empty RepartitionSinkTopics
+            "01",       // empty RepartitionSourceTopics
+            "01",       // empty CopartitionGroups
+            "00",       // Subtopology tagged fields
+            "00",       // message tagged fields
+        ]);
         assert!(&v.encode()[..] == &want[..]);
     }
 

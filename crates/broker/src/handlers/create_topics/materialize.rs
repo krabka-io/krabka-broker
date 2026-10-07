@@ -8,6 +8,27 @@ fn is_local_leader(leader: krabka_raft::NodeId, node_id: krabka_raft::NodeId) ->
 }
 
 impl super::InitialLeadership {
+    /// The authoritative registration shared by both creation APIs.
+    pub(crate) fn partition_record(
+        &self,
+        topic: &str,
+        partition: i32,
+        replicas: &[krabka_raft::NodeId],
+    ) -> krabka_metadata::MetadataRecord {
+        krabka_metadata::MetadataRecord::V1Partition(krabka_metadata::PartitionRecord {
+            topic: topic.to_owned(),
+            partition,
+            leader: self.leader,
+            replicas: replicas.to_vec(),
+            isr: self.isr.clone(),
+            leader_epoch: krabka_metadata::LeaderEpoch(super::INITIAL_LEADER_EPOCH),
+            adding_replicas: vec![],
+            removing_replicas: vec![],
+            directories: vec![],
+            partition_epoch: 0,
+        })
+    }
+
     /// Installs this leadership on a partition this broker has just
     /// materialized: the first leader at `leader_epoch` and, when this broker
     /// leads, the ISR.

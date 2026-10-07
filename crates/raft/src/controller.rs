@@ -42,10 +42,23 @@ use crate::{
     types::{Node, NodeId},
 };
 
+fn connection_options(
+    client_id: &str,
+    dispatch_queue_capacity: krabka_client_core::ConnectionDispatchQueueCapacity,
+    frame_max: krabka_client_core::ClientFrameMax,
+) -> krabka_client_core::ConnectionOptions {
+    krabka_client_core::ConnectionOptions {
+        client_id: client_id.to_owned(),
+        dispatch_queue_capacity,
+        frame_max,
+        ..krabka_client_core::ConnectionOptions::default()
+    }
+}
+
 /// Krabka-native view of the controller's current quorum state. Surfaced by
 /// [`ControllerHandle::quorum_state`] for the broker's `DescribeQuorum` admin
 /// handler so callers don't depend on engine internals directly.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct QuorumState {
     /// `KRaft` leader epoch (on the wire as `leader_epoch`).
     pub current_term: u64,
@@ -220,11 +233,7 @@ impl ControllerHandle {
 
     /// Drain the listener and stop the engine. Idempotent in practice.
     pub async fn shutdown(self) {
-        self.shutdown.cancel();
-        self.engine.shutdown().await;
-        if let Some(h) = self.listener_task.lock().await.take() {
-            let _ = h.await;
-        }
+        self.cancel().await;
     }
 
     /// Stop the engine and cancel the controller listener without consuming
@@ -248,7 +257,7 @@ mod tests {
 
     use super::*;
     use crate::{
-        config::{BootstrapMode, ControllerConfig},
+        config::ControllerConfig,
         controller::test_support::{
             FAST_ELECTION_TIMEOUT, TEST_OP_TIMEOUT, bind_eventually, committable_topic_record,
             wait_for_leader,
@@ -304,13 +313,7 @@ mod tests {
 
     #[tokio::test]
     async fn quorum_view_reports_join_node_is_not_leader() {
-        let dir = TempDir::new().unwrap();
-        let cfg = ControllerConfig {
-            bootstrap_mode: BootstrapMode::Join,
-            initial_voters: krabka_metadata::VoterSet::from_voters(std::iter::empty()),
-            ..ControllerConfig::for_tests(NodeId(1), dir.path().to_path_buf())
-        };
-        let ctrl = Controller::start(cfg).await.expect("join start");
+        let (_dir, ctrl) = crate::controller::test_support::joining_controller("join start").await;
 
         assert2::assert!(ctrl.quorum_state().current_leader.is_none());
         assert2::assert!(ctrl.voted_directory_id().is_none());
@@ -319,9 +322,7 @@ mod tests {
 
     #[tokio::test]
     async fn shutdown_releases_bound_listener_addr() {
-        let dir = TempDir::new().unwrap();
-        let cfg = ControllerConfig::for_tests(NodeId(1), dir.path().to_path_buf());
-        let ctrl = Controller::start(cfg).await.expect("bootstrap");
+        let (_dir, ctrl) = crate::controller::test_support::bootstrap_controller("bootstrap").await;
         let addr = ctrl.controller_bound_addr();
 
         ctrl.shutdown().await;
@@ -332,9 +333,7 @@ mod tests {
 
     #[tokio::test]
     async fn cancel_releases_bound_listener_addr_without_consuming_handle() {
-        let dir = TempDir::new().unwrap();
-        let cfg = ControllerConfig::for_tests(NodeId(1), dir.path().to_path_buf());
-        let ctrl = Controller::start(cfg).await.expect("bootstrap");
+        let (_dir, ctrl) = crate::controller::test_support::bootstrap_controller("bootstrap").await;
         let addr = ctrl.controller_bound_addr();
 
         ctrl.cancel().await;

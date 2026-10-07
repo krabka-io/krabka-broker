@@ -26,20 +26,41 @@ fn raw_vote_body(request: &VoteRequest) -> Bytes {
     encode_body(request, VOTE_VERSION)
 }
 
-#[test]
-fn vote_request_round_trips() {
-    let cluster_id = uuid::Uuid::from_u128(1);
-    let req = PeerRequest::Vote {
-        cluster_id: Some(cluster_id),
+fn candidate_vote(
+    cluster_id: Option<uuid::Uuid>,
+    directories: (uuid::Uuid, uuid::Uuid),
+) -> PeerRequest {
+    PeerRequest::Vote {
+        cluster_id,
         voter_id: NodeId(9),
-        voter_directory_id: uuid::Uuid::from_u128(2),
+        voter_directory_id: directories.0,
         candidate_epoch: 3,
         candidate: NodeId(7),
-        candidate_directory_id: uuid::Uuid::from_u128(3),
+        candidate_directory_id: directories.1,
         last_epoch: 2,
         last_offset: 42,
         pre_vote: true,
-    };
+    }
+}
+
+fn begin_request() -> PeerRequest {
+    PeerRequest::BeginQuorumEpoch {
+        cluster_id: Some(uuid::Uuid::from_u128(9)),
+        voter_id: NodeId(2),
+        voter_directory_id: uuid::Uuid::from_u128(2),
+        leader_id: NodeId(5),
+        leader_epoch: 9,
+        leader_endpoints: vec![("CONTROLLER".into(), "c5".into(), 9093)],
+    }
+}
+
+#[test]
+fn vote_request_round_trips() {
+    let cluster_id = uuid::Uuid::from_u128(1);
+    let req = candidate_vote(
+        Some(cluster_id),
+        (uuid::Uuid::from_u128(2), uuid::Uuid::from_u128(3)),
+    );
     let encoded = req.encode();
     assert2::assert!(decode_vote(&encoded) == Some(req));
 
@@ -153,17 +174,7 @@ fn vote_decode_rejects_trailing_bytes() {
 
 #[test]
 fn generic_request_decode_accepts_vote_request() {
-    let req = PeerRequest::Vote {
-        cluster_id: None,
-        voter_id: NodeId(9),
-        voter_directory_id: uuid::Uuid::nil(),
-        candidate_epoch: 3,
-        candidate: NodeId(7),
-        candidate_directory_id: uuid::Uuid::nil(),
-        last_epoch: 2,
-        last_offset: 42,
-        pre_vote: true,
-    };
+    let req = candidate_vote(None, (uuid::Uuid::nil(), uuid::Uuid::nil()));
     assert2::assert!(PeerRequest::decode(&req.encode()) == Some(req));
 }
 
@@ -171,17 +182,7 @@ fn generic_request_decode_accepts_vote_request() {
 fn encoded_vote_request_carries_target_voter_and_empty_cluster_id() {
     use krabka_protocol::Decode;
 
-    let req = PeerRequest::Vote {
-        cluster_id: None,
-        voter_id: NodeId(9),
-        voter_directory_id: uuid::Uuid::nil(),
-        candidate_epoch: 3,
-        candidate: NodeId(7),
-        candidate_directory_id: uuid::Uuid::nil(),
-        last_epoch: 2,
-        last_offset: 42,
-        pre_vote: true,
-    };
+    let req = candidate_vote(None, (uuid::Uuid::nil(), uuid::Uuid::nil()));
     let mut cur = &req.encode()[..];
     let raw = VoteRequest::decode(&mut cur, VOTE_VERSION).expect("decode vote request");
     let partition = &raw.topics[0].partitions[0];
@@ -200,14 +201,7 @@ fn encoded_vote_request_carries_target_voter_and_empty_cluster_id() {
 
 #[test]
 fn begin_end_round_trip() {
-    let begin = PeerRequest::BeginQuorumEpoch {
-        cluster_id: Some(uuid::Uuid::from_u128(9)),
-        voter_id: NodeId(2),
-        voter_directory_id: uuid::Uuid::from_u128(2),
-        leader_id: NodeId(5),
-        leader_epoch: 9,
-        leader_endpoints: vec![("CONTROLLER".into(), "c5".into(), 9093)],
-    };
+    let begin = begin_request();
     assert2::assert!(decode_begin(&begin.encode()) == Some(begin));
     let end = PeerRequest::EndQuorumEpoch {
         cluster_id: Some(uuid::Uuid::from_u128(9)),
@@ -233,14 +227,7 @@ fn encoded_begin_and_end_requests_are_kafkas_singleton_requests() {
         primitives::uuid::Uuid as WireUuid,
     };
 
-    let begin = PeerRequest::BeginQuorumEpoch {
-        cluster_id: Some(uuid::Uuid::from_u128(9)),
-        voter_id: NodeId(2),
-        voter_directory_id: uuid::Uuid::from_u128(2),
-        leader_id: NodeId(5),
-        leader_epoch: 9,
-        leader_endpoints: vec![("CONTROLLER".into(), "c5".into(), 9093)],
-    };
+    let begin = begin_request();
     let raw_begin = BeginQuorumEpochRequest::decode(&mut &begin.encode()[..], QUORUM_EPOCH_VERSION)
         .expect("decode begin request");
     let expected_begin = BeginQuorumEpochRequest {

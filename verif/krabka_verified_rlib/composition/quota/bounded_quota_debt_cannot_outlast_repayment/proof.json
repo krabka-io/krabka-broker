@@ -4,11 +4,11 @@
     "Coma": {
       "vc_bounded_quota_debt_cannot_outlast_repayment": {
         "prover": "z3",
-        "time": 0.004
+        "time": 0.016
       },
-      "vc_plan_consume": { "prover": "alt-ergo", "time": 0.006 },
-      "vc_quota_charge": { "prover": "alt-ergo", "time": 0.005 },
-      "vc_quota_credit": { "prover": "alt-ergo", "time": 0.013 }
+      "vc_plan_consume": { "prover": "alt-ergo", "time": 0.016 },
+      "vc_quota_charge": { "prover": "alt-ergo", "time": 0.01 },
+      "vc_quota_credit": { "prover": "alt-ergo", "time": 0.008 }
     }
   }
 }

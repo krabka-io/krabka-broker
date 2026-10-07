@@ -8,7 +8,7 @@
 use std::net::SocketAddr;
 
 use krabka_broker::{Broker, BrokerHandle};
-use krabka_security::{SaslMechanism, SecretBytes};
+use krabka_security::SaslMechanism;
 use tempfile::TempDir;
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -24,9 +24,10 @@ use tempfile::TempDir;
 ///   - `delegation_token_secret_key = Some("e2e-master-key")`, which gates
 ///     the four delegation-token RPCs and the SCRAM token-fallback lookup
 pub(crate) async fn start_broker() -> (BrokerHandle, TempDir, SocketAddr) {
-    let log_dir = tempfile::tempdir().unwrap();
-    let mut cfg = crate::support::sasl_plaintext_config(log_dir.path().to_path_buf());
-    cfg.enabled_sasl_mechanisms = vec![SaslMechanism::Plain, SaslMechanism::ScramSha256];
+    let (log_dir, mut cfg) = crate::support::sasl::sasl_temp_config(vec![
+        SaslMechanism::Plain,
+        SaslMechanism::ScramSha256,
+    ]);
     cfg.plain_credentials
         .insert("alice".to_string(), "wonderland".to_string());
     cfg.plain_credentials
@@ -38,7 +39,6 @@ pub(crate) async fn start_broker() -> (BrokerHandle, TempDir, SocketAddr) {
         username: "alice".to_string(),
         password: "wonderland".to_string(),
     });
-    cfg.delegation_token_secret_key = Some(SecretBytes::new(b"e2e-master-key".to_vec()));
     // KIP-48 distinguishes the absolute ceiling (`max_lifetime_ms` →
     // `max_timestamp_ms`) from the initial renew window (`default_renew_period`
     // → `expiry_timestamp_ms`). With 7d ceiling + 24h renew period (both
@@ -46,8 +46,7 @@ pub(crate) async fn start_broker() -> (BrokerHandle, TempDir, SocketAddr) {
     // and max = issue + 7d as separate values, so Renew can extend the
     // expiry well past its initial value (and the lifecycle test asserts
     // strict-monotonic extension below).
-    cfg.delegation_token_max_lifetime = krabka_units::days(7);
-    cfg.delegation_token_default_renew_period = krabka_units::hours(24);
+    crate::support::sasl::delegation_token_defaults(&mut cfg, b"e2e-master-key");
 
     let handle = Broker::start(cfg).await.expect("broker must start");
     let addr = handle.listen_addr();
@@ -70,9 +69,10 @@ pub(crate) fn start_broker_with_super_users(
     plain_creds: &[(&str, &str)],
     super_users: &[&str],
 ) -> impl std::future::Future<Output = (BrokerHandle, TempDir, SocketAddr)> {
-    let log_dir = tempfile::tempdir().unwrap();
-    let mut cfg = crate::support::sasl_plaintext_config(log_dir.path().to_path_buf());
-    cfg.enabled_sasl_mechanisms = vec![SaslMechanism::Plain, SaslMechanism::ScramSha256];
+    let (log_dir, mut cfg) = crate::support::sasl::sasl_temp_config(vec![
+        SaslMechanism::Plain,
+        SaslMechanism::ScramSha256,
+    ]);
     for (user, password) in plain_creds {
         cfg.plain_credentials
             .insert((*user).to_string(), (*password).to_string());
@@ -97,15 +97,9 @@ pub(crate) fn start_broker_with_super_users(
         username: (*ib_user).to_string(),
         password: (*ib_pw).to_string(),
     });
-    cfg.delegation_token_secret_key = Some(SecretBytes::new(b"act-as-master-key".to_vec()));
-    cfg.delegation_token_max_lifetime = krabka_units::days(7);
-    cfg.delegation_token_default_renew_period = krabka_units::hours(24);
+    crate::support::sasl::delegation_token_defaults(&mut cfg, b"act-as-master-key");
 
-    Box::pin(async move {
-        let handle = Broker::start(cfg).await.expect("broker must start");
-        let addr = handle.listen_addr();
-        (handle, log_dir, addr)
-    })
+    Box::pin(crate::support::sasl::start_broker(cfg, log_dir))
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

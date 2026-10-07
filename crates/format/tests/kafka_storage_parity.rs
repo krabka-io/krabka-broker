@@ -89,23 +89,13 @@ fn checkpoint(dir: &Path) -> PathBuf {
         .join("00000000000000000000-0000000000.checkpoint")
 }
 
-/// Every file under `dir` with its bytes, for an unchanged-on-rerun check.
-fn snapshot(dir: &Path) -> Vec<(PathBuf, Vec<u8>)> {
-    let mut files = Vec::new();
-    let mut pending = vec![dir.to_path_buf()];
-    while let Some(next) = pending.pop() {
-        for entry in std::fs::read_dir(&next).expect("list") {
-            let path = entry.expect("entry").path();
-            if path.is_dir() {
-                pending.push(path);
-            } else {
-                files.push((path.clone(), std::fs::read(&path).expect("read")));
-            }
-        }
-    }
-    files.sort();
-    files
-}
+krabka_macros::directory_tree_fixture!(
+    snapshot,
+    (PathBuf, Vec<u8>),
+    { /// Every file under `dir` with its bytes, for an unchanged-on-rerun check.
+    },
+    (|_dir: &Path, path: &Path| (path.to_path_buf(), std::fs::read(path).expect("read")))
+);
 
 /// The id form: whatever `--cluster-id` names, the directory, the manifest,
 /// and stdout carry Kafka's 22-character form. The reserved ids parse, as
@@ -227,8 +217,7 @@ fn directory_ids_are_written_in_kafka_form() {
             NODE,
         ];
         args.extend_from_slice(extra);
-        let out = krabka_format(&args, None);
-        assert2::assert!(out.status.code() == Some(0), "{what}: {}", stderr(&out));
+        format_successfully(&args, what);
         // The broker reads back exactly what was written.
         assert2::assert!(
             krabka_broker::bootstrap::read_meta_properties(&dir).ok()
@@ -341,8 +330,7 @@ fn every_log_dir_is_formatted_in_one_run() {
         args.extend(["--cluster-id", CLUSTER_ID].map(String::from));
         args.extend(STANDALONE.iter().map(|a| (*a).to_owned()));
         let args: Vec<&str> = args.iter().map(String::as_str).collect();
-        let out = krabka_format(&args, None);
-        assert2::assert!(out.status.code() == Some(0), "{what}: {}", stderr(&out));
+        let out = format_successfully(&args, what);
 
         assert2::assert!(
             [formatted(&meta_dir), formatted(&data_dir)]
@@ -420,8 +408,7 @@ fn a_metadata_log_dir_is_formatted_with_the_log_dirs() {
             CLUSTER_ID,
         ];
         args.extend_from_slice(STANDALONE);
-        let out = krabka_format(&args, None);
-        assert2::assert!(out.status.code() == Some(0), "{what}: {}", stderr(&out));
+        let out = format_successfully(&args, what);
 
         let mut lines: Vec<String> = want
             .iter()
@@ -610,8 +597,7 @@ fn an_interrupted_run_can_be_run_again() {
         (META_PROPERTIES, 3),
     ];
     for (fault, rerun_exit) in cases {
-        let tmp = tempfile::tempdir().expect("tempdir");
-        let (meta_dir, data_dir) = (tmp.path().join("meta"), tmp.path().join("data"));
+        let (_tmp, meta_dir, data_dir) = metadata_and_data_directories();
         let dirs = format!("{},{}", meta_dir.display(), data_dir.display());
         let mut args = vec!["--log-dir", &dirs, "--cluster-id", CLUSTER_ID];
         args.extend_from_slice(STANDALONE);
@@ -712,8 +698,7 @@ fn is_utc_date_comment(line: &str) -> bool {
 #[test]
 fn meta_properties_is_the_file_kafka_writes() {
     const DIRECTORY_ID: &str = "AAAAAAAAAAAAAAAAAAAAZA";
-    let tmp = tempfile::tempdir().expect("tempdir");
-    let (meta_dir, data_dir) = (tmp.path().join("meta"), tmp.path().join("data"));
+    let (_tmp, meta_dir, data_dir) = metadata_and_data_directories();
     let out = krabka_format(
         &[
             "--metadata-log-dir",
@@ -756,3 +741,11 @@ fn meta_properties_is_the_file_kafka_writes() {
         );
     }
 }
+
+fn format_successfully(args: &[&str], what: &str) -> std::process::Output {
+    let out = krabka_format(args, None);
+    assert2::assert!(out.status.code() == Some(0), "{what}: {}", stderr(&out));
+    out
+}
+
+krabka_macros::format_directories_fixture!(metadata_and_data_directories);

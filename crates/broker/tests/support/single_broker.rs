@@ -9,6 +9,8 @@ use krabka_broker::{Broker, BrokerConfig, BrokerHandle};
 use krabka_client_core::Client;
 use tempfile::TempDir;
 
+use crate::support::client::connect_owned;
+
 pub struct InProcess {
     pub broker: BrokerHandle,
     pub client: Client,
@@ -17,6 +19,18 @@ pub struct InProcess {
 
 pub async fn start() -> InProcess {
     start_configured(|_| {}).await
+}
+
+/// A bare broker with its directory bound before its handle at the call site.
+///
+/// # Panics
+/// Panics if the temporary directory or broker cannot be created.
+pub async fn standalone_broker() -> (TempDir, BrokerHandle) {
+    let dir = TempDir::new().unwrap();
+    let broker = Broker::start(BrokerConfig::for_tests(dir.path().to_path_buf()))
+        .await
+        .unwrap();
+    (dir, broker)
 }
 
 /// [`start`] with `legacy_request_versions_enable` set, for the tests that
@@ -33,23 +47,21 @@ pub async fn start_legacy() -> InProcess {
 /// [`start`] with `configure` applied to the `for_tests` config first.
 pub async fn start_configured(configure: impl FnOnce(&mut BrokerConfig)) -> InProcess {
     let tempdir = tempfile::tempdir().expect("tempdir");
-    let mut config = BrokerConfig::for_tests(tempdir.path().to_path_buf());
-    config.heartbeat_timeout = krabka_units::secs(30);
+    let mut config = heartbeat_config(tempdir.path());
     configure(&mut config);
-    let broker = Broker::start(config).await.expect("broker start");
-    broker.wait_until_broker_alive(1).await;
-    let bootstrap = broker.listen_addr().to_string();
-    let client = Client::builder()
-        .bootstrap(&bootstrap)
-        .client_id("krabka-broker-test")
-        .build()
-        .await
-        .expect("client build");
+    let (broker, client) = boot_with_client(config, "krabka-broker-test").await;
     InProcess {
         broker,
         client,
         _tempdir: tempdir,
     }
+}
+
+async fn boot_with_client(config: BrokerConfig, client_id: &str) -> (BrokerHandle, Client) {
+    let broker = Broker::start(config).await.expect("broker start");
+    broker.wait_until_broker_alive(1).await;
+    let client = connect_owned(broker.listen_addr().to_string(), client_id, "client build").await;
+    (broker, client)
 }
 
 /// Start a broker rooted at `dir` (caller owns the directory).
@@ -58,8 +70,7 @@ pub async fn start_configured(configure: impl FnOnce(&mut BrokerConfig)) -> InPr
 /// verify that the broker recovers persistent state (audit chain, spool)
 /// correctly. The helper detects an existing raft log and then uses `Rejoin`.
 pub async fn start_with_dir(dir: &std::path::Path) -> (BrokerHandle, krabka_client_core::Client) {
-    let mut config = BrokerConfig::for_tests(dir.to_path_buf());
-    config.heartbeat_timeout = krabka_units::secs(30);
+    let mut config = heartbeat_config(dir);
     // Mirror the production heuristic from `detect_bootstrap_mode` in
     // broker.rs: key Rejoin on `metadata_log_nonempty` (committed
     // quorum-state), NOT bare directory presence.  The segment dir is created
@@ -69,16 +80,7 @@ pub async fn start_with_dir(dir: &std::path::Path) -> (BrokerHandle, krabka_clie
     if krabka_raft::metadata_log_nonempty(&metadata_dir) {
         config.bootstrap_mode = krabka_broker::BootstrapMode::Rejoin;
     }
-    let broker = Broker::start(config).await.expect("broker start");
-    broker.wait_until_broker_alive(1).await;
-    let bootstrap = broker.listen_addr().to_string();
-    let client = krabka_client_core::Client::builder()
-        .bootstrap(&bootstrap)
-        .client_id("krabka-broker-test")
-        .build()
-        .await
-        .expect("client build");
-    (broker, client)
+    boot_with_client(config, "krabka-broker-test").await
 }
 
 /// Start a broker configured with an audit signing key and a given checkpoint cadence.
@@ -90,22 +92,13 @@ pub fn start_with_audit_key(
     every_n: u64,
 ) -> impl std::future::Future<Output = InProcess> {
     let tempdir = tempfile::tempdir().expect("tempdir");
-    let mut config = BrokerConfig::for_tests(tempdir.path().to_path_buf());
-    config.heartbeat_timeout = krabka_units::secs(30);
+    let mut config = heartbeat_config(tempdir.path());
     config.audit_signing_key_path = Some(key_path.to_path_buf());
     config.audit_signing_key_id = Some(key_id.to_string());
     config.audit_checkpoint_every_n = every_n;
     config.audit_checkpoint_every = krabka_units::hours(1); // only count trigger fires
     Box::pin(async move {
-        let broker = Broker::start(config).await.expect("broker start");
-        broker.wait_until_broker_alive(1).await;
-        let bootstrap = broker.listen_addr().to_string();
-        let client = Client::builder()
-            .bootstrap(&bootstrap)
-            .client_id("krabka-broker-test-audit-key")
-            .build()
-            .await
-            .expect("client build");
+        let (broker, client) = boot_with_client(config, "krabka-broker-test-audit-key").await;
         InProcess {
             broker,
             client,
@@ -124,8 +117,7 @@ pub async fn start_with_deny_all_authz() -> InProcess {
     use krabka_broker::authorizer::SimpleAclAuthorizer;
 
     let tempdir = tempfile::tempdir().expect("tempdir");
-    let mut config = BrokerConfig::for_tests(tempdir.path().to_path_buf());
-    config.heartbeat_timeout = krabka_units::secs(30);
+    let mut config = heartbeat_config(tempdir.path());
     // Replace the default AllowAllAuthorizer with a deny-all SimpleAclAuthorizer
     // (empty ACL store, no super-users). The anonymous test client connects
     // with no credentials so it has no super-user bypass — every operation is
@@ -133,14 +125,13 @@ pub async fn start_with_deny_all_authz() -> InProcess {
     config.authorizer = std::sync::Arc::new(SimpleAclAuthorizer::new(HashSet::new()));
     // The broker's own heartbeat is denied too, so it stays fenced: it never
     // becomes alive in the liveness registry, and nothing here needs it to.
-    let broker = Broker::start(config).await.expect("broker start");
-    let bootstrap = broker.listen_addr().to_string();
-    let client = Client::builder()
-        .bootstrap(&bootstrap)
-        .client_id("krabka-broker-test-deny")
-        .build()
-        .await
-        .expect("client build");
+    let (broker, client) = crate::support::client::start_broker_client(
+        config,
+        "krabka-broker-test-deny",
+        "broker start",
+        "client build",
+    )
+    .await;
     InProcess {
         broker,
         client,
@@ -148,28 +139,50 @@ pub async fn start_with_deny_all_authz() -> InProcess {
     }
 }
 
+krabka_macros::bound_start_fixture!(config, bound_config, ::krabka_broker);
+krabka_macros::bound_start_fixture!(start, start_bound, ::krabka_broker, expect, bound_config);
+
 /// Hold both listeners through startup and advertise their actual addresses.
 pub async fn start_with_bound_listeners(
     customize: impl FnOnce(&mut BrokerConfig),
 ) -> (BrokerHandle, TempDir) {
-    let dir = TempDir::new().expect("tempdir");
-    let data_listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-        .await
-        .expect("bind data listener");
-    let controller_listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-        .await
-        .expect("bind controller listener");
-    let data_addr = data_listener.local_addr().expect("data addr");
-    let controller_addr = controller_listener.local_addr().expect("controller addr");
-    let mut config = BrokerConfig::for_tests(dir.path().to_path_buf());
-    config.listen_addr = data_addr;
-    config.advertised_listener = data_addr.to_string();
-    config.controller_listen_addr = controller_addr;
-    config.controller_quorum_voters = vec![(krabka_broker::NodeId(1), controller_addr.to_string())];
-    customize(&mut config);
-    let broker =
-        Broker::start_with_listeners(config, Some(controller_listener), Some(data_listener))
-            .await
-            .expect("broker start");
+    let (broker, _controller_addr, dir) = start_bound(customize).await;
     (broker, dir)
+}
+
+/// A bare `for_tests` broker, with no readiness wait or client-side setup.
+///
+/// # Panics
+/// Panics if the temporary directory or broker cannot be created.
+pub async fn boot_single() -> (BrokerHandle, String, TempDir) {
+    let (dir, broker) = standalone_broker().await;
+    let bootstrap = broker.listen_addr().to_string();
+    (broker, bootstrap, dir)
+}
+
+/// A classic-group fixture with the unmodified `for_tests` configuration.
+///
+/// # Panics
+/// Panics if the temporary directory or broker cannot be created.
+pub async fn start_group_coordinator() -> (BrokerHandle, String, TempDir) {
+    let tempdir = tempfile::tempdir().expect("tempdir");
+    let config = BrokerConfig::for_tests(tempdir.path().to_path_buf());
+    let handle = Broker::start(config).await.expect("broker must start");
+    handle.wait_until_group_coordinator_ready().await;
+    let bootstrap = handle.listen_addr().to_string();
+    (handle, bootstrap, tempdir)
+}
+
+/// Keep the standard client fixture and wait for its group coordinator after startup.
+pub async fn start_ready_group() -> InProcess {
+    let p = start().await;
+    p.broker.wait_until_group_coordinator_ready().await;
+    p
+}
+
+/// The single-client fixtures' shared heartbeat timeout, before caller overrides.
+fn heartbeat_config(dir: &std::path::Path) -> BrokerConfig {
+    let mut config = BrokerConfig::for_tests(dir.to_path_buf());
+    config.heartbeat_timeout = krabka_units::secs(30);
+    config
 }

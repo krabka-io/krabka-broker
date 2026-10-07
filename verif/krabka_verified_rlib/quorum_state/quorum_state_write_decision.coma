@@ -1,12 +1,12 @@
-(* #"/workspace/crates/verified/src/quorum_state.rs" 59 0 67 29 *)
+(* #"/workspace/crates/verified/src/quorum_state.rs" 57 0 65 29 *)
 
-let%span squorum_state = "/workspace/crates/verified/src/quorum_state.rs" 68 23 68 24
-let%span squorum_state'0 = "/workspace/crates/verified/src/quorum_state.rs" 69 26 69 39
-let%span squorum_state'1 = "/workspace/crates/verified/src/quorum_state.rs" 70 38 70 51
-let%span squorum_state'2 = "/workspace/crates/verified/src/quorum_state.rs" 71 35 71 48
-let%span squorum_state'3 = "/workspace/crates/verified/src/quorum_state.rs" 72 29 72 30
-let%span squorum_state'4 = "/workspace/crates/verified/src/quorum_state.rs" 49 10 57 1
-let%span squorum_state'5 = "/workspace/crates/verified/src/quorum_state.rs" 38 8 42 57
+let%span squorum_state = "/workspace/crates/verified/src/quorum_state.rs" 66 23 66 24
+let%span squorum_state'0 = "/workspace/crates/verified/src/quorum_state.rs" 67 26 67 39
+let%span squorum_state'1 = "/workspace/crates/verified/src/quorum_state.rs" 68 38 68 51
+let%span squorum_state'2 = "/workspace/crates/verified/src/quorum_state.rs" 69 35 69 48
+let%span squorum_state'3 = "/workspace/crates/verified/src/quorum_state.rs" 70 29 70 30
+let%span squorum_state'4 = "/workspace/crates/verified/src/quorum_state.rs" 47 10 55 1
+let%span squorum_state'5 = "/workspace/crates/verified/src/quorum_state.rs" 36 8 40 57
 
 use creusot.int.UInt16
 use creusot.int.UInt32
@@ -19,7 +19,7 @@ type t_QuorumStateWriteDecision = Reject | Accept
 
 constant const_MAX: Int32.t = (2147483647: Int32.t)
 
-predicate fits_signed_json [#"/workspace/crates/verified/src/quorum_state.rs" 28 0 36 9] (kraft_version: UInt16.t) (leader_epoch: UInt32.t) (has_leader: bool) (leader_id: UInt64.t) (has_vote: bool) (voted_id: UInt64.t) (all_voter_ids_fit: bool) =
+predicate fits_signed_json [#"/workspace/crates/verified/src/quorum_state.rs" 26 0 34 9] (kraft_version: UInt16.t) (leader_epoch: UInt32.t) (has_leader: bool) (leader_id: UInt64.t) (has_vote: bool) (voted_id: UInt64.t) (all_voter_ids_fit: bool) =
   [%#squorum_state'5] UInt16.t'int kraft_version <= 1
   /\ UInt32.t'int leader_epoch <= Int32.to_int const_MAX
   /\ (not has_leader \/ UInt64.t'int leader_id <= Int32.to_int const_MAX)
@@ -30,7 +30,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let quorum_state_write_decision [#"/workspace/crates/verified/src/quorum_state.rs" 59 0 67 29] (kraft_version: UInt16.t)
+let quorum_state_write_decision [#"/workspace/crates/verified/src/quorum_state.rs" 57 0 65 29] (kraft_version: UInt16.t)
   (leader_epoch: UInt32.t) (has_leader: bool) (leader_id: UInt64.t) (has_vote: bool) (voted_id: UInt64.t)
   (all_voter_ids_fit: bool) (return (x: t_QuorumStateWriteDecision)) = (! bb0
   [ bb0 = s0

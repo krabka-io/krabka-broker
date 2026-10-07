@@ -42,6 +42,21 @@ fn client_options(
         .with_connect_timeout(connect_timeout)
 }
 
+// Both SDK builders expose the same connection policy methods.
+#[cfg(not(target_family = "wasm"))]
+macro_rules! connection_policy {
+    ($builder:expr, $cfg:expr) => {
+        $builder
+            .with_retry(retry_config($cfg.max_retries, $cfg.retry_timeout))
+            .with_client_options(client_options(
+                ClientOptions::new(),
+                $cfg.allow_http,
+                $cfg.request_timeout,
+                $cfg.connect_timeout,
+            ))
+    };
+}
+
 /// Build an `object_store` handle for `cfg`.
 ///
 /// The builder wiring covers the credential chains, the endpoints, and
@@ -81,17 +96,13 @@ pub fn build_object_store(
 pub(crate) fn build_s3_store(
     cfg: &S3Config,
 ) -> Result<object_store::aws::AmazonS3, ObjectStoreError> {
-    let mut builder = object_store::aws::AmazonS3Builder::new()
-        .with_bucket_name(&cfg.bucket)
-        .with_region(&cfg.region)
-        .with_allow_http(cfg.allow_http)
-        .with_retry(retry_config(cfg.max_retries, cfg.retry_timeout))
-        .with_client_options(client_options(
-            ClientOptions::new(),
-            cfg.allow_http,
-            cfg.request_timeout,
-            cfg.connect_timeout,
-        ));
+    let mut builder = connection_policy!(
+        object_store::aws::AmazonS3Builder::new()
+            .with_bucket_name(&cfg.bucket)
+            .with_region(&cfg.region)
+            .with_allow_http(cfg.allow_http),
+        cfg
+    );
     if let Some(endpoint) = &cfg.endpoint {
         builder = builder.with_endpoint(endpoint);
     }
@@ -132,14 +143,7 @@ pub(crate) fn build_gcs_store(
     if let Some(endpoint) = &cfg.endpoint {
         builder = builder.with_base_url(endpoint);
     }
-    builder = builder
-        .with_retry(retry_config(cfg.max_retries, cfg.retry_timeout))
-        .with_client_options(client_options(
-            ClientOptions::new(),
-            cfg.allow_http,
-            cfg.request_timeout,
-            cfg.connect_timeout,
-        ));
+    builder = connection_policy!(builder, cfg);
     let store = builder
         .build()
         .map_err(|e| ObjectStoreError::InvalidConfig(format!("GCS builder: {e}")))?;
@@ -149,7 +153,7 @@ pub(crate) fn build_gcs_store(
 #[cfg(test)]
 mod tests {
     use assert2::{assert, check};
-    use object_store::ObjectStoreExt;
+    use object_store::ObjectStoreExt as _;
 
     use super::{object_store, *};
     use crate::config::{GcsConfig, ObjectStoreConfig, S3Config};
@@ -163,11 +167,7 @@ mod tests {
     async fn inmemory_round_trips() {
         let store = build_object_store(&ObjectStoreConfig::InMemory).unwrap();
         let path = object_store::path::Path::from("t/x");
-        store
-            .put(&path, object_store::PutPayload::from(b"hi".to_vec()))
-            .await
-            .unwrap();
-        let got = store.get(&path).await.unwrap().bytes().await.unwrap();
+        let got = crate::test_support::round_trip(&*store, &path, b"hi").await;
         assert!(&got[..] == b"hi");
     }
 
@@ -247,8 +247,7 @@ mod tests {
     /// who set it.
     #[tokio::test]
     async fn s3_request_timeout_bounds_a_stalled_store() {
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let endpoint = format!("http://{}", listener.local_addr().unwrap());
+        let (listener, endpoint) = crate::test_support::http_listener().await;
         // Hold the accepted sockets open for the length of the test: dropping
         // them would answer the request with a reset, which is not a stall.
         let server = tokio::spawn(async move {
@@ -262,15 +261,9 @@ mod tests {
         });
 
         let store = build_object_store(&ObjectStoreConfig::S3(S3Config {
-            bucket: "b".into(),
-            region: "us-east-1".into(),
-            endpoint: Some(endpoint),
-            allow_http: true,
-            access_key_id: Some("key".into()),
-            secret_access_key: Some("secret".into()),
             max_retries: 0,
             request_timeout: std::time::Duration::from_millis(200),
-            ..Default::default()
+            ..crate::test_support::s3_config("b", endpoint)
         }))
         .unwrap();
 
@@ -293,8 +286,7 @@ mod tests {
     async fn s3_max_retries_bounds_the_attempts_against_a_throttling_store() {
         use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let endpoint = format!("http://{}", listener.local_addr().unwrap());
+        let (listener, endpoint) = crate::test_support::http_listener().await;
         let attempts = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let counter = Arc::clone(&attempts);
         let server = tokio::spawn(async move {
@@ -327,16 +319,10 @@ mod tests {
         });
 
         let store = build_object_store(&ObjectStoreConfig::S3(S3Config {
-            bucket: "b".into(),
-            region: "us-east-1".into(),
-            endpoint: Some(endpoint),
-            allow_http: true,
-            access_key_id: Some("key".into()),
-            secret_access_key: Some("secret".into()),
             max_retries: 2,
             retry_timeout: std::time::Duration::from_secs(30),
             request_timeout: std::time::Duration::from_secs(5),
-            ..Default::default()
+            ..crate::test_support::s3_config("b", endpoint)
         }))
         .unwrap();
 

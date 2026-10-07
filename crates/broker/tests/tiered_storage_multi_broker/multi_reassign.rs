@@ -22,7 +22,7 @@
 //! brokers 2 and 3 free to be the replica this test adds.
 
 use std::{
-    path::{Path, PathBuf},
+    path::Path,
     time::{Duration, Instant},
 };
 
@@ -30,14 +30,11 @@ use assert2::{assert, check};
 use krabka_broker::{BrokerHandle, metrics::PartitionLabel};
 use krabka_client_core::Client;
 use krabka_protocol::{
-    owned::{
-        alter_partition_reassignments_request::{
-            AlterPartitionReassignmentsRequest, ReassignablePartition, ReassignableTopic,
-        },
-        create_topics_request::{CreatableTopic, CreateTopicsRequest},
+    owned::alter_partition_reassignments_request::{
+        AlterPartitionReassignmentsRequest, ReassignablePartition, ReassignableTopic,
     },
     primitives::uuid::Uuid as WireUuid,
-    records::{Record, RecordBatch},
+    records::Record,
 };
 
 use crate::{
@@ -47,6 +44,7 @@ use crate::{
         start_three_tiered_brokers_with_segment_sizes,
     },
     multi_workload::local_segment_bases,
+    support::{client::connect_owned, records::batch_from_records},
 };
 
 /// The topic this suite produces into.
@@ -62,39 +60,9 @@ const PAYLOAD: usize = 256;
 
 /// The total size of every `*.log` object the shared store holds for `TOPIC`.
 fn archive_bytes(root: &Path) -> u64 {
-    fn walk(dir: &Path, out: &mut Vec<PathBuf>) {
-        let Ok(entries) = std::fs::read_dir(dir) else {
-            return;
-        };
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.is_dir() {
-                walk(&path, out);
-            } else {
-                out.push(path);
-            }
-        }
-    }
-    let Ok(entries) = std::fs::read_dir(root) else {
-        return 0;
-    };
-    let mut files = Vec::new();
-    for entry in entries.flatten() {
-        let path = entry.path();
-        let is_topic_dir = path
-            .file_name()
-            .and_then(|n| n.to_str())
-            .is_some_and(|name| name.starts_with(TOPIC));
-        if path.is_dir() && is_topic_dir {
-            walk(&path, &mut files);
-        }
-    }
+    let files = crate::support::storage::topic_remote_log_files(root, TOPIC);
     files
         .iter()
-        .filter(|path| {
-            path.extension().and_then(|e| e.to_str()) == Some("log")
-                || path.file_name().and_then(|n| n.to_str()) == Some("log")
-        })
         .filter_map(|path| std::fs::metadata(path).ok())
         .map(|meta| meta.len())
         .sum()
@@ -118,13 +86,10 @@ async fn produce_records(client: &Client, topic_id: WireUuid, count: usize) {
     for index in 0..count {
         let mut value = format!("record-{index}-").into_bytes();
         value.resize(PAYLOAD, b'x');
-        let batch = RecordBatch {
-            records: vec![Record {
-                value: Some(bytes::Bytes::from(value)),
-                ..Default::default()
-            }],
+        let batch = batch_from_records(vec![Record {
+            value: Some(bytes::Bytes::from(value)),
             ..Default::default()
-        };
+        }]);
         let response =
             crate::support::client::produce_batch(client, TOPIC, topic_id, batch, 1, 10_000).await;
         assert!(response.error_code == 0, "Produce failed: {response:?}");
@@ -134,21 +99,7 @@ async fn produce_records(client: &Client, topic_id: WireUuid, count: usize) {
 /// Creates the tiered topic on broker 1 alone, with local retention set so
 /// tight that every sealed segment is evicted as soon as it is archived.
 async fn create_single_replica_tiered_topic(admin: &Client, leader: &BrokerHandle) {
-    let response = admin
-        .send(CreateTopicsRequest {
-            topics: vec![CreatableTopic {
-                configs: crate::topic_fixture::tiered_configs(None),
-                ..crate::support::topic_on(TOPIC, &[&[1]])
-            }],
-            timeout_ms: 10_000,
-            ..Default::default()
-        })
-        .await
-        .expect("CreateTopics");
-    assert!(
-        response.topics[0].error_code == 0,
-        "CreateTopics failed: {response:?}"
-    );
+    crate::topic_fixture::create_assigned_topic(admin, TOPIC, &[1], None).await;
     leader
         .wait_for_image(|img| img.partition(TOPIC, 0).is_some())
         .await;
@@ -217,12 +168,7 @@ async fn a_replica_added_to_a_tiered_partition_does_not_pull_the_archive() {
     await_all_rlmm_active(&b1, &b2, &b3).await;
 
     let b1_bootstrap = format!("127.0.0.1:{}", b1.listen_addr().port());
-    let admin = Client::builder()
-        .bootstrap(&b1_bootstrap)
-        .client_id("tiered-reassign-admin")
-        .build()
-        .await
-        .expect("admin client");
+    let admin = connect_owned(&b1_bootstrap, "tiered-reassign-admin", "admin client").await;
     create_single_replica_tiered_topic(&admin, &b1).await;
     assert!(
         b1.partition_leader_for_test(TOPIC, 0) == Some(b1.node_id()),
@@ -283,12 +229,12 @@ async fn a_replica_added_to_a_tiered_partition_does_not_pull_the_archive() {
         .find(|handle| handle.node_id() == controller_leader.0)
         .map(|handle| format!("127.0.0.1:{}", handle.listen_addr().port()))
         .expect("the controller leader is one of the three brokers");
-    let controller_client = Client::builder()
-        .bootstrap(&controller_addr)
-        .client_id("tiered-reassign-controller")
-        .build()
-        .await
-        .expect("controller client");
+    let controller_client = connect_owned(
+        &controller_addr,
+        "tiered-reassign-controller",
+        "controller client",
+    )
+    .await;
     reassign_to(&controller_client, vec![1, 3]).await;
 
     // Broker 3 hosts the partition and catches up to the leader's log end.

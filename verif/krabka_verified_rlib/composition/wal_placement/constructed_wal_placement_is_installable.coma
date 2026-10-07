@@ -1,47 +1,51 @@
-(* #"/workspace/crates/verified/src/composition/wal_placement.rs" 40 0 44 23 *)
+(* #"/workspace/crates/verified/src/composition/wal_placement.rs" 37 0 41 23 *)
 
-let%span sord = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
-let%span sord'0 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
-let%span swell_founded = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/well_founded.rs" 43 8 43 33
-let%span sslice = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 151 20 151 37
-let%span sslice'0 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 156 20 156 37
-let%span svec = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 104 18 104 36
-let%span svec'0 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 18 14 18 41
-let%span svec'1 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 114 18 114 40
-let%span svec'2 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 195 19 195 38
-let%span svec'3 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 196 18 196 46
-let%span svec'4 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 118 18 118 48
-let%span svec'5 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 202 18 202 34
-let%span sselect_wal_voters = "/workspace/crates/verified/src/wal/select_wal_voters.rs" 164 10 164 37
-let%span sselect_wal_voters'0 = "/workspace/crates/verified/src/wal/select_wal_voters.rs" 165 10 166 89
-let%span sselect_wal_voters'1 = "/workspace/crates/verified/src/wal/select_wal_voters.rs" 167 10 167 58
-let%span sselect_wal_voters'2 = "/workspace/crates/verified/src/wal/select_wal_voters.rs" 168 10 169 86
-let%span sselect_wal_voters'3 = "/workspace/crates/verified/src/wal/select_wal_voters.rs" 170 10 171 68
-let%span sselect_wal_voters'4 = "/workspace/crates/verified/src/wal/select_wal_voters.rs" 172 10 175 85
-let%span sselect_wal_voters'5 = "/workspace/crates/verified/src/wal/select_wal_voters.rs" 100 10 103 37
-let%span swal_placement = "/workspace/crates/verified/src/composition/wal_placement.rs" 45 19 45 71
-let%span swal_placement'0 = "/workspace/crates/verified/src/composition/wal_placement.rs" 46 30 46 40
-let%span swal_placement'1 = "/workspace/crates/verified/src/composition/wal_placement.rs" 47 16 47 22
-let%span swal_placement'2 = "/workspace/crates/verified/src/composition/wal_placement.rs" 50 14 50 34
-let%span swal_placement'3 = "/workspace/crates/verified/src/composition/wal_placement.rs" 51 14 51 28
-let%span swal_placement'4 = "/workspace/crates/verified/src/composition/wal_placement.rs" 49 16 49 79
-let%span swal_placement'5 = "/workspace/crates/verified/src/composition/wal_placement.rs" 48 16 48 59
-let%span swal_placement'6 = "/workspace/crates/verified/src/composition/wal_placement.rs" 52 27 52 30
-let%span swal_placement'7 = "/workspace/crates/verified/src/composition/wal_placement.rs" 52 8 52 33
-let%span swal_placement'8 = "/workspace/crates/verified/src/composition/wal_placement.rs" 53 13 53 14
-let%span swal_placement'9 = "/workspace/crates/verified/src/composition/wal_placement.rs" 53 8 53 14
-let%span swal_placement'10 = "/workspace/crates/verified/src/composition/wal_placement.rs" 55 40 55 46
-let%span swal_placement'11 = "/workspace/crates/verified/src/composition/wal_placement.rs" 55 20 55 70
-let%span swal_placement'12 = "/workspace/crates/verified/src/composition/wal_placement.rs" 32 10 32 73
-let%span swal_placement'13 = "/workspace/crates/verified/src/composition/wal_placement.rs" 33 10 34 86
-let%span swal_placement'14 = "/workspace/crates/verified/src/composition/wal_placement.rs" 35 10 35 71
-let%span swal_placement'15 = "/workspace/crates/verified/src/composition/wal_placement.rs" 36 10 39 41
-let%span swal_placement'16 = "/workspace/crates/verified/src/composition/wal_placement.rs" 20 8 25 237
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span swell_founded = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/well_founded.rs" 43 8 43 33
+let%span sslice = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 151 20 151 37
+let%span sslice'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 156 20 156 37
+let%span ssequence = "/workspace/crates/verified/src/sequence.rs" 7 16 7 71
+let%span ssequence'0 = "/workspace/crates/verified/src/sequence.rs" 21 16 22 44
+let%span svec = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 104 18 104 36
+let%span svec'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 18 14 18 41
+let%span svec'1 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 114 18 114 40
+let%span svec'2 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 195 19 195 38
+let%span svec'3 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 196 18 196 46
+let%span svec'4 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 118 18 118 48
+let%span svec'5 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 202 18 202 34
+let%span sselect_wal_voters = "/workspace/crates/verified/src/wal/select_wal_voters.rs" 161 10 161 37
+let%span sselect_wal_voters'0 = "/workspace/crates/verified/src/wal/select_wal_voters.rs" 162 10 163 89
+let%span sselect_wal_voters'1 = "/workspace/crates/verified/src/wal/select_wal_voters.rs" 164 10 164 58
+let%span sselect_wal_voters'2 = "/workspace/crates/verified/src/wal/select_wal_voters.rs" 165 10 166 86
+let%span sselect_wal_voters'3 = "/workspace/crates/verified/src/wal/select_wal_voters.rs" 167 10 167 60
+let%span sselect_wal_voters'4 = "/workspace/crates/verified/src/wal/select_wal_voters.rs" 168 10 171 85
+let%span sselect_wal_voters'5 = "/workspace/crates/verified/src/wal/select_wal_voters.rs" 98 10 100 42
+let%span swal_placement = "/workspace/crates/verified/src/composition/wal_placement.rs" 42 19 42 71
+let%span swal_placement'0 = "/workspace/crates/verified/src/composition/wal_placement.rs" 43 30 43 40
+let%span swal_placement'1 = "/workspace/crates/verified/src/composition/wal_placement.rs" 44 16 44 22
+let%span swal_placement'2 = "/workspace/crates/verified/src/composition/wal_placement.rs" 47 14 47 34
+let%span swal_placement'3 = "/workspace/crates/verified/src/composition/wal_placement.rs" 48 14 48 28
+let%span swal_placement'4 = "/workspace/crates/verified/src/composition/wal_placement.rs" 46 16 46 79
+let%span swal_placement'5 = "/workspace/crates/verified/src/composition/wal_placement.rs" 45 16 45 59
+let%span swal_placement'6 = "/workspace/crates/verified/src/composition/wal_placement.rs" 49 27 49 30
+let%span swal_placement'7 = "/workspace/crates/verified/src/composition/wal_placement.rs" 49 8 49 33
+let%span swal_placement'8 = "/workspace/crates/verified/src/composition/wal_placement.rs" 50 13 50 14
+let%span swal_placement'9 = "/workspace/crates/verified/src/composition/wal_placement.rs" 50 8 50 14
+let%span swal_placement'10 = "/workspace/crates/verified/src/composition/wal_placement.rs" 52 40 52 46
+let%span swal_placement'11 = "/workspace/crates/verified/src/composition/wal_placement.rs" 52 20 52 70
+let%span swal_placement'12 = "/workspace/crates/verified/src/composition/wal_placement.rs" 30 10 30 73
+let%span swal_placement'13 = "/workspace/crates/verified/src/composition/wal_placement.rs" 31 10 32 86
+let%span swal_placement'14 = "/workspace/crates/verified/src/composition/wal_placement.rs" 33 10 33 71
+let%span swal_placement'15 = "/workspace/crates/verified/src/composition/wal_placement.rs" 34 10 36 44
+let%span swal_placement'16 = "/workspace/crates/verified/src/composition/wal_placement.rs" 17 8 22 237
+let%span swal = "/workspace/crates/verified/src/wal.rs" 34 16 35 72
 
 use creusot.slice.Slice64
 use creusot.int.UInt64
 use seq.Seq
 use creusot.prelude.MutBorrow
+use map.Map
 use creusot.prelude.Any
 use int.Int
 
@@ -61,6 +65,10 @@ predicate gt_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other
 
 meta "rewrite_def" predicate gt_log_Int
 
+predicate placement_identities_distinct [#"/workspace/crates/verified/src/wal.rs" 33 0 33 71] (selected: Seq.seq tup2_u64_u64) =
+  [%#swal] forall i: int, j: int. 0 <= i /\ i < j /\ j < Seq.length selected
+    -> (Seq.get selected i).f0 <> (Seq.get selected j).f0 /\ (Seq.get selected i).f1 <> (Seq.get selected j).f1
+
 let select_wal_voters (candidates: Slice64.slice tup2_u64_u64) (local_node: UInt64.t) (requested: UInt64.t)
   (return (x: t_Vec_tup2_u64_u64_Global)) = any
   [ return (result: t_Vec_tup2_u64_u64_Global) ->
@@ -78,10 +86,7 @@ let select_wal_voters (candidates: Slice64.slice tup2_u64_u64) (local_node: UInt
         -> (exists j: int. 0 <= j
           /\ j < Seq.length (Slice64.view candidates)
           /\ Seq.get (view_Vec_tup2_u64_u64_Global result) i = Seq.get (Slice64.view candidates) j))
-    /\ ([@stop_split] [@expl:select_wal_voters ensures #4] [%#sselect_wal_voters'3] forall i: int, j: int. 0 <= i
-          /\ i < j /\ j < Seq.length (view_Vec_tup2_u64_u64_Global result)
-        -> (Seq.get (view_Vec_tup2_u64_u64_Global result) i).f0 <> (Seq.get (view_Vec_tup2_u64_u64_Global result) j).f0
-        /\ (Seq.get (view_Vec_tup2_u64_u64_Global result) i).f1 <> (Seq.get (view_Vec_tup2_u64_u64_Global result) j).f1)
+    /\ ([@stop_split] [@expl:select_wal_voters ensures #4] [%#sselect_wal_voters'3] placement_identities_distinct (view_Vec_tup2_u64_u64_Global result))
     /\ ([@stop_split] [@expl:select_wal_voters ensures #5] [%#sselect_wal_voters'4] 0
         < Seq.length (view_Vec_tup2_u64_u64_Global result)
       /\ Seq.length (view_Vec_tup2_u64_u64_Global result) < UInt64.t'int requested
@@ -146,14 +151,19 @@ let deref_Vec_u64_Global (self_: t_Vec_u64_Global) (return (x: Slice64.slice UIn
     = view_Vec_u64_Global self_}
     (! return {result}) ]
 
+predicate pairwise_u64 [#"/workspace/crates/verified/src/sequence.rs" 20 0 20 95] (values: Seq.seq UInt64.t) (relation: Map.map tup2_u64_u64 bool) =
+  [%#ssequence'0] forall i: int, j: int. 0 <= i /\ i < j /\ j < Seq.length values
+    -> Map.get relation { f0 = Seq.get values i; f1 = Seq.get values j }
+
+predicate distinct_u64 [#"/workspace/crates/verified/src/sequence.rs" 6 0 6 42] (values: Seq.seq UInt64.t) =
+  [%#ssequence] pairwise_u64 values (fun (__0: tup2_u64_u64) -> let {f0 = left; f1 = right} = __0 in left <> right)
+
 let wal_voter_set_valid (voters: Slice64.slice UInt64.t) (local_node: UInt64.t) (expected: UInt64.t)
   (return (x: bool)) = any
   [ return (result: bool) -> {[@stop_split] [@expl:wal_voter_set_valid ensures] [%#sselect_wal_voters'5] result
     = (gt_log_Int (UInt64.t'int expected) 0
     /\ Seq.length (Slice64.view voters) = UInt64.t'int expected
-    /\ Seq.get (Slice64.view voters) 0 = local_node
-    /\ (forall i: int, j: int. 0 <= i /\ i < j /\ j < Seq.length (Slice64.view voters)
-      -> Seq.get (Slice64.view voters) i <> Seq.get (Slice64.view voters) j))}
+    /\ Seq.get (Slice64.view voters) 0 = local_node /\ distinct_u64 (Slice64.view voters))}
     (! return {result}) ]
 
 type tup3_Vec_tup2_u64_u64_Global_Vec_u64_Global_bool = {
@@ -161,15 +171,14 @@ type tup3_Vec_tup2_u64_u64_Global_Vec_u64_Global_bool = {
   f1'0: t_Vec_u64_Global;
   f2'0: bool }
 
-predicate placement_valid [#"/workspace/crates/verified/src/composition/wal_placement.rs" 13 0 18 9] (candidates: Seq.seq tup2_u64_u64) (selected: Seq.seq tup2_u64_u64) (local: UInt64.t) (requested: int) =
+predicate placement_valid [#"/workspace/crates/verified/src/composition/wal_placement.rs" 10 0 15 9] (candidates: Seq.seq tup2_u64_u64) (selected: Seq.seq tup2_u64_u64) (local: UInt64.t) (requested: int) =
   [%#swal_placement'16] Seq.length selected <= requested
   /\ (Seq.length selected = 0)
     = (requested = 0 \/ (forall i: int. 0 <= i /\ i < Seq.length candidates -> (Seq.get candidates i).f0 <> local))
   /\ (gt_log_Int (Seq.length selected) 0 -> (Seq.get selected 0).f0 = local)
   /\ (forall i: int. 0 <= i /\ i < Seq.length selected
       -> (exists j: int. 0 <= j /\ j < Seq.length candidates /\ Seq.get selected i = Seq.get candidates j))
-  /\ (forall i: int, j: int. 0 <= i /\ i < j /\ j < Seq.length selected
-      -> (Seq.get selected i).f0 <> (Seq.get selected j).f0 /\ (Seq.get selected i).f1 <> (Seq.get selected j).f1)
+  /\ placement_identities_distinct selected
   /\ (0 < Seq.length selected /\ Seq.length selected < requested
   -> (forall i: int. 0 <= i /\ i < Seq.length candidates
     -> (exists j: int. 0 <= j
@@ -180,7 +189,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let constructed_wal_placement_is_installable [#"/workspace/crates/verified/src/composition/wal_placement.rs" 40 0 44 23]
+let constructed_wal_placement_is_installable [#"/workspace/crates/verified/src/composition/wal_placement.rs" 37 0 41 23]
   (candidates: Slice64.slice tup2_u64_u64) (local_node: UInt64.t) (requested: UInt64.t)
   (return (x: tup3_Vec_tup2_u64_u64_Global_Vec_u64_Global_bool)) = (! bb0
   [ bb0 = s0
@@ -248,7 +257,5 @@ let constructed_wal_placement_is_installable [#"/workspace/crates/verified/src/c
     /\ ([@stop_split] [@expl:constructed_wal_placement_is_installable ensures #3] [%#swal_placement'15] result.f2'0
     = (gt_log_Int (UInt64.t'int requested) 0
     /\ Seq.length (view_Vec_u64_Global result.f1'0) = UInt64.t'int requested
-    /\ Seq.get (view_Vec_u64_Global result.f1'0) 0 = local_node
-    /\ (forall i: int, j: int. 0 <= i /\ i < j /\ j < Seq.length (view_Vec_u64_Global result.f1'0)
-      -> Seq.get (view_Vec_u64_Global result.f1'0) i <> Seq.get (view_Vec_u64_Global result.f1'0) j)))}
+    /\ Seq.get (view_Vec_u64_Global result.f1'0) 0 = local_node /\ distinct_u64 (view_Vec_u64_Global result.f1'0)))}
     (! return {result}) ]

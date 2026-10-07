@@ -17,7 +17,7 @@ use assert2::assert;
 use bytes::Bytes;
 use krabka_protocol::{
     owned::{
-        create_topics_request::{self, CreatableTopic, CreateTopicsRequest},
+        create_topics_request::{self},
         init_producer_id_request::InitProducerIdRequest,
         produce_request::{PartitionProduceData, ProduceRequest, TopicProduceData},
         produce_response::{PartitionProduceResponse, ProduceResponse, TopicProduceResponse},
@@ -32,7 +32,7 @@ use crate::{
     codes,
     test_support::{
         GrantsInPrincipalName, decode_response, dispatch_context, encode_request, peer, principal,
-        request_context, start_broker_no_audit_with,
+        start_broker_no_audit_with,
     },
 };
 
@@ -44,11 +44,12 @@ const ADMIN_GRANTS: &str = "Cluster:Create";
 
 async fn boot() -> (crate::broker::BrokerHandle, tempfile::TempDir) {
     let (handle, dir) = start_broker_no_audit_with(|cfg| {
-        cfg.authorizer = Arc::new(crate::test_support::ControllerPeerAllowed(
-            GrantsInPrincipalName,
-        ));
-        cfg.transaction_state_num_partitions = 1;
-        cfg.transaction_state_replication_factor = 1;
+        crate::test_support::configure_single_partition_transactions(
+            cfg,
+            Arc::new(crate::test_support::ControllerPeerAllowed(
+                GrantsInPrincipalName,
+            )),
+        );
     })
     .await;
     handle.wait_until_controller_leader().await;
@@ -63,19 +64,12 @@ async fn boot() -> (crate::broker::BrokerHandle, tempfile::TempDir) {
 }
 
 async fn create_topic(broker: &Broker, name: &str) {
-    let admin = principal(ADMIN_GRANTS);
-    let address = peer();
-    let ctx = request_context(&admin, &address, "produce-txn-authz-admin");
-    let request = CreateTopicsRequest {
-        topics: vec![CreatableTopic {
-            name: name.to_string(),
-            num_partitions: 1,
-            replication_factor: 1,
-            ..Default::default()
-        }],
-        timeout_ms: 5_000,
-        ..Default::default()
-    };
+    request_identity!(
+        (admin, address, ctx),
+        principal(ADMIN_GRANTS),
+        client_id = "produce-txn-authz-admin"
+    );
+    let request = crate::handlers::test_support::configured_topic_request(name, &[], 1, 1, 5_000);
     dispatch_context(
         broker,
         create_topics_request::API_KEY,
@@ -94,9 +88,11 @@ async fn create_topic(broker: &Broker, name: &str) {
 /// of the append (`FIRST_ADD_PARTITION_PRODUCE_VERSION` in
 /// `producer_checks.rs`), the same way a real v12+ client would.
 async fn open_transaction(broker: &Broker) -> (i64, i16) {
-    let grantee = principal("TransactionalId:Write");
-    let address = peer();
-    let ctx = request_context(&grantee, &address, "produce-txn-authz-open");
+    request_identity!(
+        (grantee, address, ctx),
+        principal("TransactionalId:Write"),
+        client_id = "produce-txn-authz-open"
+    );
 
     let init_request = InitProducerIdRequest {
         transactional_id: Some(TXN_ID.to_string()),
@@ -115,13 +111,7 @@ async fn open_transaction(broker: &Broker) -> (i64, i16) {
 
 /// One v2 batch with one record, non-transactional.
 fn plain_batch() -> RecordsPayload {
-    RecordsPayload::V2(vec![RecordBatch {
-        records: vec![Record {
-            value: Some(Bytes::from_static(b"v")),
-            ..Default::default()
-        }],
-        ..Default::default()
-    }])
+    RecordsPayload::V2(vec![crate::test_support::repeated_records_batch(1, 0)])
 }
 
 /// One v2 batch with one record, marked transactional (KIP-98) under
@@ -195,9 +185,11 @@ async fn drive(
     records: RecordsPayload,
 ) -> ProduceResponse {
     let request = produce_request(topic_id, version, transactional_id, records);
-    let user = principal(grants);
-    let address = peer();
-    let ctx = request_context(&user, &address, "produce-txn-authz");
+    request_identity!(
+        (user, address, ctx),
+        principal(grants),
+        client_id = "produce-txn-authz"
+    );
     let request_bytes = encode_request(&request, version);
     let response_bytes = handle(broker, version, &request_bytes, request_bytes.clone(), &ctx)
         .await

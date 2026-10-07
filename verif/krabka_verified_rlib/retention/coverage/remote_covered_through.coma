@@ -1,4 +1,4 @@
-(* #"/workspace/crates/verified/src/retention/coverage.rs" 37 0 37 85 *)
+(* #"/workspace/crates/verified/src/retention/coverage.rs" 33 0 33 85 *)
 
 let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
 let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
@@ -7,34 +7,34 @@ let%span snum'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cr
 let%span snum'1 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 352 26 352 83
 let%span swell_founded = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/well_founded.rs" 43 8 43 33
 let%span sslice = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 331 18 331 22
-let%span scoverage = "/workspace/crates/verified/src/retention/coverage.rs" 38 16 38 22
-let%span scoverage'0 = "/workspace/crates/verified/src/retention/coverage.rs" 41 14 41 32
-let%span scoverage'1 = "/workspace/crates/verified/src/retention/coverage.rs" 42 14 42 26
-let%span scoverage'2 = "/workspace/crates/verified/src/retention/coverage.rs" 40 16 40 82
-let%span scoverage'3 = "/workspace/crates/verified/src/retention/coverage.rs" 39 16 39 35
-let%span scoverage'4 = "/workspace/crates/verified/src/retention/coverage.rs" 43 11 43 20
-let%span scoverage'5 = "/workspace/crates/verified/src/retention/coverage.rs" 43 11 43 22
-let%span scoverage'6 = "/workspace/crates/verified/src/retention/coverage.rs" 43 25 43 34
-let%span scoverage'7 = "/workspace/crates/verified/src/retention/coverage.rs" 43 25 43 36
-let%span scoverage'8 = "/workspace/crates/verified/src/retention/coverage.rs" 46 13 46 14
-let%span scoverage'9 = "/workspace/crates/verified/src/retention/coverage.rs" 46 8 46 14
-let%span scoverage'10 = "/workspace/crates/verified/src/retention/coverage.rs" 49 8 49 9
-let%span scoverage'11 = "/workspace/crates/verified/src/retention/coverage.rs" 59 14 59 32
-let%span scoverage'12 = "/workspace/crates/verified/src/retention/coverage.rs" 60 14 60 26
-let%span scoverage'13 = "/workspace/crates/verified/src/retention/coverage.rs" 51 16 58 5
-let%span scoverage'14 = "/workspace/crates/verified/src/retention/coverage.rs" 50 16 50 35
-let%span scoverage'15 = "/workspace/crates/verified/src/retention/coverage.rs" 61 27 61 36
-let%span scoverage'16 = "/workspace/crates/verified/src/retention/coverage.rs" 61 13 61 18
-let%span scoverage'17 = "/workspace/crates/verified/src/retention/coverage.rs" 61 20 61 23
-let%span scoverage'18 = "/workspace/crates/verified/src/retention/coverage.rs" 65 61 65 62
-let%span scoverage'19 = "/workspace/crates/verified/src/retention/coverage.rs" 65 38 65 63
-let%span scoverage'20 = "/workspace/crates/verified/src/retention/coverage.rs" 75 13 75 14
-let%span scoverage'21 = "/workspace/crates/verified/src/retention/coverage.rs" 75 8 75 14
-let%span scoverage'22 = "/workspace/crates/verified/src/retention/coverage.rs" 71 30 71 107
-let%span scoverage'23 = "/workspace/crates/verified/src/retention/coverage.rs" 23 11 24 38
-let%span scoverage'24 = "/workspace/crates/verified/src/retention/coverage.rs" 25 10 35 1
-let%span scoverage'25 = "/workspace/crates/verified/src/retention/coverage.rs" 16 16 16 109
-let%span scoverage'26 = "/workspace/crates/verified/src/retention/coverage.rs" 8 16 8 90
+let%span scoverage = "/workspace/crates/verified/src/retention/coverage.rs" 34 16 34 22
+let%span scoverage'0 = "/workspace/crates/verified/src/retention/coverage.rs" 37 14 37 32
+let%span scoverage'1 = "/workspace/crates/verified/src/retention/coverage.rs" 38 14 38 26
+let%span scoverage'2 = "/workspace/crates/verified/src/retention/coverage.rs" 36 16 36 82
+let%span scoverage'3 = "/workspace/crates/verified/src/retention/coverage.rs" 35 16 35 35
+let%span scoverage'4 = "/workspace/crates/verified/src/retention/coverage.rs" 39 11 39 20
+let%span scoverage'5 = "/workspace/crates/verified/src/retention/coverage.rs" 39 11 39 22
+let%span scoverage'6 = "/workspace/crates/verified/src/retention/coverage.rs" 39 25 39 34
+let%span scoverage'7 = "/workspace/crates/verified/src/retention/coverage.rs" 39 25 39 36
+let%span scoverage'8 = "/workspace/crates/verified/src/retention/coverage.rs" 42 13 42 14
+let%span scoverage'9 = "/workspace/crates/verified/src/retention/coverage.rs" 42 8 42 14
+let%span scoverage'10 = "/workspace/crates/verified/src/retention/coverage.rs" 45 8 45 9
+let%span scoverage'11 = "/workspace/crates/verified/src/retention/coverage.rs" 55 14 55 32
+let%span scoverage'12 = "/workspace/crates/verified/src/retention/coverage.rs" 56 14 56 26
+let%span scoverage'13 = "/workspace/crates/verified/src/retention/coverage.rs" 47 16 54 5
+let%span scoverage'14 = "/workspace/crates/verified/src/retention/coverage.rs" 46 16 46 35
+let%span scoverage'15 = "/workspace/crates/verified/src/retention/coverage.rs" 57 27 57 36
+let%span scoverage'16 = "/workspace/crates/verified/src/retention/coverage.rs" 57 13 57 18
+let%span scoverage'17 = "/workspace/crates/verified/src/retention/coverage.rs" 57 20 57 23
+let%span scoverage'18 = "/workspace/crates/verified/src/retention/coverage.rs" 61 61 61 62
+let%span scoverage'19 = "/workspace/crates/verified/src/retention/coverage.rs" 61 38 61 63
+let%span scoverage'20 = "/workspace/crates/verified/src/retention/coverage.rs" 71 13 71 14
+let%span scoverage'21 = "/workspace/crates/verified/src/retention/coverage.rs" 71 8 71 14
+let%span scoverage'22 = "/workspace/crates/verified/src/retention/coverage.rs" 67 30 67 107
+let%span scoverage'23 = "/workspace/crates/verified/src/retention/coverage.rs" 19 11 20 38
+let%span scoverage'24 = "/workspace/crates/verified/src/retention/coverage.rs" 21 10 31 1
+let%span scoverage'25 = "/workspace/crates/verified/src/retention/coverage.rs" 11 16 11 109
+let%span scoverage'26 = "/workspace/crates/verified/src/retention/coverage.rs" 5 16 5 90
 
 use creusot.int.UInt64
 use seq.Seq
@@ -65,7 +65,7 @@ let len_tup2_i64_i64 (self_: Slice64.slice tup2_i64_i64) (return (x: UInt64.t)) 
 
 type t_Option_i64 = None | Some Int64.t
 
-predicate remote_covers_offset [#"/workspace/crates/verified/src/retention/coverage.rs" 15 0 15 73] (ranges: Seq.seq tup2_i64_i64) (offset: int) =
+predicate remote_covers_offset [#"/workspace/crates/verified/src/retention/coverage.rs" 10 0 10 73] (ranges: Seq.seq tup2_i64_i64) (offset: int) =
   [%#scoverage'25] exists i: int. 0 <= i
     /\ i < Seq.length ranges
     /\ Int64.to_int (Seq.get ranges i).f0 <= offset /\ offset <= Int64.to_int (Seq.get ranges i).f1
@@ -94,7 +94,7 @@ let saturating_add (self_: Int64.t) (rhs: Int64.t) (return (x: Int64.t)) = any
       + Int64.to_int rhs) (Int64.to_int const_MAX) -> Int64.to_int result = Int64.to_int const_MAX)}
     (! return {result}) ]
 
-predicate remote_ranges_valid [#"/workspace/crates/verified/src/retention/coverage.rs" 7 0 7 59] (ranges: Seq.seq tup2_i64_i64) =
+predicate remote_ranges_valid [#"/workspace/crates/verified/src/retention/coverage.rs" 4 0 4 59] (ranges: Seq.seq tup2_i64_i64) =
   [%#scoverage'26] forall i: int. 0 <= i /\ i < Seq.length ranges
     -> Int64.to_int (Seq.get ranges i).f0 <= Int64.to_int (Seq.get ranges i).f1
 
@@ -102,7 +102,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let remote_covered_through [#"/workspace/crates/verified/src/retention/coverage.rs" 37 0 37 85]
+let remote_covered_through [#"/workspace/crates/verified/src/retention/coverage.rs" 33 0 33 85]
   (ranges: Slice64.slice tup2_i64_i64) (local_start: Int64.t) (return (x: t_Option_i64)) =
 {[@stop_split] [@expl:remote_covered_through requires] [%#scoverage'23] forall i: int, j: int. 0 <= i
       /\ i < j /\ j < Seq.length (Slice64.view ranges)

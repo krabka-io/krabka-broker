@@ -24,26 +24,25 @@ use krabka_client_core::{Client, Connection, ConnectionOptions};
 use krabka_protocol::{
     owned::{
         add_offsets_to_txn_request::AddOffsetsToTxnRequest,
-        create_topics_request::CreateTopicsRequest,
-        describe_transactions_request::DescribeTransactionsRequest,
-        end_txn_request::EndTxnRequest,
-        end_txn_response::EndTxnResponse,
-        offset_commit_request::{
-            OffsetCommitRequest, OffsetCommitRequestPartition, OffsetCommitRequestTopic,
-        },
-        offset_delete_request::{
-            OffsetDeleteRequest, OffsetDeleteRequestPartition, OffsetDeleteRequestTopic,
-        },
+        describe_transactions_request::DescribeTransactionsRequest, end_txn_request::EndTxnRequest,
+        end_txn_response::EndTxnResponse, offset_commit_request::OffsetCommitRequest,
         offset_delete_response::OffsetDeleteResponse,
-        txn_offset_commit_request::{
-            TxnOffsetCommitRequest, TxnOffsetCommitRequestPartition, TxnOffsetCommitRequestTopic,
-        },
+        txn_offset_commit_request::TxnOffsetCommitRequest,
     },
     primitives::uuid::Uuid as WireUuid,
 };
 use tempfile::TempDir;
 
-use crate::support::{self, relay::Relay};
+use crate::support::{
+    self,
+    client::connect_owned,
+    offsets::{
+        offset_commit_partition, offset_commit_topic, offset_delete_partition,
+        offset_delete_request, offset_delete_topic,
+    },
+    relay::Relay,
+    transactions::{end_transaction_request, txn_offset_partition, txn_offset_topic},
+};
 
 const TID: &str = "txn-uncommitted-writes";
 const TOPIC: &str = "txn-uncommitted-writes";
@@ -51,22 +50,14 @@ const GROUP: &str = "txn-uncommitted-writes";
 const STATE_TOPIC: &str = "__transaction_state";
 const OFFSETS_TOPIC: &str = "__consumer_offsets";
 
-const COORDINATOR_LOAD_IN_PROGRESS: i16 = 14;
 const COORDINATOR_NOT_AVAILABLE: i16 = 15;
-const NOT_COORDINATOR: i16 = 16;
 const CONCURRENT_TRANSACTIONS: i16 = 51;
 
 /// The time a retried request may take to see the cluster settle.
 const SETTLE: Duration = Duration::from_secs(60);
 
 fn retriable(code: i16) -> bool {
-    matches!(
-        code,
-        COORDINATOR_LOAD_IN_PROGRESS
-            | COORDINATOR_NOT_AVAILABLE
-            | NOT_COORDINATOR
-            | CONCURRENT_TRANSACTIONS
-    )
+    crate::support::transaction_wire::coordinator_loading(code) || code == CONCURRENT_TRANSACTIONS
 }
 
 /// One connection to the broker that binds `address`, past any relay, so a
@@ -84,25 +75,12 @@ async fn connect(address: SocketAddr) -> Connection {
 }
 
 async fn client(address: SocketAddr) -> Client {
-    Client::builder()
-        .bootstrap(address.to_string())
-        .client_id("txn-uncommitted-writes")
-        .build()
-        .await
-        .expect("client")
+    connect_owned(address.to_string(), "txn-uncommitted-writes", "client").await
 }
 
 /// The leader of `topic-0` in the image of `handle`.
 async fn leader_of(handle: &BrokerHandle, topic: &str) -> u64 {
-    let deadline = Instant::now() + SETTLE;
-    loop {
-        if let Some(leader) = handle.partition_leader_for_test(topic, 0) {
-            return leader;
-        }
-        assert!(Instant::now() < deadline, "{topic}-0 has no leader");
-        // intentional: the image watch has no awaiter for "any leader".
-        tokio::time::sleep(Duration::from_millis(100)).await;
-    }
+    crate::support::transaction_wire::partition_leader(handle, topic, SETTLE).await
 }
 
 /// Create the one-partition data topic on `replicas`, the first of them its
@@ -112,43 +90,28 @@ async fn create_topic(client: &Client, replicas: &[u64]) -> WireUuid {
         .iter()
         .map(|node| i32::try_from(*node).expect("node id fits an i32"))
         .collect();
-    let created = client
-        .send(CreateTopicsRequest {
-            topics: vec![support::topic_on(TOPIC, &[&replicas])],
-            timeout_ms: 5_000,
-            ..Default::default()
-        })
-        .await
-        .expect("CreateTopics");
-    assert!(created.topics[0].error_code == 0, "{created:?}");
-    created.topics[0].topic_id
+    crate::support::transaction_wire::create_assigned_topic(client, TOPIC, &replicas, None).await
 }
 
 async fn init_producer(connection: &Connection) -> (i64, i16) {
-    let deadline = Instant::now() + SETTLE;
-    loop {
-        let response = connection
-            .send(crate::txn_fixture::init_producer_request(TID))
-            .await
-            .expect("InitProducerId");
-        if retriable(response.error_code) && Instant::now() < deadline {
-            // intentional: the coordinator load has no awaiter; the answer is the signal.
-            tokio::time::sleep(Duration::from_millis(100)).await;
-            continue;
-        }
-        assert!(response.error_code == 0, "InitProducerId: {response:?}");
-        return (response.producer_id, response.producer_epoch);
-    }
+    crate::support::transaction_wire::initialized_identity(
+        || async {
+            connection
+                .send(crate::support::transaction_wire::init_producer_request(TID))
+                .await
+                .expect("InitProducerId")
+        },
+        retriable,
+        SETTLE,
+    )
+    .await
 }
 
 async fn add_partition(connection: &Connection, producer: (i64, i16)) {
-    let response = connection
-        .send(crate::txn_fixture::add_partition_request(
-            TID, TOPIC, producer,
-        ))
-        .await
-        .expect("AddPartitionsToTxn");
-    crate::txn_fixture::assert_partition_added(&response);
+    crate::support::transaction_wire::partition_added(connection.send(
+        crate::support::transaction_wire::add_partition_request(TID, TOPIC, producer),
+    ))
+    .await;
 }
 
 async fn produce(
@@ -157,41 +120,30 @@ async fn produce(
     producer: Option<(i64, i16)>,
     values: &[&'static str],
 ) {
-    let response = connection
-        .send(crate::txn_fixture::produce_request(
-            TID, TOPIC, topic_id, producer, values,
-        ))
-        .await
-        .expect("Produce");
-    let code = response.responses[0].partition_responses[0].error_code;
-    assert!(code == 0, "Produce: {response:?}");
+    crate::support::transaction_wire::produce_succeeds(connection.send(
+        crate::support::transaction_wire::produce_request(TID, TOPIC, topic_id, producer, values),
+    ))
+    .await;
 }
 
 fn end_txn_request((producer_id, epoch): (i64, i16)) -> EndTxnRequest {
-    EndTxnRequest {
-        transactional_id: TID.into(),
-        producer_id,
-        producer_epoch: epoch,
-        committed: true,
-        ..Default::default()
-    }
+    end_transaction_request(TID, (producer_id, epoch), true)
 }
 
 /// Commit, and retry while the coordinator answers a retriable error.
 async fn end_txn(connection: &Connection, producer: (i64, i16)) -> EndTxnResponse {
-    let deadline = Instant::now() + SETTLE;
-    loop {
-        let response = connection
-            .send(end_txn_request(producer))
-            .await
-            .expect("EndTxn");
-        if retriable(response.error_code) && Instant::now() < deadline {
-            // intentional: the coordinator load has no awaiter; the answer is the signal.
-            tokio::time::sleep(Duration::from_millis(100)).await;
-            continue;
-        }
-        return response;
-    }
+    crate::support::transaction_wire::retry_coordinator(
+        || async {
+            connection
+                .send(end_txn_request(producer))
+                .await
+                .expect("EndTxn")
+        },
+        |response| response.error_code,
+        retriable,
+        SETTLE,
+    )
+    .await
 }
 
 /// The state of a transaction as its coordinator describes it, and the
@@ -234,8 +186,13 @@ async fn describe_until(connection: &Connection, expected: &Described) -> Option
 }
 
 async fn read_committed(bootstrap: SocketAddr, last: &str) -> Vec<String> {
-    crate::txn_consumer_fixture::read_committed_through(&bootstrap.to_string(), TOPIC, last, SETTLE)
-        .await
+    crate::support::transaction_wire::read_committed_through(
+        &bootstrap.to_string(),
+        TOPIC,
+        last,
+        SETTLE,
+    )
+    .await
 }
 
 /// Three brokers whose data listeners each sit behind a [`Relay`]: every
@@ -281,10 +238,8 @@ impl RelayedCluster {
             .collect();
         let mut starts = Vec::with_capacity(3);
         let mut metas = Vec::with_capacity(3);
-        for (index, (data, controller)) in client_listeners
-            .into_iter()
-            .zip(controller_listeners)
-            .enumerate()
+        for (index, (data, controller)) in
+            support::listener_pairs(client_listeners, controller_listeners)
         {
             let dir = TempDir::new().expect("tempdir");
             let mut config = support::broker_config(
@@ -311,9 +266,7 @@ impl RelayedCluster {
         let mut configs = Vec::with_capacity(3);
         let mut dirs = Vec::with_capacity(3);
         for (start, (config, dir)) in starts.into_iter().zip(metas) {
-            let handle = start
-                .await
-                .map_err(|e| BrokerError::Startup(format!("broker start task panicked: {e}")))??;
+            let handle = support::await_broker_start(start).await?;
             brokers.push(Some(handle));
             configs.push(config);
             dirs.push(dir);
@@ -377,6 +330,48 @@ impl RelayedCluster {
     }
 }
 
+async fn connected_transaction(address: SocketAddr) -> (Connection, (i64, i16)) {
+    let connection = connect(address).await;
+    let producer = init_producer(&connection).await;
+    add_partition(&connection, producer).await;
+    (connection, producer)
+}
+
+async fn cut_and_append_commit(
+    cluster: &RelayedCluster,
+    coordinator: u64,
+    connection: Connection,
+    producer: (i64, i16),
+    (topic, offset): (&str, i64),
+) -> tokio::task::JoinHandle<Result<EndTxnResponse, krabka_client_core::ClientError>> {
+    cluster.relay(coordinator).cut();
+    let commit = tokio::spawn(async move { connection.send(end_txn_request(producer)).await });
+    cluster
+        .handle(coordinator)
+        .wait_until_local_log_end_offset(topic, 0, offset)
+        .await;
+    commit
+}
+
+async fn relayed_transaction_cluster(
+    configure: impl Fn(&mut BrokerConfig),
+) -> (RelayedCluster, Client, u64) {
+    let cluster = RelayedCluster::start(configure).await;
+    // __consumer_offsets needs three brokers for replication, including readers after a broker dies.
+    for node in 1..=3 {
+        cluster
+            .handle(node)
+            .wait_until_group_coordinator_ready()
+            .await;
+    }
+    let admin = client(cluster.address(1)).await;
+    let coordinator = support::find_coordinator(&admin, support::KEY_TYPE_TRANSACTION, TID)
+        .await
+        .node_id;
+    let coordinator = u64::try_from(coordinator).expect("a node id");
+    (cluster, admin, coordinator)
+}
+
 /// An `EndTxn` whose `PrepareCommit` cannot reach a follower gets no answer,
 /// and the transaction commits through the next coordinator when the
 /// producer retries.
@@ -390,27 +385,13 @@ impl RelayedCluster {
 /// next transaction.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn an_end_txn_is_answered_only_once_its_commit_decision_is_replicated() {
-    let mut cluster = RelayedCluster::start(|config| {
+    let (mut cluster, admin, coordinator) = relayed_transaction_cluster(|config| {
         config.transaction_state_num_partitions = 1;
         // The coordinator keeps its followers in the ISR while they cannot
         // reach it, so the high watermark stops below what it appends then.
         config.isr_scan_interval = krabka_units::hours(1);
     })
     .await;
-    // `__consumer_offsets` needs three brokers for its replication factor, and
-    // the reader at the end looks its group up after a broker died.
-    for node in 1..=3 {
-        cluster
-            .handle(node)
-            .wait_until_group_coordinator_ready()
-            .await;
-    }
-
-    let admin = client(cluster.address(1)).await;
-    let coordinator = support::find_coordinator(&admin, support::KEY_TYPE_TRANSACTION, TID)
-        .await
-        .node_id;
-    let coordinator = u64::try_from(coordinator).expect("a node id");
     cluster
         .handle(coordinator)
         .wait_until_isr_len(STATE_TOPIC, 0, 3)
@@ -427,9 +408,7 @@ async fn an_end_txn_is_answered_only_once_its_commit_decision_is_replicated() {
         .wait_until_local_partition_leader(TOPIC, 0, NodeId(data_node))
         .await;
 
-    let to_coordinator = connect(cluster.address(coordinator)).await;
-    let producer = init_producer(&to_coordinator).await;
-    add_partition(&to_coordinator, producer).await;
+    let (to_coordinator, producer) = connected_transaction(cluster.address(coordinator)).await;
     let to_data = connect(cluster.address(data_node)).await;
     produce(&to_data, topic_id, Some(producer), &["a", "b", "c"]).await;
 
@@ -438,13 +417,14 @@ async fn an_end_txn_is_answered_only_once_its_commit_decision_is_replicated() {
         .handle(coordinator)
         .local_log_end_offset(STATE_TOPIC, 0)
         .expect("the coordinator hosts the state partition");
-    cluster.relay(coordinator).cut();
-    let mut commit =
-        tokio::spawn(async move { to_coordinator.send(end_txn_request(producer)).await });
-    cluster
-        .handle(coordinator)
-        .wait_until_local_log_end_offset(STATE_TOPIC, 0, state_end + 1)
-        .await;
+    let mut commit = cut_and_append_commit(
+        &cluster,
+        coordinator,
+        to_coordinator,
+        producer,
+        (STATE_TOPIC, state_end + 1),
+    )
+    .await;
     let answered = tokio::time::timeout(Duration::from_secs(2), &mut commit).await;
     assert!(
         answered.is_err(),
@@ -504,7 +484,7 @@ async fn an_end_txn_is_answered_only_once_its_commit_decision_is_replicated() {
 /// the transaction, and a `read_committed` consumer read nothing after it.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_transaction_completes_only_once_its_markers_are_committed() {
-    let mut cluster = RelayedCluster::start(|config| {
+    let (mut cluster, admin, coordinator) = relayed_transaction_cluster(|config| {
         config.transaction_state_num_partitions = 1;
         // The coordinator is the only replica of the state partition, so a
         // state record commits at its append, and the cut below stops only
@@ -516,18 +496,6 @@ async fn a_transaction_completes_only_once_its_markers_are_committed() {
         config.isr_scan_interval = krabka_units::hours(1);
     })
     .await;
-    for node in 1..=3 {
-        cluster
-            .handle(node)
-            .wait_until_group_coordinator_ready()
-            .await;
-    }
-
-    let admin = client(cluster.address(1)).await;
-    let coordinator = support::find_coordinator(&admin, support::KEY_TYPE_TRANSACTION, TID)
-        .await
-        .node_id;
-    let coordinator = u64::try_from(coordinator).expect("a node id");
     let follower = (1..=3)
         .find(|node| *node != coordinator)
         .expect("another broker");
@@ -542,20 +510,13 @@ async fn a_transaction_completes_only_once_its_markers_are_committed() {
         .wait_until_isr_len(TOPIC, 0, 2)
         .await;
 
-    let to_coordinator = connect(cluster.address(coordinator)).await;
-    let producer = init_producer(&to_coordinator).await;
-    add_partition(&to_coordinator, producer).await;
+    let (to_coordinator, producer) = connected_transaction(cluster.address(coordinator)).await;
     produce(&to_coordinator, topic_id, Some(producer), &["a", "b", "c"]).await;
 
     // Cut the follower off from the coordinator, and commit. The marker comes
     // after the three records.
-    cluster.relay(coordinator).cut();
     let mut commit =
-        tokio::spawn(async move { to_coordinator.send(end_txn_request(producer)).await });
-    cluster
-        .handle(coordinator)
-        .wait_until_local_log_end_offset(TOPIC, 0, 4)
-        .await;
+        cut_and_append_commit(&cluster, coordinator, to_coordinator, producer, (TOPIC, 4)).await;
     let answered = tokio::time::timeout(Duration::from_secs(2), &mut commit).await;
     assert!(
         answered.is_err(),
@@ -601,7 +562,7 @@ async fn a_transaction_completes_only_once_its_markers_are_committed() {
 /// `CoordinatorOperationExceptionHelper` answers `COORDINATOR_NOT_AVAILABLE`.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn group_coordinator_writes_are_answered_only_once_committed() {
-    let mut cluster = support::start_n_node_with(3, |_, config| {
+    let mut cluster = crate::txn_harness::registered_transaction_cluster(|_, config| {
         config.offsets_topic_num_partitions = 1;
         config.transaction_state_num_partitions = 1;
         // A stopped follower stays in the ISR: the leader does not shrink it
@@ -609,12 +570,7 @@ async fn group_coordinator_writes_are_answered_only_once_committed() {
         config.isr_scan_interval = krabka_units::hours(1);
         config.heartbeat_timeout = krabka_units::minutes(10);
     })
-    .await
-    .expect("start the cluster");
-    support::wait_for_all_brokers_registered(&cluster, 3).await;
-    for (handle, _, _) in &cluster {
-        handle.wait_until_group_coordinator_ready().await;
-    }
+    .await;
     let address = |cluster: &[(BrokerHandle, BrokerConfig, TempDir)], node: u64| {
         cluster
             .iter()
@@ -654,16 +610,11 @@ async fn group_coordinator_writes_are_answered_only_once_committed() {
         .send(OffsetCommitRequest {
             group_id: GROUP.into(),
             generation_id_or_member_epoch: -1,
-            topics: vec![OffsetCommitRequestTopic {
-                name: TOPIC.into(),
+            topics: vec![offset_commit_topic(
+                TOPIC,
                 topic_id,
-                partitions: vec![OffsetCommitRequestPartition {
-                    partition_index: 0,
-                    committed_offset: 5,
-                    ..Default::default()
-                }],
-                ..Default::default()
-            }],
+                vec![offset_commit_partition(0, 5, None)],
+            )],
             ..Default::default()
         })
         .await
@@ -702,16 +653,11 @@ async fn group_coordinator_writes_are_answered_only_once_committed() {
             producer_epoch,
             generation_id_or_member_epoch: -1,
             member_id: String::new(),
-            topics: vec![TxnOffsetCommitRequestTopic {
-                name: TOPIC.into(),
+            topics: vec![txn_offset_topic(
+                TOPIC,
                 topic_id,
-                partitions: vec![TxnOffsetCommitRequestPartition {
-                    partition_index: 0,
-                    committed_offset: 7,
-                    ..Default::default()
-                }],
-                ..Default::default()
-            }],
+                vec![txn_offset_partition(0, 7)],
+            )],
             ..Default::default()
         })
         .await
@@ -725,18 +671,10 @@ async fn group_coordinator_writes_are_answered_only_once_committed() {
     assert!(codes == [(0, COORDINATOR_NOT_AVAILABLE)], "{offsets:?}");
 
     let deleted = to_group
-        .send(OffsetDeleteRequest {
-            group_id: GROUP.into(),
-            topics: vec![OffsetDeleteRequestTopic {
-                name: TOPIC.into(),
-                partitions: vec![OffsetDeleteRequestPartition {
-                    partition_index: 0,
-                    ..Default::default()
-                }],
-                ..Default::default()
-            }],
-            ..Default::default()
-        })
+        .send(offset_delete_request(
+            GROUP,
+            vec![offset_delete_topic(TOPIC, vec![offset_delete_partition(0)])],
+        ))
         .await
         .expect("OffsetDelete");
     assert!(
@@ -747,8 +685,6 @@ async fn group_coordinator_writes_are_answered_only_once_committed() {
             }
     );
 
-    for (handle, _, _) in cluster {
-        handle.shutdown().await;
-    }
+    crate::support::shutdown_cluster(cluster).await;
     drop(stopped_dir);
 }

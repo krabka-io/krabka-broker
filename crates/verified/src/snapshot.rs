@@ -1,28 +1,22 @@
 //! Snapshot-transfer chunk admission.
 
-#[cfg(creusot)]
-use std::clone::Clone;
+use creusot_std::prelude::*;
 
-#[cfg(creusot)]
-use creusot_std::prelude::DeepModel;
-use creusot_std::prelude::ensures;
+model_types! {
+    @proof (derive(std::clone::Clone, Copy, DeepModel));
+    /// Pure decision for one snapshot response chunk.
+    pub enum SnapshotChunkDecision {
+        Restart,
+        Continue { next_position: i64 },
+        Complete,
+    }
 
-/// Pure decision for one snapshot response chunk.
-#[cfg_attr(creusot, derive(Clone, Copy, DeepModel))]
-#[cfg_attr(not(creusot), derive(Clone, Copy, Debug, PartialEq, Eq))]
-pub enum SnapshotChunkDecision {
-    Restart,
-    Continue { next_position: i64 },
-    Complete,
-}
-
-/// Admission result for a fully assembled snapshot at the controller boundary.
-#[cfg_attr(creusot, derive(Clone, Copy, DeepModel))]
-#[cfg_attr(not(creusot), derive(Clone, Copy, Debug, PartialEq, Eq))]
-pub enum SnapshotInstallDecision {
-    Reject,
-    Stale,
-    Install,
+    /// Admission result for a fully assembled snapshot at the controller boundary.
+    pub enum SnapshotInstallDecision {
+        Reject,
+        Stale,
+        Install,
+    }
 }
 
 /// Classify a decoded, fully assembled snapshot against live controller state.
@@ -79,30 +73,10 @@ pub fn snapshot_prune_admission(snapshot_end: i64, committed_end: i64) -> bool {
             None => false,
         }
         || received@ + chunk_len@ > declared_size@,
-    SnapshotChunkDecision::Continue { next_position } => identity_matches
-        && received@ >= 0
-        && chunk_len@ >= 0
-        && max_size@ >= 0
-        && declared_size@ >= 0
-        && declared_size@ <= max_size@
-        && position@ == received@
-        && match fixed_size {
-            Some(size) => size@ == declared_size@,
-            None => true,
-        }
+    SnapshotChunkDecision::Continue { next_position } => snapshot_chunk_shape_valid(identity_matches, fixed_size, received@, declared_size@, position@, chunk_len@, max_size@)
         && next_position@ == received@ + chunk_len@
         && next_position@ < declared_size@,
-    SnapshotChunkDecision::Complete => identity_matches
-        && received@ >= 0
-        && chunk_len@ >= 0
-        && max_size@ >= 0
-        && declared_size@ >= 0
-        && declared_size@ <= max_size@
-        && position@ == received@
-        && match fixed_size {
-            Some(size) => size@ == declared_size@,
-            None => true,
-        }
+    SnapshotChunkDecision::Complete => snapshot_chunk_shape_valid(identity_matches, fixed_size, received@, declared_size@, position@, chunk_len@, max_size@)
         && received@ + chunk_len@ == declared_size@,
 })]
 #[must_use]
@@ -138,6 +112,23 @@ pub fn snapshot_chunk_admission(
         std::cmp::Ordering::Equal => SnapshotChunkDecision::Complete,
         std::cmp::Ordering::Less => SnapshotChunkDecision::Continue { next_position },
     }
+}
+
+open_logic! {
+/// A chunk continues one fixed identity and declared size at the exact received position.
+fn snapshot_chunk_shape_valid(
+    identity_matches: bool,
+    fixed_size: Option<i64>,
+    received: Int,
+    declared_size: Int,
+    position: Int,
+    chunk_len: Int,
+    max_size: Int,
+) -> bool {
+    pearlite! { identity_matches && received >= 0 && chunk_len >= 0 && max_size >= 0
+    && declared_size >= 0 && declared_size <= max_size && position == received
+    && match fixed_size { Some(size) => size@ == declared_size, None => true, } }
+}
 }
 
 #[cfg(test)]

@@ -1,4 +1,4 @@
-(* #"/workspace/crates/verified/src/reconfiguration.rs" 63 27 63 32 *)
+(* #"/workspace/crates/verified/src/reconfiguration.rs" 14 19 14 36 *)
 
 (* <reconfiguration::TargetMembership as std::clone::Clone> *)
 
@@ -10,8 +10,8 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let clone_TargetMembership [#"/workspace/crates/verified/src/reconfiguration.rs" 63 27 63 32]
-  (self: t_TargetMembership) (return (x: t_TargetMembership)) = (! bb0
+let clone_TargetMembership [#"/workspace/crates/verified/src/reconfiguration.rs" 14 19 14 36] (self: t_TargetMembership)
+  (return (x: t_TargetMembership)) = (! bb0
   [ bb0 = s0 [ s0 = [ &_ret <- self ] s1 | s1 = return {_ret} ] ]
   [ & _ret: t_TargetMembership = Any.any_l () | & self: t_TargetMembership = self ])
   [ return (result: t_TargetMembership) -> (! return {result}) ]

@@ -12,7 +12,7 @@ use krabka_protocol::owned::find_coordinator_response::FindCoordinatorResponse;
 
 use super::*;
 use crate::{
-    authorizer::{AuthorizationRequest, AuthorizationResult, Authorizer},
+    authorizer::AuthorizationResult,
     test_support::{DenyAll, peer, principal, start_broker_no_audit, start_broker_no_audit_with},
 };
 
@@ -21,21 +21,30 @@ const KAFKA_TOPIC_ID: &str = "BQUFBQUFBQUFBQUFBQUFBQ";
 #[derive(Debug)]
 struct DenyOneTransaction;
 
-impl Authorizer for DenyOneTransaction {
-    fn authorize(
-        &self,
-        _source: &dyn krabka_authz::AclSource,
-        request: &AuthorizationRequest<'_>,
-    ) -> AuthorizationResult {
-        if request.resource_type == ResourceType::TransactionalId
-            && request.operation == AclOperation::Describe
-            && request.resource_name == "denied"
-        {
-            AuthorizationResult::Deny
-        } else {
-            AuthorizationResult::Allow
-        }
+test_authorizer!(DenyOneTransaction, (self, _source, request), {
+    if request.resource_type == ResourceType::TransactionalId
+        && request.operation == AclOperation::Describe
+        && request.resource_name == "denied"
+    {
+        AuthorizationResult::Deny
+    } else {
+        AuthorizationResult::Allow
     }
+});
+
+/// A malformed share lookup returns one refusal and never starts share-state bootstrap.
+fn check_invalid_share_lookup(
+    handle: &crate::broker::BrokerHandle,
+    response: &FindCoordinatorResponse,
+) {
+    assert!(response.coordinators.len() == 1);
+    assert!(response.coordinators[0].error_code == codes::INVALID_REQUEST);
+    assert!(
+        handle
+            .controller_image_for_test()
+            .topic(crate::share_coordinator::bootstrap::TOPIC)
+            .is_none()
+    );
 }
 
 #[tokio::test]
@@ -46,9 +55,11 @@ async fn configured_partition_count_controls_txn_topic_and_routing() {
     })
     .await;
     let broker = broker_handle.broker_arc_for_test();
-    let principal = principal("admin");
-    let peer = peer();
-    let context = crate::test_support::request_context(&principal, &peer, "admin-client");
+    request_identity!(
+        (principal, peer, context),
+        principal("admin"),
+        client_id = "admin-client"
+    );
     let version = krabka_protocol::owned::find_coordinator_response::MAX_VERSION;
     let tid = "my-tid"; // hashes to partition 43 with the old fixed count of 50
     let request = FindCoordinatorRequest {
@@ -84,9 +95,11 @@ async fn configured_partition_count_controls_txn_topic_and_routing() {
 async fn share_key_type_before_v6_is_invalid_without_bootstrap() {
     let (broker_handle, _dir) = start_broker_no_audit().await;
     let broker = broker_handle.broker_arc_for_test();
-    let principal = principal("alice");
-    let peer = peer();
-    let context = crate::test_support::request_context(&principal, &peer, "share-client");
+    request_identity!(
+        (principal, peer, context),
+        principal("alice"),
+        client_id = "share-client"
+    );
     let version = 5;
     let request = FindCoordinatorRequest {
         key_type: KEY_TYPE_SHARE,
@@ -98,14 +111,7 @@ async fn share_key_type_before_v6_is_invalid_without_bootstrap() {
         .await
         .expect("reject pre-v6 share coordinator lookup");
 
-    assert!(response.coordinators.len() == 1);
-    assert!(response.coordinators[0].error_code == codes::INVALID_REQUEST);
-    assert!(
-        broker_handle
-            .controller_image_for_test()
-            .topic(crate::share_coordinator::bootstrap::TOPIC)
-            .is_none()
-    );
+    check_invalid_share_lookup(&broker_handle, &response);
     broker_handle.shutdown().await;
 }
 
@@ -113,9 +119,11 @@ async fn share_key_type_before_v6_is_invalid_without_bootstrap() {
 async fn v4_empty_key_array_stays_empty_without_bootstrap() {
     let (broker_handle, _dir) = start_broker_no_audit().await;
     let broker = broker_handle.broker_arc_for_test();
-    let principal = principal("alice");
-    let peer = peer();
-    let context = crate::test_support::request_context(&principal, &peer, "txn-client");
+    request_identity!(
+        (principal, peer, context),
+        principal("alice"),
+        client_id = "txn-client"
+    );
     let version = 4;
     let request = FindCoordinatorRequest {
         key_type: KEY_TYPE_TRANSACTION,
@@ -148,9 +156,11 @@ async fn mixed_rejection_and_resolution_preserve_key_order_and_errors() {
     broker_handle
         .wait_until_transaction_coordinator_ready()
         .await;
-    let principal = principal("alice");
-    let peer = peer();
-    let context = crate::test_support::request_context(&principal, &peer, "txn-client");
+    request_identity!(
+        (principal, peer, context),
+        principal("alice"),
+        client_id = "txn-client"
+    );
     let version = krabka_protocol::owned::find_coordinator_response::MAX_VERSION;
     let request = FindCoordinatorRequest {
         key_type: KEY_TYPE_TRANSACTION,
@@ -188,9 +198,11 @@ async fn malformed_share_key_is_invalid_without_bootstrap() {
     })
     .await;
     let broker = broker_handle.broker_arc_for_test();
-    let principal = principal("alice");
-    let peer = peer();
-    let context = crate::test_support::request_context(&principal, &peer, "share-client");
+    request_identity!(
+        (principal, peer, context),
+        principal("alice"),
+        client_id = "share-client"
+    );
     let version = krabka_protocol::owned::find_coordinator_response::MAX_VERSION;
     let request = FindCoordinatorRequest {
         key_type: KEY_TYPE_SHARE,
@@ -202,14 +214,7 @@ async fn malformed_share_key_is_invalid_without_bootstrap() {
         .await
         .expect("reject malformed share coordinator key");
 
-    assert!(response.coordinators.len() == 1);
-    assert!(response.coordinators[0].error_code == codes::INVALID_REQUEST);
-    assert!(
-        broker_handle
-            .controller_image_for_test()
-            .topic(crate::share_coordinator::bootstrap::TOPIC)
-            .is_none()
-    );
+    check_invalid_share_lookup(&broker_handle, &response);
     broker_handle.shutdown().await;
 }
 
@@ -221,9 +226,11 @@ async fn find(
     version: i16,
     principal_name: &str,
 ) -> FindCoordinatorResponse {
-    let principal = principal(principal_name);
-    let peer = peer();
-    let context = crate::test_support::request_context(&principal, &peer, "find-client");
+    request_identity!(
+        (principal, peer, context),
+        principal(principal_name),
+        client_id = "find-client"
+    );
     crate::test_support::dispatch_wire(
         broker,
         krabka_protocol::owned::find_coordinator_request::API_KEY,
@@ -246,6 +253,17 @@ fn row(key: &str, error_code: i16, error_message: Option<String>) -> Coordinator
     }
 }
 
+macro_rules! mixed_share_keys {
+    (($valid:ident, $request:ident)) => {
+        let $valid = format!("share-group:{KAFKA_TOPIC_ID}:0");
+        let $request = FindCoordinatorRequest {
+            key_type: KEY_TYPE_SHARE,
+            coordinator_keys: vec!["malformed".into(), $valid.clone()],
+            ..Default::default()
+        };
+    };
+}
+
 /// A principal without `ClusterAction` that sends one malformed and one valid
 /// share key gets `CLUSTER_AUTHORIZATION_FAILED` with Kafka's message on both:
 /// `authorizeClusterOperation` throws before `SharePartitionKey.validate`, and
@@ -258,12 +276,7 @@ async fn denied_share_request_answers_cluster_authorization_failed_on_every_key(
     })
     .await;
     let broker = broker_handle.broker_arc_for_test();
-    let valid = format!("share-group:{KAFKA_TOPIC_ID}:0");
-    let request = FindCoordinatorRequest {
-        key_type: KEY_TYPE_SHARE,
-        coordinator_keys: vec!["malformed".into(), valid.clone()],
-        ..Default::default()
-    };
+    mixed_share_keys!((valid, request));
 
     let response = find(&broker, &request, 6, "alice").await;
 
@@ -346,12 +359,7 @@ async fn granted_share_request_validates_each_key() {
     .await;
     let broker = broker_handle.broker_arc_for_test();
     broker_handle.wait_until_share_coordinator_ready().await;
-    let valid = format!("share-group:{KAFKA_TOPIC_ID}:0");
-    let request = FindCoordinatorRequest {
-        key_type: KEY_TYPE_SHARE,
-        coordinator_keys: vec!["malformed".into(), valid.clone()],
-        ..Default::default()
-    };
+    mixed_share_keys!((valid, request));
 
     let response = find(&broker, &request, 6, "admin").await;
 
@@ -461,8 +469,7 @@ fn bootstrap_failure_is_shaped_per_admitted_key_without_losing_rejections() {
 /// node 2 an `INTERNAL` one; node 4 has no registration.
 fn resolve_image() -> krabka_metadata::MetadataImage {
     use krabka_metadata::{
-        BrokerEndpoint, BrokerRegistrationRecord, MetadataRecord, NodeId, PartitionRecord,
-        TopicRecord,
+        BrokerEndpoint, BrokerRegistrationRecord, MetadataRecord, NodeId, TopicRecord,
     };
     let endpoint = |name: &str, host: &str| BrokerEndpoint {
         name: name.into(),
@@ -496,18 +503,13 @@ fn resolve_image() -> krabka_metadata::MetadataImage {
         ));
     }
     for (partition, leader) in [(0, 1), (1, 2), (2, 3), (3, 4)] {
-        image.apply(&MetadataRecord::V1Partition(PartitionRecord {
-            topic: topic.into(),
-            partition,
-            leader: NodeId(leader),
-            replicas: vec![NodeId(leader)],
-            isr: vec![NodeId(leader)],
-            leader_epoch: krabka_metadata::LeaderEpoch(0),
-            adding_replicas: vec![],
-            removing_replicas: vec![],
-            directories: vec![],
-            partition_epoch: 0,
-        }));
+        image.apply(&MetadataRecord::V1Partition(
+            crate::handlers::test_support::single_replica_partition(
+                topic,
+                partition,
+                NodeId(leader),
+            ),
+        ));
     }
     image
 }
@@ -585,31 +587,21 @@ async fn a_legacy_group_lookup_answers_in_the_top_level_fields() {
     // the top-level row.
     assert!(
         response
-            == FindCoordinatorResponse {
-                throttle_time_ms: 0,
+            == unthrottled_wire!(FindCoordinatorResponse {
                 error_code: codes::NONE,
                 error_message: Some("NONE".into()),
                 node_id: broker.config.broker_id,
                 host: response.host.clone(),
                 port: response.port,
                 coordinators: vec![],
-                unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(vec![]),
-            }
+            })
     );
     assert!(response.port > 0);
     broker_handle.shutdown().await;
 }
 
 /// Waits until no creation of `topic` is in flight on `broker`.
-async fn wait_until_creation_ends(broker: &crate::broker::Broker, topic: &str) {
-    tokio::time::timeout(std::time::Duration::from_secs(30), async {
-        while broker.auto_topic_creation.is_in_flight(topic) {
-            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-        }
-    })
-    .await
-    .expect("the creation ends");
-}
+use crate::handlers::test_support::wait_until_creation_ends;
 
 /// Kafka's `KafkaApis.getCoordinator`: before the state topic exists, every
 /// lookup answers `COORDINATOR_NOT_AVAILABLE` and asks for the topic. Many

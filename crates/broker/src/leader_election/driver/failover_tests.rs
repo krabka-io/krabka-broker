@@ -131,18 +131,13 @@ async fn sweep_resolves_death_edge_that_found_no_alive_isr_member() {
     .await;
     let batches = source.submitted();
     assert!(batches.len() == 1);
-    let expected = PartitionRecord {
-        topic: "t".into(),
-        partition: 0,
-        leader: NodeId(2),
-        replicas: vec![NodeId(1), NodeId(2), NodeId(3)],
-        isr: vec![NodeId(2)],
-        leader_epoch: LeaderEpoch(6),
-        adding_replicas: vec![],
-        removing_replicas: vec![],
-        directories: vec![],
-        partition_epoch: 1,
-    };
+    let expected = crate::leader_election::test_support::expected_partition(
+        "t",
+        2,
+        &[2],
+        LeaderEpoch(6),
+        vec![],
+    );
     assert!(*one_partition_change(&batches[0]) == expected);
 }
 
@@ -159,18 +154,13 @@ async fn sweep_re_drives_only_dead_leaders_and_isr_members() {
         alive: &'static [u64],
         expected: Option<PartitionRecord>,
     }
-    let base = PartitionRecord {
-        topic: "t".into(),
-        partition: 0,
-        leader: NodeId(1),
-        replicas: vec![NodeId(1), NodeId(2), NodeId(3)],
-        isr: vec![],
-        leader_epoch: LeaderEpoch(5),
-        adding_replicas: vec![],
-        removing_replicas: vec![],
-        directories: vec![],
-        partition_epoch: 1,
-    };
+    let base = crate::leader_election::test_support::expected_partition(
+        "t",
+        1,
+        &[],
+        LeaderEpoch(5),
+        vec![],
+    );
     let cases = [
         Case {
             name: "dead leader still leads: elect an alive ISR member",

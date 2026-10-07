@@ -28,31 +28,27 @@ use std::{sync::Arc, time::Duration};
 use krabka_ids::PartitionIndex;
 use krabka_log::Offset;
 use krabka_metadata::NodeId;
-use krabka_protocol::{
-    owned::{
-        delete_share_group_state_request::{
-            DeleteShareGroupStateRequest, DeleteStateData, PartitionData as DeletePartitionData,
-        },
-        delete_share_group_state_response::DeleteShareGroupStateResponse,
-        initialize_share_group_state_request::{
-            InitializeShareGroupStateRequest, InitializeStateData,
-            PartitionData as InitPartitionData,
-        },
-        initialize_share_group_state_response::InitializeShareGroupStateResponse,
-        read_share_group_state_request::{
-            PartitionData as ReadPartitionData, ReadShareGroupStateRequest, ReadStateData,
-        },
-        read_share_group_state_summary_request::{
-            PartitionData as ReadSummaryPartitionData, ReadShareGroupStateSummaryRequest,
-            ReadStateSummaryData,
-        },
-        write_share_group_state_request::{
-            PartitionData as WritePartitionData, StateBatch as ProtoStateBatch,
-            WriteShareGroupStateRequest, WriteStateData,
-        },
-        write_share_group_state_response::WriteShareGroupStateResponse,
+use krabka_protocol::owned::{
+    delete_share_group_state_request::{
+        DeleteShareGroupStateRequest, DeleteStateData, PartitionData as DeletePartitionData,
     },
-    primitives::uuid::Uuid as ProtoUuid,
+    delete_share_group_state_response::DeleteShareGroupStateResponse,
+    initialize_share_group_state_request::{
+        InitializeShareGroupStateRequest, InitializeStateData, PartitionData as InitPartitionData,
+    },
+    initialize_share_group_state_response::InitializeShareGroupStateResponse,
+    read_share_group_state_request::{
+        PartitionData as ReadPartitionData, ReadShareGroupStateRequest, ReadStateData,
+    },
+    read_share_group_state_summary_request::{
+        PartitionData as ReadSummaryPartitionData, ReadShareGroupStateSummaryRequest,
+        ReadStateSummaryData,
+    },
+    write_share_group_state_request::{
+        PartitionData as WritePartitionData, StateBatch as ProtoStateBatch,
+        WriteShareGroupStateRequest, WriteStateData,
+    },
+    write_share_group_state_response::WriteShareGroupStateResponse,
 };
 use krabka_security::ListenerProtocol;
 
@@ -70,6 +66,21 @@ use crate::{
         state::SharePartitionState,
     },
 };
+
+/// The persister RPCs share a singleton topic/partition envelope.
+macro_rules! one_partition_request {
+    ($request:ident, $topic:ident, $partition_type:ident; $group:expr, $topic_id:expr; $($fields:tt)*) => {
+        $request {
+            group_id: ($group).to_string(),
+            topics: vec![$topic {
+                topic_id: krabka_protocol::primitives::uuid::Uuid(*($topic_id).as_bytes()),
+                partitions: vec![$partition_type { $($fields)* ..Default::default() }],
+                ..Default::default()
+            }],
+            ..Default::default()
+        }
+    };
+}
 
 /// Group-coordinator-side client for the share-state persister. `Broker::start`
 /// constructs it after both the [`ShareCoordinator`] and the
@@ -142,11 +153,8 @@ impl SharePersister {
         // the lifecycle hook is the first thing to touch the topic when no
         // client has issued FindCoordinator(SHARE) yet. Mirrors how the txn
         // handlers refresh before dispatching.
-        let state_partition = self
-            .share_coordinator
-            .state_partition_for(group, &topic_id, partition);
-        self.ensure_topic_and_refresh(state_partition).await?;
-        if self.share_coordinator.is_leader(state_partition).await {
+        let (state_partition, local) = self.route(group, topic_id, partition).await?;
+        if local {
             return self
                 .share_coordinator
                 .initialize(
@@ -167,20 +175,11 @@ impl SharePersister {
                 });
         }
 
-        let req = InitializeShareGroupStateRequest {
-            group_id: group.to_string(),
-            topics: vec![InitializeStateData {
-                topic_id: ProtoUuid(*topic_id.as_bytes()),
-                partitions: vec![InitPartitionData {
-                    partition,
-                    state_epoch,
-                    start_offset: start_offset.0,
-                    ..Default::default()
-                }],
-                ..Default::default()
-            }],
-            ..Default::default()
-        };
+        let req = one_partition_request!(InitializeShareGroupStateRequest, InitializeStateData, InitPartitionData; group, topic_id;
+            partition,
+            state_epoch,
+            start_offset: start_offset.0,
+        );
         self.send_to_leader(state_partition, req, "InitializeShareGroupState", partition)
             .await
     }
@@ -199,11 +198,8 @@ impl SharePersister {
         topic_id: uuid::Uuid,
         partition: i32,
     ) -> Result<(), BrokerError> {
-        let state_partition = self
-            .share_coordinator
-            .state_partition_for(group, &topic_id, partition);
-        self.ensure_topic_and_refresh(state_partition).await?;
-        let result = if self.share_coordinator.is_leader(state_partition).await {
+        let (state_partition, local) = self.route(group, topic_id, partition).await?;
+        let result = if local {
             self.share_coordinator
                 .delete(&self.controller.current_image(), group, topic_id, partition)
                 .await
@@ -216,18 +212,9 @@ impl SharePersister {
                     )
                 })
         } else {
-            let req = DeleteShareGroupStateRequest {
-                group_id: group.to_string(),
-                topics: vec![DeleteStateData {
-                    topic_id: ProtoUuid(*topic_id.as_bytes()),
-                    partitions: vec![DeletePartitionData {
-                        partition,
-                        ..Default::default()
-                    }],
-                    ..Default::default()
-                }],
-                ..Default::default()
-            };
+            let req = one_partition_request!(DeleteShareGroupStateRequest, DeleteStateData, DeletePartitionData; group, topic_id;
+                partition,
+            );
             self.send_to_leader(state_partition, req, "DeleteShareGroupState", partition)
                 .await
         };
@@ -249,6 +236,21 @@ impl SharePersister {
             }
             other => other,
         }
+    }
+
+    /// Refresh leadership before choosing the local coordinator or its remote leader.
+    async fn route(
+        &self,
+        group: &str,
+        topic_id: uuid::Uuid,
+        partition: i32,
+    ) -> Result<(PartitionIndex, bool), BrokerError> {
+        let state_partition = self
+            .share_coordinator
+            .state_partition_for(group, &topic_id, partition);
+        self.ensure_topic_and_refresh(state_partition).await?;
+        let local = self.share_coordinator.is_leader(state_partition).await;
+        Ok((state_partition, local))
     }
 
     /// Ask for `__share_group_state` if it does not exist, and refresh this
@@ -347,11 +349,8 @@ impl SharePersister {
         partition: i32,
         leader_epoch: i32,
     ) -> Result<SharePartitionState, BrokerError> {
-        let state_partition = self
-            .share_coordinator
-            .state_partition_for(group, &topic_id, partition);
-        self.ensure_topic_and_refresh(state_partition).await?;
-        if self.share_coordinator.is_leader(state_partition).await {
+        let (state_partition, local) = self.route(group, topic_id, partition).await?;
+        if local {
             return self
                 .share_coordinator
                 .read(
@@ -372,38 +371,18 @@ impl SharePersister {
                 });
         }
 
-        let req = ReadShareGroupStateRequest {
-            group_id: group.to_string(),
-            topics: vec![ReadStateData {
-                topic_id: ProtoUuid(*topic_id.as_bytes()),
-                partitions: vec![ReadPartitionData {
-                    partition,
-                    leader_epoch,
-                    ..Default::default()
-                }],
-                ..Default::default()
-            }],
-            ..Default::default()
-        };
+        let req = one_partition_request!(ReadShareGroupStateRequest, ReadStateData, ReadPartitionData; group, topic_id;
+            partition,
+            leader_epoch,
+        );
         let resp = self.send_to_leader_resp(state_partition, req).await?;
-        let Some(pr) = resp
-            .results
-            .into_iter()
-            .flat_map(|t| t.partitions)
-            .find(|p| p.partition == partition)
-        else {
-            return Err(BrokerError::Share(format!(
-                "ReadShareGroupState for partition {partition}: leader answered for no such partition"
-            )));
-        };
-        if pr.error_code != 0 {
-            return Err(refused(
-                "ReadShareGroupState",
-                partition,
-                pr.error_code,
-                pr.error_message.as_deref().unwrap_or("no error message"),
-            ));
-        }
+        let pr = checked_partition(
+            resp.results.into_iter().flat_map(|topic| topic.partitions),
+            "ReadShareGroupState",
+            partition,
+            |row| (row.partition, row.error_code, row.error_message.as_deref()),
+        )?;
+
         // The read response carries no leader epoch and no delivery complete
         // count.
         Ok(SharePartitionState {
@@ -411,16 +390,7 @@ impl SharePersister {
             leader_epoch,
             start_offset: Offset(pr.start_offset),
             delivery_complete_count: 0,
-            state_batches: pr
-                .state_batches
-                .into_iter()
-                .map(|b| StateBatch {
-                    first_offset: Offset(b.first_offset),
-                    last_offset: Offset(b.last_offset),
-                    delivery_state: b.delivery_state,
-                    delivery_count: b.delivery_count,
-                })
-                .collect(),
+            state_batches: pr.state_batches.into_iter().map(StateBatch::from).collect(),
             ..SharePartitionState::default()
         })
     }
@@ -441,11 +411,8 @@ impl SharePersister {
         topic_id: uuid::Uuid,
         partition: i32,
     ) -> Result<Option<ShareStateSummary>, BrokerError> {
-        let state_partition = self
-            .share_coordinator
-            .state_partition_for(group, &topic_id, partition);
-        self.ensure_topic_and_refresh(state_partition).await?;
-        if self.share_coordinator.is_leader(state_partition).await {
+        let (state_partition, local) = self.route(group, topic_id, partition).await?;
+        if local {
             return self
                 .share_coordinator
                 .read_summary(group, topic_id, partition)
@@ -460,37 +427,17 @@ impl SharePersister {
                 });
         }
 
-        let req = ReadShareGroupStateSummaryRequest {
-            group_id: group.to_string(),
-            topics: vec![ReadStateSummaryData {
-                topic_id: ProtoUuid(*topic_id.as_bytes()),
-                partitions: vec![ReadSummaryPartitionData {
-                    partition,
-                    ..Default::default()
-                }],
-                ..Default::default()
-            }],
-            ..Default::default()
-        };
+        let req = one_partition_request!(ReadShareGroupStateSummaryRequest, ReadStateSummaryData, ReadSummaryPartitionData; group, topic_id;
+            partition,
+        );
         let resp = self.send_to_leader_resp(state_partition, req).await?;
-        let Some(pr) = resp
-            .results
-            .into_iter()
-            .flat_map(|t| t.partitions)
-            .find(|p| p.partition == partition)
-        else {
-            return Err(BrokerError::Share(format!(
-                "ReadShareGroupStateSummary for partition {partition}: leader answered for no such partition"
-            )));
-        };
-        if pr.error_code != 0 {
-            return Err(refused(
-                "ReadShareGroupStateSummary",
-                partition,
-                pr.error_code,
-                pr.error_message.as_deref().unwrap_or("no error message"),
-            ));
-        }
+        let pr = checked_partition(
+            resp.results.into_iter().flat_map(|topic| topic.partitions),
+            "ReadShareGroupStateSummary",
+            partition,
+            |row| (row.partition, row.error_code, row.error_message.as_deref()),
+        )?;
+
         // The summary of a key with no state is the default row: epochs 0 and
         // start offset -1. An initialized key always has a state epoch above
         // 0, because the group coordinator stamps the group epoch.
@@ -528,11 +475,8 @@ impl SharePersister {
     ) -> Result<(), BrokerError> {
         let (state_epoch, leader_epoch) = epochs;
         let (start_offset, delivery_complete_count) = progress;
-        let state_partition = self
-            .share_coordinator
-            .state_partition_for(group, &topic_id, partition);
-        self.ensure_topic_and_refresh(state_partition).await?;
-        if self.share_coordinator.is_leader(state_partition).await {
+        let (state_partition, local) = self.route(group, topic_id, partition).await?;
+        if local {
             let request = ShareWrite {
                 state_epoch,
                 leader_epoch,
@@ -560,32 +504,17 @@ impl SharePersister {
                 });
         }
 
-        let req = WriteShareGroupStateRequest {
-            group_id: group.to_string(),
-            topics: vec![WriteStateData {
-                topic_id: ProtoUuid(*topic_id.as_bytes()),
-                partitions: vec![WritePartitionData {
-                    partition,
-                    state_epoch,
-                    leader_epoch,
-                    start_offset: start_offset.0,
-                    delivery_complete_count,
-                    state_batches: batches
-                        .into_iter()
-                        .map(|b| ProtoStateBatch {
-                            first_offset: b.first_offset.0,
-                            last_offset: b.last_offset.0,
-                            delivery_state: b.delivery_state,
-                            delivery_count: b.delivery_count,
-                            ..Default::default()
-                        })
-                        .collect(),
-                    ..Default::default()
-                }],
-                ..Default::default()
-            }],
-            ..Default::default()
-        };
+        let req = one_partition_request!(WriteShareGroupStateRequest, WriteStateData, WritePartitionData; group, topic_id;
+            partition,
+            state_epoch,
+            leader_epoch,
+            start_offset: start_offset.0,
+            delivery_complete_count,
+            state_batches: batches
+                .into_iter()
+                .map(ProtoStateBatch::from)
+                .collect(),
+        );
         self.send_to_leader(state_partition, req, "WriteShareGroupState", partition)
             .await
     }
@@ -614,14 +543,11 @@ impl SharePersister {
                 code: crate::codes::COORDINATOR_NOT_AVAILABLE,
                 message: format!("share-state leader node {leader} not in metadata image"),
             })?;
-        let (host, port) = broker_info
-            .endpoints
-            .iter()
-            .find(|e| e.name == self.inter_broker_listener_name)
-            .map_or_else(
-                || (broker_info.host.clone(), broker_info.port),
-                |e| (e.host.clone(), e.port),
-            );
+        let (host, port) = crate::broker::registered_listener_endpoint(
+            broker_info,
+            &self.inter_broker_listener_name,
+        );
+        let host = host.to_owned();
 
         let opts = krabka_client_core::ConnectionOptions {
             client_id: format!("krabka-broker-share-{}", self.node_id),
@@ -662,12 +588,7 @@ impl SharePersister {
         R: krabka_client_core::ProtocolRequest,
         R::Response: PartitionResults,
     {
-        let conn = self.connect_to_leader(state_partition).await?;
-        let resp = conn
-            .send(req)
-            .await
-            .map_err(|e| BrokerError::Share(format!("share-state RPC: {e}")))?;
-        conn.close();
+        let resp = self.send_to_leader_resp(state_partition, req).await?;
         check_partition_result(resp, what, partition)
     }
 
@@ -733,6 +654,35 @@ fn refused(what: &str, partition: i32, error_code: i16, message: &str) -> Broker
     }
 }
 
+type PartitionStatus<'a> = (i32, i16, Option<&'a str>);
+
+/// Finds the requested row and checks the leader's verdict without changing its payload.
+fn checked_partition<T>(
+    rows: impl IntoIterator<Item = T>,
+    what: &str,
+    partition: i32,
+    status: impl Fn(&T) -> PartitionStatus<'_>,
+) -> Result<T, BrokerError> {
+    let row = rows
+        .into_iter()
+        .find(|row| status(row).0 == partition)
+        .ok_or_else(|| {
+            BrokerError::Share(format!(
+                "{what} for partition {partition}: leader answered for no such partition"
+            ))
+        })?;
+    let (_, code, message) = status(&row);
+    if code != 0 {
+        return Err(refused(
+            what,
+            partition,
+            code,
+            message.unwrap_or("no error message"),
+        ));
+    }
+    Ok(row)
+}
+
 /// `Ok(())` only when the leader answered for `partition` with error code 0.
 ///
 /// A non-zero code is the leader refusing the call — it is still loading, it
@@ -745,28 +695,17 @@ fn check_partition_result<R: PartitionResults>(
     what: &str,
     partition: i32,
 ) -> Result<(), BrokerError> {
-    let results = resp.partition_results();
-    let Some((_, error_code, error_message)) =
-        results.into_iter().find(|(p, _, _)| *p == partition)
-    else {
-        return Err(BrokerError::Share(format!(
-            "{what} for partition {partition}: leader answered for no such partition"
-        )));
-    };
-    if error_code == 0 {
-        return Ok(());
-    }
-    let detail = error_message.unwrap_or_else(|| "no error message".to_string());
-    Err(BrokerError::SharePartitionState {
-        code: error_code,
-        message: format!("{what} for partition {partition} refused by the leader: {detail}"),
+    checked_partition(resp.partition_results(), what, partition, |row| {
+        (row.0, row.1, row.2.as_deref())
     })
+    .map(|_| ())
 }
 
 #[cfg(test)]
 mod tests {
-    use krabka_protocol::owned::initialize_share_group_state_response::{
-        InitializeStateResult, PartitionResult,
+    use krabka_protocol::{
+        owned::initialize_share_group_state_response::{InitializeStateResult, PartitionResult},
+        primitives::uuid::Uuid as ProtoUuid,
     };
 
     use super::*;

@@ -1,6 +1,8 @@
 //! Raw-RPC integration tests for KIP-848 next-gen consumer groups,
 //! driven against an in-process Krabka broker through `krabka-client-core`.
 
+mod support;
+
 use std::{
     sync::Arc,
     time::{Duration, Instant},
@@ -14,9 +16,13 @@ use krabka_protocol::owned::{
     consumer_group_describe_request::ConsumerGroupDescribeRequest,
     consumer_group_heartbeat_request::ConsumerGroupHeartbeatRequest,
     consumer_group_heartbeat_response::{Assignment, ConsumerGroupHeartbeatResponse},
-    create_topics_request::{CreatableTopic, CreateTopicsRequest},
     list_groups_request::ListGroupsRequest,
-    metadata_request::{MetadataRequest, MetadataRequestTopic},
+};
+
+use crate::support::{
+    classic::classic_join_request,
+    client::connect_client,
+    topics::{creatable_topic, create_topic_request},
 };
 
 async fn boot() -> (krabka_broker::BrokerHandle, String, tempfile::TempDir) {
@@ -31,16 +37,10 @@ async fn boot() -> (krabka_broker::BrokerHandle, String, tempfile::TempDir) {
 
 async fn create_topic(client: &Client, topic: &str, partitions: i32) {
     let resp = client
-        .send(CreateTopicsRequest {
-            topics: vec![CreatableTopic {
-                name: topic.into(),
-                num_partitions: partitions,
-                replication_factor: 1,
-                ..Default::default()
-            }],
-            timeout_ms: 5_000,
-            ..Default::default()
-        })
+        .send(create_topic_request(
+            creatable_topic(topic, partitions, 1),
+            5_000,
+        ))
         .await
         .expect("CreateTopics");
     assert!(
@@ -59,27 +59,15 @@ fn heartbeat(group: &str, member_id: &str, epoch: i32) -> ConsumerGroupHeartbeat
         member_id.into()
     };
     ConsumerGroupHeartbeatRequest {
-        group_id: group.into(),
-        member_id,
-        member_epoch: epoch,
         rebalance_timeout_ms: 60_000,
         topic_partitions: (epoch == 0).then(Vec::new),
-        ..Default::default()
+        ..crate::support::consumer_groups::consumer_heartbeat(group, member_id, epoch)
     }
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn single_member_full_lifecycle() {
-    let (_b, bootstrap, _d) = boot().await;
-    let client = Arc::new(
-        Client::builder()
-            .bootstrap(bootstrap.as_str())
-            .client_id("c1")
-            .build()
-            .await
-            .unwrap(),
-    );
-    create_topic(&client, "t1", 4).await;
+    let (_b, _d, client) = consumer_case("t1", 4, "c1").await;
 
     let mut req = heartbeat("g1", "", 0);
     req.subscribed_topic_names = Some(vec!["t1".into()]);
@@ -108,16 +96,7 @@ async fn single_member_full_lifecycle() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn two_members_split_partitions() {
-    let (_b, bootstrap, _d) = boot().await;
-    let client = Arc::new(
-        Client::builder()
-            .bootstrap(bootstrap.as_str())
-            .client_id("c")
-            .build()
-            .await
-            .unwrap(),
-    );
-    create_topic(&client, "t2", 4).await;
+    let (_b, _d, client) = consumer_case("t2", 4, "c").await;
 
     let mut a = heartbeat("g2", "", 0);
     a.subscribed_topic_names = Some(vec!["t2".into()]);
@@ -138,20 +117,11 @@ async fn two_members_split_partitions() {
     // 1 — we must heartbeat at that epoch.
     // Each re-heartbeat reports what the member owns, so it is Kafka's full
     // request and the response carries the assignment.
-    let owned = |resp: &krabka_protocol::owned::consumer_group_heartbeat_response::ConsumerGroupHeartbeatResponse| {
-        resp.assignment.as_ref().map(|assignment| {
-            assignment
-                .topic_partitions
-                .iter()
-                .map(|topic| {
-                    krabka_protocol::owned::consumer_group_heartbeat_request::TopicPartitions {
-                        topic_id: topic.topic_id,
-                        partitions: topic.partitions.clone(),
-                        ..Default::default()
-                    }
-                })
-                .collect()
-        })
+    let owned = |response: &ConsumerGroupHeartbeatResponse| {
+        response
+            .assignment
+            .as_ref()
+            .map(crate::support::consumer_groups::reported_assignment)
     };
     let mut a3 = heartbeat("g2", &mid_a, ra.member_epoch);
     a3.subscribed_topic_names = Some(vec!["t2".into()]);
@@ -195,34 +165,24 @@ async fn two_members_split_partitions() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn classic_group_locked_against_next_gen() {
-    use krabka_protocol::owned::join_group_request::JoinGroupRequest;
-    let (_b, bootstrap, _d) = boot().await;
-    let client = Arc::new(
-        Client::builder()
-            .bootstrap(bootstrap.as_str())
-            .client_id("c")
-            .build()
-            .await
-            .unwrap(),
-    );
-    create_topic(&client, "t3", 2).await;
+    let (_b, _d, client) = consumer_case("t3", 2, "c").await;
 
     // A live classic group that does not use the consumer embedded protocol.
     // Kafka's `validateOnlineUpgrade` refuses to upgrade it; an empty classic
     // group would be replaced instead.
-    let join = |member_id: String| JoinGroupRequest {
-        group_id: "g3".into(),
-        session_timeout_ms: 30_000,
-        rebalance_timeout_ms: 60_000,
-        member_id,
-        protocol_type: "connect".into(),
-        protocols: vec![
-            krabka_protocol::owned::join_group_request::JoinGroupRequestProtocol {
-                name: "default".into(),
-                ..Default::default()
-            },
-        ],
-        ..Default::default()
+    let join = |member_id: String| {
+        classic_join_request(
+            "g3",
+            member_id,
+            (30_000, 60_000),
+            "connect",
+            vec![
+                krabka_protocol::owned::join_group_request::JoinGroupRequestProtocol {
+                    name: "default".into(),
+                    ..Default::default()
+                },
+            ],
+        )
     };
     let required = client.send(join(String::new())).await.unwrap();
     let joined = client.send(join(required.member_id)).await.unwrap();
@@ -251,14 +211,7 @@ async fn kill_switch_returns_unsupported_version() {
         vec![krabka_broker::coordinator::unified::config::RebalanceProtocol::Classic];
     let broker = Broker::start(config).await.unwrap();
     let bootstrap = broker.listen_addr().to_string();
-    let client = Arc::new(
-        Client::builder()
-            .bootstrap(bootstrap.as_str())
-            .client_id("c")
-            .build()
-            .await
-            .unwrap(),
-    );
+    let client = Arc::new(connect_client(bootstrap.as_str(), Some("c")).await);
 
     let mut req = heartbeat("g4", "", 0);
     req.subscribed_topic_names = Some(vec!["t".into()]);
@@ -268,16 +221,7 @@ async fn kill_switch_returns_unsupported_version() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn describe_after_join() {
-    let (_b, bootstrap, _d) = boot().await;
-    let client = Arc::new(
-        Client::builder()
-            .bootstrap(bootstrap.as_str())
-            .client_id("c")
-            .build()
-            .await
-            .unwrap(),
-    );
-    create_topic(&client, "t5", 2).await;
+    let (_b, _d, client) = consumer_case("t5", 2, "c").await;
 
     let mut req = heartbeat("g5", "", 0);
     req.subscribed_topic_names = Some(vec!["t5".into()]);
@@ -298,16 +242,7 @@ async fn describe_after_join() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn an_old_epoch_is_fenced() {
-    let (_b, bootstrap, _d) = boot().await;
-    let client = Arc::new(
-        Client::builder()
-            .bootstrap(bootstrap.as_str())
-            .client_id("c")
-            .build()
-            .await
-            .unwrap(),
-    );
-    create_topic(&client, "t6", 2).await;
+    let (_b, _d, client) = consumer_case("t6", 2, "c").await;
 
     // A joins; group_epoch goes 0→1, A's member_epoch = 1.
     let mut req = heartbeat("g6", "", 0);
@@ -337,18 +272,8 @@ async fn an_old_epoch_is_fenced() {
 
     // A reports what it keeps, and moves to epoch 2.
     let mut acknowledge = heartbeat("g6", &mid, 1);
-    acknowledge.topic_partitions = Some(
-        kept.topic_partitions
-            .iter()
-            .map(|topic| {
-                krabka_protocol::owned::consumer_group_heartbeat_request::TopicPartitions {
-                    topic_id: topic.topic_id,
-                    partitions: topic.partitions.clone(),
-                    ..Default::default()
-                }
-            })
-            .collect(),
-    );
+    acknowledge.topic_partitions =
+        Some(crate::support::consumer_groups::reported_assignment(&kept));
     let ra = client.send(acknowledge).await.unwrap();
     assert!(ra.error_code == 0);
     assert!(ra.member_epoch == 2, "A moves to epoch 2 once it revoked");
@@ -364,16 +289,7 @@ async fn an_old_epoch_is_fenced() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn first_join_with_client_member_id_echoes_and_assigns() {
-    let (_b, bootstrap, _d) = boot().await;
-    let client = Arc::new(
-        Client::builder()
-            .bootstrap(bootstrap.as_str())
-            .client_id("c")
-            .build()
-            .await
-            .unwrap(),
-    );
-    create_topic(&client, "tc", 2).await;
+    let (_b, _d, client) = consumer_case("tc", 2, "c").await;
 
     // Client supplies its own member id (GA KIP-848 semantics).
     let mut req = heartbeat("gc", "client-generated-id", 0);
@@ -405,16 +321,7 @@ async fn first_join_with_client_member_id_echoes_and_assigns() {
 /// filter.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn list_groups_includes_next_gen_consumer_group() {
-    let (_b, bootstrap, _d) = boot().await;
-    let client = Arc::new(
-        Client::builder()
-            .bootstrap(bootstrap.as_str())
-            .client_id("c")
-            .build()
-            .await
-            .unwrap(),
-    );
-    create_topic(&client, "tlist", 2).await;
+    let (_b, _d, client) = consumer_case("tlist", 2, "c").await;
 
     // Join a next-gen consumer group so it is registered in the coordinator.
     let mut req = heartbeat("glist", "", 0);
@@ -503,16 +410,7 @@ async fn list_groups_includes_next_gen_consumer_group() {
 /// repository has no image carrying both a JDK and the 4.x client jars.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn an_invalid_subscribed_topic_regex_fails_the_heartbeat() {
-    let (_b, bootstrap, _d) = boot().await;
-    let client = Arc::new(
-        Client::builder()
-            .bootstrap(bootstrap.as_str())
-            .client_id("c-badregex")
-            .build()
-            .await
-            .unwrap(),
-    );
-    create_topic(&client, "t-badregex", 1).await;
+    let (_b, _d, client) = consumer_case("t-badregex", 1, "c-badregex").await;
 
     for pattern in ["(", "[a-", "a{2,1}"] {
         let mut req = heartbeat("g-badregex", "", 0);
@@ -554,12 +452,7 @@ async fn an_invalid_subscribed_topic_regex_fails_the_heartbeat() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_topic_created_after_the_member_joined_reaches_its_next_heartbeat() {
     let (_b, bootstrap, _d) = boot().await;
-    let client = Client::builder()
-        .bootstrap(bootstrap.as_str())
-        .client_id("c-late")
-        .build()
-        .await
-        .unwrap();
+    let client = connect_client(bootstrap.as_str(), Some("c-late")).await;
     let mut join = heartbeat("g-late", "", 0);
     join.subscribed_topic_names = Some(vec!["late".into()]);
     let joined = client.send(join).await.unwrap();
@@ -570,13 +463,7 @@ async fn a_topic_created_after_the_member_joined_reaches_its_next_heartbeat() {
 
     create_topic(&client, "late", 3).await;
     let metadata = client
-        .send(MetadataRequest {
-            topics: Some(vec![MetadataRequestTopic {
-                name: Some("late".into()),
-                ..Default::default()
-            }]),
-            ..Default::default()
-        })
+        .send(crate::support::discovery::named_topic_metadata("late"))
         .await
         .expect("Metadata");
     let topic_id = metadata.topics[0].topic_id;
@@ -623,14 +510,7 @@ async fn a_topic_created_after_the_member_joined_reaches_its_next_heartbeat() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_group_config_overrides_the_heartbeat_interval_of_its_group() {
     let (broker, bootstrap, _dir) = boot().await;
-    let client = Arc::new(
-        Client::builder()
-            .bootstrap(bootstrap.as_str())
-            .client_id("c")
-            .build()
-            .await
-            .unwrap(),
-    );
+    let client = Arc::new(connect_client(bootstrap.as_str(), Some("c")).await);
     broker
         .submit_metadata_record_for_test(krabka_metadata::MetadataRecord::V1GroupConfig(
             krabka_metadata::GroupConfigRecord {
@@ -658,4 +538,15 @@ async fn a_group_config_overrides_the_heartbeat_interval_of_its_group() {
     }
 
     check!(intervals == [("g-tuned", 7_000), ("g-plain", 5_000)]);
+}
+
+async fn consumer_case(
+    topic: &str,
+    partitions: i32,
+    client_id: &str,
+) -> (krabka_broker::BrokerHandle, tempfile::TempDir, Arc<Client>) {
+    let (broker, bootstrap, dir) = boot().await;
+    let client = Arc::new(connect_client(bootstrap.as_str(), Some(client_id)).await);
+    create_topic(&client, topic, partitions).await;
+    (broker, dir, client)
 }

@@ -83,6 +83,138 @@ pub struct StreamsGroupSeed {
     >,
 }
 
+/// Snapshot member metadata, current assignments, then the protocol's target map.
+macro_rules! snapshot_member_maps {
+    ($state:ident; $members:ident, $current:ident, $targets:ident;
+        $metadata:path, $assignment:path; |$id:ident, $member:ident| $target:block
+    ) => {
+        let mut $members = ::std::collections::HashMap::new();
+        let mut $targets = ::std::collections::HashMap::new();
+        let mut $current = ::std::collections::HashMap::new();
+        for ($id, $member) in &$state.members {
+            $members.insert($id.clone(), $metadata($member));
+            $current.insert($id.clone(), $assignment($member));
+            $target
+        }
+    };
+}
+pub(super) use snapshot_member_maps;
+
+/// Restore epochs only for members whose metadata survived replay, then apply
+/// the protocol's original assignment fields in the same iteration.
+macro_rules! hydrate_member_epochs {
+    ($state:ident, $seed:ident; $member:ident, $current:ident { $($assignment:tt)* }) => {
+        for (mid, $current) in $seed.current_per_member {
+            if let Some($member) = $state.members.get_mut(&mid) {
+                $member.member_epoch = $current.member_epoch;
+                $member.previous_member_epoch = $current.previous_member_epoch;
+                $($assignment)*
+            }
+        }
+    };
+}
+pub(super) use hydrate_member_epochs;
+
+/// Apply a record to the bootstrap seed, then the cache, releasing each map
+/// guard separately. Clone only an admissible seed write; move the cache write.
+macro_rules! update_replayed_seeds {
+    ($self:ident, $pending:ident, $cached:ident, $group:ident; ($first:expr, $last:expr);
+        |$seed:ident| $admissible:expr => |$record:ident| $apply:block
+    ) => {{
+        {
+            if let Some(mut $seed) = $self.$pending.get_mut($group)
+                && $admissible
+            {
+                let $record = $first;
+                $apply
+            }
+        }
+        if let Some(mut $seed) = $self.$cached.get_mut($group)
+            && $admissible
+        {
+            let $record = $last;
+            $apply
+        }
+    }};
+}
+pub(super) use update_replayed_seeds;
+
+/// Replay one member record with the shared parentage and epoch policy.
+macro_rules! update_replayed_member {
+    ($arguments:tt; metadata) => {
+        $crate::coordinator::unified::seeds::update_replayed_member!(
+            @apply $arguments;
+            MemberMetadata, members;
+        );
+    };
+    ($arguments:tt; target) => {
+        $crate::coordinator::unified::seeds::update_replayed_member!(
+            @apply $arguments;
+            TargetAssignmentMember, target_per_member;
+        );
+    };
+    ($arguments:tt; current) => {
+        $crate::coordinator::unified::seeds::update_replayed_member!(
+            @apply $arguments;
+            CurrentMemberAssignment, current_per_member; current
+        );
+    };
+    (@apply ($self:ident, $pending:ident, $cached:ident, $group:ident, $member:ident, $value:ident);
+        $kind:ident, $field:ident; $($mode:ident)?
+    ) => {
+        $crate::coordinator::unified::seeds::update_replayed_seeds!(
+            $self, $pending, $cached, $group; ($value.clone(), $value);
+            |seed| $crate::coordinator::unified::replay_policy::replay_write_is_admissible(
+                $crate::coordinator::unified::replay_policy::ReplayRecordKind::$kind,
+                true, seed.members.contains_key($member),
+            ) $( && $crate::coordinator::unified::seeds::update_replayed_member!(
+                @epoch seed, $member, $value; $mode
+            ))? => |record| {
+                seed.$field.insert($member.into(), record);
+            }
+        );
+    };
+    (@epoch $seed:ident, $member:ident, $value:ident; current) => {
+        $seed.current_per_member.get($member).is_none_or(|current| {
+            $crate::coordinator::unified::replay_policy::replay_epoch_is_admissible(
+                current.member_epoch, $value.member_epoch,
+            )
+        })
+    };
+}
+pub(super) use update_replayed_member;
+
+/// Remove a group's replay projections and protocol lock in log order.
+pub(super) fn remove_replayed_group<S>(
+    pending: &dashmap::DashMap<String, S>,
+    cached: &dashmap::DashMap<String, S>,
+    group_types: &dashmap::DashMap<String, super::group_coordinator::GroupType>,
+    group_id: &str,
+) {
+    use super::replay_policy::{ReplayMutation, ReplayRecordKind, replay_mutation};
+    assert2::debug_assert!(
+        replay_mutation(ReplayRecordKind::GroupMetadata, None, true, false)
+            == ReplayMutation::RemoveGroup
+    );
+    pending.remove(group_id);
+    cached.remove(group_id);
+    group_types.remove(group_id);
+}
+
+/// Scrub each projection separately, releasing the seed guard before the cache.
+pub(super) fn scrub_replayed_seeds<S>(
+    pending: &dashmap::DashMap<String, S>,
+    cached: &dashmap::DashMap<String, S>,
+    group_id: &str,
+    mut scrub: impl FnMut(&mut S),
+) {
+    for seeds in [pending, cached] {
+        if let Some(mut seed) = seeds.get_mut(group_id) {
+            scrub(seed.value_mut());
+        }
+    }
+}
+
 /// The shared member/assignment tombstone mutations for all three seed types.
 /// Each replay supplies its protocol-specific records as additional match arms.
 macro_rules! scrub_seed_assignments {

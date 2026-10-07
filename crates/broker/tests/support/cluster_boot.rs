@@ -17,6 +17,13 @@ use tempfile::TempDir;
 
 use super::cluster::start_n_node_with;
 
+/// Shut brokers down in vector order, retaining the original tuple destructuring.
+pub async fn shutdown_cluster(cluster: Vec<(BrokerHandle, BrokerConfig, TempDir)>) {
+    for (handle, _, _) in cluster {
+        handle.shutdown().await;
+    }
+}
+
 // The functions below are only meaningful on non-Windows targets because
 // openraft's debug_assert! races on the hosted Windows task scheduler.
 // Individual test files gate their use with ``.
@@ -36,21 +43,79 @@ pub fn broker_config(
     mode: BootstrapMode,
 ) -> BrokerConfig {
     let listen = client_addrs[i];
-    let mut cfg = BrokerConfig::for_tests(log_dir.to_path_buf());
-    cfg.broker_id = i32::try_from(i + 1).unwrap();
+    let mut cfg = crate::support::node_config(i, log_dir);
     cfg.listen_addr = listen;
     cfg.advertised_listener = listen.to_string();
-    cfg.node_id = NodeId(u64::try_from(i + 1).unwrap());
     cfg.controller_listen_addr = controller_addrs[i];
     // `controller_quorum_voters` carries `<host>:<port>` strings (the dialer
     // re-resolves per connect); test voter sets are built from `SocketAddr`s,
     // so stringify here.
-    cfg.controller_quorum_voters = voters
-        .iter()
-        .map(|(id, a)| (NodeId(*id), a.to_string()))
-        .collect();
+    cfg.controller_quorum_voters = crate::support::controller_voters(voters);
     cfg.bootstrap_mode = mode;
     cfg
+}
+
+/// The held endpoints and voter map shared by the nodes of a role-separated cluster.
+pub struct RoleTopology<'a> {
+    clients: &'a [SocketAddr],
+    controllers: &'a [SocketAddr],
+    voters: &'a [(u64, SocketAddr)],
+}
+
+impl<'a> RoleTopology<'a> {
+    pub fn new(
+        clients: &'a [SocketAddr],
+        controllers: &'a [SocketAddr],
+        voters: &'a [(u64, SocketAddr)],
+    ) -> Self {
+        Self {
+            clients,
+            controllers,
+            voters,
+        }
+    }
+
+    /// Apply exactly one role after the ordinary static-voter configuration.
+    ///
+    /// # Panics
+    /// Panics if the node index or checked broker id is out of range.
+    pub fn config(
+        &self,
+        index: usize,
+        log_dir: &std::path::Path,
+        mode: BootstrapMode,
+        role: krabka_broker::config::NodeRole,
+    ) -> BrokerConfig {
+        let mut config = broker_config(
+            index,
+            self.clients,
+            self.controllers,
+            self.voters,
+            log_dir,
+            mode,
+        );
+        config.roles = vec![role];
+        config
+    }
+}
+
+/// Consume the held controller and data sockets in the same order before startup.
+///
+/// # Panics
+/// Panics if either listener iterator is exhausted or startup fails.
+pub async fn start_held_node(
+    config: BrokerConfig,
+    controllers: &mut std::vec::IntoIter<tokio::net::TcpListener>,
+    clients: &mut std::vec::IntoIter<tokio::net::TcpListener>,
+    context: &str,
+) -> BrokerHandle {
+    Broker::start_with_listeners(
+        config,
+        Some(controllers.next().unwrap()),
+        Some(clients.next().unwrap()),
+    )
+    .await
+    .expect(context)
 }
 
 /// Boot an `n`-broker cluster with ephemeral ports and short raft timings
@@ -88,6 +153,16 @@ pub async fn start_n_node_with_retry(n: u64) -> Vec<(BrokerHandle, BrokerConfig,
         }
     }
     panic!("cluster start failed after 3 attempts; last error: {last_err:?}");
+}
+
+/// Boot a static-voter cluster and await its registration on every broker.
+///
+/// # Panics
+/// Panics if the cluster cannot start or its broker count cannot fit `usize`.
+pub async fn registered_cluster(n: u64) -> Vec<(BrokerHandle, BrokerConfig, TempDir)> {
+    let cluster = start_n_node_with_retry(n).await;
+    wait_for_all_brokers_registered(&cluster, usize::try_from(n).expect("broker count")).await;
+    cluster
 }
 
 /// Start a broker on listen addresses another broker has just vacated.
@@ -146,4 +221,40 @@ pub async fn wait_for_all_brokers_registered(
     for (h, _, _) in cluster {
         h.wait_until_brokers_registered(n).await;
     }
+}
+
+/// Selects two non-controller nodes in ascending cluster order.
+/// Removing the second leaves the first node's index unchanged.
+///
+/// # Panics
+/// Panics unless exactly two nodes are followers of the elected controller.
+pub async fn two_controller_followers(
+    cluster: &[(BrokerHandle, BrokerConfig, TempDir)],
+) -> (NodeId, usize, usize) {
+    let leader = cluster[0].0.wait_until_controller_leader().await;
+    let followers: Vec<usize> = (0..cluster.len())
+        .filter(|&i| cluster[i].0.node_id() != leader.0)
+        .collect();
+    assert2::assert!(
+        followers.len() == 2,
+        "a three-node cluster has two non-controller nodes"
+    );
+    (leader, followers[0], followers[1])
+}
+
+/// Start the first held client/controller pair, releasing spare client sockets first.
+///
+/// # Panics
+/// Panics if either vector is empty or broker startup fails.
+pub async fn start_first_held(
+    config: BrokerConfig,
+    clients: Vec<tokio::net::TcpListener>,
+    controllers: Vec<tokio::net::TcpListener>,
+    context: &str,
+) -> BrokerHandle {
+    let data_listener = clients.into_iter().next().unwrap();
+    let controller_listener = controllers.into_iter().next().unwrap();
+    Broker::start_with_listeners(config, Some(controller_listener), Some(data_listener))
+        .await
+        .expect(context)
 }

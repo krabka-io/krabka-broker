@@ -4,9 +4,9 @@
     "Coma": {
       "vc_loss_settlement_is_idempotent": {
         "prover": "alt-ergo",
-        "time": 0.014
+        "time": 0.025
       },
-      "vc_settle_loss_batch": { "prover": "alt-ergo", "time": 0.007 }
+      "vc_settle_loss_batch": { "prover": "alt-ergo", "time": 0.015 }
     }
   }
 }

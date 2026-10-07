@@ -242,15 +242,7 @@ mod tests {
     use assert2::{assert, check};
 
     use super::*;
-
-    fn batch(first: i64, last: i64, state: i8, count: i16) -> StateBatch {
-        StateBatch {
-            first_offset: Offset(first),
-            last_offset: Offset(last),
-            delivery_state: state,
-            delivery_count: count,
-        }
-    }
+    use crate::share_coordinator::coordinator::test_support::state_batch as batch;
 
     /// Cases of Kafka's `PersisterStateBatchCombinerTest`: the combined
     /// batches of `so_far` and `new` at a start offset.

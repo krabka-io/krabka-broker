@@ -2,21 +2,21 @@
   "profile": [],
   "proofs": {
     "Coma": {
-      "vc_elim_Some": { "prover": "alt-ergo", "time": 0.007 },
-      "vc_jwks_cache_admission": { "prover": "alt-ergo", "time": 0.01 },
+      "vc_elim_Some": { "prover": "alt-ergo", "time": 0.01 },
+      "vc_jwks_cache_admission": { "prover": "alt-ergo", "time": 0.013 },
       "vc_jwks_publication_generations": {
         "prover": "alt-ergo",
-        "time": 0.009
+        "time": 0.023
       },
-      "vc_oauth_session_admission": { "prover": "alt-ergo", "time": 0.009 },
+      "vc_oauth_session_admission": { "prover": "alt-ergo", "time": 0.017 },
       "vc_oauth_validation_admission": {
         "prover": "alt-ergo",
-        "time": 0.007
+        "time": 0.008
       },
-      "vc_publication_trace": { "prover": "alt-ergo", "time": 0.01 },
+      "vc_publication_trace": { "prover": "alt-ergo", "time": 0.014 },
       "vc_published_keys_bound_oauth_session": {
         "prover": "z3",
-        "time": 0.009
+        "time": 0.026
       }
     }
   }

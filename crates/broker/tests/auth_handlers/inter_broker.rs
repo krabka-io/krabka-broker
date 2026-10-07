@@ -7,14 +7,11 @@
 
 use std::{io, net::SocketAddr};
 
-use bytes::{Buf, BufMut, BytesMut};
 use krabka_broker::Broker;
-use krabka_protocol::{
-    Decode, Encode,
-    owned::{api_versions_request::ApiVersionsRequest, api_versions_response::ApiVersionsResponse},
+use krabka_protocol::owned::{
+    api_versions_request::ApiVersionsRequest, api_versions_response::ApiVersionsResponse,
 };
 use krabka_security::{ListenerProtocol, SaslMechanism};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use crate::harness::admin_plain_password;
 
@@ -27,9 +24,7 @@ use crate::harness::admin_plain_password;
 /// stream and decodes the response.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn inter_broker_client_authenticates_via_plain() {
-    let log_dir = tempfile::tempdir().unwrap();
-    let mut cfg = crate::support::sasl_plaintext_config(log_dir.path().to_path_buf());
-    cfg.enabled_sasl_mechanisms = vec![SaslMechanism::Plain];
+    let (_log_dir, mut cfg) = crate::support::sasl::sasl_temp_config(vec![SaslMechanism::Plain]);
     cfg.plain_credentials
         .insert("broker".to_string(), admin_plain_password());
 
@@ -79,35 +74,22 @@ pub async fn drive_inter_broker_client_then_apiversions(
     // client returned a usable stream and (b) the broker treats the
     // stream as fully authenticated.
     let av_req = ApiVersionsRequest::default();
-    let mut av_body = BytesMut::new();
-    av_req
-        .encode(&mut av_body, 0)
-        .map_err(|e| io::Error::other(format!("ApiVersions encode: {e}")))?;
+    let av_body = crate::kafka_wire::encode_named(&av_req, 0, "ApiVersions")?;
 
-    let mut frame = BytesMut::with_capacity(16 + av_body.len());
-    frame.put_i16(18); // api_key = ApiVersions
-    frame.put_i16(0); // api_version
-    frame.put_i32(99); // post-auth correlation id (distinct from auth ones)
-    let client_id = "krabka-t16-test";
-    frame.put_i16(i16::try_from(client_id.len()).unwrap());
-    frame.put_slice(client_id.as_bytes());
-    // ApiVersions v0 is non-flexible → no tagged-fields byte.
-    frame.put_slice(&av_body);
+    let frame = crate::support::wire::request_frame(
+        (18, 0, 99, false),
+        "krabka-t16-test",
+        &av_body,
+        Some(16 + av_body.len()),
+        None,
+    );
 
-    stream
-        .write_u32(u32::try_from(frame.len()).unwrap())
-        .await?;
-    stream.write_all(&frame).await?;
-    stream.flush().await?;
+    crate::support::wire::write_frame(&mut stream, &frame, None).await?;
 
-    let resp_len = stream.read_u32().await?;
-    let mut resp = vec![0u8; resp_len as usize];
-    stream.read_exact(&mut resp).await?;
+    let resp = crate::support::wire::read_frame(&mut stream).await?;
 
     // Non-flexible response: header is v0 (just corr_id).
-    let mut cur = &resp[..];
-    let _corr = cur.get_i32();
-    let _av_resp = ApiVersionsResponse::decode(&mut cur, 0)
-        .map_err(|e| io::Error::other(format!("ApiVersions decode: {e}")))?;
+    let _av_resp: ApiVersionsResponse =
+        crate::support::wire::decode_response_frame(&resp, 0, false, "ApiVersions decode")?;
     Ok(())
 }

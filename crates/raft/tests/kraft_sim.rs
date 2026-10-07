@@ -23,8 +23,7 @@ fn new_sim(voter_ids: &[NodeId]) -> Sim<SimLog> {
 #[test]
 fn three_nodes_elect_exactly_one_leader() {
     let mut sim = new_sim(&[NodeId(1), NodeId(2), NodeId(3)]);
-    sim.run_until_stable(10_000);
-    assert2::assert!(sim.leaders().len() == 1);
+    sim.stabilize_one_leader(10_000);
     // Every voter agrees on a single leader epoch.
     assert2::assert!(sim.distinct_epochs().len() == 1);
 }
@@ -32,9 +31,7 @@ fn three_nodes_elect_exactly_one_leader() {
 #[test]
 fn re_elects_single_leader_after_leader_partition() {
     let mut sim = new_sim(&[NodeId(1), NodeId(2), NodeId(3)]);
-    sim.run_until_stable(10_000);
-    assert2::assert!(sim.leaders().len() == 1);
-    let old_leader = sim.leaders()[0];
+    let old_leader = sim.stabilize_one_leader(10_000);
 
     // Isolate the leader; the majority side must elect a new one.
     sim.partition(old_leader);
@@ -49,17 +46,14 @@ fn re_elects_single_leader_after_leader_partition() {
     // Heal the partition; the old leader rejoins and steps down to follower,
     // leaving a single leader cluster-wide.
     sim.heal(old_leader);
-    sim.run_until_stable(10_000);
-    assert2::assert!(sim.leaders().len() == 1);
+    sim.stabilize_one_leader(10_000);
     assert2::assert!(sim.leaders()[0] == new_leaders[0]);
 }
 
 #[test]
 fn committed_high_watermark_agrees_across_voters() {
     let mut sim = new_sim(&[NodeId(1), NodeId(2), NodeId(3)]);
-    sim.run_until_stable(10_000);
-    assert2::assert!(sim.leaders().len() == 1);
-    let leader = sim.leaders()[0];
+    let leader = sim.stabilize_one_leader(10_000);
 
     // The leader already appended its LeaderChange control record at promotion;
     // capture the log end, then produce 5 data records on top.

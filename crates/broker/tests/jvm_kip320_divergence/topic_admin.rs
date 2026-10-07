@@ -31,17 +31,7 @@ pub async fn wait_for_described_leader(
     let deadline = Instant::now() + timeout;
     let marker = format!("Leader: {expected}");
     loop {
-        let output = docker_run_kafka_tool_with_image(
-            KAFKA_IMAGE,
-            &[
-                "kafka-topics",
-                "--describe",
-                "--topic",
-                topic,
-                "--bootstrap-server",
-                bootstrap,
-            ],
-        );
+        let output = describe_topic(bootstrap, topic);
         let description = String::from_utf8_lossy(&output.stdout);
         if output.status.success() && description.contains(&marker) {
             return;
@@ -105,4 +95,40 @@ fn topic_description_isr_parser_ignores_ids_outside_isr_field() {
     let description =
         "Topic: krabka-kip320-3 Partition: 0 Leader: 1 Replicas: 1,2,3 Isr: 1,2 Elr: 3";
     assert2::assert!(described_isr(description) == vec![1, 2]);
+}
+
+/// Create the mixed topic and wait for the scenario's required JVM-visible ISR.
+pub async fn create_and_wait_for_isr(
+    bootstrap: &str,
+    topic: &str,
+    required: &[u64],
+    context: &str,
+) {
+    create_mixed_topic(bootstrap, topic).await;
+    let deadline = Instant::now() + Duration::from_mins(2);
+    loop {
+        let output = describe_topic(bootstrap, topic);
+        let description = String::from_utf8_lossy(&output.stdout);
+        let isr = described_isr(&description);
+        if required.iter().all(|node| isr.contains(node)) {
+            return;
+        }
+        assert2::assert!(Instant::now() <= deadline, "{context}: {description}");
+        // External JVM fetch progress has no matching in-process awaiter, and needs this two-minute budget.
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
+}
+
+fn describe_topic(bootstrap: &str, topic: &str) -> std::process::Output {
+    docker_run_kafka_tool_with_image(
+        KAFKA_IMAGE,
+        &[
+            "kafka-topics",
+            "--describe",
+            "--topic",
+            topic,
+            "--bootstrap-server",
+            bootstrap,
+        ],
+    )
 }

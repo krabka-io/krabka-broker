@@ -1,6 +1,6 @@
-(* #"/workspace/crates/verified/src/schema.rs" 125 0 129 25 *)
+(* #"/workspace/crates/verified/src/schema.rs" 118 0 122 25 *)
 
-let%span sschema = "/workspace/crates/verified/src/schema.rs" 122 10 123 48
+let%span sschema = "/workspace/crates/verified/src/schema.rs" 115 10 116 48
 
 use creusot.prelude.Any
 use creusot.int.UInt64
@@ -11,7 +11,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let schema_batch_admission [#"/workspace/crates/verified/src/schema.rs" 125 0 129 25] (walk_complete: bool)
+let schema_batch_admission [#"/workspace/crates/verified/src/schema.rs" 118 0 122 25] (walk_complete: bool)
   (applicable: UInt64.t) (admitted: UInt64.t) (return (x: t_SchemaBatchAdmission)) = (! bb0
   [ bb0 = any [ br0 -> {walk_complete = false} (! bb4) | br1 -> {walk_complete} (! bb1) ]
   | bb1 = s0

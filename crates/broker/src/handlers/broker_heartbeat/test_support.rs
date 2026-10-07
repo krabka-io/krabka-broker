@@ -8,7 +8,7 @@
 
 use std::sync::Arc;
 
-use krabka_metadata::{MetadataImage, MetadataRecord, NodeId, PartitionRecord, TopicRecord};
+use krabka_metadata::{MetadataImage, NodeId};
 use uuid::Uuid;
 
 use crate::{
@@ -33,26 +33,12 @@ pub(super) fn image_with_dir_partition(
     isr: &[NodeId],
     dirs: &[Uuid],
 ) -> MetadataImage {
-    let mut img = MetadataImage::new(Uuid::nil());
-    img.apply(&MetadataRecord::V1Topic(TopicRecord {
-        name: "t".into(),
-        topic_id: Uuid::nil(),
-        partitions: 1,
-        replication_factor: i16::try_from(replicas.len()).unwrap(),
-    }));
-    img.apply(&MetadataRecord::V1Partition(PartitionRecord {
-        topic: "t".into(),
-        partition: 0,
+    crate::test_support::directory_partition_image(
         leader,
-        replicas: replicas.to_vec(),
-        isr: isr.to_vec(),
-        leader_epoch: krabka_metadata::LeaderEpoch(5),
-        adding_replicas: vec![],
-        removing_replicas: vec![],
-        directories: dirs.to_vec(),
-        partition_epoch: 0,
-    }));
-    img
+        replicas.iter().copied(),
+        isr.iter().copied(),
+        dirs,
+    )
 }
 
 pub(super) async fn liveness_with(alive: &[NodeId]) -> Arc<ControllerLivenessState> {

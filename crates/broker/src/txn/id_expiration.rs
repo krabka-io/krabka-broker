@@ -22,36 +22,23 @@
 use std::sync::Arc;
 
 use krabka_units::{Time, convert::TimeExt as _};
-use tokio_util::sync::CancellationToken;
 use tracing::{debug, info};
 
-use crate::{
-    metadata_source::MetadataSource, task_util::run_every, txn::coordinator::TxnCoordinator,
-};
+use crate::{metadata_source::MetadataSource, txn::coordinator::TxnCoordinator};
 
-/// Entry point of the spawned task. It returns when `shutdown` is cancelled.
-///
-/// The cadence is
-/// [`crate::config::BrokerConfig::txn_id_expiration_cleanup_interval`], which
-/// mirrors Kafka's
-/// `transaction.remove.expired.transaction.cleanup.interval.ms` and defaults to
-/// one hour. The broker spawns this task only when that interval is non-zero.
-/// `expiration` is
-/// [`crate::config::BrokerConfig::txn_id_expiration`], Kafka's
-/// `transactional.id.expiration.ms`.
-pub(crate) async fn run(
-    coord: Arc<TxnCoordinator>,
-    controller: Arc<dyn MetadataSource>,
-    interval: Time,
-    expiration: Time,
-    shutdown: CancellationToken,
-) {
-    let tick = tokio::time::interval(interval.to_std());
-    run_every(tick, &shutdown, || {
-        sweep_once(&coord, &*controller, expiration)
-    })
-    .await;
-    info!("transactional-id expiry sweep shutting down");
+super::util::reaper_task! {
+    /// Entry point of the spawned task. It returns when `shutdown` is cancelled.
+    ///
+    /// The cadence is
+    /// [`crate::config::BrokerConfig::txn_id_expiration_cleanup_interval`], which
+    /// mirrors Kafka's
+    /// `transaction.remove.expired.transaction.cleanup.interval.ms` and defaults to
+    /// one hour. The broker spawns this task only when that interval is non-zero.
+    /// `expiration` is
+    /// [`crate::config::BrokerConfig::txn_id_expiration`], Kafka's
+    /// `transactional.id.expiration.ms`.
+    run(coord, controller, interval, expiration: Time; shutdown) => sweep_once(&coord, &*controller, expiration);
+    "transactional-id expiry sweep shutting down"
 }
 
 /// Runs one sweep: refresh the leader-partition view, then expire.

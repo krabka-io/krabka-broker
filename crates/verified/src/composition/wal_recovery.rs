@@ -1,5 +1,7 @@
 use creusot_std::prelude::*;
 
+#[cfg(creusot)]
+use super::control_truncation::physical_batch_sequence_valid;
 use super::{
     DeleteRecordsTrimApplication, FetchWatermarks, delete_records_trim_application,
     fetch_visibility, in_half_open_window, truncation_batch_retained, truncation_frontier,
@@ -11,13 +13,11 @@ use super::{
 /// reset at their floor. Clamping visibility to the actual retained end then
 /// prevents Fetch from exposing that suffix. `ends` must be the complete,
 /// accurately decoded local batch sequence; publication/fsync remain host effects.
-#[requires(0 <= physical_start@ && physical_start@ <= w.log_start@)]
-#[requires(forall<i: Int> 0 <= i && i < ends@.len() ==> physical_start@ < ends@[i]@)]
-#[requires(forall<i: Int, j: Int> 0 <= i && i < j && j < ends@.len() ==> ends@[i]@ < ends@[j]@)]
+#[requires(physical_batch_sequence_valid(ends@, physical_start@, w.log_start@))]
 #[requires(w.log_start@ <= w.log_end@)]
 #[requires(w.log_end@ == if ends@.len() == 0 { physical_start@ }
     else { ends@[ends@.len() - 1]@ })]
-#[ensures((match result { None => false, Some(_) => true }) == (
+#[ensures((result != None) == (
     w.log_start@ <= start@ && start@ <= cut@
     && cut@ <= (if ends@.len() == 0 { physical_start@ } else { ends@[ends@.len() - 1]@ })
     && (start == cut || exists<i: Int> 0 <= i && i < ends@.len() && ends@[i] == cut)
@@ -97,15 +97,13 @@ pub(super) fn checkpoint_truncation_bounds_fetch(
 #[requires(if phase.0@ < 2 { phase.1 == w.log_start }
     else { phase.1@ <= w.log_end@.min(requested@) })]
 #[requires(phase.0@ == 3 ==> phase.1@ == w.log_end@.min(requested@))]
-#[requires(0 <= physical_start@ && physical_start@ <= phase.1@)]
-#[requires(forall<i: Int> 0 <= i && i < ends@.len() ==> physical_start@ < ends@[i]@)]
-#[requires(forall<i: Int, j: Int> 0 <= i && i < j && j < ends@.len() ==> ends@[i]@ < ends@[j]@)]
+#[requires(physical_batch_sequence_valid(ends@, physical_start@, phase.1@))]
 #[requires(w.log_end@ == if ends@.len() == 0 { physical_start@ }
     else { ends@[ends@.len() - 1]@ })]
 #[requires(w.log_start@ <= prior_end@ && prior_end@ <= w.log_end@)]
 #[requires(phase.0@ < 2 ==> prior_end == w.log_start
     || exists<i: Int> 0 <= i && i < ends@.len() && ends@[i] == prior_end)]
-#[ensures(match result { Some(_) => true, None => false })]
+#[ensures(result != None)]
 #[ensures(match result {
     None => true,
     Some((floor, end, kept, limit, visible)) =>

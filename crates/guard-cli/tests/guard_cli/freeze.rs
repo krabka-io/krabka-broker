@@ -5,7 +5,9 @@
 
 use assert2::check;
 
-use crate::support::{PREFIX, PRINCIPAL, REFUSED, TOPIC, cli, cluster, signed_as};
+use crate::support::{
+    PREFIX, PRINCIPAL, REFUSED, TOPIC, cli, cluster, set_signed_freeze, signed_as, verify_registry,
+};
 
 /// The whole freeze loop: sign a freeze here, send it, read the registry back,
 /// and prove the entry against the operator public key on this machine.
@@ -18,9 +20,10 @@ async fn the_freeze_loop_runs_end_to_end() {
     let (_broker, _dir, bootstrap, key) = cluster().await;
     let signing = signed_as(&key, PRINCIPAL);
 
-    let mut set = vec!["freeze", "set", "--topic", TOPIC, "--reason", "DR cutover"];
-    set.extend_from_slice(&signing);
-    check!(cli(&bootstrap, &set).await == 0, "a signed freeze");
+    check!(
+        set_signed_freeze(&bootstrap, &signing).await == 0,
+        "a signed freeze"
+    );
 
     check!(cli(&bootstrap, &["freeze", "list"]).await == 0, "list");
     check!(
@@ -28,18 +31,7 @@ async fn the_freeze_loop_runs_end_to_end() {
         "list one scope"
     );
     check!(
-        cli(
-            &bootstrap,
-            &[
-                "freeze",
-                "list",
-                "--verify-signatures",
-                "--operator-keys",
-                key.trust_file.to_str().expect("utf-8 path"),
-            ],
-        )
-        .await
-            == 0,
+        verify_registry(&bootstrap, key.trust_file.to_str().expect("utf-8 path")).await == 0,
         "the entry verifies against the local operator key"
     );
 
@@ -65,18 +57,7 @@ async fn the_freeze_loop_runs_end_to_end() {
     // entry is reported as unsigned rather than counted as a failure, because
     // that mixture is what `freeze.require_signature = false` allows.
     check!(
-        cli(
-            &bootstrap,
-            &[
-                "freeze",
-                "list",
-                "--verify-signatures",
-                "--operator-keys",
-                key.trust_file.to_str().expect("utf-8 path"),
-            ],
-        )
-        .await
-            == 0,
+        verify_registry(&bootstrap, key.trust_file.to_str().expect("utf-8 path")).await == 0,
         "a mixed registry still verifies"
     );
 }

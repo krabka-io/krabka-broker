@@ -2,8 +2,8 @@
   "profile": [],
   "proofs": {
     "Coma": {
-      "vc_control_history_frontier": { "prover": "z3", "time": 0.008 },
-      "vc_len_i64": { "prover": "alt-ergo", "time": 0.008 }
+      "vc_control_history_frontier": { "prover": "z3", "time": 0.016 },
+      "vc_len_i64": { "prover": "alt-ergo", "time": 0.014 }
     }
   }
 }

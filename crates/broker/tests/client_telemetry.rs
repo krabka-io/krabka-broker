@@ -30,16 +30,18 @@
 //! every request against what the broker advertised.
 
 use assert2::{assert, check};
+
+use crate::support::{
+    client::connect_owned,
+    configs::{incremental_config, incremental_request, incremental_resource},
+    discovery::api_versions_request_for,
+};
 mod support;
 
 use krabka_protocol::{
     owned::{
-        api_versions_request::ApiVersionsRequest,
         get_telemetry_subscriptions_request::GetTelemetrySubscriptionsRequest,
         get_telemetry_subscriptions_response::GetTelemetrySubscriptionsResponse,
-        incremental_alter_configs_request::{
-            AlterConfigsResource, AlterableConfig, IncrementalAlterConfigsRequest,
-        },
         incremental_alter_configs_response::IncrementalAlterConfigsResponse,
         push_telemetry_request::PushTelemetryRequest,
         push_telemetry_response::PushTelemetryResponse,
@@ -79,24 +81,29 @@ async fn start_with_client_metrics() -> support::InProcess {
     }
 }
 
-/// One controller-backed broker that advertises the KIP-714 RPCs.
-async fn start_one_node_with_client_metrics() -> Vec<(
+type MetricsCluster = Vec<(
     krabka_broker::BrokerHandle,
     krabka_broker::BrokerConfig,
     tempfile::TempDir,
-)> {
-    start_n_node_with(1, |_, cfg| cfg.client_metrics_enable = true)
+)>;
+
+/// Keep the controller-backed cluster alive alongside its negotiated client.
+async fn start_one_node_with_client_metrics() -> (MetricsCluster, krabka_client_core::Client) {
+    let cluster = start_n_node_with(1, |_, cfg| cfg.client_metrics_enable = true)
         .await
-        .expect("start_n_node_with")
+        .expect("start_n_node_with");
+    let (_, cfg, _dir) = &cluster[0];
+    let client = build_client(cfg.listen_addr).await;
+    (cluster, client)
 }
 
 async fn build_client(addr: std::net::SocketAddr) -> krabka_client_core::Client {
-    krabka_client_core::Client::builder()
-        .bootstrap(format!("127.0.0.1:{}", addr.port()))
-        .client_id("client-telemetry-test")
-        .build()
-        .await
-        .expect("client build")
+    connect_owned(
+        format!("127.0.0.1:{}", addr.port()),
+        "client-telemetry-test",
+        "client build",
+    )
+    .await
 }
 
 /// Configures a match-all `CLIENT_METRICS` subscription with
@@ -106,29 +113,21 @@ async fn configure_match_all_subscription(
     name: &str,
     interval_ms: &str,
 ) {
-    let alter_req = IncrementalAlterConfigsRequest {
-        resources: vec![AlterConfigsResource {
-            resource_type: RESOURCE_TYPE_CLIENT_METRICS,
-            resource_name: name.to_string(),
-            configs: vec![
-                AlterableConfig {
-                    name: "metrics".to_string(),
-                    config_operation: CONFIG_OP_SET,
-                    value: Some("*".to_string()),
-                    ..Default::default()
-                },
-                AlterableConfig {
-                    name: "interval.ms".to_string(),
-                    config_operation: CONFIG_OP_SET,
-                    value: Some(interval_ms.to_string()),
-                    ..Default::default()
-                },
+    let alter_req = incremental_request(
+        vec![incremental_resource(
+            RESOURCE_TYPE_CLIENT_METRICS,
+            name.to_string(),
+            vec![
+                incremental_config("metrics".to_string(), Some("*".to_string()), CONFIG_OP_SET),
+                incremental_config(
+                    "interval.ms".to_string(),
+                    Some(interval_ms.to_string()),
+                    CONFIG_OP_SET,
+                ),
             ],
-            ..Default::default()
-        }],
-        validate_only: false,
-        ..Default::default()
-    };
+        )],
+        false,
+    );
 
     let alter_resp: IncrementalAlterConfigsResponse = client
         .send(alter_req)
@@ -180,23 +179,36 @@ fn sample_otlp_metrics() -> bytes::Bytes {
     bytes::Bytes::from(md.encode_to_vec())
 }
 
+async fn advertised_apis(client: &krabka_client_core::Client) -> std::collections::HashSet<i16> {
+    let resp = client
+        .send(api_versions_request_for("krabka-test", "0.0.0"))
+        .await
+        .expect("ApiVersions");
+    resp.api_keys.iter().map(|k| k.api_key).collect()
+}
+
+fn telemetry_push_request(
+    client_instance_id: WireUuid,
+    subscription_id: i32,
+    compression_type: i8,
+    metrics: bytes::Bytes,
+) -> PushTelemetryRequest {
+    PushTelemetryRequest {
+        client_instance_id,
+        subscription_id,
+        terminating: false,
+        compression_type,
+        metrics,
+        ..Default::default()
+    }
+}
+
 // ── Part 1: fixed legacy tests ────────────────────────────────────────────────
 
 #[tokio::test]
 async fn api_versions_advertises_telemetry_apis() {
     let p = start_with_client_metrics().await;
-    let resp = p
-        .client
-        .send(ApiVersionsRequest {
-            client_software_name: "krabka-test".into(),
-            client_software_version: "0.0.0".into(),
-            ..Default::default()
-        })
-        .await
-        .expect("ApiVersions");
-
-    let advertised: std::collections::HashSet<i16> =
-        resp.api_keys.iter().map(|k| k.api_key).collect();
+    let advertised = advertised_apis(&p.client).await;
     assert!(
         advertised.contains(&71),
         "ApiVersions must advertise GetTelemetrySubscriptions (71), got {advertised:?}",
@@ -216,18 +228,7 @@ async fn api_versions_advertises_telemetry_apis() {
 #[tokio::test]
 async fn api_versions_withholds_telemetry_apis_without_a_receiver() {
     let p = support::start().await;
-    let resp = p
-        .client
-        .send(ApiVersionsRequest {
-            client_software_name: "krabka-test".into(),
-            client_software_version: "0.0.0".into(),
-            ..Default::default()
-        })
-        .await
-        .expect("ApiVersions");
-
-    let advertised: std::collections::HashSet<i16> =
-        resp.api_keys.iter().map(|k| k.api_key).collect();
+    let advertised = advertised_apis(&p.client).await;
     check!(
         !advertised.contains(&71),
         "GetTelemetrySubscriptions (71) must stay unadvertised, got {advertised:?}",
@@ -330,14 +331,12 @@ async fn push_telemetry_unknown_instance_rejected() {
     ] {
         let resp: PushTelemetryResponse = p
             .client
-            .send(PushTelemetryRequest {
-                client_instance_id: instance,
-                subscription_id: 0,
-                terminating: false,
-                compression_type: 0,
-                metrics: bytes::Bytes::from_static(b"\x00\x01\x02"),
-                ..Default::default()
-            })
+            .send(telemetry_push_request(
+                instance,
+                0,
+                0,
+                bytes::Bytes::from_static(b"\x00\x01\x02"),
+            ))
             .await
             .expect("PushTelemetry");
 
@@ -359,9 +358,7 @@ async fn push_telemetry_unknown_instance_rejected() {
 /// handshake, then push a valid OTLP payload. All three must succeed.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn push_telemetry_happy_path_after_subscription() {
-    let cluster = start_one_node_with_client_metrics().await;
-    let (_, cfg, _dir) = &cluster[0];
-    let client = build_client(cfg.listen_addr).await;
+    let (_cluster, client) = start_one_node_with_client_metrics().await;
 
     // ── Step 1: configure a match-all subscription ───────────────────────────
     configure_match_all_subscription(&client, "all", "100").await;
@@ -412,14 +409,12 @@ async fn push_telemetry_happy_path_after_subscription() {
     // compression_type = 0 is NONE (uncompressed); sample_otlp_metrics()
     // returns raw (uncompressed) proto bytes, so no codec mismatch.
     let push_resp: PushTelemetryResponse = client
-        .send(PushTelemetryRequest {
-            client_instance_id: assigned_id,
+        .send(telemetry_push_request(
+            assigned_id,
             subscription_id,
-            terminating: false,
-            compression_type: 0,
-            metrics: sample_otlp_metrics(),
-            ..Default::default()
-        })
+            0,
+            sample_otlp_metrics(),
+        ))
         .await
         .expect("PushTelemetry");
 
@@ -434,9 +429,7 @@ async fn push_telemetry_happy_path_after_subscription() {
 /// stale `subscription_id`, with `UNKNOWN_SUBSCRIPTION_ID` (117).
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn push_telemetry_stale_subscription_id_rejected() {
-    let cluster = start_one_node_with_client_metrics().await;
-    let (_, cfg, _dir) = &cluster[0];
-    let client = build_client(cfg.listen_addr).await;
+    let (_cluster, client) = start_one_node_with_client_metrics().await;
 
     let get_resp = enroll_telemetry(&client).await;
     let assigned_id = get_resp.client_instance_id;
@@ -445,14 +438,12 @@ async fn push_telemetry_stale_subscription_id_rejected() {
     let stale_sub_id = real_sub_id ^ 0x5555;
 
     let push_resp: PushTelemetryResponse = client
-        .send(PushTelemetryRequest {
-            client_instance_id: assigned_id,
-            subscription_id: stale_sub_id,
-            terminating: false,
-            compression_type: 0,
-            metrics: sample_otlp_metrics(),
-            ..Default::default()
-        })
+        .send(telemetry_push_request(
+            assigned_id,
+            stale_sub_id,
+            0,
+            sample_otlp_metrics(),
+        ))
         .await
         .expect("PushTelemetry");
 
@@ -469,9 +460,7 @@ async fn push_telemetry_stale_subscription_id_rejected() {
 /// request reaches the codec check.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn push_telemetry_unsupported_compression_rejected() {
-    let cluster = start_one_node_with_client_metrics().await;
-    let (_, cfg, _dir) = &cluster[0];
-    let client = build_client(cfg.listen_addr).await;
+    let (_cluster, client) = start_one_node_with_client_metrics().await;
 
     let get_resp = enroll_telemetry(&client).await;
     let assigned_id = get_resp.client_instance_id;
@@ -479,14 +468,12 @@ async fn push_telemetry_unsupported_compression_rejected() {
 
     // Kafka's `CompressionType.forId` knows the ids 0 to 4 only.
     let push_resp: PushTelemetryResponse = client
-        .send(PushTelemetryRequest {
-            client_instance_id: assigned_id,
+        .send(telemetry_push_request(
+            assigned_id,
             subscription_id,
-            terminating: false,
-            compression_type: 5,
-            metrics: sample_otlp_metrics(),
-            ..Default::default()
-        })
+            5,
+            sample_otlp_metrics(),
+        ))
         .await
         .expect("PushTelemetry");
 

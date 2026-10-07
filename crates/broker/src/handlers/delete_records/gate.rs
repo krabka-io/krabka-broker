@@ -7,8 +7,7 @@
 
 use std::collections::HashSet;
 
-use krabka_audit::PrivilegedPhase;
-use krabka_metadata::{BreakGlassAction, MetadataImage, MetadataRecord};
+use krabka_metadata::{BreakGlassAction, MetadataRecord};
 use krabka_protocol::owned::delete_records_response::DeleteRecordsPartitionResult;
 use uuid::Uuid;
 
@@ -17,38 +16,19 @@ pub(super) use crate::break_glass::gate::consumed_proposal_id;
 use crate::{
     break_glass::{
         gate::{self, BreakGlassDenial},
-        handlers::audit::{GatedTransition, audit_transition},
-        metrics as break_glass_metrics,
         persistence::spend_before_local_action,
     },
     broker::Broker,
     codes,
-    config::BreakGlassConfig,
-    time_util::now_ms,
 };
 
+crate::handlers::partition_transition::authorizer! {
 /// KFC-9: find the approved proposal that authorizes a trim of one partition,
 /// and stamp it consumed.
 ///
 /// `Ok(None)` is a broker that gates nothing, where `[break_glass]` names no
 /// approver. A trim then behaves as it does on a cluster with no such section.
-pub(super) fn authorize_trim(
-    image: &MetadataImage,
-    config: &BreakGlassConfig,
-    topic: &str,
-    partition: i32,
-) -> Result<Option<MetadataRecord>, BreakGlassDenial> {
-    if !gate::is_gated(config) {
-        return Ok(None);
-    }
-    gate::authorize(
-        image,
-        config,
-        BreakGlassAction::DeleteRecords,
-        &trim_target(topic, partition),
-        now_ms(),
-    )
-    .map(Some)
+pub(super) fn authorize_trim = DeleteRecords;
 }
 
 /// Append the consumed proposal, and answer the proposal it names.
@@ -86,18 +66,13 @@ pub(super) fn refuse_trim(
 ) -> DeleteRecordsPartitionResult {
     let message = denial.to_string();
     tracing::warn!(%topic, partition, refusal = %message, "DeleteRecords refused");
-    break_glass_metrics::record_refusal(&env.broker.metrics, denial.action);
-    audit_transition(
-        &env.broker.audit_log,
-        &env.broker.config.break_glass,
+    crate::handlers::partition_transition::audit_refusal(
+        env.broker,
         env.ctx,
-        &GatedTransition {
-            action: BreakGlassAction::DeleteRecords,
-            target: &trim_target(topic, partition),
-            phase: PrivilegedPhase::Refused,
-            proposal_id: denial.proposal_id(),
-            reason: &message,
-        },
+        BreakGlassAction::DeleteRecords,
+        || trim_target(topic, partition),
+        denial,
+        &message,
     );
     error_partition_result(partition, codes::POLICY_VIOLATION)
 }
@@ -106,9 +81,7 @@ pub(super) fn refuse_trim(
 ///
 /// A proposal on the bare topic name covers every partition of it, which
 /// `gate::authorize` resolves from this spelling.
-pub(super) fn trim_target(topic: &str, partition: i32) -> String {
-    format!("{topic}-{partition}")
-}
+pub(super) use crate::handlers::partition_transition::partition_target as trim_target;
 
 #[cfg(test)]
 mod tests {

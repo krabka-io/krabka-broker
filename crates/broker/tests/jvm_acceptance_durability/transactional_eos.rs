@@ -213,19 +213,7 @@ async fn transactional_console_producer_eos() {
     let bootstrap_3 = format!("host.docker.internal:{}", client_ports[2]);
 
     // 1. Create the topic via node 1.
-    docker_run_kafka_tool(&[
-        "kafka-topics",
-        "--create",
-        "--if-not-exists",
-        "--topic",
-        TOPIC,
-        "--partitions",
-        "1",
-        "--replication-factor",
-        "1",
-        "--bootstrap-server",
-        &bootstrap_1,
-    ]);
+    crate::jvm_acceptance::create_plain_console_topic_at(&bootstrap_1, TOPIC);
     // Wait for the partition to materialize on the broker that leads it: the
     // producer's first batch must not land before the log exists with the
     // segment size the cluster booted with.

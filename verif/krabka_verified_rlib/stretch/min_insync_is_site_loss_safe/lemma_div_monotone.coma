@@ -1,9 +1,9 @@
-(* #"/workspace/crates/verified/src/stretch/min_insync_is_site_loss_safe.rs" 31 0 31 60 *)
+(* #"/workspace/crates/verified/src/stretch/min_insync_is_site_loss_safe.rs" 47 0 47 60 *)
 
 let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
 let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
-let%span smin_insync_is_site_loss_safe = "/workspace/crates/verified/src/stretch/min_insync_is_site_loss_safe.rs" 29 11 29 50
-let%span smin_insync_is_site_loss_safe'0 = "/workspace/crates/verified/src/stretch/min_insync_is_site_loss_safe.rs" 30 10 30 41
+let%span smin_insync_is_site_loss_safe = "/workspace/crates/verified/src/stretch/min_insync_is_site_loss_safe.rs" 45 11 45 50
+let%span smin_insync_is_site_loss_safe'0 = "/workspace/crates/verified/src/stretch/min_insync_is_site_loss_safe.rs" 46 10 46 41
 
 use int.ComputerDivision
 use int.Int
@@ -26,7 +26,7 @@ constant high : int
 
 constant divisor : int
 
-function lemma_div_monotone [#"/workspace/crates/verified/src/stretch/min_insync_is_site_loss_safe.rs" 31 0 31 60] (low: int) (high: int) (divisor: int) : ()
+function lemma_div_monotone [#"/workspace/crates/verified/src/stretch/min_insync_is_site_loss_safe.rs" 47 0 47 60] (low: int) (high: int) (divisor: int) : ()
 
 goal vc_lemma_div_monotone: ([%#smin_insync_is_site_loss_safe] 0 <= low /\ low <= high /\ ge_log_Int divisor 1)
   -> (if low = divisor * ComputerDivision.div low divisor + ComputerDivision.mod low divisor then

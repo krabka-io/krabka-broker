@@ -2,8 +2,8 @@
   "profile": [],
   "proofs": {
     "Coma": {
-      "vc_elim_Some": { "prover": "alt-ergo", "time": 0.004 },
-      "vc_replay_cursor_decision": { "prover": "alt-ergo", "time": 0.007 }
+      "vc_elim_Some": { "prover": "alt-ergo", "time": 0.021 },
+      "vc_replay_cursor_decision": { "prover": "alt-ergo", "time": 0.018 }
     }
   }
 }

@@ -12,10 +12,7 @@ use krabka_metadata::{
     AclEntry, AclOperation, FeatureLevelRecord, MetadataRecord, PatternType, PermissionType,
     ResourceType,
 };
-use krabka_protocol::{
-    UnknownTaggedFields,
-    owned::create_acls_response::{AclCreationResult, CreateAclsResponse},
-};
+use krabka_protocol::owned::create_acls_response::{AclCreationResult, CreateAclsResponse};
 
 use super::handle;
 use crate::{
@@ -31,19 +28,20 @@ use crate::{
 /// creation: a bare `AclCreationResult`, whose generated `ErrorMessage`
 /// default is the empty string.
 fn committed() -> AclCreationResult {
-    AclCreationResult {
+    tagged_wire!(AclCreationResult {
         error_code: codes::NONE,
         error_message: Some(String::new()),
-        unknown_tagged_fields: UnknownTaggedFields(Vec::new()),
-    }
+    })
 }
 
 /// Kafka puts no length limit on an ACL's resource name or principal, so a
 /// binding far past any fixed ceiling is accepted and stored as sent.
 #[tokio::test]
 async fn handle_stores_long_resource_names_and_principals() {
-    let (broker_handle, _dir) = start_broker(configured_authorizer()).await;
-    let broker = broker_handle.broker_arc_for_test();
+    broker_fixture!(
+        (broker_handle, _dir, broker),
+        start_broker(configured_authorizer())
+    );
     test_ctx!(ctx, "admin");
     let long_name = "r".repeat(4096);
     let long_principal = format!("User:{}", "a".repeat(4096));
@@ -54,11 +52,9 @@ async fn handle_stores_long_resource_names_and_principals() {
 
     let resp = handle(&broker, req, VERSION, &ctx).await.expect("handle");
 
-    let expected = CreateAclsResponse {
-        throttle_time_ms: 0,
+    let expected = unthrottled_wire!(CreateAclsResponse {
         results: vec![committed(), committed()],
-        unknown_tagged_fields: UnknownTaggedFields(Vec::new()),
-    };
+    });
     assert!(resp == expected);
     let stored = |resource_name: &str, principal: &str| {
         crate::test_support::allow_acl(
@@ -76,9 +72,11 @@ async fn handle_stores_long_resource_names_and_principals() {
 
 #[tokio::test]
 async fn handle_denies_cluster_alter_for_each_creation() {
-    let (broker_handle, _dir) = start_broker(Arc::new(DenyAll)).await;
-    let broker = broker_handle.broker_arc_for_test();
-    test_ctx!(ctx, "alice");
+    broker_fixture!(
+        (broker_handle, _dir, broker),
+        deny_all,
+        context(ctx, "alice")
+    );
     let req = request(vec![
         creation("topic-a", "User:bob", OPERATION_READ),
         creation("topic-b", "User:carol", OPERATION_WRITE),
@@ -86,16 +84,13 @@ async fn handle_denies_cluster_alter_for_each_creation() {
 
     let resp = handle(&broker, req, VERSION, &ctx).await.expect("handle");
 
-    let denied = AclCreationResult {
+    let denied = tagged_wire!(AclCreationResult {
         error_code: codes::CLUSTER_AUTHORIZATION_FAILED,
         error_message: Some("create-acls denied".into()),
-        unknown_tagged_fields: UnknownTaggedFields(Vec::new()),
-    };
-    let expected = CreateAclsResponse {
-        throttle_time_ms: 0,
+    });
+    let expected = unthrottled_wire!(CreateAclsResponse {
         results: vec![denied.clone(), denied],
-        unknown_tagged_fields: UnknownTaggedFields(Vec::new()),
-    };
+    });
     assert!(resp == expected);
     assert!(all_acls(&broker_handle).is_empty());
     broker_handle.shutdown().await;
@@ -103,8 +98,10 @@ async fn handle_denies_cluster_alter_for_each_creation() {
 
 #[tokio::test]
 async fn handle_submits_valid_creations_and_reports_invalid_creations_in_order() {
-    let (broker_handle, _dir) = start_broker(configured_authorizer()).await;
-    let broker = broker_handle.broker_arc_for_test();
+    broker_fixture!(
+        (broker_handle, _dir, broker),
+        start_broker(configured_authorizer())
+    );
     test_ctx!(ctx, "admin");
     let mut invalid = creation("", "User:bob", OPERATION_WRITE);
     invalid.resource_name.clear();
@@ -115,18 +112,15 @@ async fn handle_submits_valid_creations_and_reports_invalid_creations_in_order()
 
     let resp = handle(&broker, req, VERSION, &ctx).await.expect("handle");
 
-    let expected = CreateAclsResponse {
-        throttle_time_ms: 0,
+    let expected = unthrottled_wire!(CreateAclsResponse {
         results: vec![
             committed(),
-            AclCreationResult {
+            tagged_wire!(AclCreationResult {
                 error_code: codes::INVALID_REQUEST,
                 error_message: Some("Invalid empty resource name".into()),
-                unknown_tagged_fields: UnknownTaggedFields(Vec::new()),
-            },
+            }),
         ],
-        unknown_tagged_fields: UnknownTaggedFields(Vec::new()),
-    };
+    });
     assert!(resp == expected);
 
     let acls = all_acls(&broker_handle);
@@ -146,9 +140,11 @@ async fn handle_submits_valid_creations_and_reports_invalid_creations_in_order()
 /// that state.
 #[tokio::test]
 async fn handle_answers_security_disabled_for_each_creation_when_no_authorizer_is_configured() {
-    let (broker_handle, _dir) = start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
-    let broker = broker_handle.broker_arc_for_test();
-    test_ctx!(ctx, "admin");
+    broker_fixture!(
+        (broker_handle, _dir, broker),
+        allow_all,
+        context(ctx, "admin")
+    );
     let req = request(vec![
         creation("topic-a", "User:alice", OPERATION_READ),
         creation("topic-b", "User:bob", OPERATION_WRITE),
@@ -156,16 +152,13 @@ async fn handle_answers_security_disabled_for_each_creation_when_no_authorizer_i
 
     let resp = handle(&broker, req, VERSION, &ctx).await.expect("handle");
 
-    let disabled = AclCreationResult {
+    let disabled = tagged_wire!(AclCreationResult {
         error_code: codes::SECURITY_DISABLED,
         error_message: Some("No Authorizer is configured.".into()),
-        unknown_tagged_fields: UnknownTaggedFields(Vec::new()),
-    };
-    let expected = CreateAclsResponse {
-        throttle_time_ms: 0,
+    });
+    let expected = unthrottled_wire!(CreateAclsResponse {
         results: vec![disabled.clone(), disabled],
-        unknown_tagged_fields: UnknownTaggedFields(Vec::new()),
-    };
+    });
     assert!(resp == expected);
     assert!(all_acls(&broker_handle).is_empty());
     broker_handle.shutdown().await;
@@ -186,8 +179,10 @@ async fn start_trunk_broker() -> (crate::broker::BrokerHandle, tempfile::TempDir
 /// `validateHostPattern` (KIP-1276) would refuse both.
 #[tokio::test]
 async fn handle_stores_any_host_by_default() {
-    let (broker_handle, _dir) = start_broker(configured_authorizer()).await;
-    let broker = broker_handle.broker_arc_for_test();
+    broker_fixture!(
+        (broker_handle, _dir, broker),
+        start_broker(configured_authorizer())
+    );
     test_ctx!(ctx, "admin");
     let hosts = ["10.0.0.0/8", "not/a/cidr", ""];
     let creations = hosts
@@ -203,11 +198,9 @@ async fn handle_stores_any_host_by_default() {
         .await
         .expect("handle");
 
-    let expected = CreateAclsResponse {
-        throttle_time_ms: 0,
+    let expected = unthrottled_wire!(CreateAclsResponse {
         results: vec![committed(), committed(), committed()],
-        unknown_tagged_fields: UnknownTaggedFields(Vec::new()),
-    };
+    });
     assert!(resp == expected);
     let mut stored: Vec<String> = all_acls(&broker_handle)
         .into_iter()
@@ -218,6 +211,21 @@ async fn handle_stores_any_host_by_default() {
     broker_handle.shutdown().await;
 }
 
+macro_rules! cidr_metadata_fixture {
+    (($handle:ident, $dir:ident, $broker:ident), $level:expr, $label:literal) => {
+        let ($handle, $dir) = start_trunk_broker().await;
+        let $broker = $handle.broker_arc_for_test();
+        $broker
+            .controller
+            .submit_change(vec![MetadataRecord::V1FeatureLevel(FeatureLevelRecord {
+                name: crate::features::METADATA_VERSION.to_string(),
+                level: $level,
+            })])
+            .await
+            .expect($label);
+    };
+}
+
 /// #652 / KIP-1276: a CIDR host is accepted, and stored as the literal text
 /// the operator typed, once `metadata.version` reaches
 /// [`crate::features::CIDR_ACL_HOST_MIN_LEVEL`]. The test seeds that level
@@ -226,28 +234,19 @@ async fn handle_stores_any_host_by_default() {
 /// seed their own metadata-version floors.
 #[tokio::test]
 async fn handle_accepts_cidr_host_at_the_cidr_metadata_version() {
-    let (broker_handle, _dir) = start_trunk_broker().await;
-    let broker = broker_handle.broker_arc_for_test();
-    broker
-        .controller
-        .submit_change(vec![MetadataRecord::V1FeatureLevel(FeatureLevelRecord {
-            name: crate::features::METADATA_VERSION.to_string(),
-            level: crate::features::CIDR_ACL_HOST_MIN_LEVEL,
-        })])
-        .await
-        .expect("seed cidr-supporting metadata.version");
+    cidr_metadata_fixture!(
+        (broker_handle, _dir, broker),
+        crate::features::CIDR_ACL_HOST_MIN_LEVEL,
+        "seed cidr-supporting metadata.version"
+    );
     test_ctx!(ctx, "admin");
-    let mut cidr_creation = creation("topic-a", "User:alice", OPERATION_READ);
-    cidr_creation.host = "10.0.0.0/8".into();
-    let req = request(vec![cidr_creation]);
+    let req = cidr_request();
 
     let resp = handle(&broker, req, VERSION, &ctx).await.expect("handle");
 
-    let expected = CreateAclsResponse {
-        throttle_time_ms: 0,
+    let expected = unthrottled_wire!(CreateAclsResponse {
         results: vec![committed()],
-        unknown_tagged_fields: UnknownTaggedFields(Vec::new()),
-    };
+    });
     assert!(resp == expected);
     let acls = all_acls(&broker_handle);
     let expected_acls = vec![AclEntry {
@@ -267,16 +266,11 @@ async fn handle_accepts_cidr_host_at_the_cidr_metadata_version() {
 /// Kafka's exact `UNSUPPORTED_VERSION` message, and nothing is stored.
 #[tokio::test]
 async fn handle_rejects_cidr_host_below_the_cidr_metadata_version() {
-    let (broker_handle, _dir) = start_trunk_broker().await;
-    let broker = broker_handle.broker_arc_for_test();
-    broker
-        .controller
-        .submit_change(vec![MetadataRecord::V1FeatureLevel(FeatureLevelRecord {
-            name: crate::features::METADATA_VERSION.to_string(),
-            level: crate::features::CIDR_ACL_HOST_MIN_LEVEL - 1,
-        })])
-        .await
-        .expect("seed pre-cidr metadata.version");
+    cidr_metadata_fixture!(
+        (broker_handle, _dir, broker),
+        crate::features::CIDR_ACL_HOST_MIN_LEVEL - 1,
+        "seed pre-cidr metadata.version"
+    );
     check_cidr_refusal(&broker_handle).await;
     broker_handle.shutdown().await;
 }
@@ -286,8 +280,10 @@ async fn handle_rejects_cidr_host_below_the_cidr_metadata_version() {
 /// `UNKNOWN_SERVER_ERROR` with no message, and nothing is stored.
 #[tokio::test]
 async fn handle_fails_every_creation_when_one_carries_a_filter_only_value() {
-    let (broker_handle, _dir) = start_broker(configured_authorizer()).await;
-    let broker = broker_handle.broker_arc_for_test();
+    broker_fixture!(
+        (broker_handle, _dir, broker),
+        start_broker(configured_authorizer())
+    );
     test_ctx!(ctx, "admin");
     let mut any_operation = creation("topic-b", "User:bob", OPERATION_READ);
     any_operation.operation = 1;
@@ -298,16 +294,13 @@ async fn handle_fails_every_creation_when_one_carries_a_filter_only_value() {
 
     let resp = handle(&broker, req, VERSION, &ctx).await.expect("handle");
 
-    let failed = AclCreationResult {
+    let failed = tagged_wire!(AclCreationResult {
         error_code: codes::UNKNOWN_SERVER_ERROR,
         error_message: None,
-        unknown_tagged_fields: UnknownTaggedFields(Vec::new()),
-    };
-    let expected = CreateAclsResponse {
-        throttle_time_ms: 0,
+    });
+    let expected = unthrottled_wire!(CreateAclsResponse {
         results: vec![failed.clone(), failed],
-        unknown_tagged_fields: UnknownTaggedFields(Vec::new()),
-    };
+    });
     assert!(resp == expected);
     assert!(all_acls(&broker_handle).is_empty());
     broker_handle.shutdown().await;
@@ -318,9 +311,11 @@ async fn handle_fails_every_creation_when_one_carries_a_filter_only_value() {
 /// closes it here, and it comes before authorization, as a parse does.
 #[tokio::test]
 async fn handle_errors_so_the_connection_closes_on_an_unknown_element() {
-    let (broker_handle, _dir) = start_broker(Arc::new(DenyAll)).await;
-    let broker = broker_handle.broker_arc_for_test();
-    test_ctx!(ctx, "alice");
+    broker_fixture!(
+        (broker_handle, _dir, broker),
+        deny_all,
+        context(ctx, "alice")
+    );
     let mut unknown_permission = creation("topic-a", "User:bob", OPERATION_READ);
     unknown_permission.permission_type = 0;
     let req = request(vec![unknown_permission]);
@@ -336,8 +331,10 @@ async fn handle_errors_so_the_connection_closes_on_an_unknown_element() {
 /// with Kafka's message, and a non-`User` principal type is stored.
 #[tokio::test]
 async fn handle_pins_the_cluster_name_and_accepts_other_principal_types() {
-    let (broker_handle, _dir) = start_broker(configured_authorizer()).await;
-    let broker = broker_handle.broker_arc_for_test();
+    broker_fixture!(
+        (broker_handle, _dir, broker),
+        start_broker(configured_authorizer())
+    );
     test_ctx!(ctx, "admin");
     let mut wrong_cluster = creation("my-cluster", "User:alice", OPERATION_READ);
     wrong_cluster.resource_type = 4;
@@ -348,20 +345,17 @@ async fn handle_pins_the_cluster_name_and_accepts_other_principal_types() {
 
     let resp = handle(&broker, req, VERSION, &ctx).await.expect("handle");
 
-    let expected = CreateAclsResponse {
-        throttle_time_ms: 0,
+    let expected = unthrottled_wire!(CreateAclsResponse {
         results: vec![
-            AclCreationResult {
+            tagged_wire!(AclCreationResult {
                 error_code: codes::INVALID_REQUEST,
                 error_message: Some(
                     "The only valid name for the CLUSTER resource is kafka-cluster".into(),
                 ),
-                unknown_tagged_fields: UnknownTaggedFields(Vec::new()),
-            },
+            }),
             committed(),
         ],
-        unknown_tagged_fields: UnknownTaggedFields(Vec::new()),
-    };
+    });
     assert!(resp == expected);
     let expected_acls = vec![crate::test_support::allow_acl(
         ResourceType::Topic,
@@ -384,16 +378,14 @@ async fn handle_bounds_a_request_to_ten_thousand_new_acls() {
             .map(|n| creation(&format!("topic-{n}"), "User:alice", OPERATION_READ))
             .collect::<Vec<_>>()
     };
-    let violation = AclCreationResult {
+    let violation = tagged_wire!(AclCreationResult {
         error_code: codes::POLICY_VIOLATION,
         error_message: Some("Unable to perform excessively large batch operation.".into()),
-        unknown_tagged_fields: UnknownTaggedFields(Vec::new()),
-    };
-    let empty_name = AclCreationResult {
+    });
+    let empty_name = tagged_wire!(AclCreationResult {
         error_code: codes::INVALID_REQUEST,
         error_message: Some("Invalid empty resource name".into()),
-        unknown_tagged_fields: UnknownTaggedFields(Vec::new()),
-    };
+    });
     // 10,001 identical bindings are one new ACL.
     let repeated = vec![creation("topic-a", "User:alice", OPERATION_READ); 10_001];
     let mut with_invalid = distinct(10_000);
@@ -429,19 +421,17 @@ async fn handle_bounds_a_request_to_ten_thousand_new_acls() {
         ),
     ];
     for (label, creations, results, stored) in cases {
-        let (broker_handle, _dir) = start_broker(configured_authorizer()).await;
-        let broker = broker_handle.broker_arc_for_test();
+        broker_fixture!(
+            (broker_handle, _dir, broker),
+            start_broker(configured_authorizer())
+        );
         test_ctx!(ctx, "admin");
 
         let resp = handle(&broker, request(creations), VERSION, &ctx)
             .await
             .expect("handle");
 
-        let expected = CreateAclsResponse {
-            throttle_time_ms: 0,
-            results,
-            unknown_tagged_fields: UnknownTaggedFields(Vec::new()),
-        };
+        let expected = unthrottled_wire!(CreateAclsResponse { results });
         check!(resp == expected, "{label}");
         check!(all_acls(&broker_handle).len() == stored, "{label}");
         broker_handle.shutdown().await;
@@ -495,23 +485,24 @@ fn count_new_acls_counts_distinct_new_acls_in_linear_time() {
 async fn check_cidr_refusal(broker_handle: &crate::broker::BrokerHandle) {
     let broker = broker_handle.broker_arc_for_test();
     test_ctx!(ctx, "admin");
-    let mut cidr_creation = creation("topic-a", "User:alice", OPERATION_READ);
-    cidr_creation.host = "10.0.0.0/8".into();
-    let req = request(vec![cidr_creation]);
+    let req = cidr_request();
 
     let resp = handle(&broker, req, VERSION, &ctx).await.expect("handle");
 
-    let expected = CreateAclsResponse {
-        throttle_time_ms: 0,
-        results: vec![AclCreationResult {
+    let expected = unthrottled_wire!(CreateAclsResponse {
+        results: vec![tagged_wire!(AclCreationResult {
             error_code: codes::UNSUPPORTED_VERSION,
             error_message: Some(
                 "CIDR-based ACL host patterns require metadata version 4.4-IV1 or higher.".into(),
             ),
-            unknown_tagged_fields: UnknownTaggedFields(Vec::new()),
-        }],
-        unknown_tagged_fields: UnknownTaggedFields(Vec::new()),
-    };
+        })],
+    });
     assert!(resp == expected);
     assert!(all_acls(broker_handle).is_empty());
+}
+
+fn cidr_request() -> krabka_protocol::owned::create_acls_request::CreateAclsRequest {
+    let mut cidr_creation = creation("topic-a", "User:alice", OPERATION_READ);
+    cidr_creation.host = "10.0.0.0/8".into();
+    request(vec![cidr_creation])
 }

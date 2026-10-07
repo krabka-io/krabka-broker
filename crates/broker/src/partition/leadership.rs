@@ -488,15 +488,7 @@ mod tests {
     }
 
     fn epoch_history(partition: &Partition) -> Vec<(i32, i64)> {
-        partition
-            .log
-            .lock()
-            .expect("log mutex")
-            .epoch_checkpoint()
-            .entries()
-            .iter()
-            .map(|entry| (entry.epoch.0, entry.start_offset.0))
-            .collect()
+        crate::partition::test_support::epoch_history(&partition.log.lock().expect("log mutex"))
     }
 
     /// One promotion step: an optional write at an epoch, or a

@@ -9,10 +9,7 @@ use super::{
 
 type TimeScanWitness = (usize, u32, u32, Option<usize>);
 
-// cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
-#[cfg(creusot)]
-#[cfg_attr(test, mutants::skip)]
-#[logic(open)]
+open_logic! {
 fn time_scan_input_valid(
     entries: Seq<(i64, u32)>,
     offsets: Seq<u32>,
@@ -22,10 +19,10 @@ fn time_scan_input_valid(
     pearlite! {
         time_archive_valid(entries, maximum) && offsets.len() == times.len()
         && (forall<i: Int> 0 <= i && i < offsets.len() ==> offsets[i]@ <= maximum)
-        && (forall<i: Int, j: Int> 0 <= i && i < j && j < offsets.len() ==> offsets[i]@ < offsets[j]@)
-        && (forall<i: Int, j: Int> 0 <= i && i < entries.len() && 0 <= j && j < offsets.len()
-            && offsets[j]@ < entries[i].1@ ==> times[j]@ <= entries[i].0@)
+        && (crate::sequence::strictly_increasing(offsets))
+        && (super::timestamp::sparse_rows_bound_records(entries, offsets, times))
     }
+}
 }
 
 /// Check canonical archived rows against complete decoded records, then consume
@@ -38,8 +35,7 @@ fn time_scan_input_valid(
     Ok((count, remote, local, selected)) => time_scan_input_valid(entries@, offsets@, times@, max_relative@)
         && remote == local && count@ <= entries@.len()
         && remote == if count@ == 0 { 0u32 } else { entries@[count@ - 1].1 }
-        && (forall<i: Int> 0 <= i && i < count@ ==> entries@[i].0@ < target@)
-        && (count@ < entries@.len() ==> entries@[count@].0@ >= target@)
+        && super::timestamp::timestamp_archive_prefix(entries@, target@, count@)
         && (forall<i: Int> 0 <= i && i < offsets@.len() && offsets@[i]@ < remote@ ==> times@[i]@ < target@)
         && match selected {
             None => forall<i: Int> 0 <= i && i < offsets@.len() ==> offsets@[i]@ < minimum@ || times@[i]@ < target@,

@@ -76,113 +76,126 @@ fn image(
     img
 }
 
-struct Case {
+struct Case<E> {
     name: &'static str,
     registrations: Vec<(u64, Vec<Uuid>)>,
     replicas: Vec<u64>,
     directories: Vec<Uuid>,
     unavailable: Vec<u64>,
-    expected: Vec<i32>,
+    expected: E,
+}
+
+fn replica_case<E>(
+    name: &'static str,
+    registrations: Vec<(u64, Vec<Uuid>)>,
+    (replicas, directories): (Vec<u64>, Vec<Uuid>),
+    unavailable: Vec<u64>,
+    expected: E,
+) -> Case<E> {
+    Case {
+        name,
+        registrations,
+        replicas,
+        directories,
+        unavailable,
+        expected,
+    }
+}
+
+impl<E> Case<E> {
+    fn image(&self) -> MetadataImage {
+        image(&self.registrations, &self.replicas, &self.directories)
+    }
+
+    fn unavailable(&self) -> HashSet<u64> {
+        self.unavailable.iter().copied().collect()
+    }
+}
+
+/// Keep the projection cases independent while sharing their image/lookup/assertion driver.
+fn check_replica_cases<E: std::fmt::Debug + PartialEq>(
+    cases: Vec<Case<E>>,
+    project: impl Fn(&MetadataImage, &PartitionRecord, &HashSet<u64>, &str) -> E,
+) {
+    for case in cases {
+        let img = case.image();
+        let record = img.partition("t", 0).expect("partition in image");
+        let unavailable: HashSet<u64> = case.unavailable();
+        let actual = project(&img, record, &unavailable, LISTENER);
+        assert!(actual == case.expected, "case {}", case.name);
+    }
 }
 
 #[test]
 fn offline_replicas_matches_kafka_replica_state_rules() {
     let (good, bad) = (dir(0x600d), dir(0xbad));
     let cases = vec![
-        Case {
-            name: "every replica registered, online dir, unfenced",
-            registrations: vec![(1, vec![good, bad]), (2, vec![good])],
-            replicas: vec![1, 2],
-            directories: vec![good, good],
-            unavailable: vec![],
-            expected: vec![],
-        },
-        Case {
-            name: "replica on a dir the registration no longer lists",
-            registrations: vec![(1, vec![good]), (2, vec![good])],
-            replicas: vec![1, 2],
-            directories: vec![bad, good],
-            unavailable: vec![],
-            expected: vec![1],
-        },
-        Case {
-            name: "fenced broker",
-            registrations: vec![(1, vec![good]), (2, vec![good])],
-            replicas: vec![1, 2],
-            directories: vec![good, good],
-            unavailable: vec![2],
-            expected: vec![2],
-        },
-        Case {
-            name: "unregistered broker",
-            registrations: vec![(1, vec![good])],
-            replicas: vec![1, 2],
-            directories: vec![good, good],
-            unavailable: vec![],
-            expected: vec![2],
-        },
-        Case {
-            name: "unassigned directory id is online",
-            registrations: vec![(1, vec![good]), (2, vec![good])],
-            replicas: vec![1, 2],
-            directories: vec![Uuid::nil(), Uuid::nil()],
-            unavailable: vec![],
-            expected: vec![],
-        },
-        Case {
-            name: "registration whose last online dir was retired offlines its replicas",
-            registrations: vec![(1, vec![]), (2, vec![good])],
-            replicas: vec![1, 2],
-            directories: vec![bad, good],
-            unavailable: vec![],
-            expected: vec![1],
-        },
-        Case {
-            name: "registration with no online dir keeps an unassigned replica online",
-            registrations: vec![(1, vec![]), (2, vec![good])],
-            replicas: vec![1, 2],
-            directories: vec![Uuid::nil(), good],
-            unavailable: vec![],
-            expected: vec![],
-        },
-        Case {
-            name: "missing directory slot is online",
-            registrations: vec![(1, vec![good]), (2, vec![good])],
-            replicas: vec![1, 2],
-            directories: vec![],
-            unavailable: vec![],
-            expected: vec![],
-        },
-        Case {
-            name: "offline dir and fenced peer are both reported, in replica order",
-            registrations: vec![(1, vec![good]), (2, vec![good])],
-            replicas: vec![2, 1],
-            directories: vec![good, bad],
-            unavailable: vec![2],
-            expected: vec![2, 1],
-        },
+        replica_case(
+            "every replica registered, online dir, unfenced",
+            vec![(1, vec![good, bad]), (2, vec![good])],
+            (vec![1, 2], vec![good, good]),
+            vec![],
+            vec![],
+        ),
+        replica_case(
+            "replica on a dir the registration no longer lists",
+            vec![(1, vec![good]), (2, vec![good])],
+            (vec![1, 2], vec![bad, good]),
+            vec![],
+            vec![1],
+        ),
+        replica_case(
+            "fenced broker",
+            vec![(1, vec![good]), (2, vec![good])],
+            (vec![1, 2], vec![good, good]),
+            vec![2],
+            vec![2],
+        ),
+        replica_case(
+            "unregistered broker",
+            vec![(1, vec![good])],
+            (vec![1, 2], vec![good, good]),
+            vec![],
+            vec![2],
+        ),
+        replica_case(
+            "unassigned directory id is online",
+            vec![(1, vec![good]), (2, vec![good])],
+            (vec![1, 2], vec![Uuid::nil(), Uuid::nil()]),
+            vec![],
+            vec![],
+        ),
+        replica_case(
+            "registration whose last online dir was retired offlines its replicas",
+            vec![(1, vec![]), (2, vec![good])],
+            (vec![1, 2], vec![bad, good]),
+            vec![],
+            vec![1],
+        ),
+        replica_case(
+            "registration with no online dir keeps an unassigned replica online",
+            vec![(1, vec![]), (2, vec![good])],
+            (vec![1, 2], vec![Uuid::nil(), good]),
+            vec![],
+            vec![],
+        ),
+        replica_case(
+            "missing directory slot is online",
+            vec![(1, vec![good]), (2, vec![good])],
+            (vec![1, 2], vec![]),
+            vec![],
+            vec![],
+        ),
+        replica_case(
+            "offline dir and fenced peer are both reported, in replica order",
+            vec![(1, vec![good]), (2, vec![good])],
+            (vec![2, 1], vec![good, bad]),
+            vec![2],
+            vec![2, 1],
+        ),
     ];
 
-    for case in cases {
-        let img = image(&case.registrations, &case.replicas, &case.directories);
-        let record = img.partition("t", 0).expect("partition in image");
-        let unavailable: HashSet<u64> = case.unavailable.iter().copied().collect();
-
-        let actual = offline_replicas(&img, record, &unavailable, LISTENER);
-
-        assert!(actual == case.expected, "case {}", case.name);
-    }
-}
-
-/// One row of the availability table: the same image shape as above, plus the
-/// whole partition row the projection must answer with.
-struct AvailabilityCase {
-    name: &'static str,
-    registrations: Vec<(u64, Vec<Uuid>)>,
-    replicas: Vec<u64>,
-    directories: Vec<Uuid>,
-    unavailable: Vec<u64>,
-    expected: PartitionAvailability,
+    check_replica_cases(cases, offline_replicas);
 }
 
 /// A replica on a directory its broker no longer lists online neither leads
@@ -202,89 +215,51 @@ struct AvailabilityCase {
 fn a_replica_on_a_dead_log_dir_neither_leads_nor_stays_in_the_isr() {
     let (good, bad) = (dir(0x600d), dir(0xbad));
     let cases = vec![
-        AvailabilityCase {
-            name: "sole replica on a failed log dir",
-            registrations: vec![(1, vec![good])],
-            replicas: vec![1],
-            directories: vec![bad],
-            unavailable: vec![],
-            expected: PartitionAvailability {
-                leader_id: NO_LEADER_ID,
-                isr_nodes: vec![],
-                offline_replicas: vec![1],
-            },
-        },
-        AvailabilityCase {
-            name: "leader on a failed log dir, follower healthy",
-            registrations: vec![(1, vec![good]), (2, vec![good])],
-            replicas: vec![1, 2],
-            directories: vec![bad, good],
-            unavailable: vec![],
-            expected: PartitionAvailability {
-                leader_id: NO_LEADER_ID,
-                isr_nodes: vec![2],
-                offline_replicas: vec![1],
-            },
-        },
-        AvailabilityCase {
-            name: "sole replica on a directory nobody has assigned yet",
-            registrations: vec![(1, vec![good])],
-            replicas: vec![1],
-            directories: vec![Uuid::nil()],
-            unavailable: vec![],
-            expected: PartitionAvailability {
-                leader_id: 1,
-                isr_nodes: vec![1],
-                offline_replicas: vec![],
-            },
-        },
-        AvailabilityCase {
-            name: "fenced follower keeps its ISR seat",
-            registrations: vec![(1, vec![good]), (2, vec![good])],
-            replicas: vec![1, 2],
-            directories: vec![good, good],
-            unavailable: vec![2],
-            expected: PartitionAvailability {
-                leader_id: 1,
-                isr_nodes: vec![1, 2],
-                offline_replicas: vec![2],
-            },
-        },
-        AvailabilityCase {
-            name: "unregistered follower keeps its ISR seat",
-            registrations: vec![(1, vec![good])],
-            replicas: vec![1, 2],
-            directories: vec![good, good],
-            unavailable: vec![],
-            expected: PartitionAvailability {
-                leader_id: 1,
-                isr_nodes: vec![1, 2],
-                offline_replicas: vec![2],
-            },
-        },
-        AvailabilityCase {
-            name: "healthy partition is untouched",
-            registrations: vec![(1, vec![good]), (2, vec![good])],
-            replicas: vec![1, 2],
-            directories: vec![good, good],
-            unavailable: vec![],
-            expected: PartitionAvailability {
-                leader_id: 1,
-                isr_nodes: vec![1, 2],
-                offline_replicas: vec![],
-            },
-        },
+        replica_case(
+            "sole replica on a failed log dir",
+            vec![(1, vec![good])],
+            (vec![1], vec![bad]),
+            vec![],
+            availability(NO_LEADER_ID, vec![], vec![1]),
+        ),
+        replica_case(
+            "leader on a failed log dir, follower healthy",
+            vec![(1, vec![good]), (2, vec![good])],
+            (vec![1, 2], vec![bad, good]),
+            vec![],
+            availability(NO_LEADER_ID, vec![2], vec![1]),
+        ),
+        replica_case(
+            "sole replica on a directory nobody has assigned yet",
+            vec![(1, vec![good])],
+            (vec![1], vec![Uuid::nil()]),
+            vec![],
+            availability(1, vec![1], vec![]),
+        ),
+        replica_case(
+            "fenced follower keeps its ISR seat",
+            vec![(1, vec![good]), (2, vec![good])],
+            (vec![1, 2], vec![good, good]),
+            vec![2],
+            availability(1, vec![1, 2], vec![2]),
+        ),
+        replica_case(
+            "unregistered follower keeps its ISR seat",
+            vec![(1, vec![good])],
+            (vec![1, 2], vec![good, good]),
+            vec![],
+            availability(1, vec![1, 2], vec![2]),
+        ),
+        replica_case(
+            "healthy partition is untouched",
+            vec![(1, vec![good]), (2, vec![good])],
+            (vec![1, 2], vec![good, good]),
+            vec![],
+            availability(1, vec![1, 2], vec![]),
+        ),
     ];
 
-    for case in cases {
-        let img = image(&case.registrations, &case.replicas, &case.directories);
-        let record = img.partition("t", 0).expect("partition in image");
-        let unavailable: HashSet<u64> = case.unavailable.iter().copied().collect();
-
-        let actual = partition_availability(&img, record, &unavailable, LISTENER);
-
-        assert!(actual == case.expected, "case {}", case.name);
-    }
+    check_replica_cases(cases, partition_availability);
 }
 
 /// Kafka's `KRaftMetadataCache` finds a leader's endpoint with
@@ -303,29 +278,17 @@ fn a_broker_without_the_request_listener_is_offline_and_cannot_be_the_leader() {
         (
             "the leader lists the listener and the follower does not",
             vec![1, 2],
-            PartitionAvailability {
-                leader_id: 1,
-                isr_nodes: vec![1, 2],
-                offline_replicas: vec![2],
-            },
+            availability(1, vec![1, 2], vec![2]),
         ),
         (
             "the leader does not list the listener",
             vec![2, 1],
-            PartitionAvailability {
-                leader_id: NO_LEADER_ID,
-                isr_nodes: vec![2, 1],
-                offline_replicas: vec![2],
-            },
+            availability(NO_LEADER_ID, vec![2, 1], vec![2]),
         ),
         (
             "the leader has no registration",
             vec![3, 1],
-            PartitionAvailability {
-                leader_id: NO_LEADER_ID,
-                isr_nodes: vec![3, 1],
-                offline_replicas: vec![3],
-            },
+            availability(NO_LEADER_ID, vec![3, 1], vec![3]),
         ),
     ];
 
@@ -345,11 +308,7 @@ fn a_broker_without_the_request_listener_is_offline_and_cannot_be_the_leader() {
     let record = img.partition("t", 0).expect("partition in image");
     assert!(
         partition_availability(&img, record, &HashSet::new(), "EXTERNAL")
-            == PartitionAvailability {
-                leader_id: NO_LEADER_ID,
-                isr_nodes: vec![1, 2],
-                offline_replicas: vec![1],
-            }
+            == availability(NO_LEADER_ID, vec![1, 2], vec![1])
     );
 }
 
@@ -410,51 +369,31 @@ fn a_leaderless_partition_projects_no_leader_and_an_isr_without_its_last_leader(
             "sole replica, last-known ELR names it",
             vec![1],
             vec![1],
-            PartitionAvailability {
-                leader_id: NO_LEADER_ID,
-                isr_nodes: vec![],
-                offline_replicas: vec![],
-            },
+            availability(NO_LEADER_ID, vec![], vec![]),
         ),
         (
             "an ISR member other than the last leader stays",
             vec![1, 2],
             vec![1],
-            PartitionAvailability {
-                leader_id: NO_LEADER_ID,
-                isr_nodes: vec![2],
-                offline_replicas: vec![],
-            },
+            availability(NO_LEADER_ID, vec![2], vec![]),
         ),
         (
             "no last-known ELR",
             vec![1, 2],
             vec![],
-            PartitionAvailability {
-                leader_id: 1,
-                isr_nodes: vec![1, 2],
-                offline_replicas: vec![],
-            },
+            availability(1, vec![1, 2], vec![]),
         ),
         (
             "a last-known ELR that names another replica is no marker",
             vec![1, 2],
             vec![2],
-            PartitionAvailability {
-                leader_id: 1,
-                isr_nodes: vec![1, 2],
-                offline_replicas: vec![],
-            },
+            availability(1, vec![1, 2], vec![]),
         ),
         (
             "a multi-member last-known ELR is no marker",
             vec![1, 2],
             vec![1, 2],
-            PartitionAvailability {
-                leader_id: 1,
-                isr_nodes: vec![1, 2],
-                offline_replicas: vec![],
-            },
+            availability(1, vec![1, 2], vec![]),
         ),
     ];
     for (name, replicas, last_known, expected) in cases {
@@ -477,5 +416,17 @@ fn a_leaderless_partition_projects_no_leader_and_an_isr_without_its_last_leader(
             partition_availability(&img, record, &HashSet::new(), LISTENER) == expected,
             "case {name}"
         );
+    }
+}
+
+fn availability(
+    leader_id: i32,
+    isr_nodes: Vec<i32>,
+    offline_replicas: Vec<i32>,
+) -> PartitionAvailability {
+    PartitionAvailability {
+        leader_id,
+        isr_nodes,
+        offline_replicas,
     }
 }

@@ -5,14 +5,8 @@ use krabka_metadata::{
     MetadataImage, MetadataRecord, NodeId, PartitionElrRecord, PartitionRecord, TopicConfigRecord,
 };
 
-use super::{PartitionElr, TopicElr};
-
-fn elr(eligible: &[i32], last_known: &[i32]) -> PartitionElr {
-    PartitionElr {
-        eligible_leader_replicas: eligible.to_vec(),
-        last_known_elr: last_known.to_vec(),
-    }
-}
+use super::TopicElr;
+use crate::test_support::partition_elr as elr;
 
 /// The grammar, one row per shape the controller can publish, plus the
 /// malformed shapes that must degrade to "no ELR" rather than fail a request.

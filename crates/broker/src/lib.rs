@@ -159,6 +159,9 @@ pub mod audit_sink;
 pub mod authorizer;
 pub(crate) mod auto_join;
 pub(crate) mod auto_topic_creation;
+#[macro_use]
+mod wire_handler;
+
 pub(crate) mod barrier;
 // The barrier marker's read half is public: `krabka-barrier verify` and any
 // recovery tool has to read a marker back out of the log, and a second decoder

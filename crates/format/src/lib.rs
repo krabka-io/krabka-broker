@@ -84,11 +84,8 @@ pub struct Cli {
 ///
 /// Panics if `argv` does not parse, which for a caller passing a literal
 /// argument list is a bug in that list rather than a runtime condition.
-pub async fn run_from_args<I, T>(argv: I) -> i32
-where
-    I: IntoIterator<Item = T>,
-    T: Into<std::ffi::OsString> + Clone,
-{
+#[krabka_macros::argv_entrypoint]
+pub async fn run_from_args() -> i32 {
     run_from_args_with_records(argv, Vec::new()).await
 }
 
@@ -106,10 +103,7 @@ where
 ///
 /// Panics if `argv` does not parse, which for a caller passing a literal
 /// argument list is a bug in that list rather than a runtime condition.
-pub async fn run_from_args_with_records<I, T>(argv: I, extra: Vec<MetadataRecord>) -> i32
-where
-    I: IntoIterator<Item = T>,
-    T: Into<std::ffi::OsString> + Clone,
-{
+#[krabka_macros::argv_entrypoint]
+pub async fn run_from_args_with_records(extra: Vec<MetadataRecord>) -> i32 {
     run_with_records(Cli::parse_from(argv).args, extra).await
 }

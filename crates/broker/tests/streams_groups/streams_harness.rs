@@ -8,8 +8,6 @@
 //! heartbeat response, live here so each scenario module holds only its own
 //! assertions.
 
-use std::sync::Arc;
-
 use krabka_client_core::Client;
 use krabka_protocol::owned::{
     streams_group_describe_request::StreamsGroupDescribeRequest,
@@ -25,13 +23,7 @@ pub async fn boot() -> (krabka_broker::BrokerHandle, String, tempfile::TempDir) 
     crate::support::streams::boot(false).await
 }
 
-pub async fn connect(bootstrap: &str) -> Arc<Client> {
-    crate::support::client::connect(bootstrap, "c1").await
-}
-
-pub async fn create_topic(client: &Client, topic: &str, partitions: i32) {
-    crate::support::client::create_topic(client, topic, partitions).await;
-}
+pub use crate::support::client::{connect_c1 as connect, create_topic};
 
 /// Active-task partitions for a given subtopology id, sorted.
 pub fn active_partitions_for(resp: &StreamsGroupHeartbeatResponse, sub: &str) -> Vec<i32> {

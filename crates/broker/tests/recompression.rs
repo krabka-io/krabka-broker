@@ -16,31 +16,32 @@
 
 mod kafka_wire;
 
-use std::{
-    net::SocketAddr,
-    time::{Duration, Instant},
-};
+mod support;
+
+use std::net::SocketAddr;
 
 use assert2::{assert, check};
-use bytes::{Bytes, BytesMut};
+use bytes::Bytes;
 use krabka_broker::{Broker, BrokerConfig, BrokerHandle};
 use krabka_compression::CompressionType;
 use krabka_protocol::{
-    Decode, Encode,
     owned::{
-        create_topics_request::{CreatableTopic, CreatableTopicConfig, CreateTopicsRequest},
+        create_topics_request::{CreatableTopicConfig, CreateTopicsRequest},
         create_topics_response::CreateTopicsResponse,
-        fetch_request::{FetchPartition, FetchRequest, FetchTopic},
+        fetch_request::FetchRequest,
         fetch_response::FetchResponse,
-        metadata_request::{MetadataRequest, MetadataRequestTopic},
         metadata_response::MetadataResponse,
-        produce_request::{PartitionProduceData, ProduceRequest, TopicProduceData},
         produce_response::ProduceResponse,
     },
     primitives::uuid::Uuid,
-    records::{Attributes, Record, RecordBatch},
+    records::{Attributes, RecordBatch},
 };
-use tokio::net::TcpStream;
+
+use crate::support::{
+    fetch::{fetch_partition, single_partition_fetch},
+    produce::single_partition_produce,
+    records::{batch_from_records, value_record},
+};
 
 const CLIENT_ID: &str = "krabka-recompression-test";
 
@@ -55,29 +56,22 @@ async fn start_broker() -> (BrokerHandle, SocketAddr) {
 
 async fn create_topic_with_compression(addr: SocketAddr, topic: &str, codec: &str) {
     let req = CreateTopicsRequest {
-        topics: vec![CreatableTopic {
-            name: topic.into(),
-            num_partitions: 1,
-            replication_factor: 1,
-            configs: vec![CreatableTopicConfig {
+        topics: vec![crate::support::topics::creatable_topic_with_configs(
+            topic.into(),
+            1,
+            1,
+            vec![CreatableTopicConfig {
                 name: "compression.type".into(),
                 value: Some(codec.into()),
                 ..Default::default()
             }],
-            ..Default::default()
-        }],
+        )],
         timeout_ms: 5_000,
         ..Default::default()
     };
     let version: i16 = 7;
-    let mut body = BytesMut::new();
-    req.encode(&mut body, version).unwrap();
-    let mut stream = TcpStream::connect(addr).await.unwrap();
-    let resp = kafka_wire::round_trip(&mut stream, 19, version, 1, CLIENT_ID, true, &body)
-        .await
-        .unwrap();
-    let mut cur: &[u8] = &resp;
-    let r = CreateTopicsResponse::decode(&mut cur, version).unwrap();
+    let (_, r): (usize, CreateTopicsResponse) =
+        kafka_wire::request_once(addr, &req, (19, version), CLIENT_ID, (1, true)).await;
     assert!(
         r.topics[0].error_code == 0,
         "CreateTopics must succeed for compression.type={codec}: {:?}",
@@ -86,22 +80,10 @@ async fn create_topic_with_compression(addr: SocketAddr, topic: &str, codec: &st
 }
 
 async fn get_topic_id(addr: SocketAddr, topic: &str) -> Uuid {
-    let req = MetadataRequest {
-        topics: Some(vec![MetadataRequestTopic {
-            name: Some(topic.into()),
-            ..Default::default()
-        }]),
-        ..Default::default()
-    };
+    let req = crate::support::discovery::named_topic_metadata(topic);
     let version: i16 = 12;
-    let mut body = BytesMut::new();
-    req.encode(&mut body, version).unwrap();
-    let mut stream = TcpStream::connect(addr).await.unwrap();
-    let resp = kafka_wire::round_trip(&mut stream, 3, version, 1, CLIENT_ID, true, &body)
-        .await
-        .unwrap();
-    let mut cur: &[u8] = &resp;
-    let r = MetadataResponse::decode(&mut cur, version).unwrap();
+    let (_, r): (usize, MetadataResponse) =
+        kafka_wire::request_once(addr, &req, (3, version), CLIENT_ID, (1, true)).await;
     r.topics
         .iter()
         .find(|t| t.name.as_deref() == Some(topic))
@@ -112,37 +94,12 @@ async fn get_topic_id(addr: SocketAddr, topic: &str) -> Uuid {
 async fn produce_gzip(addr: SocketAddr, topic: &str, topic_id: Uuid, value: &[u8]) {
     let batch = RecordBatch {
         attributes: Attributes::default().with_compression(CompressionType::Gzip),
-        records: vec![Record {
-            offset_delta: 0,
-            value: Some(Bytes::copy_from_slice(value)),
-            ..Default::default()
-        }],
-        ..Default::default()
+        ..batch_from_records(vec![value_record(0, Some(Bytes::copy_from_slice(value)))])
     };
-    let req = ProduceRequest {
-        acks: -1,
-        timeout_ms: 5_000,
-        topic_data: vec![TopicProduceData {
-            name: topic.into(),
-            topic_id,
-            partition_data: vec![PartitionProduceData {
-                index: 0,
-                records: Some(batch.into()),
-                ..Default::default()
-            }],
-            ..Default::default()
-        }],
-        ..Default::default()
-    };
+    let req = single_partition_produce(topic, topic_id, 0, Some(batch.into()), (-1, 5_000));
     let version: i16 = 9;
-    let mut body = BytesMut::new();
-    req.encode(&mut body, version).unwrap();
-    let mut stream = TcpStream::connect(addr).await.unwrap();
-    let resp = kafka_wire::round_trip(&mut stream, 0, version, 1, CLIENT_ID, true, &body)
-        .await
-        .unwrap();
-    let mut cur: &[u8] = &resp;
-    let r = ProduceResponse::decode(&mut cur, version).unwrap();
+    let (_, r): (usize, ProduceResponse) =
+        kafka_wire::request_once(addr, &req, (0, version), CLIENT_ID, (1, true)).await;
     let part = &r.responses[0].partition_responses[0];
     assert!(part.error_code == 0, "Produce must succeed: {part:?}");
 }
@@ -150,31 +107,16 @@ async fn produce_gzip(addr: SocketAddr, topic: &str, topic_id: Uuid, value: &[u8
 async fn fetch_first_batch(addr: SocketAddr, topic: &str, topic_id: Uuid) -> RecordBatch {
     let req = FetchRequest {
         replica_id: -1,
-        max_wait_ms: 500,
-        min_bytes: 1,
-        max_bytes: 1 << 20,
-        topics: vec![FetchTopic {
-            topic: topic.into(),
+        ..single_partition_fetch(
+            topic,
             topic_id,
-            partitions: vec![FetchPartition {
-                partition: 0,
-                fetch_offset: 0,
-                partition_max_bytes: 1 << 20,
-                ..Default::default()
-            }],
-            ..Default::default()
-        }],
-        ..Default::default()
+            fetch_partition(0, 0, 1 << 20),
+            (500, 1, 1 << 20),
+        )
     };
     let version: i16 = 12;
-    let mut body = BytesMut::new();
-    req.encode(&mut body, version).unwrap();
-    let mut stream = TcpStream::connect(addr).await.unwrap();
-    let resp = kafka_wire::round_trip(&mut stream, 1, version, 1, CLIENT_ID, true, &body)
-        .await
-        .unwrap();
-    let mut cur: &[u8] = &resp;
-    let r = FetchResponse::decode(&mut cur, version).unwrap();
+    let (_, r): (usize, FetchResponse) =
+        kafka_wire::request_once(addr, &req, (1, version), CLIENT_ID, (1, true)).await;
     let part = &r.responses[0].partitions[0];
     assert!(part.error_code == 0, "Fetch error: {}", part.error_code);
     part.records
@@ -184,31 +126,7 @@ async fn fetch_first_batch(addr: SocketAddr, topic: &str, topic_id: Uuid) -> Rec
         .expect("Fetch returned at least one v2 batch")
 }
 
-async fn wait_for_compression(
-    handle: &BrokerHandle,
-    topic: &str,
-    expected: Option<CompressionType>,
-) {
-    let deadline = Instant::now() + Duration::from_secs(10);
-    loop {
-        if let Some(cfg) = handle.partition_log_config_for_test(topic, 0)
-            && cfg.compression_type == expected
-        {
-            return;
-        }
-        assert!(
-            Instant::now() <= deadline,
-            "compression_type={expected:?} never propagated to partition LogConfig within 10s"
-        );
-        // intentional: this polls the partition writer's applied LogConfig
-        // (partition_log_config_for_test), not the metadata image. No awaiter
-        // captures "the reconcile loop has pushed the compression override into
-        // the writer"; waiting on the image alone would fire strictly earlier
-        // and reintroduce the produce-before-override race this helper exists to
-        // prevent. The loop is bounded by the 10s deadline asserted above.
-        tokio::time::sleep(Duration::from_millis(100)).await;
-    }
-}
+use crate::support::partitions::wait_for_compression;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn topic_compression_lz4_recompresses_producer_gzip_batch() {

@@ -33,11 +33,9 @@ fn marker_at(
 #[tokio::test]
 async fn an_injection_marks_every_partition_and_publishes_a_complete_cut() {
     let fixture = Fixture::new();
-    let coordinator = fixture.coordinator().await;
-    coordinator
-        .create_group(GROUP, spec(&["orders", "payments"], None, 4))
-        .await
-        .expect("the group is created");
+    let coordinator = fixture
+        .coordinator_with_group(GROUP, spec(&["orders", "payments"], None, 4))
+        .await;
 
     let outcome = coordinator
         .trigger_injection(GROUP, None)
@@ -89,11 +87,9 @@ async fn an_injection_marks_every_partition_and_publishes_a_complete_cut() {
 #[tokio::test]
 async fn every_injection_takes_the_next_epoch() {
     let fixture = Fixture::new();
-    let coordinator = fixture.coordinator().await;
-    coordinator
-        .create_group(GROUP, spec(&["orders"], None, 4))
-        .await
-        .expect("the group is created");
+    let coordinator = fixture
+        .coordinator_with_group(GROUP, spec(&["orders"], None, 4))
+        .await;
 
     let mut epochs = Vec::new();
     for _ in 0..3 {
@@ -117,11 +113,9 @@ async fn every_injection_takes_the_next_epoch() {
 #[tokio::test]
 async fn an_exhausted_group_epoch_rejects_injection() {
     let fixture = Fixture::new();
-    let coordinator = fixture.coordinator().await;
-    coordinator
-        .create_group(GROUP, spec(&["orders"], None, 4))
-        .await
-        .expect("the group is created");
+    let coordinator = fixture
+        .coordinator_with_group(GROUP, spec(&["orders"], None, 4))
+        .await;
     let entry = coordinator
         .groups
         .get(GROUP)
@@ -140,11 +134,9 @@ async fn a_partition_that_carries_no_marker_makes_the_cut_partial() {
     // Only partition 0 of `orders` is open here, so partition 1 stays
     // unmarked until the deadline runs out.
     let fixture = Fixture::with_data_partitions(&[("orders", 1)]);
-    let coordinator = fixture.coordinator().await;
-    coordinator
-        .create_group(GROUP, spec(&["orders"], None, 4))
-        .await
-        .expect("the group is created");
+    let coordinator = fixture
+        .coordinator_with_group(GROUP, spec(&["orders"], None, 4))
+        .await;
 
     let outcome = coordinator
         .trigger_injection(GROUP, None)
@@ -171,11 +163,9 @@ async fn a_partition_that_carries_no_marker_makes_the_cut_partial() {
 #[tokio::test]
 async fn a_topic_set_edit_applies_from_the_next_epoch() {
     let fixture = Fixture::new();
-    let coordinator = fixture.coordinator().await;
-    coordinator
-        .create_group(GROUP, spec(&["orders"], None, 4))
-        .await
-        .expect("the group is created");
+    let coordinator = fixture
+        .coordinator_with_group(GROUP, spec(&["orders"], None, 4))
+        .await;
     let first = coordinator
         .trigger_injection(GROUP, None)
         .await
@@ -198,11 +188,9 @@ async fn a_topic_set_edit_applies_from_the_next_epoch() {
 #[tokio::test]
 async fn the_group_keeps_only_its_retained_cuts() {
     let fixture = Fixture::new();
-    let coordinator = fixture.coordinator().await;
-    coordinator
-        .create_group(GROUP, spec(&["orders"], None, 2))
-        .await
-        .expect("the group is created");
+    let coordinator = fixture
+        .coordinator_with_group(GROUP, spec(&["orders"], None, 2))
+        .await;
     for _ in 0..4 {
         coordinator
             .trigger_injection(GROUP, None)
@@ -234,11 +222,9 @@ async fn the_group_keeps_only_its_retained_cuts() {
 #[tokio::test]
 async fn a_smaller_retention_drops_every_cut_below_the_new_window() {
     let fixture = Fixture::new();
-    let coordinator = fixture.coordinator().await;
-    coordinator
-        .create_group(GROUP, spec(&["orders"], None, 8))
-        .await
-        .expect("the group is created");
+    let coordinator = fixture
+        .coordinator_with_group(GROUP, spec(&["orders"], None, 8))
+        .await;
     for _ in 0..4 {
         coordinator
             .trigger_injection(GROUP, None)
@@ -277,11 +263,9 @@ async fn a_smaller_retention_drops_every_cut_below_the_new_window() {
 #[tokio::test]
 async fn the_scheduler_injects_only_a_group_whose_interval_elapsed() {
     let fixture = Fixture::new();
-    let coordinator = fixture.coordinator().await;
-    coordinator
-        .create_group(GROUP, spec(&["orders"], Some(millis(1_000)), 4))
-        .await
-        .expect("the group is created");
+    let coordinator = fixture
+        .coordinator_with_group(GROUP, spec(&["orders"], Some(millis(1_000)), 4))
+        .await;
     coordinator
         .create_group("on-demand", spec(&["payments"], None, 4))
         .await
@@ -303,11 +287,9 @@ async fn the_scheduler_injects_only_a_group_whose_interval_elapsed() {
 #[tokio::test]
 async fn an_injection_holds_the_group_against_a_second_caller() {
     let fixture = Fixture::new();
-    let coordinator = fixture.coordinator().await;
-    coordinator
-        .create_group(GROUP, spec(&["orders"], None, 4))
-        .await
-        .expect("the group is created");
+    let coordinator = fixture
+        .coordinator_with_group(GROUP, spec(&["orders"], None, 4))
+        .await;
 
     let handle = coordinator
         .live_entry(GROUP)

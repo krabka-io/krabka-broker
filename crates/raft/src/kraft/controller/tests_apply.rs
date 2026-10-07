@@ -9,8 +9,8 @@ use crate::kraft::controller::{
     records::{decode_batches, metadata_record_batch},
     recovery::replay_committed,
     test_support::{
-        await_leader, build, build_engine_only, build_engine_only_with_policy, one_offset_batch,
-        topic_record, topic_record_named,
+        build_engine_only, build_engine_only_with_policy, one_offset_batch, topic_record,
+        topic_record_named,
     },
 };
 
@@ -136,9 +136,7 @@ fn metadata_fetch_slice_excludes_negative_hwm_and_uncommitted_batches() {
 
 #[tokio::test]
 async fn committed_batch_applies_to_image() {
-    let (ctrl, _dir) = build(NodeId(1), &[NodeId(1)]);
-    ctrl.inject_event(Event::ElectionTimeout).await.unwrap();
-    await_leader(&ctrl, Some(NodeId(1))).await;
+    let (ctrl, _dir) = super::test_support::single_voter_leader().await;
 
     assert2::assert!(ctrl.current_image().topic("t").is_none());
 
@@ -156,9 +154,7 @@ async fn committed_batch_applies_to_image() {
 
 #[tokio::test]
 async fn duplicate_committed_record_rejected_on_apply() {
-    let (ctrl, _dir) = build(NodeId(1), &[NodeId(1)]);
-    ctrl.inject_event(Event::ElectionTimeout).await.unwrap();
-    await_leader(&ctrl, Some(NodeId(1))).await;
+    let (ctrl, _dir) = super::test_support::single_voter_leader().await;
 
     ctrl.test_append_and_commit(topic_record("t"))
         .await

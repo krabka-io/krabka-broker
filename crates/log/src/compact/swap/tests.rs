@@ -8,7 +8,7 @@
 //! one, and the compacted one once the swap has committed.
 
 use std::{
-    collections::{BTreeMap, HashMap},
+    collections::HashMap,
     fs::File,
     path::{Path, PathBuf},
     sync::Mutex,
@@ -31,24 +31,8 @@ use crate::{
         deleted_orphan_recover,
         swap::{cleaned_path, recover_swaps},
     },
+    test_support::{Files, directory_files},
 };
-
-/// Every file of a directory, by name, with its contents.
-type Files = BTreeMap<String, Vec<u8>>;
-
-/// Every file in `dir`.
-fn listing(dir: &Path) -> Files {
-    std::fs::read_dir(dir)
-        .unwrap()
-        .map(|entry| {
-            let entry = entry.unwrap();
-            (
-                entry.file_name().into_string().unwrap(),
-                std::fs::read(entry.path()).unwrap(),
-            )
-        })
-        .collect()
-}
 
 /// A directory operation a crash may lose, with what undoing it restores.
 #[derive(Debug)]
@@ -265,7 +249,7 @@ const CONSUMED: [Offset; 2] = [Offset(0), Offset(10)];
 fn references(survivor_txnindex: bool) -> (Files, Files, Vec<String>) {
     let dir = tempfile::tempdir().unwrap();
     compactable(dir.path(), survivor_txnindex);
-    let before: Files = listing(dir.path())
+    let before: Files = directory_files(dir.path())
         .into_iter()
         .filter(|(file, _)| !file.ends_with(".cleaned"))
         .collect();
@@ -275,7 +259,7 @@ fn references(survivor_txnindex: bool) -> (Files, Files, Vec<String>) {
     let io = CrashingIo::new(usize::MAX);
     atomic_swap(&io, dir.path(), &CONSUMED, &rewrite).unwrap();
     reopen(dir.path()).unwrap();
-    (before, listing(dir.path()), io.ops())
+    (before, directory_files(dir.path()), io.ops())
 }
 
 #[test]
@@ -339,7 +323,7 @@ fn every_crash_point_recovers_to_the_old_or_the_new_segments() {
                 io.lose(lost);
                 reopen(dir.path()).unwrap();
 
-                let recovered = listing(dir.path());
+                let recovered = directory_files(dir.path());
                 let case = format!(
                     "txnindex {survivor_txnindex}, crash at {crash_at} ({op}), lost {lost:b}"
                 );
@@ -386,7 +370,7 @@ fn a_committed_swap_is_completed_even_when_its_base_segment_survives() {
 
     reopen(dir.path()).unwrap();
 
-    check!(listing(dir.path()) == after);
+    check!(directory_files(dir.path()) == after);
 }
 
 /// A failed unlink of a consumed segment fails the swap instead of being
@@ -412,5 +396,5 @@ fn a_failed_unlink_fails_the_swap_and_recovery_completes_it() {
     check!(let LogError::Io(_) = error);
 
     reopen(dir.path()).unwrap();
-    check!(listing(dir.path()) == after);
+    check!(directory_files(dir.path()) == after);
 }

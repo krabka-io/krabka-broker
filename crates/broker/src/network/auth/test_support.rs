@@ -38,3 +38,56 @@ pub(super) fn assert_failed_authenticate_response(
     };
     assert!(*resp == expected);
 }
+
+/// Existing OAuth session while an in-band reauthentication exchange is pending.
+pub(super) fn oauth_reauthenticating(name: &str, expires_at_ms: i64) -> super::ConnectionAuth {
+    super::ConnectionAuth::Reauthenticating {
+        previous: super::AuthenticatedSnapshot {
+            principal: krabka_security::Principal {
+                name: name.to_owned(),
+                auth_method: krabka_security::AuthMethod::SaslOAuthBearer,
+                groups: vec![],
+            },
+            mechanism: krabka_security::SaslMechanism::OAuthBearer,
+            expires_at_ms: Some(expires_at_ms),
+            authenticated_via_token: false,
+        },
+        exchange: super::state::SaslExchange::OAuthBearer,
+        pending_token_expiry_ms: None,
+    }
+}
+
+/// Construct a session without deriving its auth method from the mechanism.
+pub(super) fn authenticated(
+    name: &str,
+    auth_method: krabka_security::AuthMethod,
+    mechanism: krabka_security::SaslMechanism,
+    expires_at_ms: Option<i64>,
+    authenticated_via_token: bool,
+) -> super::ConnectionAuth {
+    super::ConnectionAuth::Authenticated {
+        principal: krabka_security::Principal {
+            name: name.to_owned(),
+            auth_method,
+            groups: vec![],
+        },
+        mechanism,
+        expires_at_ms,
+        authenticated_via_token,
+    }
+}
+
+/// The RFC 4616 bytes with an empty authorization identity.
+pub(crate) fn plain_request(
+    user: &str,
+    password: &str,
+) -> krabka_protocol::owned::sasl_authenticate_request::SaslAuthenticateRequest {
+    let mut bytes = vec![0_u8];
+    bytes.extend_from_slice(user.as_bytes());
+    bytes.push(0);
+    bytes.extend_from_slice(password.as_bytes());
+    krabka_protocol::owned::sasl_authenticate_request::SaslAuthenticateRequest {
+        auth_bytes: bytes::Bytes::from(bytes),
+        ..Default::default()
+    }
+}

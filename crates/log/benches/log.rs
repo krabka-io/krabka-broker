@@ -52,17 +52,50 @@ fn make_verbatim_from_batch(batch: &RecordBatch) -> VerbatimBatch {
 // Append benchmarks
 // ---------------------------------------------------------------------------
 
+fn open_log(config: LogConfig) -> (tempfile::TempDir, Log) {
+    let dir = tempdir().unwrap();
+    let log = Log::open(dir.path(), config).unwrap();
+    (dir, log)
+}
+
+fn populated_log(
+    config: LogConfig,
+    appends: usize,
+    records: i32,
+    payload: usize,
+) -> (tempfile::TempDir, Log) {
+    let (dir, mut log) = open_log(config);
+    for _ in 0..appends {
+        log.append(&mut make_batch(records, payload)).unwrap();
+    }
+    (dir, log)
+}
+
+fn verbatim_fixture(payload: usize) -> (tempfile::TempDir, Arc<Mutex<Log>>, VerbatimBatch) {
+    let (dir, log) = open_log(LogConfig::default());
+    let batch = make_verbatim_batch(1, payload);
+    (dir, Arc::new(Mutex::new(log)), batch)
+}
+
+#[cfg(unix)]
+fn file_fixture() -> (tempfile::TempDir, std::fs::File) {
+    let dir = tempdir().unwrap();
+    let file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create_new(true)
+        .open(dir.path().join("bench.log"))
+        .unwrap();
+    (dir, file)
+}
+
 fn async_verbatim_fixture() -> (
     tempfile::TempDir,
     Arc<Mutex<Log>>,
     VerbatimBatch,
     tokio::runtime::Runtime,
 ) {
-    let dir = tempdir().unwrap();
-    let log = Arc::new(Mutex::new(
-        Log::open(dir.path(), LogConfig::default()).unwrap(),
-    ));
-    let batch = make_verbatim_batch(1, 100 * 1024);
+    let (dir, log, batch) = verbatim_fixture(100 * 1024);
     let runtime = tokio::runtime::Runtime::new().unwrap();
     (dir, log, batch, runtime)
 }
@@ -77,8 +110,7 @@ fn bench_append_record_sizes(c: &mut Criterion) {
         (100, 1024),
         (500, 256),
     ] {
-        let dir = tempdir().unwrap();
-        let mut log = Log::open(dir.path(), LogConfig::default()).unwrap();
+        let (_dir, mut log) = open_log(LogConfig::default());
         group.bench_function(format!("{records}rec_{payload}B"), |b| {
             b.iter(|| {
                 let mut batch = make_batch(records, payload);
@@ -94,31 +126,25 @@ fn bench_append_large_message_paths(c: &mut Criterion) {
     let mut group = c.benchmark_group("log/append_large_message");
 
     group.bench_function("owned_1rec_100KiB", |b| {
-        let dir = tempdir().unwrap();
-        let mut log = Log::open(dir.path(), LogConfig::default()).unwrap();
+        let (_dir, mut log) = open_log(LogConfig::default());
         b.iter(|| {
             let mut batch = make_batch(1, 100 * 1024);
             log.append(&mut batch).unwrap();
         });
     });
 
-    group.bench_function("verbatim_1rec_100KiB", |b| {
-        let dir = tempdir().unwrap();
-        let mut log = Log::open(dir.path(), LogConfig::default()).unwrap();
-        let batch = make_verbatim_batch(1, 100 * 1024);
-        b.iter(|| {
-            log.append_verbatim(&batch).unwrap();
+    for (label, payload) in [
+        ("verbatim_1rec_100KiB", 100 * 1024),
+        ("verbatim_1rec_512KiB", 512 * 1024),
+    ] {
+        group.bench_function(label, |b| {
+            let (_dir, mut log) = open_log(LogConfig::default());
+            let batch = make_verbatim_batch(1, payload);
+            b.iter(|| {
+                log.append_verbatim(&batch).unwrap();
+            });
         });
-    });
-
-    group.bench_function("verbatim_1rec_512KiB", |b| {
-        let dir = tempdir().unwrap();
-        let mut log = Log::open(dir.path(), LogConfig::default()).unwrap();
-        let batch = make_verbatim_batch(1, 512 * 1024);
-        b.iter(|| {
-            log.append_verbatim(&batch).unwrap();
-        });
-    });
+    }
 
     group.finish();
 }
@@ -127,11 +153,7 @@ fn bench_append_handoff(c: &mut Criterion) {
     let mut group = c.benchmark_group("log/append_handoff");
 
     group.bench_function("direct_mutex_verbatim_1rec_100KiB", |b| {
-        let dir = tempdir().unwrap();
-        let log = Arc::new(Mutex::new(
-            Log::open(dir.path(), LogConfig::default()).unwrap(),
-        ));
-        let batch = make_verbatim_batch(1, 100 * 1024);
+        let (_dir, log, batch) = verbatim_fixture(100 * 1024);
         b.iter_custom(|iters| {
             let start = Instant::now();
             for _ in 0..iters {
@@ -199,13 +221,7 @@ fn bench_file_write_shapes(c: &mut Criterion) {
     let body = vec![0xCDu8; (100 * 1024) - header.len()];
 
     group.bench_function("seek_end_writev_100KiB", |b| {
-        let dir = tempdir().unwrap();
-        let file = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create_new(true)
-            .open(dir.path().join("bench.log"))
-            .unwrap();
+        let (_dir, file) = file_fixture();
         b.iter(|| {
             (&file).seek(SeekFrom::End(0)).unwrap();
             let mut bufs = [IoSlice::new(&header), IoSlice::new(&body)];
@@ -214,13 +230,7 @@ fn bench_file_write_shapes(c: &mut Criterion) {
     });
 
     group.bench_function("writev_at_current_cursor_100KiB", |b| {
-        let dir = tempdir().unwrap();
-        let file = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create_new(true)
-            .open(dir.path().join("bench.log"))
-            .unwrap();
+        let (_dir, file) = file_fixture();
         b.iter(|| {
             let mut bufs = [IoSlice::new(&header), IoSlice::new(&body)];
             write_all_vectored(&file, &mut bufs).unwrap();
@@ -228,13 +238,7 @@ fn bench_file_write_shapes(c: &mut Criterion) {
     });
 
     group.bench_function("write_all_at_twice_100KiB", |b| {
-        let dir = tempdir().unwrap();
-        let file = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create_new(true)
-            .open(dir.path().join("bench.log"))
-            .unwrap();
+        let (_dir, file) = file_fixture();
         let mut position = 0u64;
         b.iter(|| {
             file.write_all_at(&header, position).unwrap();
@@ -255,52 +259,29 @@ fn bench_file_write_shapes(_c: &mut Criterion) {}
 // ---------------------------------------------------------------------------
 
 fn bench_read(c: &mut Criterion) {
-    let dir = tempdir().unwrap();
-    let mut log = Log::open(dir.path(), LogConfig::default()).unwrap();
-    for _ in 0..200 {
-        let mut batch = make_batch(100, 256);
-        log.append(&mut batch).unwrap();
-    }
+    let (_dir, log) = populated_log(LogConfig::default(), 200, 100, 256);
     let end = log.log_end_offset();
 
     let mut group = c.benchmark_group("log/read");
 
-    group.bench_function("from_start_1MiB", |b| {
-        b.iter(|| {
-            let out = log.read(black_box(Offset(0)), mebibytes(1)).unwrap();
-            black_box(out);
+    for (label, offset, budget) in [
+        ("from_start_1MiB", Offset(0), mebibytes(1)),
+        ("from_start_unbounded", Offset(0), UNBOUNDED),
+        ("from_middle_1MiB", Offset(end.0 / 2), mebibytes(1)),
+        (
+            "from_end_minus_100_1MiB",
+            (end - 100).max(Offset(0)),
+            mebibytes(1),
+        ),
+        ("past_end_returns_empty", end, mebibytes(1)),
+    ] {
+        group.bench_function(label, |b| {
+            b.iter(|| {
+                let out = log.read(black_box(offset), budget).unwrap();
+                black_box(out);
+            });
         });
-    });
-
-    group.bench_function("from_start_unbounded", |b| {
-        b.iter(|| {
-            let out = log.read(black_box(Offset(0)), UNBOUNDED).unwrap();
-            black_box(out);
-        });
-    });
-
-    group.bench_function("from_middle_1MiB", |b| {
-        let mid = Offset(end.0 / 2);
-        b.iter(|| {
-            let out = log.read(black_box(mid), mebibytes(1)).unwrap();
-            black_box(out);
-        });
-    });
-
-    group.bench_function("from_end_minus_100_1MiB", |b| {
-        let near_end = (end - 100).max(Offset(0));
-        b.iter(|| {
-            let out = log.read(black_box(near_end), mebibytes(1)).unwrap();
-            black_box(out);
-        });
-    });
-
-    group.bench_function("past_end_returns_empty", |b| {
-        b.iter(|| {
-            let out = log.read(black_box(end), mebibytes(1)).unwrap();
-            black_box(out);
-        });
-    });
+    }
 
     group.finish();
 }
@@ -313,18 +294,16 @@ fn bench_open(c: &mut Criterion) {
     let mut group = c.benchmark_group("log/open");
 
     for &num_appends in &[50usize, 200, 500] {
-        let dir = tempdir().unwrap();
-        {
-            let config = LogConfig {
+        let (dir, log) = populated_log(
+            LogConfig {
                 segment_size: kibibytes(1),
                 ..LogConfig::default()
-            };
-            let mut log = Log::open(dir.path(), config).unwrap();
-            for _ in 0..num_appends {
-                let mut batch = make_batch(5, 64);
-                log.append(&mut batch).unwrap();
-            }
-        }
+            },
+            num_appends,
+            5,
+            64,
+        );
+        drop(log);
         group.bench_function(format!("{num_appends}_appends_validate_on_open"), |b| {
             b.iter(|| {
                 let log = Log::open(dir.path(), LogConfig::default()).unwrap();
@@ -356,12 +335,7 @@ fn bench_truncate(c: &mut Criterion) {
     group.bench_function("truncate_recent_offset", |b| {
         b.iter_with_setup(
             || {
-                let dir = tempdir().unwrap();
-                let mut log = Log::open(dir.path(), LogConfig::default()).unwrap();
-                for _ in 0..50 {
-                    let mut batch = make_batch(10, 64);
-                    log.append(&mut batch).unwrap();
-                }
+                let (dir, log) = populated_log(LogConfig::default(), 50, 10, 64);
                 let end = log.log_end_offset();
                 (dir, log, end)
             },
@@ -380,12 +354,7 @@ fn bench_truncate(c: &mut Criterion) {
 // ---------------------------------------------------------------------------
 
 fn bench_accessors(c: &mut Criterion) {
-    let dir = tempdir().unwrap();
-    let mut log = Log::open(dir.path(), LogConfig::default()).unwrap();
-    for _ in 0..100 {
-        let mut batch = make_batch(10, 64);
-        log.append(&mut batch).unwrap();
-    }
+    let (_dir, log) = populated_log(LogConfig::default(), 100, 10, 64);
 
     let mut group = c.benchmark_group("log/accessors");
     group.bench_function("log_end_offset", |b| {

@@ -3,7 +3,6 @@
 //! `start_offset`. It gates every partition on local leadership of that
 //! partition's `__share_group_state` partition.
 
-use futures_util::future::join_all;
 use krabka_log::Offset;
 use krabka_metadata::MetadataImage;
 use krabka_protocol::owned::{
@@ -13,37 +12,15 @@ use krabka_protocol::owned::{
     },
 };
 
-use crate::{
-    broker::Broker, codes, error::BrokerError, share_coordinator::coordinator::ShareCoordinator,
-};
+use crate::share_coordinator::coordinator::ShareCoordinator;
 
-/// Checks `ClusterAction` on the cluster, then serves the request.
-///
-/// Kafka's `KafkaApis` answers a denied principal with
-/// `InitializeShareGroupStateResponse.toGlobalErrorResponse`: `CLUSTER_AUTHORIZATION_FAILED` on
-/// every requested partition, and the share coordinator does not run.
-pub(crate) async fn handle(
-    broker: &Broker,
-    req: InitializeShareGroupStateRequest,
-    _version: i16,
-    ctx: &crate::handlers::RequestContext<'_>,
-) -> Result<InitializeShareGroupStateResponse, BrokerError> {
-    Ok(if super::cluster_action_denied(broker, ctx) {
-        super::cluster_authorization_failed!(
-            req,
-            InitializeShareGroupStateResponse,
-            InitializeStateResult,
-            PartitionResult
-        )
-    } else {
-        initialize_state(
-            &broker.share_coordinator,
-            &broker.controller.current_image(),
-            req,
-        )
-        .await
-    })
-}
+super::share_state_handler!(
+    InitializeShareGroupStateRequest,
+    InitializeShareGroupStateResponse,
+    InitializeStateResult,
+    PartitionResult,
+    initialize_state
+);
 
 /// Initializes every partition of `req`, as Kafka's
 /// `ShareCoordinatorService.initializeState` does.
@@ -57,44 +34,25 @@ async fn initialize_state(
     if req.group_id.is_empty() || req.topics.is_empty() {
         return InitializeShareGroupStateResponse::default();
     }
-    let group_id = req.group_id.as_str();
-
-    // Kafka's `ShareCoordinatorService` schedules one operation for each
-    // partition and answers when every one of them completes. Each operation
-    // waits until its records commit, so the partitions run together.
-    let results: Vec<InitializeStateResult> =
-        join_all(req.topics.into_iter().map(|topic| async move {
-            let topic_id = uuid::Uuid::from_bytes(topic.topic_id.0);
-            let partitions = join_all(topic.partitions.into_iter().map(|pd| async move {
-                let result = coordinator
-                    .initialize(
-                        image,
-                        group_id,
-                        topic_id,
-                        pd.partition,
-                        pd.state_epoch,
-                        Offset(pd.start_offset),
-                    )
-                    .await;
-                let (error_code, error_message) = match result {
-                    Ok(()) => (codes::NONE, None),
-                    Err(error) => (error.code(), Some(error.row_message("initialize"))),
-                };
-                PartitionResult {
-                    partition: pd.partition,
-                    error_code,
-                    error_message,
-                    ..Default::default()
-                }
-            }))
+    let results = super::state_results!(req, InitializeStateResult, |group_id, topic_id, pd| {
+        let result = coordinator
+            .initialize(
+                image,
+                group_id,
+                topic_id,
+                pd.partition,
+                pd.state_epoch,
+                Offset(pd.start_offset),
+            )
             .await;
-            InitializeStateResult {
-                topic_id: topic.topic_id,
-                partitions,
-                ..Default::default()
-            }
-        }))
-        .await;
+        let (error_code, error_message) = super::operation_result(result, "initialize");
+        PartitionResult {
+            partition: pd.partition,
+            error_code,
+            error_message,
+            ..Default::default()
+        }
+    });
 
     InitializeShareGroupStateResponse {
         results,
@@ -106,19 +64,21 @@ async fn initialize_state(
 mod tests {
     use assert2::check;
     use krabka_protocol::{
-        UnknownTaggedFields,
         owned::initialize_share_group_state_request::{InitializeStateData, PartitionData},
         primitives::uuid::Uuid as ProtoUuid,
     };
 
     use super::*;
-    use crate::share_coordinator::{
-        config::ShareCoordinatorConfig,
-        coordinator::{
-            ShareStateSummary,
-            test_support::{Logged, NOW_MS, image_with_topic, logged_records},
+    use crate::{
+        codes,
+        share_coordinator::{
+            config::ShareCoordinatorConfig,
+            coordinator::{
+                ShareStateSummary,
+                test_support::{Logged, NOW_MS, image_with_topic, logged_records, logged_since},
+            },
+            persistence::ShareSnapshotValue,
         },
-        persistence::ShareSnapshotValue,
     };
 
     const TOPIC: uuid::Uuid = uuid::Uuid::from_bytes([32; 16]);
@@ -147,26 +107,7 @@ mod tests {
         }
     }
 
-    fn response(
-        topic_id: uuid::Uuid,
-        partition: i32,
-        error_code: i16,
-        message: Option<&str>,
-    ) -> InitializeShareGroupStateResponse {
-        InitializeShareGroupStateResponse {
-            results: vec![InitializeStateResult {
-                topic_id: ProtoUuid(*topic_id.as_bytes()),
-                partitions: vec![PartitionResult {
-                    partition,
-                    error_code,
-                    error_message: message.map(str::to_owned),
-                    unknown_tagged_fields: UnknownTaggedFields(vec![]),
-                }],
-                unknown_tagged_fields: UnknownTaggedFields(vec![]),
-            }],
-            unknown_tagged_fields: UnknownTaggedFields(vec![]),
-        }
-    }
+    super::super::test_support::response_fixture!(InitializeShareGroupStateResponse, InitializeStateResult, PartitionResult; keyed);
 
     fn snapshot(
         snapshot_epoch: i32,
@@ -371,11 +312,7 @@ mod tests {
 
             let resp = initialize_state(&coordinator, &image, row.request).await;
             check!(resp == row.response, "{}, trunk {trunk}", row.name);
-            let appended: Vec<Logged> = logged_records(&coordinator, state_partition)
-                .into_iter()
-                .skip(before)
-                .map(|(_, logged)| logged)
-                .collect();
+            let appended = logged_since(&coordinator, state_partition, before);
             check!(appended == row.appended, "{}, trunk {trunk}", row.name);
             let summary = coordinator
                 .read_summary(&key_group, topic_id, partition)

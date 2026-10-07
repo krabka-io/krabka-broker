@@ -3,14 +3,11 @@ use creusot_std::prelude::*;
 
 use super::{FetchContent, FetchFence, FetchResponseFacts, FetchResponseMutation};
 
+open_logic! {
 /// The response is a successful answer from the leader this node already
 /// follows, in this node's epoch: only such a response may change the log or
 /// the HWM (`KafkaRaftClient.handleFetchResponse` applies content only for
 /// `Errors.NONE` from the followed leader).
-// cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
-#[cfg(creusot)]
-#[cfg_attr(test, mutants::skip)]
-#[logic(open)]
 pub fn leader_fence_holds(fence: FetchFence, response: FetchResponseFacts) -> bool {
     pearlite! {
         fence.role_leader == Some(response.from)
@@ -20,16 +17,14 @@ pub fn leader_fence_holds(fence: FetchFence, response: FetchResponseFacts) -> bo
             && response.error_none
     }
 }
+}
 
+open_logic! {
 /// Kafka's `maybeHandleCommonResponse` discovery case: a response in this
 /// node's epoch names a leader while the node knows none. It applies whatever
 /// the error is, since a follower that knows the leader answers
 /// `NOT_LEADER_OR_FOLLOWER` naming it. A newer epoch is the host's
 /// `BeginQuorumEpoch` path and never reaches this kernel.
-// cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
-#[cfg(creusot)]
-#[cfg_attr(test, mutants::skip)]
-#[logic(open)]
 pub fn discovery_applies(fence: FetchFence, response: FetchResponseFacts) -> bool {
     pearlite! {
         fence.discovering
@@ -38,6 +33,7 @@ pub fn discovery_applies(fence: FetchFence, response: FetchResponseFacts) -> boo
             && response.epoch == fence.current_epoch
             && response.leader != None
     }
+}
 }
 
 /// Fence a Fetch response against the live role, leader, and epoch, then
@@ -135,8 +131,7 @@ pub const fn frontier_reaches(frontier: i64, target: i64) -> bool {
 
 /// Return the length of the strictly ordered control-record prefix below a
 /// half-open frontier.
-#[cfg_attr(creusot, requires(forall<i: Int, j: Int>
-    0 <= i && i < j && j < offsets@.len() ==> offsets@[i]@ < offsets@[j]@))]
+#[cfg_attr(creusot, requires(crate::sequence::strictly_increasing(offsets@)))]
 #[cfg_attr(creusot, ensures(result@ <= offsets@.len()))]
 #[cfg_attr(creusot, ensures(forall<i: Int>
     0 <= i && i < result@ ==> offsets@[i]@ < frontier@))]

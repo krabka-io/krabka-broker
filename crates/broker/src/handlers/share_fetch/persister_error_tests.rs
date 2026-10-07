@@ -9,11 +9,9 @@
 //! error that `SharePartition.fetchPersisterError` maps. A fenced state epoch
 //! maps to `NOT_LEADER_OR_FOLLOWER` and drops the partition from the cache.
 
-use std::sync::Arc;
-
 use assert2::assert;
 use krabka_log::Offset;
-use krabka_metadata::{LeaderEpoch, MetadataRecord, NodeId, PartitionRecord, TopicRecord};
+use krabka_metadata::{MetadataRecord, NodeId, TopicRecord};
 use krabka_protocol::{
     owned::{
         share_fetch_request::{
@@ -25,12 +23,7 @@ use krabka_protocol::{
     primitives::uuid::Uuid as WireUuid,
 };
 
-use crate::{
-    authorizer::AllowAllAuthorizer,
-    broker::BrokerHandle,
-    codes,
-    test_support::{initialize_share_state, start_broker_no_audit_with},
-};
+use crate::{broker::BrokerHandle, codes, test_support::initialize_share_state};
 
 /// The acknowledge type `Accept`.
 const ACCEPT: i8 = 1;
@@ -43,9 +36,7 @@ enum Api {
     ShareFetch,
 }
 
-async fn start() -> (BrokerHandle, tempfile::TempDir) {
-    start_broker_no_audit_with(|cfg| cfg.authorizer = Arc::new(AllowAllAuthorizer)).await
-}
+use crate::handlers::test_support::start_allow_all_no_audit as start;
 
 async fn create_topic(broker: &BrokerHandle, name: &str) -> WireUuid {
     crate::handlers::test_support::create_topic(broker, "share-persister-error-test", name, 1).await
@@ -126,12 +117,7 @@ async fn share_acknowledge(
     response.responses[0].partitions[0].error_code
 }
 
-fn acquired(row: &PartitionData) -> Vec<(i64, i64)> {
-    row.acquired_records
-        .iter()
-        .map(|range| (range.first_offset, range.last_offset))
-        .collect()
-}
+use crate::handlers::test_support::acquired_share_records as acquired;
 
 fn topic_uuid(topic_id: WireUuid) -> uuid::Uuid {
     uuid::Uuid::from_bytes(topic_id.0)
@@ -263,18 +249,11 @@ async fn state_topic_led_by_an_unknown_broker(broker: &BrokerHandle) {
         replication_factor: 1,
     })];
     records.extend((0..partitions).map(|partition| {
-        MetadataRecord::V1Partition(PartitionRecord {
-            topic: crate::share_coordinator::bootstrap::TOPIC.to_string(),
+        MetadataRecord::V1Partition(crate::handlers::test_support::single_replica_partition(
+            crate::share_coordinator::bootstrap::TOPIC,
             partition,
-            leader: NodeId(99),
-            replicas: vec![NodeId(99)],
-            isr: vec![NodeId(99)],
-            leader_epoch: LeaderEpoch(0),
-            adding_replicas: vec![],
-            removing_replicas: vec![],
-            directories: vec![],
-            partition_epoch: 0,
-        })
+            NodeId(99),
+        ))
     }));
     shared
         .controller

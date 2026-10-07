@@ -34,3 +34,28 @@ mod support;
 mod transactional_eos;
 #[path = "jvm_acceptance_durability/transactional_tv2.rs"]
 mod transactional_tv2;
+
+/// Create the fully replicated workload topic before exercising failures or disk bytes.
+async fn prepare_replication_topic(
+    broker: &krabka_broker::BrokerHandle,
+    topic: &str,
+    client_ports: &[u16; 3],
+) -> (String, String) {
+    let bootstrap = support::jvm_bootstrap_servers(&client_ports[..1]);
+    let all = support::jvm_bootstrap_servers(client_ports);
+    jvm_acceptance::docker_run_kafka_tool(&[
+        "kafka-topics",
+        "--create",
+        "--if-not-exists",
+        "--topic",
+        topic,
+        "--partitions",
+        "1",
+        "--replication-factor",
+        "3",
+        "--bootstrap-server",
+        &bootstrap,
+    ]);
+    broker.wait_until_isr_len(topic, 0, 3).await;
+    (bootstrap, all)
+}

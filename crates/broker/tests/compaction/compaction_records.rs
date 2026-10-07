@@ -10,15 +10,15 @@ use std::net::SocketAddr;
 
 use assert2::assert;
 use krabka_protocol::{
-    owned::{
-        fetch_request::{FetchPartition, FetchRequest, FetchTopic},
-        fetch_response::FetchResponse,
-    },
+    owned::{fetch_request::FetchRequest, fetch_response::FetchResponse},
     primitives::uuid::Uuid,
 };
 use tokio::net::TcpStream;
 
-use crate::{CLIENT_ID, kafka_wire};
+use crate::{
+    CLIENT_ID, kafka_wire,
+    support::fetch::{fetch_partition, single_partition_fetch},
+};
 
 /// A flattened record: key and value as plain byte vecs.
 #[derive(Debug)]
@@ -43,21 +43,12 @@ pub(crate) async fn fetch_all(addr: SocketAddr, topic: &str, topic_id: Uuid) -> 
     loop {
         let req = FetchRequest {
             replica_id: -1,
-            max_wait_ms: 100,
-            min_bytes: 1,
-            max_bytes: 1 << 22,
-            topics: vec![FetchTopic {
-                topic: topic.to_string(),
+            ..single_partition_fetch(
+                topic.to_string(),
                 topic_id,
-                partitions: vec![FetchPartition {
-                    partition: 0,
-                    fetch_offset: next_offset,
-                    partition_max_bytes: 1 << 22,
-                    ..Default::default()
-                }],
-                ..Default::default()
-            }],
-            ..Default::default()
+                fetch_partition(0, next_offset, 1 << 22),
+                (100, 1, 1 << 22),
+            )
         };
         let mut stream = TcpStream::connect(addr).await.expect("connect");
         let resp: FetchResponse =

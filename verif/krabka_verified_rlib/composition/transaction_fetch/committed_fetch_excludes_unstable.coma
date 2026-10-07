@@ -1,28 +1,30 @@
-(* #"/workspace/crates/verified/src/composition/transaction_fetch.rs" 36 0 39 50 *)
+(* #"/workspace/crates/verified/src/composition/transaction_fetch.rs" 30 0 33 50 *)
 
-let%span sord = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
-let%span sord'0 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
-let%span sfetch = "/workspace/crates/verified/src/broker/fetch.rs" 177 10 177 63
-let%span sfetch'0 = "/workspace/crates/verified/src/broker/fetch.rs" 178 10 179 97
-let%span sfetch'1 = "/workspace/crates/verified/src/broker/fetch.rs" 180 10 180 83
-let%span sfetch'2 = "/workspace/crates/verified/src/broker/fetch.rs" 181 10 183 58
-let%span sfetch'3 = "/workspace/crates/verified/src/broker/fetch.rs" 184 10 184 74
-let%span sfetch'4 = "/workspace/crates/verified/src/broker/fetch.rs" 185 10 189 1
-let%span sfetch'5 = "/workspace/crates/verified/src/broker/fetch.rs" 190 10 190 36
-let%span sfetch'6 = "/workspace/crates/verified/src/broker/fetch.rs" 191 10 191 59
-let%span sfetch'7 = "/workspace/crates/verified/src/broker/fetch.rs" 127 16 127 42
-let%span sfetch'8 = "/workspace/crates/verified/src/broker/fetch.rs" 142 8 148 9
-let%span sops = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/ops.rs" 688 18 691 9
-let%span sops'0 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/ops.rs" 702 25 702 33
-let%span sops'1 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/ops.rs" 701 18 701 32
-let%span snext_producer_identity = "/workspace/crates/verified/src/transaction/next_producer_identity.rs" 10 10 18 1
-let%span stransaction_fetch = "/workspace/crates/verified/src/composition/transaction_fetch.rs" 40 14 40 54
-let%span stransaction_fetch'0 = "/workspace/crates/verified/src/composition/transaction_fetch.rs" 40 14 40 55
-let%span stransaction_fetch'1 = "/workspace/crates/verified/src/composition/transaction_fetch.rs" 41 38 41 43
-let%span stransaction_fetch'2 = "/workspace/crates/verified/src/composition/transaction_fetch.rs" 41 45 41 49
-let%span stransaction_fetch'3 = "/workspace/crates/verified/src/composition/transaction_fetch.rs" 41 21 41 93
-let%span stransaction_fetch'4 = "/workspace/crates/verified/src/composition/transaction_fetch.rs" 12 10 28 1
-let%span stransaction_fetch'5 = "/workspace/crates/verified/src/composition/transaction_fetch.rs" 29 10 35 1
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sfetch = "/workspace/crates/verified/src/broker/fetch.rs" 169 10 169 63
+let%span sfetch'0 = "/workspace/crates/verified/src/broker/fetch.rs" 170 10 171 97
+let%span sfetch'1 = "/workspace/crates/verified/src/broker/fetch.rs" 172 10 172 83
+let%span sfetch'2 = "/workspace/crates/verified/src/broker/fetch.rs" 173 10 175 58
+let%span sfetch'3 = "/workspace/crates/verified/src/broker/fetch.rs" 176 10 176 74
+let%span sfetch'4 = "/workspace/crates/verified/src/broker/fetch.rs" 177 10 181 1
+let%span sfetch'5 = "/workspace/crates/verified/src/broker/fetch.rs" 182 10 182 36
+let%span sfetch'6 = "/workspace/crates/verified/src/broker/fetch.rs" 183 10 183 59
+let%span sfetch'7 = "/workspace/crates/verified/src/broker/fetch.rs" 120 16 120 42
+let%span sfetch'8 = "/workspace/crates/verified/src/broker/fetch.rs" 133 8 139 9
+let%span sops = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/ops.rs" 688 18 691 9
+let%span sops'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/ops.rs" 702 25 702 33
+let%span sops'1 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/ops.rs" 701 18 701 32
+let%span snext_producer_identity = "/workspace/crates/verified/src/transaction/next_producer_identity.rs" 12 10 15 1
+let%span stransaction = "/workspace/crates/verified/src/transaction.rs" 9 8 14 86
+let%span stransaction'0 = "/workspace/crates/verified/src/transaction.rs" 252 16 253 85
+let%span stransaction_fetch = "/workspace/crates/verified/src/composition/transaction_fetch.rs" 34 14 34 54
+let%span stransaction_fetch'0 = "/workspace/crates/verified/src/composition/transaction_fetch.rs" 34 14 34 55
+let%span stransaction_fetch'1 = "/workspace/crates/verified/src/composition/transaction_fetch.rs" 35 38 35 43
+let%span stransaction_fetch'2 = "/workspace/crates/verified/src/composition/transaction_fetch.rs" 35 45 35 49
+let%span stransaction_fetch'3 = "/workspace/crates/verified/src/composition/transaction_fetch.rs" 35 21 35 93
+let%span stransaction_fetch'4 = "/workspace/crates/verified/src/composition/transaction_fetch.rs" 14 10 25 1
+let%span stransaction_fetch'5 = "/workspace/crates/verified/src/composition/transaction_fetch.rs" 26 10 29 1
 
 use creusot.slice.Slice64
 use creusot.int.Int64
@@ -39,19 +41,18 @@ predicate gt_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other
 
 meta "rewrite_def" predicate gt_log_Int
 
+predicate first_unstable_frontier [#"/workspace/crates/verified/src/transaction.rs" 7 0 7 87] (starts: Seq.seq Int64.t) (log_end'0: int) (lso'0: int) =
+  [%#stransaction] lso'0 <= log_end'0
+  /\ (forall i: int. 0 <= i /\ i < Seq.length starts -> Int64.to_int (Seq.get starts i) <= log_end'0)
+  /\ (Seq.length starts = 0 /\ lso'0 = log_end'0
+  \/ gt_log_Int (Seq.length starts) 0
+  /\ (exists i: int. 0 <= i /\ i < Seq.length starts /\ lso'0 = Int64.to_int (Seq.get starts i))
+  /\ (forall i: int. 0 <= i /\ i < Seq.length starts -> lso'0 <= Int64.to_int (Seq.get starts i)))
+
 let first_unstable_offset (starts: Slice64.slice Int64.t) (log_end'0: Int64.t) (return (x: t_Option_i64)) = any
   [ return (result: t_Option_i64) ->
   {[@stop_split] [@expl:first_unstable_offset ensures] [%#snext_producer_identity] match result with
-      | Some lso'0 -> Int64.to_int lso'0 <= Int64.to_int log_end'0
-      /\ (forall i: int. 0 <= i /\ i < Seq.length (Slice64.view starts)
-          -> Int64.to_int (Seq.get (Slice64.view starts) i) <= Int64.to_int log_end'0)
-      /\ (Seq.length (Slice64.view starts) = 0 /\ Int64.to_int lso'0 = Int64.to_int log_end'0
-      \/ gt_log_Int (Seq.length (Slice64.view starts)) 0
-      /\ (exists i: int. 0 <= i
-          /\ i < Seq.length (Slice64.view starts)
-          /\ Int64.to_int lso'0 = Int64.to_int (Seq.get (Slice64.view starts) i))
-      /\ (forall i: int. 0 <= i /\ i < Seq.length (Slice64.view starts)
-        -> Int64.to_int lso'0 <= Int64.to_int (Seq.get (Slice64.view starts) i)))
+      | Some lso'0 -> first_unstable_frontier (Slice64.view starts) (Int64.to_int log_end'0) (Int64.to_int lso'0)
       | None -> exists i: int. 0 <= i
         /\ i < Seq.length (Slice64.view starts)
         /\ gt_log_Int (Int64.to_int (Seq.get (Slice64.view starts) i)) (Int64.to_int log_end'0)
@@ -133,10 +134,10 @@ predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord'0] oth
 
 meta "rewrite_def" predicate ge_log_Int
 
-function offset_min [#"/workspace/crates/verified/src/broker/fetch.rs" 126 0 126 40] (a: int) (b: int) : int =
+function offset_min [#"/workspace/crates/verified/src/broker/fetch.rs" 119 0 119 40] (a: int) (b: int) : int =
   [%#sfetch'7] if a <= b then a else b
 
-function fetch_limit_model [#"/workspace/crates/verified/src/broker/fetch.rs" 140 0 140 92] (is_follower: bool) (read_committed: bool) (w: t_FetchWatermarks) : int
+function fetch_limit_model [#"/workspace/crates/verified/src/broker/fetch.rs" 131 0 131 92] (is_follower: bool) (read_committed: bool) (w: t_FetchWatermarks) : int
  = [%#sfetch'8] if is_follower then
     Int64.to_int w.log_end
   else
@@ -178,11 +179,17 @@ let fetch_visibility (is_follower: bool) (read_committed: bool) (w: t_FetchWater
     = offset_min (Int64.to_int w.lso) (Int64.to_int w.hw))}
     (! return {result}) ]
 
+predicate unstable_fetch_limit_maximal [#"/workspace/crates/verified/src/transaction.rs" 245 0 251 9] (starts: Seq.seq Int64.t) (log_end'0: int) (high_watermark: int) (deliverable'0: int) (limit: int) =
+  [%#stransaction'0] forall v: int. v <= log_end'0
+      /\ v <= high_watermark
+      /\ v <= deliverable'0 /\ (forall i: int. 0 <= i /\ i < Seq.length starts -> v <= Int64.to_int (Seq.get starts i))
+    -> v <= limit
+
 meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let committed_fetch_excludes_unstable [#"/workspace/crates/verified/src/composition/transaction_fetch.rs" 36 0 39 50]
+let committed_fetch_excludes_unstable [#"/workspace/crates/verified/src/composition/transaction_fetch.rs" 30 0 33 50]
   (starts: Slice64.slice Int64.t) (w: t_FetchWatermarks) (return (x: t_Option_tup2_i64_FetchVisibility)) = (! bb0
   [ bb0 = s0
     [ s0 = first_unstable_offset [%#stransaction_fetch] {starts} {w.log_end}
@@ -225,16 +232,7 @@ let committed_fetch_excludes_unstable [#"/workspace/crates/verified/src/composit
         | None'1 -> exists i: int. 0 <= i
           /\ i < Seq.length (Slice64.view starts)
           /\ gt_log_Int (Int64.to_int (Seq.get (Slice64.view starts) i)) (Int64.to_int w.log_end)
-        | Some'1 {f0 = lso'0; f1 = visibility} -> Int64.to_int lso'0 <= Int64.to_int w.log_end
-        /\ (forall i: int. 0 <= i /\ i < Seq.length (Slice64.view starts)
-            -> Int64.to_int (Seq.get (Slice64.view starts) i) <= Int64.to_int w.log_end)
-        /\ (Seq.length (Slice64.view starts) = 0 /\ Int64.to_int lso'0 = Int64.to_int w.log_end
-          \/ gt_log_Int (Seq.length (Slice64.view starts)) 0
-          /\ (exists i: int. 0 <= i
-              /\ i < Seq.length (Slice64.view starts)
-              /\ Int64.to_int lso'0 = Int64.to_int (Seq.get (Slice64.view starts) i))
-          /\ (forall i: int. 0 <= i /\ i < Seq.length (Slice64.view starts)
-            -> Int64.to_int lso'0 <= Int64.to_int (Seq.get (Slice64.view starts) i)))
+        | Some'1 {f0 = lso'0; f1 = visibility} -> first_unstable_frontier (Slice64.view starts) (Int64.to_int w.log_end) (Int64.to_int lso'0)
         /\ Int64.to_int visibility.limit_offset
           = MinMax.min (MinMax.min (Int64.to_int lso'0) (Int64.to_int w.hw)) (Int64.to_int w.deliverable)
         /\ Int64.to_int visibility.effective_lso = MinMax.min (Int64.to_int lso'0) (Int64.to_int w.hw)
@@ -249,10 +247,6 @@ let committed_fetch_excludes_unstable [#"/workspace/crates/verified/src/composit
         end)
     /\ ([@stop_split] [@expl:committed_fetch_excludes_unstable ensures #1] [%#stransaction_fetch'5] match result with
       | None'1 -> true
-      | Some'1 {f1 = visibility} -> forall v: int. v <= Int64.to_int w.log_end
-          /\ v <= Int64.to_int w.hw
-          /\ v <= Int64.to_int w.deliverable
-          /\ (forall i: int. 0 <= i /\ i < Seq.length (Slice64.view starts)
-            -> v <= Int64.to_int (Seq.get (Slice64.view starts) i)) -> v <= Int64.to_int visibility.limit_offset
+      | Some'1 {f1 = visibility} -> unstable_fetch_limit_maximal (Slice64.view starts) (Int64.to_int w.log_end) (Int64.to_int w.hw) (Int64.to_int w.deliverable) (Int64.to_int visibility.limit_offset)
       end)}
     (! return {result}) ]

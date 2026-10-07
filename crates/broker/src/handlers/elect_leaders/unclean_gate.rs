@@ -6,55 +6,28 @@
 //! metadata image. A cluster whose `[break_glass]` section names no approver
 //! gates nothing, and a preferred election never reaches this module at all.
 
-use krabka_audit::PrivilegedPhase;
-use krabka_metadata::{BreakGlassAction, MetadataImage, MetadataRecord};
+use krabka_metadata::BreakGlassAction;
 use krabka_protocol::owned::elect_leaders_response::PartitionResult;
 
 use super::env::ElectionEnv;
 pub(super) use crate::break_glass::gate::consumed_proposal_id;
-use crate::{
-    break_glass::{
-        gate::{self, BreakGlassDenial},
-        handlers::audit::{GatedTransition, audit_transition},
-        metrics as break_glass_metrics,
-    },
-    codes,
-    config::BreakGlassConfig,
-    time_util::now_ms,
-};
+use crate::{break_glass::gate::BreakGlassDenial, codes};
 
+crate::handlers::partition_transition::authorizer! {
 /// KFC-9: find the approved proposal that authorizes an unclean election of one
 /// partition, and stamp it consumed.
 ///
 /// `Ok(None)` is a broker that gates nothing, where `[break_glass]` names no
 /// approver. Every transition then behaves as it does on a cluster with no such
 /// section, which is what keeps a stock cluster working.
-pub(super) fn authorize_unclean(
-    image: &MetadataImage,
-    config: &BreakGlassConfig,
-    topic: &str,
-    partition: i32,
-) -> Result<Option<MetadataRecord>, BreakGlassDenial> {
-    if !gate::is_gated(config) {
-        return Ok(None);
-    }
-    gate::authorize(
-        image,
-        config,
-        BreakGlassAction::UncleanElectLeaders,
-        &unclean_target(topic, partition),
-        now_ms(),
-    )
-    .map(Some)
+pub(super) fn authorize_unclean = UncleanElectLeaders;
 }
 
 /// The break-glass target of one partition.
 ///
 /// A proposal on the bare topic name covers every partition of it, which
 /// `gate::authorize` resolves from this spelling.
-pub(super) fn unclean_target(topic: &str, partition: i32) -> String {
-    format!("{topic}-{partition}")
-}
+pub(super) use crate::handlers::partition_transition::partition_target as unclean_target;
 
 /// Refuse one partition: count it, audit it, and build its error row.
 pub(super) fn refuse_unclean(
@@ -64,18 +37,13 @@ pub(super) fn refuse_unclean(
     denial: &BreakGlassDenial,
 ) -> PartitionResult {
     let message = denial.to_string();
-    break_glass_metrics::record_refusal(&env.broker.metrics, denial.action);
-    audit_transition(
-        &env.broker.audit_log,
-        &env.broker.config.break_glass,
+    crate::handlers::partition_transition::audit_refusal(
+        env.broker,
         env.ctx,
-        &GatedTransition {
-            action: BreakGlassAction::UncleanElectLeaders,
-            target: &unclean_target(topic, partition),
-            phase: PrivilegedPhase::Refused,
-            proposal_id: denial.proposal_id(),
-            reason: &message,
-        },
+        BreakGlassAction::UncleanElectLeaders,
+        || unclean_target(topic, partition),
+        denial,
+        &message,
     );
     PartitionResult {
         partition_id: partition,

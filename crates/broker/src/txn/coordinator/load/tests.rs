@@ -5,12 +5,9 @@ use std::{path::Path, sync::Arc};
 
 use assert2::{assert, check};
 use krabka_ids::PartitionIndex;
-use krabka_log::{Log, LogConfig, ProducerId};
-use krabka_metadata::{
-    LeaderEpoch, MetadataImage, MetadataRecord, NodeId, PartitionRecord, TopicRecord,
-};
+use krabka_log::ProducerId;
+use krabka_metadata::{MetadataImage, NodeId};
 use tempfile::TempDir;
-use uuid::Uuid;
 
 use super::*;
 use crate::{
@@ -25,37 +22,11 @@ const TID: &str = "tid-moved";
 const P0: PartitionIndex = PartitionIndex(0);
 
 fn image(leader: NodeId, leader_epoch: i32) -> MetadataImage {
-    let mut image = MetadataImage::new(Uuid::nil());
-    image.apply(&MetadataRecord::V1Topic(TopicRecord {
-        name: bootstrap::TOPIC.to_owned(),
-        topic_id: Uuid::from_u128(1),
-        partitions: 1,
-        replication_factor: 2,
-    }));
-    image.apply(&MetadataRecord::V1Partition(PartitionRecord {
-        topic: bootstrap::TOPIC.to_owned(),
-        partition: 0,
-        leader,
-        replicas: vec![NodeId(1), NodeId(2)],
-        isr: vec![NodeId(1), NodeId(2)],
-        leader_epoch: LeaderEpoch(leader_epoch),
-        ..Default::default()
-    }));
-    image
+    super::super::test_support::state_image(leader, leader_epoch, &[NodeId(1), NodeId(2)])
 }
 
 fn open_state_partition(dir: &Path) -> Arc<crate::partition::Partition> {
-    let part_dir = crate::log_dir::partition_dir(dir, bootstrap::TOPIC, 0);
-    std::fs::create_dir_all(&part_dir).expect("create partition dir");
-    crate::broker::spawn_partition(
-        bootstrap::TOPIC.to_owned(),
-        P0,
-        dir.to_path_buf(),
-        Log::open(&part_dir, LogConfig::default()).expect("open log"),
-        crate::log_dir_status::LogDirRegistry::default(),
-        Arc::new(crate::producer_state::ProducerState::new()),
-        false,
-    )
+    crate::test_support::open_partition(dir, bootstrap::TOPIC, 0)
 }
 
 fn coordinator(node: NodeId, partitions: &Arc<PartitionRegistry>) -> Arc<TxnCoordinator> {
@@ -69,13 +40,8 @@ fn coordinator_persisting_last_epoch(
     partitions: &Arc<PartitionRegistry>,
     persist_last_epoch: bool,
 ) -> Arc<TxnCoordinator> {
-    let mut coordinator = TxnCoordinator::new(
-        node,
-        Arc::clone(partitions),
-        Arc::new(crate::producer_id_manager::ProducerIdManager::new()),
-        1,
-        krabka_units::mebibytes(1),
-    );
+    let mut coordinator =
+        super::super::test_support::coordinator_with_registry(node, Arc::clone(partitions), 1);
     coordinator.set_persist_last_producer_epoch(persist_last_epoch);
     Arc::new(coordinator)
 }
@@ -100,6 +66,14 @@ struct View {
     producer_id_maps_to: Option<String>,
 }
 
+fn unavailable_view(error_code: i16) -> View {
+    View {
+        coordinator_error: Some(error_code),
+        entry: None,
+        producer_id_maps_to: None,
+    }
+}
+
 async fn view(coordinator: &TxnCoordinator) -> View {
     let entry = match coordinator.get(TID) {
         Some(handle) => Some(handle.lock().await.clone()),
@@ -120,12 +94,7 @@ async fn view(coordinator: &TxnCoordinator) -> View {
 #[tokio::test]
 async fn a_leadership_change_loads_the_new_leader_and_unloads_the_old_one() {
     let dir = TempDir::new().expect("tempdir");
-    let partitions = Arc::new(PartitionRegistry::new());
-    partitions.insert(
-        bootstrap::TOPIC.into(),
-        P0,
-        open_state_partition(dir.path()),
-    );
+    let partitions = super::super::test_support::state_registry(dir.path());
     let first = coordinator(NodeId(1), &partitions);
     let second = coordinator(NodeId(2), &partitions);
 
@@ -141,27 +110,13 @@ async fn a_leadership_change_loads_the_new_leader_and_unloads_the_old_one() {
         .await
         .expect("persist the prepared transaction");
     check!(first.take_completion_requests().is_empty());
-    check!(
-        view(&second).await
-            == View {
-                coordinator_error: Some(crate::codes::NOT_COORDINATOR),
-                entry: None,
-                producer_id_maps_to: None,
-            }
-    );
+    check!(view(&second).await == unavailable_view(crate::codes::NOT_COORDINATOR));
 
     // Broker 2 is elected at epoch 1. Its load waits while an append holds
     // the state-partition lock, and it answers COORDINATOR_LOAD_IN_PROGRESS.
     let held_append = second.state_partition_writes[0].lock().await;
     let loads = second.refresh_leader_partitions(&image(NodeId(2), 1)).await;
-    check!(
-        view(&second).await
-            == View {
-                coordinator_error: Some(crate::codes::COORDINATOR_LOAD_IN_PROGRESS),
-                entry: None,
-                producer_id_maps_to: None,
-            }
-    );
+    check!(view(&second).await == unavailable_view(crate::codes::COORDINATOR_LOAD_IN_PROGRESS));
     drop(held_append);
     loads.finished().await;
     check!(
@@ -177,14 +132,7 @@ async fn a_leadership_change_loads_the_new_leader_and_unloads_the_old_one() {
     // Broker 1 applies the same election. It resigns and drops the
     // transaction and its producer id.
     drop(first.refresh_leader_partitions(&image(NodeId(2), 1)).await);
-    check!(
-        view(&first).await
-            == View {
-                coordinator_error: Some(crate::codes::NOT_COORDINATOR),
-                entry: None,
-                producer_id_maps_to: None,
-            }
-    );
+    check!(view(&first).await == unavailable_view(crate::codes::NOT_COORDINATOR));
     let refused = first.put(prepared_entry(), TxnVersion::Verified).await;
     assert!(refused.is_err(), "a resigned coordinator must not append");
 }
@@ -195,12 +143,7 @@ async fn a_leadership_change_loads_the_new_leader_and_unloads_the_old_one() {
 #[tokio::test]
 async fn a_new_term_refuses_the_generation_of_the_old_term() {
     let dir = TempDir::new().expect("tempdir");
-    let partitions = Arc::new(PartitionRegistry::new());
-    partitions.insert(
-        bootstrap::TOPIC.into(),
-        P0,
-        open_state_partition(dir.path()),
-    );
+    let partitions = super::super::test_support::state_registry(dir.path());
     let coordinator = coordinator(NodeId(1), &partitions);
     coordinator
         .refresh_leader_partitions(&image(NodeId(1), 0))
@@ -242,12 +185,7 @@ async fn a_reload_keeps_last_producer_epoch_only_in_trunk_mode() {
         [("4.3.1", false, -1, Fenced), ("trunk", true, 4, Retry)]
     {
         let dir = TempDir::new().expect("tempdir");
-        let partitions = Arc::new(PartitionRegistry::new());
-        partitions.insert(
-            bootstrap::TOPIC.into(),
-            P0,
-            open_state_partition(dir.path()),
-        );
+        let partitions = super::super::test_support::state_registry(dir.path());
         let first = coordinator_persisting_last_epoch(NodeId(1), &partitions, persist_last_epoch);
         let second = coordinator_persisting_last_epoch(NodeId(2), &partitions, persist_last_epoch);
 

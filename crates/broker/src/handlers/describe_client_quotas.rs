@@ -299,9 +299,11 @@ mod tests {
 
     #[tokio::test]
     async fn denied_response_preserves_error_fields() {
-        let (broker_handle, _dir) = start_broker(Arc::new(DenyAll)).await;
-        let broker = broker_handle.broker_arc_for_test();
-        test_ctx!(ctx, "alice");
+        broker_fixture!(
+            (broker_handle, _dir, broker),
+            deny_all,
+            context(ctx, "alice")
+        );
 
         let resp = handle(
             &broker,
@@ -310,13 +312,11 @@ mod tests {
             &ctx,
         );
 
-        let expected = DescribeClientQuotasResponse {
-            throttle_time_ms: 0,
+        let expected = unthrottled_wire!(DescribeClientQuotasResponse {
             error_code: CLUSTER_AUTHORIZATION_FAILED,
             error_message: None,
             entries: None,
-            unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(vec![]),
-        };
+        });
         assert!(resp == expected, "{resp:?}");
         broker_handle.shutdown().await;
     }
@@ -358,13 +358,11 @@ mod tests {
             }]),
             unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(vec![]),
         };
-        let denied = DescribeClientQuotasResponse {
-            throttle_time_ms: 0,
+        let denied = unthrottled_wire!(DescribeClientQuotasResponse {
             error_code: CLUSTER_AUTHORIZATION_FAILED,
             error_message: None,
             entries: None,
-            unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(vec![]),
-        };
+        });
 
         for (user, grant, expected) in [
             ("no-grant", None, &denied),
@@ -483,12 +481,12 @@ mod tests {
         let broker = broker_handle.broker_arc_for_test();
         test_ctx!(ctx, "admin");
 
-        let error = |code: i16, message: &str| DescribeClientQuotasResponse {
-            throttle_time_ms: 0,
-            error_code: code,
-            error_message: Some(message.into()),
-            entries: None,
-            unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(vec![]),
+        let error = |code: i16, message: &str| {
+            unthrottled_wire!(DescribeClientQuotasResponse {
+                error_code: code,
+                error_message: Some(message.into()),
+                entries: None,
+            })
         };
         let found = |name: Option<&str>, value: f64| DescribeClientQuotasResponse {
             throttle_time_ms: 0,
@@ -621,10 +619,11 @@ mod tests {
 
     #[tokio::test]
     async fn successful_empty_match_uses_some_empty_entries() {
-        let (broker_handle, _dir) =
-            start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
-        let broker = broker_handle.broker_arc_for_test();
-        test_ctx!(ctx, "admin");
+        broker_fixture!(
+            (broker_handle, _dir, broker),
+            allow_all,
+            context(ctx, "admin")
+        );
 
         let resp = handle(
             &broker,
@@ -633,13 +632,11 @@ mod tests {
             &ctx,
         );
 
-        let expected = DescribeClientQuotasResponse {
-            throttle_time_ms: 0,
+        let expected = unthrottled_wire!(DescribeClientQuotasResponse {
             error_code: 0,
             error_message: Some(String::new()),
             entries: Some(Vec::new()),
-            unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(vec![]),
-        };
+        });
         assert!(resp == expected);
         broker_handle.shutdown().await;
     }

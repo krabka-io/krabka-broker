@@ -18,6 +18,15 @@ use crate::{
     wal::{ControllerSequencer, OffsetSequencer},
 };
 
+fn seeded_log(path: &std::path::Path) -> Arc<Mutex<Log>> {
+    let log = open_default_log(path);
+    log.lock()
+        .expect("lock")
+        .append(&mut sample_batch(4))
+        .expect("append");
+    log
+}
+
 /// The controller quorum refuses an offset reservation before it reserves
 /// anything when it has no leader, when its leader moved, and when its new
 /// leader has not yet committed its epoch. That is a leader election, not a
@@ -185,11 +194,7 @@ async fn diskless_acked_record_survives_reopen() {
 #[tokio::test]
 async fn diskless_writer_keeps_wal_and_local_trim_frontiers_equal() {
     let dir = tempdir().expect("tempdir");
-    let log = open_default_log(dir.path());
-    log.lock()
-        .expect("lock")
-        .append(&mut sample_batch(4))
-        .expect("append");
+    let log = seeded_log(dir.path());
 
     let (sync_started_tx, _sync_started_rx) = oneshot::channel();
     let (_release_sync_tx, release_sync_rx) = oneshot::channel();
@@ -225,11 +230,7 @@ async fn diskless_writer_keeps_wal_and_local_trim_frontiers_equal() {
 #[tokio::test]
 async fn diskless_trim_retry_finishes_after_wal_failure() {
     let dir = tempdir().expect("tempdir");
-    let log = open_default_log(dir.path());
-    log.lock()
-        .expect("lock")
-        .append(&mut sample_batch(4))
-        .expect("append");
+    let log = seeded_log(dir.path());
 
     let (sync_started_tx, _sync_started_rx) = oneshot::channel();
     let (_release_sync_tx, release_sync_rx) = oneshot::channel();

@@ -24,7 +24,7 @@ use krabka_protocol::{
         delete_records_request::{
             DeleteRecordsPartition, DeleteRecordsRequest, DeleteRecordsTopic,
         },
-        share_fetch_request::{FetchPartition, FetchTopic, ShareFetchRequest},
+        share_fetch_request::ShareFetchRequest,
         share_fetch_response::PartitionData,
     },
     primitives::uuid::Uuid as WireUuid,
@@ -34,9 +34,7 @@ use crate::{
     authorizer::AllowAllAuthorizer,
     broker::BrokerHandle,
     codes,
-    test_support::{
-        initialize_share_state, peer, principal, request_context, start_broker_no_audit_with,
-    },
+    test_support::{initialize_share_state, peer, principal, start_broker_no_audit_with},
 };
 
 /// One partition row of a multi-partition `ShareFetch`: its
@@ -87,9 +85,11 @@ async fn delete_records(
         ..Default::default()
     };
     let shared = broker.broker_arc_for_test();
-    let user = principal("admin");
-    let address = peer();
-    let ctx = request_context(&user, &address, "admin-client");
+    request_identity!(
+        (user, address, ctx),
+        principal("admin"),
+        client_id = "admin-client"
+    );
     let response =
         crate::handlers::delete_records::handle(&shared, request, DELETE_RECORDS_VERSION, &ctx)
             .await
@@ -119,17 +119,7 @@ async fn share_fetch_rows_with_max_records(
         // `record_limit`, so a priming fetch takes exactly `max_records` of
         // the one five-record batch.
         share_acquire_mode: 1,
-        topics: vec![FetchTopic {
-            topic_id,
-            partitions: partitions
-                .iter()
-                .map(|&partition_index| FetchPartition {
-                    partition_index,
-                    ..Default::default()
-                })
-                .collect(),
-            ..Default::default()
-        }],
+        topics: crate::handlers::test_support::share_fetch_topics(topic_id, partitions),
         ..Default::default()
     };
     let response = crate::handlers::test_support::share_fetch_wire(broker, version, &request).await;
@@ -168,12 +158,7 @@ async fn share_fetch_one(
         })
 }
 
-fn acquired(row: &PartitionData) -> Vec<(i64, i64)> {
-    row.acquired_records
-        .iter()
-        .map(|range| (range.first_offset, range.last_offset))
-        .collect()
-}
+use crate::handlers::test_support::acquired_share_records as acquired;
 
 fn topic_uuid(topic_id: WireUuid) -> uuid::Uuid {
     uuid::Uuid::from_bytes(topic_id.0)
@@ -356,11 +341,7 @@ async fn an_unreadable_partition_fails_alone() {
     std::fs::write(&segment, bytes).expect("corrupt the segment");
 
     let rows = share_fetch_rows(&broker, group, 1, topic_id, &[0, 1]).await;
-    let mut by_partition: Vec<PartitionOutcome> = rows
-        .iter()
-        .map(|row| (row.partition_index, row.error_code, acquired(row)))
-        .collect();
-    by_partition.sort_unstable();
+    let by_partition = sorted_partition_outcomes(&rows);
 
     assert!(
         by_partition
@@ -389,11 +370,7 @@ async fn a_healthy_partition_in_the_same_request_is_unaffected() {
     let rows = share_fetch_rows(&broker, group, 1, topic_id, &[0, 1]).await;
     // The partitions rotate by session epoch, so the rows come in either
     // order.
-    let mut by_partition: Vec<PartitionOutcome> = rows
-        .iter()
-        .map(|row| (row.partition_index, row.error_code, acquired(row)))
-        .collect();
-    by_partition.sort_unstable();
+    let by_partition = sorted_partition_outcomes(&rows);
 
     assert!(
         by_partition
@@ -467,4 +444,13 @@ async fn primed_pair(broker: &BrokerHandle, topic: &str, group: &str) -> WireUui
     produce_records(broker, topic, 0, 5).await;
     produce_records(broker, topic, 1, 5).await;
     topic_id
+}
+
+fn sorted_partition_outcomes(rows: &[PartitionData]) -> Vec<PartitionOutcome> {
+    let mut outcomes: Vec<_> = rows
+        .iter()
+        .map(|row| (row.partition_index, row.error_code, acquired(row)))
+        .collect();
+    outcomes.sort_unstable();
+    outcomes
 }

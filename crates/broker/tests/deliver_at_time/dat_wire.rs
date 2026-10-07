@@ -13,49 +13,32 @@ use assert2::assert;
 use krabka_broker::{BrokerHandle, NodeId};
 use krabka_client_core::Client;
 use krabka_protocol::{
-    owned::{
-        create_topics_request::{CreatableTopic, CreatableTopicConfig, CreateTopicsRequest},
-        fetch_request::{FetchPartition, FetchRequest, FetchTopic},
-        list_offsets_request::{ListOffsetsPartition, ListOffsetsRequest, ListOffsetsTopic},
-        produce_request::{PartitionProduceData, ProduceRequest, TopicProduceData},
-    },
-    primitives::uuid::Uuid,
-    records::RecordBatch,
+    owned::list_offsets_request::ListOffsetsRequest, primitives::uuid::Uuid, records::RecordBatch,
 };
 
 use crate::{
     dat_fixtures::{Mode, Visible, now_ms},
     support,
+    support::{
+        fetch::{fetch_partition, single_partition_fetch},
+        offsets::{list_offset_partition, single_partition_list_offsets},
+        produce::single_partition_produce,
+    },
 };
 
 /// Ceiling on how long a poll waits for a record to become visible.
 const VISIBILITY_DEADLINE: Duration = Duration::from_secs(30);
 
 pub async fn create_topic(client: &Client, topic: &str, mode: Mode) {
-    let response = client
-        .send(CreateTopicsRequest {
-            topics: vec![CreatableTopic {
-                name: topic.to_owned(),
-                num_partitions: 1,
-                replication_factor: 1,
-                configs: vec![CreatableTopicConfig {
-                    name: "delivery.mode".to_owned(),
-                    value: Some(mode.value.to_owned()),
-                    ..CreatableTopicConfig::default()
-                }],
-                ..CreatableTopic::default()
-            }],
-            timeout_ms: 5_000,
-            ..CreateTopicsRequest::default()
-        })
-        .await
-        .expect("CreateTopics");
-    let created = response.topics.first().expect("one topic result");
-    assert!(
-        created.error_code == 0,
-        "create {topic}: {:?}",
-        created.error_message
-    );
+    crate::support::client::create_configured_topic(
+        client,
+        topic,
+        &[("delivery.mode", mode.value)],
+        1,
+        1,
+        5_000,
+    )
+    .await;
 }
 
 // Wait until `delivery.mode` has travelled from the metadata image through the
@@ -90,21 +73,13 @@ pub async fn ready_topic(broker: &BrokerHandle, client: &Client, topic: &str, mo
 
 pub async fn produce(client: &Client, topic: &str, topic_id: Uuid, batch: RecordBatch) {
     let response = client
-        .send(ProduceRequest {
-            acks: 1,
-            timeout_ms: 5_000,
-            topic_data: vec![TopicProduceData {
-                name: topic.to_owned(),
-                topic_id,
-                partition_data: vec![PartitionProduceData {
-                    index: 0,
-                    records: Some(batch.into()),
-                    ..PartitionProduceData::default()
-                }],
-                ..TopicProduceData::default()
-            }],
-            ..ProduceRequest::default()
-        })
+        .send(single_partition_produce(
+            topic.to_owned(),
+            topic_id,
+            0,
+            Some(batch.into()),
+            (1, 5_000),
+        ))
         .await
         .expect("Produce");
     let written = response
@@ -127,23 +102,12 @@ pub async fn fetch_values(
     max_wait_ms: i32,
 ) -> Vec<String> {
     let response = client
-        .send(FetchRequest {
-            max_wait_ms,
-            min_bytes: 1,
-            max_bytes: 1 << 20,
-            topics: vec![FetchTopic {
-                topic: topic.to_owned(),
-                topic_id,
-                partitions: vec![FetchPartition {
-                    partition: 0,
-                    fetch_offset: 0,
-                    partition_max_bytes: 1 << 20,
-                    ..FetchPartition::default()
-                }],
-                ..FetchTopic::default()
-            }],
-            ..FetchRequest::default()
-        })
+        .send(single_partition_fetch(
+            topic.to_owned(),
+            topic_id,
+            fetch_partition(0, 0, 1 << 20),
+            (max_wait_ms, 1, 1 << 20),
+        ))
         .await
         .expect("Fetch");
     let served = response
@@ -178,16 +142,7 @@ async fn latest_offset(client: &Client, topic: &str) -> i64 {
     let response = client
         .send(ListOffsetsRequest {
             replica_id: -1,
-            topics: vec![ListOffsetsTopic {
-                name: topic.to_owned(),
-                partitions: vec![ListOffsetsPartition {
-                    partition_index: 0,
-                    timestamp: -1,
-                    ..ListOffsetsPartition::default()
-                }],
-                ..ListOffsetsTopic::default()
-            }],
-            ..ListOffsetsRequest::default()
+            ..single_partition_list_offsets(topic.to_owned(), list_offset_partition(0, -1))
         })
         .await
         .expect("ListOffsets");

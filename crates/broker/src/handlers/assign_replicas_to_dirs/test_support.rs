@@ -4,20 +4,16 @@
 //! single-broker harness are each used by more than one of the test modules
 //! under this module, so they live in one file instead of once per module.
 
-use krabka_protocol::{
-    owned::{
-        assign_replicas_to_dirs_request::{
-            AssignReplicasToDirsRequest, DirectoryData as ReqDirData, PartitionData as ReqPartData,
-            TopicData as ReqTopicData,
-        },
-        assign_replicas_to_dirs_response::AssignReplicasToDirsResponse,
-    },
-    primitives::uuid::Uuid as ProtocolUuid,
+use krabka_protocol::owned::{
+    assign_replicas_to_dirs_request::AssignReplicasToDirsRequest,
+    assign_replicas_to_dirs_response::AssignReplicasToDirsResponse,
 };
 
 use crate::{broker::Broker, error::BrokerError, handlers::assign_replicas_to_dirs::handle};
 
 pub(super) const VERSION: i16 = 0;
+
+krabka_macros::assignment_dirs_fixture!(assignment_request);
 
 /// Builds a request reported by broker 1 at `broker_epoch`. Most tests pass
 /// the broker's actual registered epoch (see
@@ -30,23 +26,7 @@ pub(super) fn request(
     topic_uuid: uuid::Uuid,
     partition_index: i32,
 ) -> AssignReplicasToDirsRequest {
-    AssignReplicasToDirsRequest {
-        broker_id: 1,
-        broker_epoch,
-        directories: vec![ReqDirData {
-            id: ProtocolUuid(dir_uuid.into_bytes()),
-            topics: vec![ReqTopicData {
-                topic_id: ProtocolUuid(topic_uuid.into_bytes()),
-                partitions: vec![ReqPartData {
-                    partition_index,
-                    ..Default::default()
-                }],
-                ..Default::default()
-            }],
-            ..Default::default()
-        }],
-        ..Default::default()
-    }
+    assignment_request(1, broker_epoch, dir_uuid, topic_uuid, &[partition_index])
 }
 
 crate::test_support::decode_helper!(pub(super) AssignReplicasToDirsResponse, version = VERSION);
@@ -67,8 +47,11 @@ pub(super) async fn handle_allowed(
     broker: &Broker,
     req: AssignReplicasToDirsRequest,
 ) -> Result<AssignReplicasToDirsResponse, BrokerError> {
-    let user = crate::test_support::principal("ANONYMOUS");
-    let address = crate::test_support::peer();
-    let ctx = crate::test_support::request_context(&user, &address, "assign-replicas-test");
+    request_identity!(
+        (user, address, ctx),
+        crate::test_support::principal("ANONYMOUS"),
+        client_id = "assign-replicas-test",
+        address = crate::test_support::peer()
+    );
     handle(broker, req, VERSION, &ctx).await
 }

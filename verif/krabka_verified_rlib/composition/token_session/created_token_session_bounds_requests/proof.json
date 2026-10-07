@@ -2,22 +2,22 @@
   "profile": [],
   "proofs": {
     "Coma": {
-      "vc_create_token_deadlines": { "prover": "alt-ergo", "time": 0.009 },
+      "vc_create_token_deadlines": { "prover": "alt-ergo", "time": 0.015 },
       "vc_created_token_session_bounds_requests": {
         "prover": "z3",
-        "time": 0.007
+        "time": 0.017
       },
-      "vc_elim_Create": { "prover": "alt-ergo", "time": 0.008 },
-      "vc_elim_Some": { "prover": "alt-ergo", "time": 0.008 },
-      "vc_request_auth_admission": { "prover": "alt-ergo", "time": 0.008 },
-      "vc_sasl_session_expiry": { "prover": "alt-ergo", "time": 0.009 },
-      "vc_scram_credential_source": { "prover": "alt-ergo", "time": 0.009 },
+      "vc_elim_Create": { "prover": "alt-ergo", "time": 0.012 },
+      "vc_elim_Some": { "prover": "alt-ergo", "time": 0.012 },
+      "vc_request_auth_admission": { "prover": "alt-ergo", "time": 0.009 },
+      "vc_sasl_session_expiry": { "prover": "alt-ergo", "time": 0.01 },
+      "vc_scram_credential_source": { "prover": "alt-ergo", "time": 0.01 },
       "vc_session_expired_for_request": {
         "prover": "alt-ergo",
-        "time": 0.008
+        "time": 0.004
       },
-      "vc_token_api_admission": { "prover": "alt-ergo", "time": 0.007 },
-      "vc_token_is_active": { "prover": "alt-ergo", "time": 0.009 }
+      "vc_token_api_admission": { "prover": "alt-ergo", "time": 0.014 },
+      "vc_token_is_active": { "prover": "alt-ergo", "time": 0.013 }
     }
   }
 }

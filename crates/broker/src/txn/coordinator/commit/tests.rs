@@ -11,7 +11,6 @@ use krabka_metadata::{
     LeaderEpoch, MetadataImage, MetadataRecord, NodeId, PartitionRecord, TopicConfigRecord,
     TopicRecord,
 };
-use krabka_protocol::records::RecordBatch;
 
 use super::coordinator_append_error;
 use crate::{
@@ -175,19 +174,7 @@ fn logged_epochs(partition: &Partition) -> Vec<i32> {
     if end == Offset(0) {
         return Vec::new();
     }
-    let read = log
-        .read_raw(Offset(0), end, krabka_units::mebibytes(1))
-        .expect("read the log");
-    let mut cursor: &[u8] = &read.bytes;
-    let mut epochs = Vec::new();
-    while !cursor.is_empty() {
-        epochs.push(
-            RecordBatch::decode(&mut cursor)
-                .expect("decode a batch")
-                .partition_leader_epoch,
-        );
-    }
-    epochs
+    crate::coordinator::test_support::read_batch_epochs(&log, end)
 }
 
 /// Kafka's `appendTransactionToLog` appends with `acks=-1` and changes the

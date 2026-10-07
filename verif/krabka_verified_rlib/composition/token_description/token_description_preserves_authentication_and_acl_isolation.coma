@@ -1,13 +1,13 @@
 (* #"/workspace/crates/verified/src/composition/token_description.rs" 48 0 53 9 *)
 
-let%span sord = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
-let%span sord'0 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
 let%span sacl_decision = "/workspace/crates/verified/src/authz/acl_decision.rs" 21 10 24 2
 let%span sacl_decision'0 = "/workspace/crates/verified/src/authz/acl_decision.rs" 9 10 9 39
 let%span sacl_decision'1 = "/workspace/crates/verified/src/authz/acl_decision.rs" 42 10 50 59
 let%span sacl_decision'2 = "/workspace/crates/verified/src/authz/acl_decision.rs" 123 10 131 1
-let%span swell_founded = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/well_founded.rs" 43 8 43 33
-let%span sslice = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 331 18 331 22
+let%span swell_founded = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/well_founded.rs" 43 8 43 33
+let%span sslice = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 331 18 331 22
 let%span stoken_description = "/workspace/crates/verified/src/composition/token_description.rs" 55 8 55 71
 let%span stoken_description'0 = "/workspace/crates/verified/src/composition/token_description.rs" 58 15 58 20
 let%span stoken_description'1 = "/workspace/crates/verified/src/composition/token_description.rs" 60 32 60 37

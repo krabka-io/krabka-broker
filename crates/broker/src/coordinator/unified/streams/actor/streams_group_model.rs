@@ -16,11 +16,10 @@
 
 use std::{
     collections::{BTreeMap, HashSet},
-    hash::{Hash, Hasher},
     time::{Duration, Instant},
 };
 
-use stateright::{Checker, Model, Property};
+use stateright::{Checker, Model};
 
 use super::{
     ActorState,
@@ -28,12 +27,15 @@ use super::{
     records::{apply_seed, snapshot_seed},
 };
 use crate::{
-    coordinator::unified::streams::{
-        config::{StreamsAssignorKind, StreamsGroupConfig},
-        persistence::{StoredSubtopology, StreamsGroupTopologyValue},
-        state::{
-            INITIAL_EPOCH, OwnedTasks, RoleTasks, StreamsGroupState, StreamsGroupStatePhase,
-            StreamsMemberAssignmentState, StreamsMemberState,
+    coordinator::unified::{
+        actor::reconciliation_model_support::model_properties,
+        streams::{
+            config::{StreamsAssignorKind, StreamsGroupConfig},
+            persistence::{StoredSubtopology, StreamsGroupTopologyValue},
+            state::{
+                INITIAL_EPOCH, OwnedTasks, RoleTasks, StreamsGroupState, StreamsGroupStatePhase,
+                StreamsMemberAssignmentState, StreamsMemberState,
+            },
         },
     },
     model_check::run_bfs,
@@ -139,12 +141,6 @@ struct State {
     replayed: bool,
 }
 
-impl std::fmt::Debug for State {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        self.projection().fmt(formatter)
-    }
-}
-
 impl State {
     fn projection(&self) -> Projection {
         Projection {
@@ -165,19 +161,7 @@ impl State {
     }
 }
 
-impl PartialEq for State {
-    fn eq(&self, other: &Self) -> bool {
-        self.projection() == other.projection()
-    }
-}
-
-impl Eq for State {}
-
-impl Hash for State {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        self.projection().hash(state);
-    }
-}
+krabka_macros::projection_identity!(State, projection, debug);
 
 #[derive(Clone, Debug)]
 struct StreamsModel;
@@ -252,20 +236,35 @@ fn target_projection(
     projection
 }
 
+fn durable_member(member: &StreamsMemberState) -> DurableMemberProjection {
+    (
+        member.member_id.clone(),
+        member.member_epoch,
+        member.previous_member_epoch,
+        member.assignment_state.as_i8(),
+        task_map_projection(&member.active),
+        task_map_projection(&member.active_pending_revocation),
+        task_map_projection(&member.standby),
+        task_map_projection(&member.warmup),
+    )
+}
+
 fn member_projection(group: &StreamsGroupState) -> Vec<MemberProjection> {
     let mut projection: Vec<MemberProjection> = group
         .members
         .values()
         .map(|member| {
+            let (id, epoch, previous, state, active, pending, standby, warmup) =
+                durable_member(member);
             (
-                member.member_id.clone(),
-                member.member_epoch,
-                member.previous_member_epoch,
-                member.assignment_state.as_i8(),
-                task_map_projection(&member.active),
-                task_map_projection(&member.active_pending_revocation),
-                task_map_projection(&member.standby),
-                task_map_projection(&member.warmup),
+                id,
+                epoch,
+                previous,
+                state,
+                active,
+                pending,
+                standby,
+                warmup,
                 member.last_seen,
             )
         })
@@ -275,22 +274,8 @@ fn member_projection(group: &StreamsGroupState) -> Vec<MemberProjection> {
 }
 
 fn durable_member_projection(group: &StreamsGroupState) -> Vec<DurableMemberProjection> {
-    let mut projection: Vec<DurableMemberProjection> = group
-        .members
-        .values()
-        .map(|member| {
-            (
-                member.member_id.clone(),
-                member.member_epoch,
-                member.previous_member_epoch,
-                member.assignment_state.as_i8(),
-                task_map_projection(&member.active),
-                task_map_projection(&member.active_pending_revocation),
-                task_map_projection(&member.standby),
-                task_map_projection(&member.warmup),
-            )
-        })
-        .collect();
+    let mut projection: Vec<DurableMemberProjection> =
+        group.members.values().map(durable_member).collect();
     projection.sort();
     projection
 }
@@ -490,8 +475,7 @@ impl Model for StreamsModel {
         }
     }
 
-    fn next_state(&self, last: &Self::State, action: Self::Action) -> Option<Self::State> {
-        let mut state = last.clone();
+    krabka_macros::model_transition! { last, action, state; {
         match action {
             Action::Join(member_id) => {
                 if state.actor.state.members.contains_key(member_id) {
@@ -640,53 +624,24 @@ impl Model for StreamsModel {
         assert2::assert!(epochs_fenced(&state.actor.state));
         assert2::assert!(phase_coherent(&state.actor.state));
         Some(state)
-    }
+    }}
 
-    fn properties(&self) -> Vec<Property<Self>> {
-        vec![
-            Property::always("active_task_exclusivity", |_, state: &State| {
-                active_task_exclusive(&state.actor.state)
-            }),
-            Property::always("target_active_task_exclusivity", |_, state: &State| {
-                target_active_exclusive(&state.actor.state)
-            }),
-            Property::always("assignment_within_topology", |_, state: &State| {
-                assignments_in_topology(state)
-            }),
-            Property::always("member_epoch_fencing", |_, state: &State| {
-                epochs_fenced(&state.actor.state)
-            }),
-            Property::always("reconciliation_phase_coherence", |_, state: &State| {
-                phase_coherent(&state.actor.state)
-            }),
-            Property::sometimes("stale_epoch_rejected", |_, state: &State| {
-                state.witnesses & WITNESS_STALE_FENCED != 0
-            }),
-            Property::sometimes("forward_epoch_rejected", |_, state: &State| {
-                state.witnesses & WITNESS_FORWARD_FENCED != 0
-            }),
-            Property::sometimes("unknown_member_rejected", |_, state: &State| {
-                state.witnesses & WITNESS_UNKNOWN_FENCED != 0
-            }),
-            Property::sometimes("timeout_evicted_member", |_, state: &State| {
-                state.witnesses & WITNESS_TIMEOUT != 0
-            }),
-            Property::sometimes("topology_changed", |_, state: &State| {
-                state.witnesses & WITNESS_TOPOLOGY != 0
-            }),
-            Property::sometimes("state_replayed", |_, state: &State| {
-                state.witnesses & WITNESS_REPLAY != 0
-            }),
-            Property::sometimes("active_task_withheld", |_, state: &State| {
-                state.witnesses & WITNESS_WITHHELD != 0
-            }),
-            Property::sometimes("active_task_released", |_, state: &State| {
-                state.witnesses & WITNESS_RELEASED != 0
-            }),
-            Property::sometimes("two_members_joined", |_, state: &State| {
-                state.actor.state.members.len() == 2
-            }),
-        ]
+    model_properties! {
+        @method State;
+        always "active_task_exclusivity" => |state| active_task_exclusive(&state.actor.state),
+        always "target_active_task_exclusivity" => |state| target_active_exclusive(&state.actor.state),
+        always "assignment_within_topology" => |state| assignments_in_topology(state),
+        always "member_epoch_fencing" => |state| epochs_fenced(&state.actor.state),
+        always "reconciliation_phase_coherence" => |state| phase_coherent(&state.actor.state),
+        sometimes "stale_epoch_rejected" => |state| state.witnesses & WITNESS_STALE_FENCED != 0,
+        sometimes "forward_epoch_rejected" => |state| state.witnesses & WITNESS_FORWARD_FENCED != 0,
+        sometimes "unknown_member_rejected" => |state| state.witnesses & WITNESS_UNKNOWN_FENCED != 0,
+        sometimes "timeout_evicted_member" => |state| state.witnesses & WITNESS_TIMEOUT != 0,
+        sometimes "topology_changed" => |state| state.witnesses & WITNESS_TOPOLOGY != 0,
+        sometimes "state_replayed" => |state| state.witnesses & WITNESS_REPLAY != 0,
+        sometimes "active_task_withheld" => |state| state.witnesses & WITNESS_WITHHELD != 0,
+        sometimes "active_task_released" => |state| state.witnesses & WITNESS_RELEASED != 0,
+        sometimes "two_members_joined" => |state| state.actor.state.members.len() == 2,
     }
 
     fn within_boundary(&self, state: &Self::State) -> bool {

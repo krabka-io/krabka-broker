@@ -29,12 +29,15 @@ use krabka_broker::{
 };
 use krabka_client_core::Client;
 use krabka_protocol::owned::{
-    create_topics_request::{CreatableTopic, CreateTopicsRequest},
     describe_cluster_request::DescribeClusterRequest,
-    describe_log_dirs_request::DescribeLogDirsRequest,
-    metadata_request::MetadataRequest,
+    describe_log_dirs_request::DescribeLogDirsRequest, metadata_request::MetadataRequest,
 };
 use tempfile::TempDir;
+
+use crate::support::{
+    client::connect_client,
+    topics::{creatable_topic, create_topic_request},
+};
 
 mod support;
 
@@ -92,30 +95,28 @@ async fn start_role_separated_with(
     let (client_addrs, controller_addrs, client_listeners, controller_listeners) =
         support::bind_and_hold_ports(nodes).await;
     let voters = vec![(1u64, controller_addrs[0])];
+    let topology = support::RoleTopology::new(&client_addrs, &controller_addrs, &voters);
     let mut data_ls = client_listeners.into_iter();
     let mut ctrl_ls = controller_listeners.into_iter();
     let mut dirs = Vec::with_capacity(nodes);
 
     let ctrl_dir = TempDir::new().unwrap();
-    let mut ctrl_cfg = support::broker_config(
+    let mut ctrl_cfg = topology.config(
         0,
-        &client_addrs,
-        &controller_addrs,
-        &voters,
         ctrl_dir.path(),
         BootstrapMode::Bootstrap,
+        NodeRole::Controller,
     );
-    ctrl_cfg.roles = vec![NodeRole::Controller];
     customize(0, &mut ctrl_cfg);
     let controller_metadata_dir = ctrl_cfg.metadata_dir().to_path_buf();
     let controller_client_addr = ctrl_cfg.listen_addr;
-    let controller = Broker::start_with_listeners(
+    let controller = support::start_held_node(
         ctrl_cfg,
-        Some(ctrl_ls.next().unwrap()),
-        Some(data_ls.next().unwrap()),
+        &mut ctrl_ls,
+        &mut data_ls,
+        "controller-only start",
     )
-    .await
-    .expect("controller-only start");
+    .await;
     dirs.push(ctrl_dir);
     controller.wait_until_controller_leader().await;
 
@@ -123,25 +124,11 @@ async fn start_role_separated_with(
     let mut broker_configs = Vec::with_capacity(brokers);
     for index in 1..nodes {
         let dir = TempDir::new().unwrap();
-        let mut cfg = support::broker_config(
-            index,
-            &client_addrs,
-            &controller_addrs,
-            &voters,
-            dir.path(),
-            BootstrapMode::Join,
-        );
-        cfg.roles = vec![NodeRole::Broker];
+        let mut cfg = topology.config(index, dir.path(), BootstrapMode::Join, NodeRole::Broker);
         customize(index, &mut cfg);
         broker_configs.push(cfg.clone());
         observers.push(
-            Broker::start_with_listeners(
-                cfg,
-                Some(ctrl_ls.next().unwrap()),
-                Some(data_ls.next().unwrap()),
-            )
-            .await
-            .expect("broker-only start"),
+            support::start_held_node(cfg, &mut ctrl_ls, &mut data_ls, "broker-only start").await,
         );
         dirs.push(dir);
     }
@@ -209,22 +196,9 @@ async fn broker_only_node_observes_and_forwards() {
     // CreateTopics against the broker-only node — forwarded to the controller
     // quorum via the observer's write path.
     let topic = "rolesep-observed";
-    let client = Client::builder()
-        .bootstrap(broker_only.listen_addr().to_string())
-        .build()
-        .await
-        .unwrap();
+    let client = connect_client(broker_only.listen_addr().to_string(), None).await;
     let resp = client
-        .send(CreateTopicsRequest {
-            topics: vec![CreatableTopic {
-                name: topic.into(),
-                num_partitions: 1,
-                replication_factor: 1,
-                ..Default::default()
-            }],
-            timeout_ms: 5_000,
-            ..Default::default()
-        })
+        .send(create_topic_request(creatable_topic(topic, 1, 1), 5_000))
         .await
         .unwrap();
     assert!(
@@ -315,11 +289,7 @@ async fn a_broker_only_node_recovers_after_the_controller_prunes_past_its_fetch_
     // Enough topics that the committed offset crosses the 4-record interval
     // several times, so the controller has snapshotted and pruned well past 0.
     let topics: Vec<String> = (0..6).map(|i| format!("pruned-topic-{i}")).collect();
-    let client = Client::builder()
-        .bootstrap(cluster.brokers[0].listen_addr().to_string())
-        .build()
-        .await
-        .unwrap();
+    let client = connect_client(cluster.brokers[0].listen_addr().to_string(), None).await;
     create_topics(&client, &topics).await;
     for topic in &topics {
         cluster.brokers[0]
@@ -418,11 +388,7 @@ async fn heartbeats_keep_brokers_unfenced_in_a_role_separated_cluster() {
     // brokers unless the caller opts in, so a fenced cluster answers with no
     // broker rows at all.
     for broker in &cluster.brokers {
-        let client = Client::builder()
-            .bootstrap(broker.listen_addr().to_string())
-            .build()
-            .await
-            .unwrap();
+        let client = connect_client(broker.listen_addr().to_string(), None).await;
         let resp = client
             .send(DescribeClusterRequest::default())
             .await
@@ -467,11 +433,7 @@ async fn heartbeats_keep_brokers_unfenced_in_a_role_separated_cluster() {
 /// endpoint it resolves to is one a client can actually reach.
 async fn assert_metadata_names_a_reachable_controller(cluster: &RoleSeparated) {
     for broker in &cluster.brokers {
-        let client = Client::builder()
-            .bootstrap(broker.listen_addr().to_string())
-            .build()
-            .await
-            .unwrap();
+        let client = connect_client(broker.listen_addr().to_string(), None).await;
         let resp = client.send(MetadataRequest::default()).await.unwrap();
 
         let listed: BTreeSet<i32> = resp.brokers.iter().map(|row| row.node_id).collect();
@@ -493,11 +455,8 @@ async fn assert_metadata_names_a_reachable_controller(cluster: &RoleSeparated) {
 
         // Reachable, not merely listed: the advertised endpoint answers.
         let endpoint = named.unwrap();
-        let controller_client = Client::builder()
-            .bootstrap(format!("{}:{}", endpoint.host, endpoint.port))
-            .build()
-            .await
-            .unwrap();
+        let controller_client =
+            connect_client(format!("{}:{}", endpoint.host, endpoint.port), None).await;
         let echoed = controller_client
             .send(MetadataRequest::default())
             .await
@@ -554,11 +513,7 @@ async fn broker_only_node_forwards_describe_quorum_to_controller() {
     assert_settled_unfenced(&cluster).await;
 
     let broker = &cluster.brokers[0];
-    let client = Client::builder()
-        .bootstrap(broker.listen_addr().to_string())
-        .build()
-        .await
-        .unwrap();
+    let client = connect_client(broker.listen_addr().to_string(), None).await;
 
     let req = DescribeQuorumRequest {
         topics: vec![ReqTopicData {
@@ -613,11 +568,7 @@ async fn broker_only_nodes_are_described_as_quorum_observers() {
         .iter()
         .map(|broker| i32::try_from(broker.node_id()).expect("small node id"))
         .collect();
-    let client = Client::builder()
-        .bootstrap(cluster.brokers[0].listen_addr().to_string())
-        .build()
-        .await
-        .unwrap();
+    let client = connect_client(cluster.brokers[0].listen_addr().to_string(), None).await;
     let request = || DescribeQuorumRequest {
         topics: vec![ReqTopicData {
             topic_name: "__cluster_metadata".into(),
@@ -711,11 +662,7 @@ async fn unregister_broker_sent_to_a_broker_only_node_is_decided_by_the_controll
         }
     })
     .await;
-    let client = Client::builder()
-        .bootstrap(cluster.brokers[0].listen_addr().to_string())
-        .build()
-        .await
-        .unwrap();
+    let client = connect_client(cluster.brokers[0].listen_addr().to_string(), None).await;
     let doomed = i32::try_from(cluster.brokers[1].node_id()).expect("small node id");
 
     let resp = client
@@ -758,11 +705,7 @@ async fn unregister_broker_sent_to_a_broker_only_node_reaches_the_controller() {
     support::init_tracing();
 
     let cluster = start_role_separated(2).await;
-    let client = Client::builder()
-        .bootstrap(cluster.brokers[0].listen_addr().to_string())
-        .build()
-        .await
-        .unwrap();
+    let client = connect_client(cluster.brokers[0].listen_addr().to_string(), None).await;
     let doomed = cluster.brokers[1].node_id();
 
     let resp = client
@@ -842,11 +785,7 @@ async fn a_separate_metadata_log_directory_rolls_cleans_and_restores_a_wiped_nod
     let broker_metadata = broker_cfg.metadata_dir().to_path_buf();
 
     let topics: Vec<String> = (0..3).map(|i| format!("metadata-dir-topic-{i}")).collect();
-    let client = Client::builder()
-        .bootstrap(cluster.brokers[0].listen_addr().to_string())
-        .build()
-        .await
-        .unwrap();
+    let client = connect_client(cluster.brokers[0].listen_addr().to_string(), None).await;
     create_topics(&client, &topics).await;
     for topic in &topics {
         cluster.brokers[0]

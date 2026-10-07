@@ -172,50 +172,34 @@ pub(crate) async fn signed_s3_get_xml<T: DeserializeOwned>(
 #[cfg(test)]
 mod tests {
     use assert2::check;
-    use tokio::io::AsyncWriteExt as _;
 
     use super::*;
 
-    async fn serve_pages(
+    async fn with_listing<T>(
         pages: Vec<(&'static str, &'static str, &'static str)>,
-    ) -> (String, tokio::task::JoinHandle<()>) {
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let endpoint = format!("http://{}", listener.local_addr().unwrap());
-        let server = tokio::spawn(async move {
-            for (expected_request, status, body) in pages {
-                let (mut socket, _) = listener.accept().await.unwrap();
-                let request = crate::test_support::read_request(&mut socket).await;
-                check!(request.starts_with(expected_request));
-                check!(
-                    request
-                        .to_ascii_lowercase()
-                        .contains("authorization: aws4-hmac-sha256")
-                );
-                socket
-                    .write_all(
-                        format!(
-                            "HTTP/1.1 {status}\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
-                            body.len()
-                        )
-                        .as_bytes(),
-                    )
-                    .await
-                    .unwrap();
-            }
-        });
-        (endpoint, server)
+        prefix: Option<&str>,
+        extract: impl FnOnce(Result<Vec<IncompleteMultipartUpload>, ObjectStoreError>) -> T,
+    ) -> T {
+        let pages = pages
+            .into_iter()
+            .map(|(request, status, body)| (request.into(), status, body))
+            .collect();
+        let (endpoint, server) = crate::test_support::serve_http_pages(pages, true).await;
+        let result = extract(list_s3_multipart_uploads(&config(endpoint), prefix).await);
+        server.await.unwrap();
+        result
+    }
+
+    async fn check_listing_error(
+        pages: Vec<(&'static str, &'static str, &'static str)>,
+        reason: &str,
+    ) {
+        let error = with_listing(pages, None, Result::unwrap_err).await;
+        check!(error.to_string().contains(reason));
     }
 
     fn config(endpoint: String) -> S3Config {
-        S3Config {
-            bucket: "bucket".into(),
-            region: "us-east-1".into(),
-            endpoint: Some(endpoint),
-            access_key_id: Some("key".into()),
-            secret_access_key: Some("secret".into()),
-            allow_http: true,
-            ..Default::default()
-        }
+        crate::test_support::s3_config("bucket", endpoint)
     }
 
     #[test]
@@ -242,17 +226,16 @@ mod tests {
     #[tokio::test]
     async fn lists_incomplete_uploads_under_the_prefix() {
         let body = "<ListMultipartUploadsResult><IsTruncated>false</IsTruncated><Upload><Key>worm/a</Key><UploadId>one</UploadId></Upload></ListMultipartUploadsResult>";
-        let (endpoint, server) = serve_pages(vec![(
-            "GET /bucket?uploads=&prefix=worm%2F HTTP/1.1",
-            "200 OK",
-            body,
-        )])
+        let uploads = with_listing(
+            vec![(
+                "GET /bucket?uploads=&prefix=worm%2F HTTP/1.1",
+                "200 OK",
+                body,
+            )],
+            Some("worm/"),
+            Result::unwrap,
+        )
         .await;
-
-        let uploads = list_s3_multipart_uploads(&config(endpoint), Some("worm/"))
-            .await
-            .unwrap();
-        server.await.unwrap();
 
         check!(
             uploads
@@ -267,7 +250,7 @@ mod tests {
     async fn follows_multipart_pagination_markers() {
         let first = "<ListMultipartUploadsResult><IsTruncated>true</IsTruncated><NextKeyMarker>worm/a</NextKeyMarker><NextUploadIdMarker>one</NextUploadIdMarker><Upload><Key>worm/a</Key><UploadId>one</UploadId></Upload></ListMultipartUploadsResult>";
         let second = "<ListMultipartUploadsResult><IsTruncated>false</IsTruncated><Upload><Key>worm/b</Key><UploadId>two</UploadId></Upload></ListMultipartUploadsResult>";
-        let (endpoint, server) = serve_pages(vec![
+        let uploads = with_listing(vec![
             (
                 "GET /bucket?uploads=&prefix=worm%2F HTTP/1.1",
                 "200 OK",
@@ -278,13 +261,7 @@ mod tests {
                 "200 OK",
                 second,
             ),
-        ])
-        .await;
-
-        let uploads = list_s3_multipart_uploads(&config(endpoint), Some("worm/"))
-            .await
-            .unwrap();
-        server.await.unwrap();
+        ], Some("worm/"), Result::unwrap).await;
 
         check!(uploads.len() == 2);
         check!(uploads[1].key == "worm/b");
@@ -294,38 +271,25 @@ mod tests {
     #[tokio::test]
     async fn rejects_truncated_page_without_markers() {
         let body = "<ListMultipartUploadsResult><IsTruncated>true</IsTruncated></ListMultipartUploadsResult>";
-        let (endpoint, server) =
-            serve_pages(vec![("GET /bucket?uploads= HTTP/1.1", "200 OK", body)]).await;
-
-        let error = list_s3_multipart_uploads(&config(endpoint), None)
-            .await
-            .unwrap_err();
-        server.await.unwrap();
-
-        check!(error.to_string().contains("no continuation marker"));
+        check_listing_error(
+            vec![("GET /bucket?uploads= HTTP/1.1", "200 OK", body)],
+            "no continuation marker",
+        )
+        .await;
     }
 
     #[tokio::test]
     async fn reports_unsuccessful_multipart_listing() {
-        let (endpoint, server) = serve_pages(vec![(
-            "GET /bucket?uploads= HTTP/1.1",
-            "403 Forbidden",
-            "denied",
-        )])
+        check_listing_error(
+            vec![("GET /bucket?uploads= HTTP/1.1", "403 Forbidden", "denied")],
+            "403 Forbidden: denied",
+        )
         .await;
-
-        let error = list_s3_multipart_uploads(&config(endpoint), None)
-            .await
-            .unwrap_err();
-        server.await.unwrap();
-
-        check!(error.to_string().contains("403 Forbidden: denied"));
     }
 
     #[tokio::test]
     async fn a_request_that_never_reaches_the_store_is_a_backend_error() {
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let endpoint = format!("http://{}", listener.local_addr().unwrap());
+        let (listener, endpoint) = crate::test_support::http_listener().await;
         drop(listener);
 
         let client = s3_http_client(&config(endpoint.clone())).unwrap();

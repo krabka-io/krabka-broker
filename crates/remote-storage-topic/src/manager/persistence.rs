@@ -117,7 +117,6 @@ mod tests {
     use assert2::{assert, check};
     use krabka_ids::LeaderEpoch;
     use krabka_remote_storage::{PartitionDump, RemoteLogMetadataManager, RlmmCacheDump};
-    use tokio::runtime::Handle;
 
     use super::*;
     use crate::{
@@ -184,13 +183,8 @@ mod tests {
             .write_atomic(&dir.join(crate::snapshot::SNAPSHOT_FILE_NAME))
             .expect("write invalid semantic snapshot");
 
-        let manager = TopicBasedRemoteLogMetadataManager::start(
-            log,
-            Handle::current(),
-            dir.clone(),
-            std::time::Duration::from_hours(1),
-        )
-        .expect("invalid cursor falls back to full replay");
+        let manager = crate::manager::test_support::start_manager_in(log, dir.clone())
+            .expect("invalid cursor falls back to full replay");
         check!(manager.committed_offset(mp) == -1);
         manager.reconcile_assignment(&[mp]).await;
         check!(manager.metadata_partition_ready(mp));
@@ -205,13 +199,8 @@ mod tests {
         let log: Arc<dyn MetadataEventLog> = InProcessMetadataEventLog::new(4);
         let mp = crate::partitioning::metadata_partition_for(&tp(), log.partition_count());
 
-        let writer = TopicBasedRemoteLogMetadataManager::start(
-            log.clone(),
-            Handle::current(),
-            dir.clone(),
-            std::time::Duration::from_hours(1),
-        )
-        .unwrap();
+        let writer =
+            crate::manager::test_support::start_manager_in(log.clone(), dir.clone()).unwrap();
         writer.reconcile_assignment(&[mp]).await;
         let writer_for_add = writer.clone();
         on_blocking(move || {
@@ -231,13 +220,7 @@ mod tests {
             .expect("append lifecycle suffix");
         check!(suffix_offset == 1);
 
-        let resumed = TopicBasedRemoteLogMetadataManager::start(
-            log,
-            Handle::current(),
-            dir.clone(),
-            std::time::Duration::from_hours(1),
-        )
-        .unwrap();
+        let resumed = crate::manager::test_support::start_manager_in(log, dir.clone()).unwrap();
         check!(resumed.committed_offset(mp) == 0);
         resumed.reconcile_assignment(&[mp]).await;
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
@@ -262,23 +245,10 @@ mod tests {
     async fn shutdown_flushes_a_snapshot_covering_applied_events() {
         let dir = snapshot_test_dir("mgr-snap");
         let log: Arc<dyn MetadataEventLog> = InProcessMetadataEventLog::new(4);
-        let m = TopicBasedRemoteLogMetadataManager::start(
-            log.clone(),
-            Handle::current(),
-            dir.clone(),
-            std::time::Duration::from_hours(1), // long interval: only shutdown flushes
-        )
-        .unwrap();
+        let m = crate::manager::test_support::start_manager_in(log.clone(), dir.clone()).unwrap();
         m.reconcile_assignment(&(0..log.partition_count()).collect::<Vec<_>>())
             .await;
-        let m2 = m.clone();
-        on_blocking(move || {
-            m2.add_remote_log_segment_metadata(started(10, 0, 99))
-                .unwrap();
-        })
-        .await;
-        let m2 = m.clone();
-        on_blocking(move || m2.update_remote_log_segment_metadata(finish(10)).unwrap()).await;
+        crate::manager::test_support::seed_finished(&m, &[(10, 0, 99)]).await;
 
         m.shutdown_and_flush().await;
 
@@ -303,18 +273,12 @@ mod tests {
     async fn restart_resumes_from_snapshot_without_replaying_from_zero() {
         let dir = snapshot_test_dir("resume");
         let log: Arc<dyn MetadataEventLog> = InProcessMetadataEventLog::new(4);
-        let interval = std::time::Duration::from_hours(1);
 
         // First lifetime: seed three finished segments, then shutdown-flush.
         let pre_cache;
         {
-            let m = TopicBasedRemoteLogMetadataManager::start(
-                log.clone(),
-                Handle::current(),
-                dir.clone(),
-                interval,
-            )
-            .unwrap();
+            let m =
+                crate::manager::test_support::start_manager_in(log.clone(), dir.clone()).unwrap();
             m.reconcile_assignment(&(0..log.partition_count()).collect::<Vec<_>>())
                 .await;
             crate::manager::test_support::seed_finished(
@@ -352,13 +316,8 @@ mod tests {
         assert!(resumed_committed[idx] == committed);
 
         // Second lifetime against the SAME log + dir: must resume, not replay.
-        let fresh = TopicBasedRemoteLogMetadataManager::start(
-            log.clone(),
-            Handle::current(),
-            dir.clone(),
-            interval,
-        )
-        .unwrap();
+        let fresh =
+            crate::manager::test_support::start_manager_in(log.clone(), dir.clone()).unwrap();
         // The manager exposes the same committed offset via its canonical
         // accessor used by the assignment reconciler.
         assert!(fresh.committed_offset(p) == committed);

@@ -5,9 +5,8 @@ use krabka_security::{Principal, SaslMechanism};
 use krabka_units::{millis, secs};
 
 use super::*;
-use crate::network::auth::{
-    AuthenticatedSnapshot,
-    test_support::{assert_failed_authenticate_response, assert_success_authenticate_response},
+use crate::network::auth::test_support::{
+    assert_failed_authenticate_response, assert_success_authenticate_response,
 };
 
 fn unsecured_token(sub: &str, exp_s: i64) -> String {
@@ -64,20 +63,8 @@ async fn reauthenticate(
     now_ms: i64,
     token: &str,
 ) -> (ConnectionAuth, SaslAuthenticateResponse) {
-    let mut auth = ConnectionAuth::Reauthenticating {
-        previous: AuthenticatedSnapshot {
-            principal: Principal {
-                name: "alice".to_string(),
-                auth_method: krabka_security::AuthMethod::SaslOAuthBearer,
-                groups: vec![],
-            },
-            mechanism: SaslMechanism::OAuthBearer,
-            expires_at_ms: Some(now_ms + 1_000),
-            authenticated_via_token: false,
-        },
-        exchange: SaslExchange::OAuthBearer,
-        pending_token_expiry_ms: None,
-    };
+    let mut auth =
+        crate::network::auth::test_support::oauth_reauthenticating("alice", now_ms + 1_000);
     let response = handle_authenticate_oauthbearer(
         &oauthbearer_client_response(token),
         &mut auth,
@@ -91,11 +78,7 @@ async fn reauthenticate(
 
 #[tokio::test]
 async fn signed_validator_fails_closed_for_stale_or_changing_jwks_cache() {
-    let now_ms = 1_000_000;
-    let request = oauthbearer_client_response(&unsecured_token("alice", 2_000));
-    let validator = signed_validator(Some(secs(1)));
-    let generation = AtomicU64::new(1);
-    let last_successful = AtomicI64::new(now_ms);
+    let (now_ms, request, validator, generation, last_successful) = signed_cache_fixture(1);
 
     let changing = validate_bearer(
         &request.auth_bytes,
@@ -130,11 +113,7 @@ async fn signed_validator_fails_closed_for_stale_or_changing_jwks_cache() {
 
 #[tokio::test]
 async fn signed_validator_uses_a_fresh_stable_jwks_cache() {
-    let now_ms = 1_000_000;
-    let request = oauthbearer_client_response(&unsecured_token("alice", 2_000));
-    let validator = signed_validator(Some(secs(1)));
-    let generation = AtomicU64::new(2);
-    let last_successful = AtomicI64::new(now_ms);
+    let (now_ms, request, validator, generation, last_successful) = signed_cache_fixture(2);
 
     let result = validate_bearer(
         &request.auth_bytes,
@@ -152,11 +131,7 @@ async fn oauthbearer_valid_token_authenticates() {
     let validator = krabka_security::OAuthBearerValidator::default();
     let now_ms = 1_000_000_000_000;
     let token = unsecured_token("svc-account", 1_000_000_900); // exp seconds → future of now
-    let mut auth = ConnectionAuth::Negotiating {
-        mechanism: SaslMechanism::OAuthBearer,
-        exchange: SaslExchange::OAuthBearer,
-        pending_token_expiry_ms: None,
-    };
+    let mut auth = oauth_pending();
     let resp = handle_authenticate_oauthbearer(
         &oauthbearer_client_response(&token),
         &mut auth,
@@ -192,11 +167,7 @@ async fn oauthbearer_invalid_token_returns_error_json_then_fails_on_dummy() {
     let now_ms = 5_000_000_000_000;
     // exp far in the past → expired.
     let token = unsecured_token("admin", 1_000_000_000);
-    let mut auth = ConnectionAuth::Negotiating {
-        mechanism: SaslMechanism::OAuthBearer,
-        exchange: SaslExchange::OAuthBearer,
-        pending_token_expiry_ms: None,
-    };
+    let mut auth = oauth_pending();
     // Round 1: rejected → error JSON, error_code 0, connection stays open.
     let resp = handle_authenticate_oauthbearer(
         &oauthbearer_client_response(&token),
@@ -206,14 +177,7 @@ async fn oauthbearer_invalid_token_returns_error_json_then_fails_on_dummy() {
         None,
     )
     .await;
-    let expected = SaslAuthenticateResponse {
-        error_code: 0,
-        error_message: None,
-        auth_bytes: bytes::Bytes::from_static(br#"{"status":"invalid_token"}"#),
-        session_lifetime_ms: 0,
-        unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(Vec::new()),
-    };
-    assert!(resp == expected);
+    assert_invalid_token_challenge(&resp);
     assert!(matches!(
         auth,
         ConnectionAuth::Negotiating {
@@ -235,11 +199,7 @@ async fn oauthbearer_invalid_token_returns_error_json_then_fails_on_dummy() {
 #[tokio::test]
 async fn oauthbearer_malformed_response_returns_error_json() {
     let validator = krabka_security::OAuthBearerValidator::default();
-    let mut auth = ConnectionAuth::Negotiating {
-        mechanism: SaslMechanism::OAuthBearer,
-        exchange: SaslExchange::OAuthBearer,
-        pending_token_expiry_ms: None,
-    };
+    let mut auth = oauth_pending();
     let req = SaslAuthenticateRequest {
         auth_bytes: bytes::Bytes::from_static(b"not-a-valid-gs2-message"),
         ..Default::default()
@@ -247,14 +207,7 @@ async fn oauthbearer_malformed_response_returns_error_json() {
     let resp =
         handle_authenticate_oauthbearer(&req, &mut auth, &validator, || 1_000_000_000_000, None)
             .await;
-    let expected = SaslAuthenticateResponse {
-        error_code: 0,
-        error_message: None,
-        auth_bytes: bytes::Bytes::from_static(br#"{"status":"invalid_token"}"#),
-        session_lifetime_ms: 0,
-        unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(Vec::new()),
-    };
-    assert!(resp == expected);
+    assert_invalid_token_challenge(&resp);
 }
 
 #[tokio::test]
@@ -262,11 +215,7 @@ async fn oauthbearer_authzid_mismatch_fails() {
     let validator = krabka_security::OAuthBearerValidator::default();
     let now_ms = 1_000_000_000_000;
     let token = unsecured_token("alice", 1_000_000_900);
-    let mut auth = ConnectionAuth::Negotiating {
-        mechanism: SaslMechanism::OAuthBearer,
-        exchange: SaslExchange::OAuthBearer,
-        pending_token_expiry_ms: None,
-    };
+    let mut auth = oauth_pending();
     // authzid "bob" != token principal "alice".
     let req = SaslAuthenticateRequest {
         auth_bytes: bytes::Bytes::from(
@@ -275,14 +224,7 @@ async fn oauthbearer_authzid_mismatch_fails() {
         ..Default::default()
     };
     let resp = handle_authenticate_oauthbearer(&req, &mut auth, &validator, || now_ms, None).await;
-    let expected = SaslAuthenticateResponse {
-        error_code: 0,
-        error_message: None,
-        auth_bytes: bytes::Bytes::from_static(br#"{"status":"invalid_token"}"#),
-        session_lifetime_ms: 0,
-        unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(Vec::new()),
-    };
-    assert!(resp == expected);
+    assert_invalid_token_challenge(&resp);
     assert!(!auth.is_authenticated());
 }
 
@@ -341,20 +283,8 @@ async fn authenticate_during_reauth_different_principal_rejected_with_sasl_auth_
 async fn a_rejected_reauth_token_gets_the_error_challenge_then_fails_with_its_json() {
     let validator = krabka_security::OAuthBearerValidator::default();
     let now_ms = 1_000_000_000_000;
-    let mut auth = ConnectionAuth::Reauthenticating {
-        previous: AuthenticatedSnapshot {
-            principal: Principal {
-                name: "alice".to_string(),
-                auth_method: krabka_security::AuthMethod::SaslOAuthBearer,
-                groups: vec![],
-            },
-            mechanism: SaslMechanism::OAuthBearer,
-            expires_at_ms: Some(now_ms + 1_000),
-            authenticated_via_token: false,
-        },
-        exchange: SaslExchange::OAuthBearer,
-        pending_token_expiry_ms: None,
-    };
+    let mut auth =
+        crate::network::auth::test_support::oauth_reauthenticating("alice", now_ms + 1_000);
     let garbage = SaslAuthenticateRequest {
         auth_bytes: bytes::Bytes::from_static(b"not a client response"),
         ..Default::default()
@@ -398,11 +328,7 @@ async fn handle_authenticate_oauthbearer_applies_max_session_lifetime_cap() {
         (Some(secs(600)), 60_000),    // cap above exp → no effect
     ];
     for (cap, want_lifetime_ms) in cases {
-        let mut auth = ConnectionAuth::Negotiating {
-            mechanism: SaslMechanism::OAuthBearer,
-            exchange: SaslExchange::OAuthBearer,
-            pending_token_expiry_ms: None,
-        };
+        let mut auth = oauth_pending();
         let resp =
             handle_authenticate_oauthbearer(&req, &mut auth, &validator, || now_ms, cap).await;
         check!(resp.error_code == 0, "cap {cap:?}");
@@ -424,11 +350,7 @@ async fn handle_authenticate_oauthbearer_rejects_a_zero_session_cap() {
     let validator = krabka_security::OAuthBearerValidator::default();
     let now_ms = 1_000_000_i64;
     let token = unsecured_token("alice", 2_000);
-    let mut auth = ConnectionAuth::Negotiating {
-        mechanism: SaslMechanism::OAuthBearer,
-        exchange: SaslExchange::OAuthBearer,
-        pending_token_expiry_ms: None,
-    };
+    let mut auth = oauth_pending();
 
     let response = handle_authenticate_oauthbearer(
         &oauthbearer_client_response(&token),
@@ -452,3 +374,43 @@ async fn handle_authenticate_oauthbearer_rejects_a_zero_session_cap() {
 }
 
 mod completion;
+
+fn oauth_pending() -> ConnectionAuth {
+    ConnectionAuth::Negotiating {
+        mechanism: SaslMechanism::OAuthBearer,
+        exchange: SaslExchange::OAuthBearer,
+        pending_token_expiry_ms: None,
+    }
+}
+
+fn assert_invalid_token_challenge(response: &SaslAuthenticateResponse) {
+    let expected = SaslAuthenticateResponse {
+        error_code: 0,
+        error_message: None,
+        auth_bytes: bytes::Bytes::from_static(br#"{"status":"invalid_token"}"#),
+        session_lifetime_ms: 0,
+        unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(Vec::new()),
+    };
+    assert!(response == &expected);
+}
+
+fn signed_cache_fixture(
+    generation: u64,
+) -> (
+    i64,
+    SaslAuthenticateRequest,
+    krabka_security::OAuthBearerValidator,
+    AtomicU64,
+    AtomicI64,
+) {
+    let now_ms = 1_000_000;
+    let request = oauthbearer_client_response(&unsecured_token("alice", 2_000));
+    let validator = signed_validator(Some(secs(1)));
+    (
+        now_ms,
+        request,
+        validator,
+        AtomicU64::new(generation),
+        AtomicI64::new(now_ms),
+    )
+}

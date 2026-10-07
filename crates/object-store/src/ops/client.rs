@@ -114,6 +114,7 @@ impl ObjectStoreClient {
     }
 }
 
+#[krabka_macros::object_ops]
 #[async_trait::async_trait]
 impl ObjectOps for ObjectStoreClient {
     async fn put(
@@ -145,14 +146,7 @@ impl ObjectOps for ObjectStoreClient {
         })
     }
 
-    async fn put_from_path(
-        &self,
-        key: &Path,
-        src: &std::path::Path,
-        threshold: u64,
-        chunk_size: usize,
-        req: PutRequest,
-    ) -> Result<PutOutcome, ObjectStoreError> {
+    put_from_path!({
         if chunk_size == 0 {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
@@ -242,7 +236,7 @@ impl ObjectOps for ObjectStoreClient {
             version_id,
             create_precondition: false,
         })
-    }
+    });
 
     async fn get(&self, key: &Path) -> Result<Bytes, ObjectStoreError> {
         Ok(self.inner.get(key).await?.bytes().await?)

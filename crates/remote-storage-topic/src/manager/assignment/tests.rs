@@ -6,28 +6,28 @@ use std::sync::Arc;
 use assert2::{assert, check};
 use krabka_ids::LeaderEpoch;
 use krabka_remote_storage::{
-    RemoteLogMetadataManager, RemoteLogSegmentId, RemoteLogSegmentMetadata,
-    RemoteLogSegmentMetadataUpdate, RemoteLogSegmentState, RemoteStorageError, TopicIdPartition,
+    RemoteLogMetadataManager, RemoteLogSegmentId, RemoteLogSegmentMetadataUpdate,
+    RemoteLogSegmentState, RemoteStorageError, TopicIdPartition,
 };
 use uuid::Uuid;
 
 use crate::{
     log::{InProcessMetadataEventLog, MetadataEventLog},
     manager::test_support::{
-        HwmFlakyLog, on_blocking, start_manager, start_manager_all, tp, wait_ready,
+        HwmFlakyLog, on_blocking, seeded_manager, start_manager, start_manager_all, tp,
+        wait_finished_metadata, wait_ready,
     },
+    partitioning::metadata_partition_for,
 };
+
+krabka_macros::remote_started_segment!(synthetic_started_segment, krabka_remote_storage);
+
+krabka_macros::remote_metadata_missing!(check_missing_partition, krabka_remote_storage);
 
 #[tokio::test(flavor = "multi_thread")]
 async fn add_then_remove_drives_assignment_and_readiness() {
-    use crate::partitioning::metadata_partition_for;
-
     let log: Arc<dyn MetadataEventLog> = InProcessMetadataEventLog::new(4);
-    // Pre-seed a finished segment for `tp()` so a ready read returns Some.
-    crate::manager::test_support::seed_log(log.clone()).await;
-
-    let mp = metadata_partition_for(&tp(), log.partition_count());
-    let m = start_manager(log);
+    let (m, mp) = seeded_manager(log).await;
 
     // Before assignment: the partition is not consumed → genuine miss.
     assert!(matches!(
@@ -40,24 +40,14 @@ async fn add_then_remove_drives_assignment_and_readiness() {
     m.reconcile_assignment(&[mp]).await;
     assert!(m.assigned_metadata_partitions() == vec![mp]);
 
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
-    loop {
-        match m.remote_log_segment_metadata(&tp(), LeaderEpoch(0), 42) {
-            Ok(Some(md)) => {
-                assert!(md.remote_log_segment_id().id == Uuid::from_u128(10));
-                break;
-            }
-            Err(RemoteStorageError::NotReady { partition }) => {
-                assert!(partition == mp, "NotReady names the catching-up partition");
-                assert!(
-                    std::time::Instant::now() < deadline,
-                    "metadata partition never became ready"
-                );
-                tokio::task::yield_now().await;
-            }
-            other => panic!("unexpected read outcome: {other:?}"),
-        }
-    }
+    wait_finished_metadata(
+        &m,
+        mp,
+        "metadata partition never became ready",
+        "unexpected read outcome",
+        Some("NotReady names the catching-up partition"),
+    )
+    .await;
 
     // Remove it: assignment drops, and subsequent reads are a genuine
     // miss (Ok(None)) — the partition is no longer consumed.
@@ -75,20 +65,12 @@ async fn unknown_partition_query_is_none() {
     let log: Arc<dyn MetadataEventLog> = InProcessMetadataEventLog::new(2);
     let m = start_manager(log);
     let other = TopicIdPartition::new(Uuid::from_u128(999), "nope", 0);
-    check!(
-        m.remote_log_segment_metadata(&other, LeaderEpoch(0), 0)
-            .unwrap()
-            == None
-    );
-    check!(m.highest_offset_for_epoch(&other, LeaderEpoch(0)).unwrap() == None);
-    check!(m.list_remote_log_segments(&other).unwrap().is_empty());
+    check_missing_partition(m.as_ref(), &other);
     m.shutdown();
 }
 
 #[tokio::test(flavor = "multi_thread")]
 async fn two_brokers_split_metadata_partitions() {
-    use crate::partitioning::metadata_partition_for;
-
     // Use a wide metadata topic so two user-partitions land in distinct
     // buckets.
     let n = 16;
@@ -108,20 +90,12 @@ async fn two_brokers_split_metadata_partitions() {
     // writer (consumes all partitions, no assignment gating).
     for (tp, id) in [(tp_a.clone(), 100u128), (tp_b.clone(), 200)] {
         let w = start_manager_all(log.clone()).await;
-        let started = RemoteLogSegmentMetadata::new(
+        let started = synthetic_started_segment(
             RemoteLogSegmentId::new(tp.clone(), Uuid::from_u128(id)),
             0,
             99,
             100,
-            1,
-            100,
-            krabka_remote_storage::RemoteLogSegmentDetails::new(
-                2048,
-                RemoteLogSegmentState::CopySegmentStarted,
-                maplit::btreemap! {LeaderEpoch(0) => 0},
-            ),
-        )
-        .unwrap();
+        );
         let w2 = w.clone();
         on_blocking(move || w2.add_remote_log_segment_metadata(started).unwrap()).await;
         let upd = RemoteLogSegmentMetadataUpdate {
@@ -195,14 +169,8 @@ async fn two_brokers_split_metadata_partitions() {
 /// corruption after a remove and re-add.
 #[tokio::test(flavor = "multi_thread")]
 async fn reassignment_remove_then_readd_applies_no_duplicates() {
-    use crate::partitioning::metadata_partition_for;
-
     let log: Arc<dyn MetadataEventLog> = InProcessMetadataEventLog::new(4);
-    // Pre-seed a single finished segment for `tp()`.
-    crate::manager::test_support::seed_log(log.clone()).await;
-
-    let mp = metadata_partition_for(&tp(), log.partition_count());
-    let m = start_manager(log);
+    let (m, mp) = seeded_manager(log).await;
 
     // Add → catch up → exactly one segment.
     m.reconcile_assignment(&[mp]).await;
@@ -241,17 +209,10 @@ async fn reassignment_remove_then_readd_applies_no_duplicates() {
 /// reconcile once the HWM fetch succeeds.
 #[tokio::test(flavor = "multi_thread")]
 async fn hwm_fetch_failure_gates_not_ready_then_self_heals() {
-    use crate::partitioning::metadata_partition_for;
-
     let flaky = HwmFlakyLog::new(4);
     let log: Arc<dyn MetadataEventLog> = flaky.clone();
 
-    // Pre-seed a finished segment for `tp()` via a healthy writer (HWM
-    // not failing yet), so a ready read would return Some.
-    crate::manager::test_support::seed_log(log.clone()).await;
-
-    let mp = metadata_partition_for(&tp(), log.partition_count());
-    let m = start_manager(log);
+    let (m, mp) = seeded_manager(log).await;
 
     // Assign the partition WHILE the HWM RPC is failing. The partition
     // must be added (the broker owns it) but recorded with the sentinel
@@ -286,24 +247,14 @@ async fn hwm_fetch_failure_gates_not_ready_then_self_heals() {
     // returns Some.
     flaky.set_fail_hwm(false);
     m.reconcile_assignment(&[mp]).await;
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
-    loop {
-        match m.remote_log_segment_metadata(&tp(), LeaderEpoch(0), 42) {
-            Ok(Some(md)) => {
-                assert!(md.remote_log_segment_id().id == Uuid::from_u128(10));
-                break;
-            }
-            Err(RemoteStorageError::NotReady { partition }) => {
-                assert!(partition == mp);
-                assert!(
-                    std::time::Instant::now() < deadline,
-                    "partition never became ready after HWM recovered"
-                );
-                tokio::task::yield_now().await;
-            }
-            other => panic!("unexpected read outcome after recovery: {other:?}"),
-        }
-    }
+    wait_finished_metadata(
+        &m,
+        mp,
+        "partition never became ready after HWM recovered",
+        "unexpected read outcome after recovery",
+        None,
+    )
+    .await;
     // The list path is now Ready too.
     assert!(m.list_remote_log_segments(&tp()).unwrap().len() == 1);
     assert!(m.highest_offset_for_epoch(&tp(), LeaderEpoch(0)).unwrap() == Some(99));

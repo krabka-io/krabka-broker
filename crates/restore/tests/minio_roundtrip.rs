@@ -20,8 +20,6 @@ mod archive_fixture;
 #[path = "roundtrip/batches.rs"]
 mod batches;
 
-use std::process::{Command, Stdio};
-
 use assert2::{assert, check};
 use clap::Parser as _;
 use krabka_ids::Offset;
@@ -58,6 +56,10 @@ const PREFIX: &str = "tier";
 
 const TOPIC: &str = "orders";
 
+// Poll the published port until MinIO's listener answers, so the first S3
+// call does not race the container's startup.
+krabka_macros::minio_fixture!(minio_process);
+
 /// A free ephemeral port on the loopback interface.
 ///
 /// The port is published by the container, so two container suites running at
@@ -79,61 +81,15 @@ struct MinioContainer {
 impl MinioContainer {
     fn start(port: u16) -> Self {
         let name = format!("krabka-restore-minio-{}", Uuid::new_v4().simple());
-        let status = Command::new("docker")
-            .args([
-                "run",
-                "-d",
-                "--rm",
-                "--name",
-                &name,
-                "-p",
-                &format!("{port}:9000"),
-                "-e",
-                &format!("MINIO_ROOT_USER={MINIO_ACCESS_KEY}"),
-                "-e",
-                &format!("MINIO_ROOT_PASSWORD={MINIO_SECRET_KEY}"),
-                MINIO_IMAGE,
-                "server",
-                "/data",
-            ])
-            .stdout(Stdio::null())
-            .stderr(Stdio::inherit())
-            .status()
-            .expect("spawn docker run minio");
-        assert!(status.success(), "docker run minio failed");
-        wait_for_minio_ready(port);
+        minio_process::start(&name, port, MINIO_IMAGE, MINIO_ACCESS_KEY, MINIO_SECRET_KEY);
         Self { name }
     }
 }
 
 impl Drop for MinioContainer {
     fn drop(&mut self) {
-        let _ = Command::new("docker")
-            .args(["rm", "-f", &self.name])
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status();
+        minio_process::remove(&self.name);
     }
-}
-
-/// Poll the published port until `MinIO`'s listener answers, so the first S3
-/// call does not race the container's startup.
-fn wait_for_minio_ready(port: u16) {
-    let addr: std::net::SocketAddr = format!("127.0.0.1:{port}").parse().expect("static addr");
-    for _ in 0..60 {
-        if std::net::TcpStream::connect_timeout(&addr, std::time::Duration::from_millis(500))
-            .is_ok()
-        {
-            // A TCP accept is not a fully initialised S3 server; give the
-            // bucket API a moment to come up.
-            std::thread::sleep(std::time::Duration::from_millis(500));
-            return;
-        }
-        // Intentional: a bounded readiness poll of an external process. No
-        // krabka metric reflects its listener coming up.
-        std::thread::sleep(std::time::Duration::from_millis(500));
-    }
-    panic!("MinIO never accepted TCP on 127.0.0.1:{port}");
 }
 
 /// Create the bucket with `mc`, retrying the alias so a slow `MinIO` startup
@@ -146,25 +102,7 @@ fn make_bucket(port: u16) {
            sleep 1; \
          done && mc mb -p local/{BUCKET}"
     );
-    let out = Command::new("docker")
-        .args([
-            "run",
-            "--rm",
-            "--add-host=host.docker.internal:host-gateway",
-            "--entrypoint",
-            "/bin/sh",
-            MINIO_CLIENT_IMAGE,
-            "-c",
-            &script,
-        ])
-        .output()
-        .expect("spawn mc mb");
-    assert!(
-        out.status.success(),
-        "mc mb failed: stdout={}, stderr={}",
-        String::from_utf8_lossy(&out.stdout),
-        String::from_utf8_lossy(&out.stderr),
-    );
+    minio_process::make_bucket(MINIO_CLIENT_IMAGE, &script);
 }
 
 /// The backend configuration both halves of the test use: the archive writer

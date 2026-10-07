@@ -214,10 +214,7 @@ mod tests {
             ..LogConfig::default()
         };
         let mut log = Log::open(dir.path(), config).unwrap();
-        for _ in 0..40 {
-            let mut batch = sample_batch(4);
-            log.append(&mut batch).expect("append");
-        }
+        crate::log::test_support::append_samples(&mut log, 40, 4);
         check!(!log.segments.is_empty(), "the appends should have rolled");
 
         let end = log.log_end_offset();
@@ -456,10 +453,7 @@ mod tests {
             },
         )
         .unwrap();
-        log.set_stamp_source(std::sync::Arc::new(
-            crate::stamp_source::MonotonicStampSource::new(10, 1),
-        ))
-        .unwrap();
+        crate::log::test_support::install_stamps(&mut log, 10, 1);
         for timestamp in [0, 0, 1_000] {
             let mut batch = sample_batch(1);
             batch.max_timestamp = timestamp;
@@ -503,9 +497,7 @@ mod tests {
         for (name, debt_halves, expected_sealed) in cases {
             let dir = tempdir().unwrap();
             let mut log = rolling_test_log(dir.path());
-            for _ in 0..5 {
-                log.append(&mut sample_batch(1)).unwrap();
-            }
+            crate::log::test_support::append_samples(&mut log, 5, 1);
             let segment = log.segments[0].size().bytes_u64();
             check!(
                 log.segments

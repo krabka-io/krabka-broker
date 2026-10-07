@@ -20,18 +20,14 @@ const ERR_NONE: i16 = 0;
 
 pub fn join_request(group_id: &str, member_id: &str) -> JoinGroupRequest {
     JoinGroupRequest {
-        group_id: group_id.to_string(),
-        session_timeout_ms: 30_000,
-        rebalance_timeout_ms: 30_000,
-        member_id: member_id.to_string(),
         group_instance_id: None,
-        protocol_type: "consumer".to_string(),
-        protocols: vec![JoinGroupRequestProtocol {
-            name: "range".to_string(),
-            metadata: Bytes::from_static(b""),
-            ..Default::default()
-        }],
-        ..Default::default()
+        ..classic_join_request(
+            group_id.to_string(),
+            member_id.to_string(),
+            (30_000, 30_000),
+            "consumer".to_string(),
+            vec![join_protocol("range".to_string(), Bytes::from_static(b""))],
+        )
     }
 }
 
@@ -92,4 +88,77 @@ pub async fn classic_join_sync(client: &Client, group_id: &str) -> (String, i32)
     );
 
     (member_id, generation_id)
+}
+
+/// Preserve protocol preference order and arbitrary metadata bytes.
+pub fn join_protocol(name: impl Into<String>, metadata: Bytes) -> JoinGroupRequestProtocol {
+    JoinGroupRequestProtocol {
+        name: name.into(),
+        metadata,
+        ..Default::default()
+    }
+}
+
+/// A classic join with explicit member identity, timing and protocol proposals.
+pub fn classic_join_request(
+    group_id: impl Into<String>,
+    member_id: impl Into<String>,
+    (session_timeout_ms, rebalance_timeout_ms): (i32, i32),
+    protocol_type: impl Into<String>,
+    protocols: Vec<JoinGroupRequestProtocol>,
+) -> JoinGroupRequest {
+    JoinGroupRequest {
+        group_id: group_id.into(),
+        member_id: member_id.into(),
+        session_timeout_ms,
+        rebalance_timeout_ms,
+        protocol_type: protocol_type.into(),
+        protocols,
+        ..Default::default()
+    }
+}
+
+pub fn sync_assignment(
+    member_id: impl Into<String>,
+    assignment: Bytes,
+) -> SyncGroupRequestAssignment {
+    SyncGroupRequestAssignment {
+        member_id: member_id.into(),
+        assignment,
+        ..Default::default()
+    }
+}
+
+pub fn classic_sync_request(
+    group_id: impl Into<String>,
+    generation_id: i32,
+    member_id: impl Into<String>,
+    protocol_type: Option<String>,
+    protocol_name: Option<String>,
+    assignments: Vec<SyncGroupRequestAssignment>,
+) -> SyncGroupRequest {
+    SyncGroupRequest {
+        group_id: group_id.into(),
+        generation_id,
+        member_id: member_id.into(),
+        protocol_type,
+        protocol_name,
+        assignments,
+        ..Default::default()
+    }
+}
+
+/// Empty range metadata with the caller's original join deadlines.
+pub fn empty_range_join(
+    group: impl Into<String>,
+    member: impl Into<String>,
+    timeouts: (i32, i32),
+) -> JoinGroupRequest {
+    classic_join_request(
+        group,
+        member,
+        timeouts,
+        "consumer",
+        vec![join_protocol("range", Bytes::new())],
+    )
 }

@@ -14,10 +14,7 @@ use krabka_units::prelude::{ByteSize, ByteSizeExt, bytes};
 use tracing::instrument;
 
 use super::Log;
-use crate::{
-    error::LogError,
-    segment::{RawSegmentRead, Segment},
-};
+use crate::{error::LogError, segment::Segment};
 
 /// A `usize` byte length as a quantity.
 ///
@@ -60,6 +57,55 @@ fn emptied(segment: &Segment, next: Offset) -> bool {
 /// waits for the next read.
 fn fits_after_first(len: ByteSize, remaining: ByteSize) -> bool {
     len <= remaining
+}
+
+/// Shared progress for verbatim bytes and file regions, including the first-batch exception.
+struct RawReadCursor {
+    start: Offset,
+    next: Offset,
+    remaining: ByteSize,
+    last: Option<Offset>,
+}
+
+impl RawReadCursor {
+    fn new(offset: Offset, budget: ByteSize) -> Self {
+        Self {
+            start: offset,
+            next: offset,
+            remaining: budget,
+            last: None,
+        }
+    }
+
+    fn budget(&self) -> ByteSize {
+        self.remaining.max(batch_header())
+    }
+
+    fn accept(&mut self, start: Offset, last: Offset, bytes: usize) -> bool {
+        let len = size_from_len(bytes);
+        if self.last.is_some() && !fits_after_first(len, self.remaining) {
+            return false;
+        }
+        if self.last.is_none() {
+            self.start = start;
+        }
+        self.remaining = (self.remaining - len).max(ByteSize::ZERO);
+        self.next = last + 1;
+        self.last = Some(last);
+        true
+    }
+
+    fn finished(&self, segment: &Segment, limit: Offset) -> bool {
+        self.remaining == ByteSize::ZERO || self.next >= limit || !emptied(segment, self.next)
+    }
+}
+
+/// A complete segment result with its offset span and byte cost.
+struct RawChunk<T> {
+    data: T,
+    start: Offset,
+    last: Offset,
+    len: usize,
 }
 
 /// Result of [`Log::read`]: the absolute offset of the first batch
@@ -219,6 +265,33 @@ impl Log {
         })
     }
 
+    fn raw_chunks<T>(
+        &self,
+        fetch_offset: Offset,
+        limit_offset: Offset,
+        budget: ByteSize,
+        mut read: impl FnMut(&Segment, Offset, ByteSize) -> Result<Option<RawChunk<T>>, LogError>,
+    ) -> Result<(RawReadCursor, Vec<T>), LogError> {
+        let mut cursor = RawReadCursor::new(fetch_offset, budget);
+        let mut chunks = Vec::new();
+        for segment in self.segments.iter().chain(self.active.as_ref()) {
+            if segment.last_offset() < cursor.next {
+                continue;
+            }
+            let Some(chunk) = read(segment, cursor.next, cursor.budget())? else {
+                continue;
+            };
+            if !cursor.accept(chunk.start, chunk.last, chunk.len) {
+                break;
+            }
+            chunks.push(chunk.data);
+            if cursor.finished(segment, limit_offset) {
+                break;
+            }
+        }
+        Ok((cursor, chunks))
+    }
+
     /// Like [`Log::read`], but returns verbatim wire bytes with no decode.
     ///
     /// The read walks sealed segments and then the active segment. It goes on
@@ -248,42 +321,28 @@ impl Log {
             return Ok(RawRead::empty(fetch_offset));
         }
 
-        let mut chunks: Vec<Bytes> = Vec::new();
-        let mut start_offset = fetch_offset;
-        let mut current = fetch_offset;
-        let mut remaining = max_size;
-        let mut got_first = false;
-        let mut last_offset = None;
-
-        for seg in self.segments.iter().chain(self.active.as_ref()) {
-            if seg.last_offset() < current {
-                continue;
-            }
-            let r: RawSegmentRead = seg.read_raw_with_buffer_cap(
-                current,
-                limit_offset,
-                remaining.max(batch_header()),
-                read_buffer_cap,
-            )?;
-            if r.is_empty() {
-                continue;
-            }
-            let len = size_from_len(r.bytes.len());
-            if got_first && !fits_after_first(len, remaining) {
-                break;
-            }
-            if !got_first {
-                start_offset = r.start_offset;
-                got_first = true;
-            }
-            remaining = (remaining - len).max(ByteSize::ZERO);
-            current = r.last_offset + 1;
-            last_offset = Some(r.last_offset);
-            chunks.push(r.bytes);
-            if remaining == ByteSize::ZERO || current >= limit_offset || !emptied(seg, current) {
-                break;
-            }
-        }
+        let (cursor, mut chunks) = self.raw_chunks(
+            fetch_offset,
+            limit_offset,
+            max_size,
+            |segment, next, budget| {
+                let read = segment.read_raw_with_buffer_cap(
+                    next,
+                    limit_offset,
+                    budget,
+                    read_buffer_cap,
+                )?;
+                if read.is_empty() {
+                    return Ok(None);
+                }
+                Ok(Some(RawChunk {
+                    len: read.bytes.len(),
+                    data: read.bytes,
+                    start: read.start_offset,
+                    last: read.last_offset,
+                }))
+            },
+        )?;
 
         let bytes = match chunks.len() {
             0 => Bytes::new(),
@@ -300,10 +359,10 @@ impl Log {
         let total = bytes.len();
         tracing::Span::current().record("total", total);
         Ok(RawRead {
-            start_offset,
+            start_offset: cursor.start,
             bytes,
             total,
-            last_offset,
+            last_offset: cursor.last,
         })
     }
 
@@ -338,42 +397,27 @@ impl Log {
             return Ok(RawReadDesc::empty(fetch_offset));
         }
 
-        let mut regions: Vec<krabka_protocol::records::FileRegion> = Vec::new();
-        let mut start_offset = fetch_offset;
-        let mut current = fetch_offset;
-        let mut remaining = max_size;
-        let mut got_first = false;
-
-        for seg in self.segments.iter().chain(self.active.as_ref()) {
-            if seg.last_offset() < current {
-                continue;
-            }
-            let r = seg.read_raw_desc(current, limit_offset, remaining.max(batch_header()))?;
-            let Some(region) = r.region else {
-                continue;
-            };
-            let len = size_from_len(region.len);
-            if got_first && !fits_after_first(len, remaining) {
-                break;
-            }
-            if !got_first {
-                start_offset = r.start_offset;
-                got_first = true;
-            }
-            remaining = (remaining - len).max(ByteSize::ZERO);
-            current = r.last_offset + 1;
-            regions.push(region);
-            if remaining == ByteSize::ZERO || current >= limit_offset || !emptied(seg, current) {
-                break;
-            }
-        }
+        let (cursor, regions) = self.raw_chunks(
+            fetch_offset,
+            limit_offset,
+            max_size,
+            |segment, next, budget| {
+                let read = segment.read_raw_desc(next, limit_offset, budget)?;
+                Ok(read.region.map(|region| RawChunk {
+                    len: region.len,
+                    data: region,
+                    start: read.start_offset,
+                    last: read.last_offset,
+                }))
+            },
+        )?;
 
         let total: usize = regions.iter().map(|r| r.len).sum();
         let span = tracing::Span::current();
         span.record("regions", regions.len());
         span.record("total", total);
         Ok(RawReadDesc {
-            start_offset,
+            start_offset: cursor.start,
             regions,
             total,
         })

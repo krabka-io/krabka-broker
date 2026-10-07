@@ -1,6 +1,6 @@
-(* #"/workspace/crates/verified/src/producer/completion.rs" 20 0 20 76 *)
+(* #"/workspace/crates/verified/src/producer/completion.rs" 18 0 18 76 *)
 
-let%span scompletion = "/workspace/crates/verified/src/producer/completion.rs" 19 10 19 91
+let%span scompletion = "/workspace/crates/verified/src/producer/completion.rs" 17 10 17 91
 
 use creusot.int.UInt64
 use seq.Seq
@@ -14,7 +14,7 @@ constant selected : Seq.seq UInt64.t
 
 constant source : int
 
-predicate completion_source_selected [#"/workspace/crates/verified/src/producer/completion.rs" 20 0 20 76] (selected: Seq.seq UInt64.t) (source: int)
+predicate completion_source_selected [#"/workspace/crates/verified/src/producer/completion.rs" 18 0 18 76] (selected: Seq.seq UInt64.t) (source: int)
 
 goal vc_completion_source_selected:
   [@stop_split] [@expl:completion_source_selected ensures] [%#scompletion] (exists j: int. 0 <= j

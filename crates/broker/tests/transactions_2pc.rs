@@ -16,21 +16,24 @@
 //! 2PC transaction, exhaustively. These tests pin the wire and handler
 //! behaviour end to end.
 
+mod support;
+
 use std::time::Duration;
 
 use assert2::assert;
 use krabka_broker::{Broker, BrokerConfig, BrokerHandle};
 use krabka_client_producer::Producer;
-use krabka_protocol::{
-    Encode, ProtocolError, ProtocolRequest,
-    owned::{
-        describe_transactions_request::DescribeTransactionsRequest,
-        init_producer_id_request::{self, InitProducerIdRequest},
-        init_producer_id_response::InitProducerIdResponse,
-        update_features_request::{FeatureUpdateKey, UpdateFeaturesRequest},
-    },
+use krabka_protocol::owned::{
+    describe_transactions_request::DescribeTransactionsRequest,
+    init_producer_id_request::{self, InitProducerIdRequest},
+    update_features_request::UpdateFeaturesRequest,
 };
 use tempfile::TempDir;
+
+use crate::support::{
+    client::connect_client, configs::feature_update, discovery::api_versions_request_for,
+    transactions::init_producer_request,
+};
 
 /// An `InitProducerId` request that keeps the two-phase commit fields.
 ///
@@ -38,26 +41,10 @@ use tempfile::TempDir;
 /// negotiates v5 at the most and leaves `enable2Pc` and `keepPreparedTxn` off
 /// the wire. These tests drive the v6 semantics, so they pin v6, on a broker
 /// that enables unstable api versions.
-#[derive(Clone, Debug)]
-struct TwoPhaseCommitInitProducerId(InitProducerIdRequest);
-
-impl Encode for TwoPhaseCommitInitProducerId {
-    fn encode<B: bytes::BufMut>(&self, buf: &mut B, version: i16) -> Result<(), ProtocolError> {
-        self.0.encode(buf, version)
-    }
-
-    fn encoded_len(&self, version: i16) -> usize {
-        self.0.encoded_len(version)
-    }
-}
-
-impl ProtocolRequest for TwoPhaseCommitInitProducerId {
-    const API_KEY: i16 = init_producer_id_request::API_KEY;
-    const MIN_VERSION: i16 = init_producer_id_request::MAX_VERSION;
-    const MAX_VERSION: i16 = init_producer_id_request::MAX_VERSION;
-    const LATEST_STABLE_VERSION: i16 = init_producer_id_request::MAX_VERSION;
-    const FLEXIBLE_MIN: i16 = init_producer_id_request::FLEXIBLE_MIN;
-    type Response = InitProducerIdResponse;
+fn two_phase_init(
+    request: InitProducerIdRequest,
+) -> crate::support::wire::At<InitProducerIdRequest, { init_producer_id_request::MAX_VERSION }> {
+    crate::support::wire::At(request)
 }
 
 // Kafka error codes (see crates/broker/src/codes.rs).
@@ -77,11 +64,7 @@ async fn boot(two_pc_enabled: bool) -> (BrokerHandle, String, TempDir) {
 }
 
 async fn client(bootstrap: &str) -> krabka_client_core::Client {
-    krabka_client_core::Client::builder()
-        .bootstrap(bootstrap)
-        .build()
-        .await
-        .unwrap()
+    connect_client(bootstrap, None).await
 }
 
 /// The broker rejects `enable2Pc=true` against a cluster with 2PC disabled,
@@ -95,14 +78,10 @@ async fn enable_2pc_rejected_when_cluster_disabled() {
     let client = client(&bootstrap).await;
 
     let resp = client
-        .send(TwoPhaseCommitInitProducerId(InitProducerIdRequest {
-            transactional_id: Some("tid-2pc".into()),
-            transaction_timeout_ms: 30_000,
-            producer_id: -1,
-            producer_epoch: -1,
+        .send(two_phase_init(InitProducerIdRequest {
             enable2_pc: true,
             keep_prepared_txn: false,
-            ..Default::default()
+            ..init_producer_request(Some("tid-2pc".into()), 30_000, (-1, -1))
         }))
         .await
         .expect("InitProducerId");
@@ -134,14 +113,10 @@ async fn keep_prepared_txn_without_ongoing_transaction_is_a_noop() {
     let client = client(&bootstrap).await;
 
     let resp = client
-        .send(TwoPhaseCommitInitProducerId(InitProducerIdRequest {
-            transactional_id: Some("tid-keep".into()),
-            transaction_timeout_ms: 30_000,
-            producer_id: -1,
-            producer_epoch: -1,
+        .send(two_phase_init(InitProducerIdRequest {
             enable2_pc: true,
             keep_prepared_txn: true,
-            ..Default::default()
+            ..init_producer_request(Some("tid-keep".into()), 30_000, (-1, -1))
         }))
         .await
         .expect("InitProducerId");
@@ -184,14 +159,10 @@ async fn enable_2pc_persists_no_timeout_sentinel() {
     // Re-init the SAME tid with enable2Pc → flips it to a no-timeout 2PC txn.
     let client = client(&bootstrap).await;
     let resp = client
-        .send(TwoPhaseCommitInitProducerId(InitProducerIdRequest {
-            transactional_id: Some("tid-2pc-ok".into()),
-            transaction_timeout_ms: 30_000,
-            producer_id: -1,
-            producer_epoch: -1,
+        .send(two_phase_init(InitProducerIdRequest {
             enable2_pc: true,
             keep_prepared_txn: false,
-            ..Default::default()
+            ..init_producer_request(Some("tid-2pc-ok".into()), 30_000, (-1, -1))
         }))
         .await
         .expect("InitProducerId(enable2Pc)");
@@ -240,19 +211,13 @@ async fn enable_2pc_persists_no_timeout_sentinel() {
 /// (95) with `QuorumFeatures.reasonNotSupported`'s message and no rows.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn two_phase_commit_needs_no_transaction_version_3_and_3_is_refused() {
-    use krabka_protocol::owned::{
-        api_versions_request::ApiVersionsRequest, update_features_response::UpdateFeaturesResponse,
-    };
+    use krabka_protocol::owned::update_features_response::UpdateFeaturesResponse;
 
     let (broker, bootstrap, _dir) = boot(true).await;
     let client = client(&bootstrap).await;
 
     let api_versions = client
-        .send(ApiVersionsRequest {
-            client_software_name: "krabka-test".into(),
-            client_software_version: "0.0.0".into(),
-            ..Default::default()
-        })
+        .send(api_versions_request_for("krabka-test", "0.0.0"))
         .await
         .expect("ApiVersions");
     let finalized = api_versions
@@ -264,12 +229,7 @@ async fn two_phase_commit_needs_no_transaction_version_3_and_3_is_refused() {
 
     let response = client
         .send(UpdateFeaturesRequest {
-            feature_updates: vec![FeatureUpdateKey {
-                feature: "transaction.version".into(),
-                max_version_level: 3,
-                upgrade_type: 1,
-                ..Default::default()
-            }],
+            feature_updates: vec![feature_update("transaction.version", 3, 1)],
             ..Default::default()
         })
         .await

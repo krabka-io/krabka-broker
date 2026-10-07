@@ -90,14 +90,9 @@ async fn write_remote_markers(
     // host/port. Mirrors the resolution in the replicator supervisor and
     // heartbeat client — the marker RPC must target the same listener whose
     // protocol we dial with.
-    let (host, port) = broker_info
-        .endpoints
-        .iter()
-        .find(|e| e.name == inter_broker_listener_name)
-        .map_or_else(
-            || (broker_info.host.clone(), broker_info.port),
-            |e| (e.host.clone(), e.port),
-        );
+    let (host, port) =
+        crate::broker::registered_listener_endpoint(broker_info, inter_broker_listener_name);
+    let host = host.to_owned();
 
     let req = build_write_txn_markers_request(entry, marker_type, tps, coordinator_epoch);
 

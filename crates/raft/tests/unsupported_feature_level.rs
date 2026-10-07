@@ -9,7 +9,7 @@
 use std::time::{Duration, Instant};
 
 use assert2::{assert, check};
-use krabka_metadata::{FeatureLevelRecord, MetadataRecord, NodeId, TopicRecord};
+use krabka_metadata::{FeatureLevelRecord, MetadataRecord, NodeId};
 use krabka_raft::{
     BootstrapMode, Controller, ControllerConfig, ControllerHandle, RaftError,
     UnstableFeatureVersions,
@@ -21,6 +21,8 @@ use uuid::Uuid;
 /// Single-voter elections are instant, and a short timeout keeps each boot well
 /// inside the 30-second leader deadline.
 const FAST_ELECTION_TIMEOUT: Time = millis(200);
+
+krabka_macros::topic_record_fixture!(single_partition_topic);
 
 const UNSTABLE_METADATA_VERSION: i16 = 33;
 
@@ -132,12 +134,10 @@ async fn a_controller_stops_when_it_replays_a_level_it_does_not_support() {
         .expect("commit the unsupported level");
     let deadline = Instant::now() + Duration::from_secs(30);
     for probe in 0.. {
-        let topic = MetadataRecord::V1Topic(TopicRecord {
-            name: format!("probe-{probe}"),
-            topic_id: Uuid::new_v4(),
-            partitions: 1,
-            replication_factor: 1,
-        });
+        let topic = MetadataRecord::V1Topic(single_partition_topic(
+            &format!("probe-{probe}"),
+            Uuid::new_v4(),
+        ));
         if let Err(error) = controller.submit_change(vec![topic]).await {
             check!(matches!(error, RaftError::Shutdown), "{error}");
             break;

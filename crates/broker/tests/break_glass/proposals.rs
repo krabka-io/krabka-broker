@@ -180,14 +180,8 @@ pub(super) async fn approved_proposal(cluster: &Cluster, action: i8, target: &st
     id
 }
 
-/// This process's wall clock in epoch milliseconds, which is the clock the
-/// broker stamps a proposal against.
-pub(super) fn now_ms() -> i64 {
-    i64::try_from(
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .expect("a clock after the epoch")
-            .as_millis(),
-    )
-    .expect("a clock inside i64 milliseconds")
-}
+// This process's wall clock in epoch milliseconds, which is the clock the
+// broker stamps a proposal against.
+krabka_macros::unix_millis_fixture!(
+    pub(super) now_ms, "a clock after the epoch", "a clock inside i64 milliseconds"
+);

@@ -1,6 +1,6 @@
 (* #"/workspace/crates/verified/src/consensus/failover.rs" 15 0 15 83 *)
 
-let%span sord = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
 let%span sfailover = "/workspace/crates/verified/src/consensus/failover.rs" 16 22 16 48
 let%span sfailover'0 = "/workspace/crates/verified/src/consensus/failover.rs" 13 10 13 61
 let%span sfailover'1 = "/workspace/crates/verified/src/consensus/failover.rs" 6 10 6 41

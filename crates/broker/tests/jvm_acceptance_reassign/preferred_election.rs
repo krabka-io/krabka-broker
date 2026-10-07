@@ -9,9 +9,7 @@ use assert2::assert;
 
 use crate::jvm_acceptance::{
     KAFKA_IMAGE_TXN, broker0_advertised, docker_run_kafka_tool_with_image_and_mount,
-    nc_check_connectivity, plain_jaas, start_three_broker_sasl_plaintext_jvm_cluster,
     wait_jvm_isr_contains, wait_jvm_partition_any_leader, wait_jvm_partition_leader,
-    wait_three_brokers_registered,
 };
 
 /// JVM acceptance test for `kafka-leader-election --election-type preferred`.
@@ -37,18 +35,9 @@ use crate::jvm_acceptance::{
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "requires Docker"]
 async fn jvm_kafka_leader_election_preferred() {
-    const ADMIN: &str = "admin";
-    const ADMIN_PASS: &str = "admin-secret";
     const TOPIC: &str = "krabka-elect-preferred-itest";
 
-    let (h1, h2, h3, _cfg1, _cfg2, _cfg3, _d1, _d2, _d3) =
-        start_three_broker_sasl_plaintext_jvm_cluster(ADMIN, ADMIN_PASS).await;
-    nc_check_connectivity();
-
-    // Wait for all three brokers to register in the metadata image.
-    wait_three_brokers_registered(&h1, &h2, &h3, 3).await;
-
-    let admin_props = crate::jvm_acceptance::write_plain_props(ADMIN, ADMIN_PASS);
+    let (cluster, admin_props) = Box::pin(crate::cluster::admin_cluster()).await;
     let admin_mount = admin_props.mount_str();
 
     // Create rf=2 topic as super-user via the 7.5 JVM image.
@@ -71,10 +60,10 @@ async fn jvm_kafka_leader_election_preferred() {
     );
 
     // Wait for broker 1 to see the partition in the committed metadata image.
-    h1.wait_until_partition_present(TOPIC, 0).await;
+    cluster.h1.wait_until_partition_present(TOPIC, 0).await;
 
     // Record the initial leader (should be broker 1 as preferred replica).
-    let initial_leader = wait_jvm_partition_any_leader(&h1, TOPIC, 0).await;
+    let initial_leader = wait_jvm_partition_any_leader(&cluster.h1, TOPIC, 0).await;
     eprintln!("KRABKA[test] initial partition leader: {initial_leader}");
 
     // For the preferred election to do anything interesting we need broker 1
@@ -105,29 +94,23 @@ async fn jvm_kafka_leader_election_preferred() {
     //
     // Metadata injection bypasses both limitations and matches the technique
     // used by `tests/elect_leaders.rs::unclean_election_via_wire_picks_alive_replica`.
-    h1.submit_metadata_record_for_test(krabka_metadata::MetadataRecord::V1Partition(
-        krabka_metadata::PartitionRecord {
-            topic: TOPIC.to_string(),
-            partition: 0,
-            // Make broker 2 the current leader — so broker 1 (replicas[0])
-            // is no longer the leader but is still alive and in the ISR.
-            leader: krabka_broker::NodeId(2),
-            replicas: vec![krabka_broker::NodeId(1), krabka_broker::NodeId(2)],
-            isr: vec![krabka_broker::NodeId(2), krabka_broker::NodeId(1)],
-            leader_epoch: krabka_metadata::LeaderEpoch(1),
-            adding_replicas: vec![],
-            removing_replicas: vec![],
-            directories: vec![],
-            partition_epoch: 0,
-        },
-    ))
-    .await
-    .expect("inject PartitionRecord making broker 2 the leader");
+    cluster
+        .h1
+        .submit_metadata_record_for_test(krabka_metadata::MetadataRecord::V1Partition(
+            crate::cluster::election_partition(
+                TOPIC,
+                krabka_broker::NodeId(2),
+                vec![krabka_broker::NodeId(1), krabka_broker::NodeId(2)],
+                vec![krabka_broker::NodeId(2), krabka_broker::NodeId(1)],
+            ),
+        ))
+        .await
+        .expect("inject PartitionRecord making broker 2 the leader");
 
     // Wait for the injected state to propagate to broker 2's metadata image:
     // leader=2, ISR contains both 1 and 2.
-    wait_jvm_partition_leader(&h2, TOPIC, 0, 2).await;
-    wait_jvm_isr_contains(&h2, TOPIC, 0, 1).await;
+    wait_jvm_partition_leader(&cluster.h2, TOPIC, 0, 2).await;
+    wait_jvm_isr_contains(&cluster.h2, TOPIC, 0, 1).await;
 
     // A PREFERRED election refuses with PREFERRED_LEADER_NOT_AVAILABLE until
     // broker 1 is electable, and neither wait above implies that: the leader
@@ -137,7 +120,7 @@ async fn jvm_kafka_leader_election_preferred() {
     // `AdminClient` sends this election to any of the three and every one of
     // them must agree. Settle on all three rather than on whichever the
     // rotation happens to name.
-    for handle in [&h1, &h2, &h3] {
+    for handle in [&cluster.h1, &cluster.h2, &cluster.h3] {
         handle.wait_until_broker_electable(1).await;
     }
     eprintln!(
@@ -182,12 +165,12 @@ async fn jvm_kafka_leader_election_preferred() {
     );
 
     // Poll until broker 1 is the leader again on broker 2's view.
-    wait_jvm_partition_leader(&h2, TOPIC, 0, 1).await;
+    wait_jvm_partition_leader(&cluster.h2, TOPIC, 0, 1).await;
     eprintln!("KRABKA[test] preferred election confirmed: broker 1 is leader again");
 
-    h1.shutdown().await;
-    h2.shutdown().await;
-    h3.shutdown().await;
+    cluster.h1.shutdown().await;
+    cluster.h2.shutdown().await;
+    cluster.h3.shutdown().await;
 }
 
 // ── the two partition selectors, and the two per-partition codes ────────────
@@ -208,8 +191,7 @@ async fn jvm_kafka_leader_election_preferred() {
 // the difference.
 
 use crate::{
-    jvm_acceptance::start_host_broker,
-    oracle::{Oracle, Side, ToolFile},
+    oracle::{Side, ToolFile},
     tool_output::{ElectionOutcome, TopicPartition, election_json, parse_election},
 };
 
@@ -245,17 +227,8 @@ fn selector_partitions() -> Vec<TopicPartition> {
 async fn election_selectors_report_election_not_needed_as_apache_kafka_does() {
     // Kafka first: the claim that a healthy partition answers 84 rather than
     // succeeding is a claim about Kafka, and this is where a wrong one fails.
-    let oracle = tokio::task::spawn_blocking(|| Oracle::start("elect-selectors"))
-        .await
-        .expect("oracle boot");
-    let oracle_side = Side::Oracle(&oracle);
-
-    let (broker, _dir) = start_host_broker().await;
-    nc_check_connectivity();
-    let advertised = broker0_advertised().to_owned();
-    let krabka_side = Side::Krabka {
-        bootstrap: &advertised,
-    };
+    let comparison = crate::oracle::OracleComparison::start("elect-selectors").await;
+    let [oracle_side, krabka_side] = comparison.sides();
 
     let document = election_json(&selector_partitions());
     let mut answers = Vec::new();
@@ -329,7 +302,7 @@ async fn election_selectors_report_election_not_needed_as_apache_kafka_does() {
         "--all-topic-partitions: krabka and Apache Kafka disagreed: {answers:?}",
     );
 
-    broker.shutdown().await;
+    comparison.broker.shutdown().await;
 }
 
 /// A partition whose preferred replica is out of the ISR reports
@@ -352,22 +325,9 @@ async fn election_selectors_report_election_not_needed_as_apache_kafka_does() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "requires Docker"]
 async fn a_preferred_replica_outside_the_isr_reports_code_80() {
-    const ADMIN: &str = "admin";
-    const ADMIN_PASS: &str = "admin-secret";
     const TOPIC: &str = "krabka-elect-unavailable-itest";
 
-    let (h1, h2, h3, _cfg1, _cfg2, _cfg3, _d1, _d2, _d3) =
-        start_three_broker_sasl_plaintext_jvm_cluster(ADMIN, ADMIN_PASS).await;
-    nc_check_connectivity();
-    wait_three_brokers_registered(&h1, &h2, &h3, 3).await;
-
-    let props = format!(
-        "security.protocol=SASL_PLAINTEXT\n\
-         sasl.mechanism=PLAIN\n\
-         sasl.jaas.config={}\n",
-        plain_jaas(ADMIN, ADMIN_PASS),
-    );
-    let advertised = broker0_advertised().to_owned();
+    let (brokers, props, advertised) = Box::pin(crate::cluster::admin_text_cluster()).await;
     let side = Side::Krabka {
         bootstrap: &advertised,
     };
@@ -393,15 +353,15 @@ async fn a_preferred_replica_outside_the_isr_reports_code_80() {
         None,
     )
     .expect_success();
-    h1.wait_until_partition_present(TOPIC, 0).await;
+    brokers.h1.wait_until_partition_present(TOPIC, 0).await;
 
     // Keep a registered non-controller broker offline so the injected
     // preferred replica cannot race back into the ISR before the JVM command.
-    let controller_leader = h1.wait_until_controller_leader().await.0;
+    let controller_leader = brokers.h1.wait_until_controller_leader().await.0;
     let preferred = (2_u64..=3)
         .find(|node| *node != controller_leader)
         .expect("a non-bootstrap, non-controller broker");
-    let mut handles = [Some(h1), Some(h2), Some(h3)];
+    let mut handles = [Some(brokers.h1), Some(brokers.h2), Some(brokers.h3)];
     handles[usize::try_from(preferred - 1).unwrap()]
         .take()
         .expect("preferred replica handle")
@@ -410,18 +370,12 @@ async fn a_preferred_replica_outside_the_isr_reports_code_80() {
     let h1 = handles[0].as_ref().expect("bootstrap broker stays live");
 
     h1.submit_metadata_record_for_test(krabka_metadata::MetadataRecord::V1Partition(
-        krabka_metadata::PartitionRecord {
-            topic: TOPIC.to_string(),
-            partition: 0,
-            leader: krabka_broker::NodeId(1),
-            replicas: vec![krabka_broker::NodeId(preferred), krabka_broker::NodeId(1)],
-            isr: vec![krabka_broker::NodeId(1)],
-            leader_epoch: krabka_metadata::LeaderEpoch(1),
-            adding_replicas: vec![],
-            removing_replicas: vec![],
-            directories: vec![],
-            partition_epoch: 0,
-        },
+        crate::cluster::election_partition(
+            TOPIC,
+            krabka_broker::NodeId(1),
+            vec![krabka_broker::NodeId(preferred), krabka_broker::NodeId(1)],
+            vec![krabka_broker::NodeId(1)],
+        ),
     ))
     .await
     .expect("inject a partition whose preferred replica is outside the ISR");

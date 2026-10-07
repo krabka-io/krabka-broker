@@ -1,9 +1,9 @@
-(* #"/workspace/crates/verified/src/retention/remote_bytes.rs" 12 0 12 85 *)
+(* #"/workspace/crates/verified/src/retention/remote_bytes.rs" 9 0 9 85 *)
 
 let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
 let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
 let%span swell_founded = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/well_founded.rs" 43 8 43 33
-let%span sremote_bytes = "/workspace/crates/verified/src/retention/remote_bytes.rs" 11 10 11 15
+let%span sremote_bytes = "/workspace/crates/verified/src/retention/remote_bytes.rs" 8 10 8 15
 
 use creusot.int.UInt64
 use seq.Seq
@@ -32,7 +32,7 @@ constant segments : Seq.seq t_RemoteRetentionSegment
 
 constant count : int
 
-function remote_prefix_charge [#"/workspace/crates/verified/src/retention/remote_bytes.rs" 12 0 12 85] (segments: Seq.seq t_RemoteRetentionSegment) (count: int) : int
+function remote_prefix_charge [#"/workspace/crates/verified/src/retention/remote_bytes.rs" 9 0 9 85] (segments: Seq.seq t_RemoteRetentionSegment) (count: int) : int
 
 goal vc_remote_prefix_charge: if count <= 0 then
     true

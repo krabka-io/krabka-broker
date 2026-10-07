@@ -5,11 +5,8 @@
 use std::{collections::BTreeMap, sync::Arc};
 
 use bytes::{Bytes, BytesMut};
-use krabka_metadata::{
-    MetadataImage, MetadataRecord, PartitionRecord, TopicConfigRecord, TopicRecord,
-};
+use krabka_metadata::{MetadataImage, MetadataRecord, PartitionRecord, TopicConfigRecord};
 use krabka_protocol::records::RecordBatch;
-use uuid::Uuid;
 
 use crate::config_keys::MIN_INSYNC_REPLICAS;
 
@@ -148,26 +145,22 @@ pub(super) fn pipeline_input(
 }
 
 pub(crate) fn image_with_topic(topic: &str, isr: &[u64]) -> MetadataImage {
-    let mut img = MetadataImage::new(Uuid::nil());
-    img.apply(&MetadataRecord::V1Topic(TopicRecord {
-        name: topic.into(),
-        topic_id: Uuid::nil(),
-        partitions: 1,
-        replication_factor: i16::try_from(isr.len().max(1)).unwrap(),
-    }));
-    img.apply(&MetadataRecord::V1Partition(PartitionRecord {
-        topic: topic.into(),
-        partition: 0,
-        leader: krabka_audit::NodeId(*isr.first().unwrap_or(&1)),
-        replicas: isr.iter().copied().map(krabka_audit::NodeId).collect(),
-        isr: isr.iter().copied().map(krabka_audit::NodeId).collect(),
-        leader_epoch: krabka_metadata::LeaderEpoch(0),
-        adding_replicas: vec![],
-        removing_replicas: vec![],
-        directories: vec![],
-        partition_epoch: 0,
-    }));
-    img
+    crate::test_support::topic_partition_image(
+        topic,
+        i16::try_from(isr.len().max(1)).unwrap(),
+        || PartitionRecord {
+            topic: topic.into(),
+            partition: 0,
+            leader: krabka_audit::NodeId(*isr.first().unwrap_or(&1)),
+            replicas: isr.iter().copied().map(krabka_audit::NodeId).collect(),
+            isr: isr.iter().copied().map(krabka_audit::NodeId).collect(),
+            leader_epoch: krabka_metadata::LeaderEpoch(0),
+            adding_replicas: vec![],
+            removing_replicas: vec![],
+            directories: vec![],
+            partition_epoch: 0,
+        },
+    )
 }
 
 pub(super) fn set_min_isr(img: &mut MetadataImage, topic: &str, n: i32) {
@@ -183,10 +176,7 @@ pub(super) fn image_with_overrides(topic: &str, overrides: &[(&str, &str)]) -> M
     let mut image = image_with_topic(topic, &[1]);
     image.apply(&MetadataRecord::V1TopicConfig(TopicConfigRecord {
         topic: topic.into(),
-        overrides: overrides
-            .iter()
-            .map(|(key, value)| (key.to_string(), value.to_string()))
-            .collect(),
+        overrides: crate::test_support::string_pairs(overrides),
     }));
     image
 }

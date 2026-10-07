@@ -16,7 +16,7 @@
 //! that never fetches, so the high watermark stays at 0 until a fetch as node
 //! 2 moves it.
 
-use std::{sync::Arc, time::Duration};
+use std::sync::Arc;
 
 use assert2::assert;
 use bytes::Bytes;
@@ -24,21 +24,17 @@ use krabka_log::Offset;
 use krabka_metadata::{AclOperation, ResourceType};
 use krabka_protocol::{
     owned::{
-        fetch_request::{FetchPartition, FetchRequest, FetchTopic, ReplicaState},
-        fetch_response::{FetchResponse, FetchableTopicResponse, PartitionData},
+        fetch_request::{FetchPartition, FetchRequest, FetchTopic},
+        fetch_response::{FetchResponse, PartitionData},
     },
     primitives::uuid::Uuid as WireUuid,
-    records::{Record, RecordBatch, RecordsPayload},
+    records::{RecordBatch, RecordsPayload},
 };
 
 use super::FIRST_TOPIC_ID_VERSION;
 use crate::{
-    authorizer::{AclSource, AuthorizationRequest, AuthorizationResult, Authorizer},
-    broker::BrokerHandle,
-    codes,
-    fetch_session::{FINAL_EPOCH, INVALID_SESSION_ID},
-    handlers::acl_wire::CLUSTER_RESOURCE_NAME,
-    partition::Partition,
+    authorizer::AuthorizationResult, broker::BrokerHandle, codes,
+    handlers::acl_wire::CLUSTER_RESOURCE_NAME, partition::Partition,
     test_support::start_broker_no_audit_with,
 };
 
@@ -80,31 +76,24 @@ impl Caller {
 #[derive(Debug)]
 struct Grants;
 
-impl Authorizer for Grants {
-    fn authorize(
-        &self,
-        _source: &dyn AclSource,
-        request: &AuthorizationRequest<'_>,
-    ) -> AuthorizationResult {
-        let allowed = match request.principal.name.as_str() {
-            "reader" => {
-                request.resource_type == ResourceType::Topic
-                    && request.operation == AclOperation::Read
-            }
-            "replicator" => {
-                request.resource_type == ResourceType::Cluster
-                    && request.resource_name == CLUSTER_RESOURCE_NAME
-                    && request.operation == AclOperation::ClusterAction
-            }
-            _ => false,
-        };
-        if allowed {
-            AuthorizationResult::Allow
-        } else {
-            AuthorizationResult::Deny
+test_authorizer!(Grants, (self, _source, request), {
+    let allowed = match request.principal.name.as_str() {
+        "reader" => {
+            request.resource_type == ResourceType::Topic && request.operation == AclOperation::Read
         }
+        "replicator" => {
+            request.resource_type == ResourceType::Cluster
+                && request.resource_name == CLUSTER_RESOURCE_NAME
+                && request.operation == AclOperation::ClusterAction
+        }
+        _ => false,
+    };
+    if allowed {
+        AuthorizationResult::Allow
+    } else {
+        AuthorizationResult::Deny
     }
-}
+});
 
 /// How the fetch that a case sends names itself.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -169,32 +158,15 @@ async fn replicated_partition(
 
     let shared = broker.broker_arc_for_test();
     let follower = krabka_raft::NodeId(2);
-    let partition = tokio::time::timeout(Duration::from_secs(10), async {
-        loop {
-            if let Some(partition) = shared.partitions.get(topic, krabka_ids::PartitionIndex(0))
-                && partition.replica_state.lock().await.isr.contains(&follower)
-            {
-                return partition;
-            }
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        }
-    })
-    .await
-    .expect("the broker leads the partition with node 2 in the ISR");
+    wait_for_bound_partition!(
+        (shared, partition),
+        topic,
+        partition,
+        partition.replica_state.lock().await.isr.contains(&follower),
+        "the broker leads the partition with node 2 in the ISR"
+    );
 
-    let mut batch = RecordBatch {
-        last_offset_delta: 1,
-        records: RECORDS
-            .iter()
-            .zip(0..)
-            .map(|(value, offset_delta)| Record {
-                offset_delta,
-                value: Some(Bytes::from_static(value)),
-                ..Record::default()
-            })
-            .collect(),
-        ..RecordBatch::default()
-    };
+    let mut batch = crate::handlers::test_support::default_records_batch(&RECORDS);
     partition
         .log
         .lock()
@@ -216,26 +188,7 @@ fn request(
         Sender::Follower => FOLLOWER,
         Sender::RackAwareConsumer => CONSUMER,
     };
-    // Before v15 the wire carries `ReplicaId`, from v15 on `ReplicaState`.
-    let (replica_id, replica_state) = if version >= 15 {
-        (
-            CONSUMER,
-            ReplicaState {
-                replica_id,
-                ..Default::default()
-            },
-        )
-    } else {
-        (replica_id, ReplicaState::default())
-    };
     FetchRequest {
-        replica_id,
-        replica_state,
-        max_wait_ms: 0,
-        min_bytes: 0,
-        max_bytes: 1_048_576,
-        session_id: INVALID_SESSION_ID,
-        session_epoch: FINAL_EPOCH,
         rack_id: if sender == Sender::RackAwareConsumer {
             "rack-a".to_owned()
         } else {
@@ -260,7 +213,7 @@ fn request(
             }],
             ..Default::default()
         }],
-        ..Default::default()
+        ..super::test_support::sessionless_request(version, replica_id)
     }
 }
 
@@ -276,38 +229,12 @@ async fn fetch(
 
 /// The one-row response of `case` for partition 0 of `topic`.
 fn response(version: i16, topic: (&str, WireUuid), partition: PartitionData) -> FetchResponse {
-    let (name, topic_id) = topic;
-    let id_only = version >= FIRST_TOPIC_ID_VERSION;
-    FetchResponse {
-        error_code: codes::NONE,
-        session_id: INVALID_SESSION_ID,
-        responses: vec![FetchableTopicResponse {
-            topic: if id_only {
-                String::new()
-            } else {
-                name.to_owned()
-            },
-            topic_id: if id_only { topic_id } else { WireUuid::ZERO },
-            partitions: vec![partition],
-            ..Default::default()
-        }],
-        ..Default::default()
-    }
+    super::test_support::expected_single_topic(version >= FIRST_TOPIC_ID_VERSION, topic, partition)
 }
 
 /// The partition row of Kafka's `FetchResponse.partitionResponse`.
 fn refused(error_code: i16) -> PartitionData {
-    PartitionData {
-        partition_index: 0,
-        error_code,
-        high_watermark: -1,
-        last_stable_offset: -1,
-        log_start_offset: -1,
-        aborted_transactions: Some(Vec::new()),
-        preferred_read_replica: -1,
-        records: Some(no_records()),
-        ..Default::default()
-    }
+    super::test_support::expected_refused_partition(0, error_code)
 }
 
 /// A partition row that the fetch read, with `watermark` as its high watermark
@@ -395,38 +322,40 @@ async fn follower_fetch_needs_cluster_action() {
     }
 
     let (broker, _dir) = start().await;
-    let mut actual = Vec::new();
-    let mut want = Vec::new();
-    for (index, case) in (0_u128..).zip(cases) {
-        let label = format!("{case:?}");
-        let name = format!("replicated-{index}");
-        let topic_id = index + 1;
-        let wire_id = WireUuid(uuid::Uuid::from_u128(topic_id).into_bytes());
-        let (partition, batch) = replicated_partition(&broker, &name, topic_id).await;
-        let topic = (name.as_str(), wire_id);
+    topic_case_outcomes!(
+        (actual, want),
+        (index, case, label, name),
+        "replicated",
+        cases,
+        {
+            let topic_id = index + 1;
+            let wire_id = WireUuid(uuid::Uuid::from_u128(topic_id).into_bytes());
+            let (partition, batch) = replicated_partition(&broker, &name, topic_id).await;
+            let topic = (name.as_str(), wire_id);
 
-        let from_start = fetch(
-            &broker,
-            case.version,
-            case.caller,
-            &request(case.version, case.sender, topic, 0),
-        )
-        .await;
-        let from_log_end = fetch(
-            &broker,
-            case.version,
-            case.caller,
-            &request(case.version, case.sender, topic, LOG_END),
-        )
-        .await;
-        actual.push(Outcome {
-            case: label.clone(),
-            from_start,
-            from_log_end,
-            high_watermark: partition.high_watermark().await,
-        });
-        want.push(expected(case, label, topic, batch));
-    }
+            let from_start = fetch(
+                &broker,
+                case.version,
+                case.caller,
+                &request(case.version, case.sender, topic, 0),
+            )
+            .await;
+            let from_log_end = fetch(
+                &broker,
+                case.version,
+                case.caller,
+                &request(case.version, case.sender, topic, LOG_END),
+            )
+            .await;
+            actual.push(Outcome {
+                case: label.clone(),
+                from_start,
+                from_log_end,
+                high_watermark: partition.high_watermark().await,
+            });
+            want.push(expected(case, label, topic, batch));
+        }
+    );
     broker.shutdown().await;
 
     assert!(actual == want);

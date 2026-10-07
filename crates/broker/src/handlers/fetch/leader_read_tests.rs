@@ -15,24 +15,21 @@
 //! The broker under test is node 1. Each case creates its own topic, with
 //! replicas 1 and 2, led by node 1 or by node 2.
 
-use std::{sync::Arc, time::Duration};
+use std::sync::Arc;
 
 use assert2::assert;
 use bytes::Bytes;
 use krabka_log::Offset;
 use krabka_protocol::{
     owned::{
-        fetch_request::{FetchPartition, FetchRequest, FetchTopic, ReplicaState},
+        fetch_request::{FetchPartition, FetchRequest, FetchTopic},
         fetch_response::{FetchResponse, FetchableTopicResponse, LeaderIdAndEpoch, PartitionData},
     },
-    records::{Record, RecordBatch, RecordsPayload},
+    records::RecordsPayload,
 };
 
 use crate::{
-    broker::BrokerHandle,
-    codes,
-    fetch_session::{FINAL_EPOCH, INVALID_SESSION_ID},
-    partition::Partition,
+    broker::BrokerHandle, codes, fetch_session::INVALID_SESSION_ID, partition::Partition,
     test_support::start_broker_no_audit_with,
 };
 
@@ -101,43 +98,26 @@ async fn partition(
 ) -> Arc<Partition> {
     crate::handlers::test_support::seed_replicated_topic(broker, topic, topic_id, leader).await;
 
-    let shared = broker.broker_arc_for_test();
-    let partition = tokio::time::timeout(Duration::from_secs(10), async {
-        loop {
-            if let Some(partition) = shared.partitions.get(topic, krabka_ids::PartitionIndex(0))
-                && partition
-                    .current_leader
-                    .load(std::sync::atomic::Ordering::Acquire)
-                    == leader
-                && (leader != THIS_NODE
-                    || partition
-                        .replica_state
-                        .lock()
-                        .await
-                        .isr
-                        .contains(&krabka_raft::NodeId(OTHER_NODE)))
-            {
-                return partition;
-            }
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        }
-    })
-    .await
-    .expect("the broker holds the partition in its role");
+    wait_for_local_partition!(
+        (shared, partition),
+        broker,
+        topic,
+        partition,
+        partition
+            .current_leader
+            .load(std::sync::atomic::Ordering::Acquire)
+            == leader
+            && (leader != THIS_NODE
+                || partition
+                    .replica_state
+                    .lock()
+                    .await
+                    .isr
+                    .contains(&krabka_raft::NodeId(OTHER_NODE))),
+        "the broker holds the partition in its role"
+    );
 
-    let mut batch = RecordBatch {
-        last_offset_delta: 1,
-        records: [&b"first"[..], &b"second"[..]]
-            .iter()
-            .zip(0..)
-            .map(|(value, offset_delta)| Record {
-                offset_delta,
-                value: Some(Bytes::from_static(value)),
-                ..Record::default()
-            })
-            .collect(),
-        ..RecordBatch::default()
-    };
+    let mut batch = crate::handlers::test_support::default_records_batch(&[b"first", b"second"]);
     partition
         .log
         .lock()
@@ -158,26 +138,7 @@ fn request(version: i16, sender: Sender, topic: &str) -> FetchRequest {
         } => (replica_id, leader_epoch, LOG_END),
         Sender::Consumer => (-1, -1, 0),
     };
-    // Before v15 the wire carries `ReplicaId`, from v15 on `ReplicaState`.
-    let (replica_id, replica_state) = if version >= 15 {
-        (
-            -1,
-            ReplicaState {
-                replica_id,
-                ..Default::default()
-            },
-        )
-    } else {
-        (replica_id, ReplicaState::default())
-    };
     FetchRequest {
-        replica_id,
-        replica_state,
-        max_wait_ms: 0,
-        min_bytes: 0,
-        max_bytes: 1_048_576,
-        session_id: INVALID_SESSION_ID,
-        session_epoch: FINAL_EPOCH,
         topics: vec![FetchTopic {
             topic: topic.to_owned(),
             partitions: vec![FetchPartition {
@@ -189,7 +150,7 @@ fn request(version: i16, sender: Sender, topic: &str) -> FetchRequest {
             }],
             ..Default::default()
         }],
-        ..Default::default()
+        ..super::test_support::sessionless_request(version, replica_id)
     }
 }
 
@@ -331,36 +292,38 @@ async fn a_read_needs_the_leader_and_an_assigned_follower() {
     ];
 
     let (broker, _dir) = start().await;
-    let mut actual = Vec::new();
-    let mut want = Vec::new();
-    for (index, case) in (0_u128..).zip(cases) {
-        let label = format!("{case:?}");
-        let name = format!("leader-read-{index}");
-        let partition = partition(&broker, &name, index + 1, case.leader).await;
+    topic_case_outcomes!(
+        (actual, want),
+        (index, case, label, name),
+        "leader-read",
+        cases,
+        {
+            let partition = partition(&broker, &name, index + 1, case.leader).await;
 
-        let response = fetch(
-            &broker,
-            case.version,
-            &request(case.version, case.sender, &name),
-        )
-        .await;
-        let mut tracked_followers: Vec<u64> = partition
-            .replica_state
-            .lock()
-            .await
-            .per_follower
-            .keys()
-            .map(|node| node.0)
-            .collect();
-        tracked_followers.sort_unstable();
-        actual.push(Outcome {
-            case: label.clone(),
-            response,
-            high_watermark: partition.high_watermark().await,
-            tracked_followers,
-        });
-        want.push(expected(case, label, &name));
-    }
+            let response = fetch(
+                &broker,
+                case.version,
+                &request(case.version, case.sender, &name),
+            )
+            .await;
+            let mut tracked_followers: Vec<u64> = partition
+                .replica_state
+                .lock()
+                .await
+                .per_follower
+                .keys()
+                .map(|node| node.0)
+                .collect();
+            tracked_followers.sort_unstable();
+            actual.push(Outcome {
+                case: label.clone(),
+                response,
+                high_watermark: partition.high_watermark().await,
+                tracked_followers,
+            });
+            want.push(expected(case, label, &name));
+        }
+    );
     broker.shutdown().await;
 
     assert!(actual == want);

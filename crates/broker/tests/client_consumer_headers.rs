@@ -1,42 +1,27 @@
 mod support;
 
-use krabka_broker::{Broker, BrokerConfig};
 use krabka_client_consumer::{AutoOffsetReset, Consumer, Header as ConsumerHeader};
-use krabka_client_core::Client;
-use krabka_client_producer::{Header, Producer, ProducerRecord};
+use krabka_client_producer::{Header, ProducerRecord};
+
+use crate::support::client::connect_client;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn consumer_record_carries_headers() {
-    let dir = tempfile::TempDir::new().unwrap();
-    let broker = Broker::start(BrokerConfig::for_tests(dir.path().to_path_buf()))
-        .await
-        .unwrap();
+    let (_dir, broker) = crate::support::standalone_broker().await;
     let bootstrap = broker.listen_addr().to_string();
 
     // Create the topic before producing.
-    let admin = Client::builder()
-        .bootstrap(&bootstrap)
-        .build()
-        .await
-        .unwrap();
+    let admin = connect_client(&bootstrap, None).await;
     crate::support::client::create_topic(&admin, "h", 1).await;
 
-    let producer = Producer::builder()
-        .bootstrap(&bootstrap)
-        .build()
-        .await
-        .unwrap();
+    let producer = crate::support::producer::default_producer(&bootstrap).await;
     producer
         .send(ProducerRecord {
-            topic: "h".into(),
-            partition: None,
-            key: None,
-            value: Some("v".into()),
             headers: vec![Header {
                 key: "trace".into(),
                 value: Some("abc".into()),
             }],
-            timestamp_ms: None,
+            ..crate::support::producer::producer_record("h", None, None, Some("v".into()))
         })
         .await
         .unwrap();

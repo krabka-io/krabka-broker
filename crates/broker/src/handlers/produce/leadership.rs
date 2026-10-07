@@ -54,11 +54,7 @@ pub(super) fn validate_partition_gate(
             current_leader: None,
         });
     };
-    let leader = LeaderIdAndEpoch {
-        leader_id: i32::try_from(record.leader.0).unwrap_or(NO_LEADER_ID),
-        leader_epoch: record.leader_epoch.0,
-        ..Default::default()
-    };
+    let leader = current_leader_hint(record);
     let Some(partition) = partitions.get(topic_name, krabka_ids::PartitionIndex(partition_index))
     else {
         return Err(PartitionGateError {
@@ -74,13 +70,7 @@ pub(super) fn validate_partition_gate(
     // diskless Produce could land on a witness. NOT_LEADER_OR_FOLLOWER is the
     // code that makes a Kafka client refresh its metadata and produce
     // somewhere else.
-    if is_witness {
-        return Err(PartitionGateError {
-            code: codes::NOT_LEADER_OR_FOLLOWER,
-            current_leader: Some(leader),
-        });
-    }
-    if record.leader != this_node_id && !partition.diskless {
+    if is_witness || (record.leader != this_node_id && !partition.diskless) {
         return Err(PartitionGateError {
             code: codes::NOT_LEADER_OR_FOLLOWER,
             current_leader: Some(leader),
@@ -340,15 +330,8 @@ mod tests {
             krabka_log::LogConfig::default(),
         )
         .unwrap();
-        let partition = crate::broker::spawn_partition(
-            "orders".into(),
-            krabka_ids::PartitionIndex(0),
-            dir.path().to_path_buf(),
-            log,
-            crate::log_dir_status::LogDirRegistry::default(),
-            Arc::new(crate::producer_state::ProducerState::new()),
-            true,
-        );
+        let partition =
+            crate::test_support::spawn_standalone_partition(dir.path(), "orders", 0, log, true);
 
         assert!(!diskless_role_ready(&partition, record));
         partition
@@ -397,15 +380,7 @@ mod tests {
         partitions.insert(
             "orders".into(),
             krabka_ids::PartitionIndex(0),
-            crate::broker::spawn_partition(
-                "orders".into(),
-                krabka_ids::PartitionIndex(0),
-                dir.path().to_path_buf(),
-                log,
-                crate::log_dir_status::LogDirRegistry::default(),
-                Arc::new(crate::producer_state::ProducerState::new()),
-                diskless,
-            ),
+            crate::test_support::spawn_standalone_partition(dir.path(), "orders", 0, log, diskless),
         );
         validate_partition_gate(
             "orders",
@@ -438,20 +413,18 @@ mod tests {
         let mut image = image_with_topic("orders", &[1, 2, 3]);
         image.apply(&MetadataRecord::V1Partition(
             krabka_metadata::PartitionRecord {
-                topic: "orders".into(),
-                partition: 0,
-                leader: krabka_audit::NodeId(1),
-                replicas: vec![
-                    krabka_audit::NodeId(1),
-                    krabka_audit::NodeId(2),
-                    krabka_audit::NodeId(3),
-                ],
                 isr: vec![krabka_audit::NodeId(1)],
-                leader_epoch: krabka_metadata::LeaderEpoch(0),
-                adding_replicas: vec![],
-                removing_replicas: vec![],
-                directories: vec![],
                 partition_epoch: 1,
+                ..crate::handlers::test_support::replicated_partition(
+                    "orders",
+                    0,
+                    krabka_audit::NodeId(1),
+                    &[
+                        krabka_audit::NodeId(1),
+                        krabka_audit::NodeId(2),
+                        krabka_audit::NodeId(3),
+                    ],
+                )
             },
         ));
         image.apply(&MetadataRecord::V1BrokerConfig(BrokerConfigRecord {
@@ -535,13 +508,16 @@ mod tests {
                 }
             }
 
-            let got = gate_with_acks(&image, krabka_audit::NodeId(1), false, false, -1, 1);
-
-            let refused = got
-                .as_ref()
-                .is_some_and(|(code, _)| *code == crate::codes::NOT_ENOUGH_REPLICAS);
-            assert!(refused == want_refused, "{label}: got {got:?}");
+            assert_min_isr_gate(&image, label, want_refused);
         }
+    }
+
+    fn assert_min_isr_gate(image: &MetadataImage, label: &str, want_refused: bool) {
+        let got = gate_with_acks(image, krabka_audit::NodeId(1), false, false, -1, 1);
+        let refused = got
+            .as_ref()
+            .is_some_and(|(code, _)| *code == crate::codes::NOT_ENOUGH_REPLICAS);
+        assert!(refused == want_refused, "{label}: got {got:?}");
     }
 
     /// Kafka's `Partition.effectiveMinIsr` clamps `min.insync.replicas` to
@@ -583,11 +559,7 @@ mod tests {
                 config_value: Some(cluster_min_isr.to_string()),
             }));
 
-            let got = gate_with_acks(&image, krabka_audit::NodeId(1), false, false, -1, 1);
-            let refused = got
-                .as_ref()
-                .is_some_and(|(code, _)| *code == crate::codes::NOT_ENOUGH_REPLICAS);
-            assert!(refused == want_refused, "{name}: got {got:?}");
+            assert_min_isr_gate(&image, name, want_refused);
         }
     }
 

@@ -15,10 +15,8 @@
 //! Authorization: `Describe` on `Cluster("kafka-cluster")`. On a deny the
 //! response carries `CLUSTER_AUTHORIZATION_FAILED` (31).
 
-use bytes::Bytes;
-use krabka_protocol::{
-    Decode,
-    krabka::barrier::{BarrierCut, ListBarrierCutsRequest, ListBarrierCutsResponse},
+use krabka_protocol::krabka::barrier::{
+    BarrierCut, ListBarrierCutsRequest, ListBarrierCutsResponse,
 };
 
 use crate::{
@@ -26,63 +24,54 @@ use crate::{
         coordinator::RetainedCut,
         handlers::{cluster_describe_denied, cut_missing, cut_topics, error_code, error_text},
     },
-    broker::Broker,
     codes,
-    error::BrokerError,
-    handlers::{ErrorResponse as _, RequestContext, encode_response},
+    handlers::{ErrorResponse as _, encode_response},
 };
 
-#[tracing::instrument(
-    name = "handle_list_barrier_cuts",
-    level = "info",
-    skip_all,
-    fields(api = "ListBarrierCuts"),
-    err
-)]
-pub(crate) async fn handle(
-    broker: &Broker,
-    version: i16,
-    _correlation_id: i32,
-    req_bytes: &[u8],
-    ctx: &RequestContext<'_>,
-) -> Result<Bytes, BrokerError> {
-    let mut cur = req_bytes;
-    let req = ListBarrierCutsRequest::decode(&mut cur, version)?;
+wire_handler!(
+    handle,
+    "handle_list_barrier_cuts",
+    "ListBarrierCuts",
+    "info",
+    ListBarrierCutsRequest,
+    |broker, version, req, ctx| {
+        let image = broker.controller.current_image();
+        if cluster_describe_denied(broker.config.authorizer.as_ref(), &image, ctx) {
+            return encode_response(
+                &ListBarrierCutsResponse::error(
+                    codes::CLUSTER_AUTHORIZATION_FAILED,
+                    Some("list-barrier-cuts denied".to_owned()),
+                ),
+                version,
+            );
+        }
 
-    let image = broker.controller.current_image();
-    if cluster_describe_denied(broker.config.authorizer.as_ref(), &image, ctx) {
-        return encode_response(
-            &ListBarrierCutsResponse::error(
-                codes::CLUSTER_AUTHORIZATION_FAILED,
-                Some("list-barrier-cuts denied".to_owned()),
-            ),
-            version,
-        );
+        let coordinator = &broker.barrier_coordinator;
+        if !coordinator.is_coordinator_for(&req.group).await {
+            return encode_response(
+                &ListBarrierCutsResponse::error(
+                    codes::NOT_COORDINATOR,
+                    Some("this broker does not coordinate the barrier group".to_owned()),
+                ),
+                version,
+            );
+        }
+
+        let resp = match coordinator.list_cuts(&req.group).await {
+            Ok(cuts) => ListBarrierCutsResponse {
+                throttle_time_ms: 0,
+                error_code: codes::NONE,
+                error_message: None,
+                cuts: select(&cuts, req.from_epoch, req.max_results),
+                ..ListBarrierCutsResponse::default()
+            },
+            Err(error) => {
+                ListBarrierCutsResponse::error(error_code(&error), Some(error_text(&error)))
+            }
+        };
+        encode_response(&resp, version)
     }
-
-    let coordinator = &broker.barrier_coordinator;
-    if !coordinator.is_coordinator_for(&req.group).await {
-        return encode_response(
-            &ListBarrierCutsResponse::error(
-                codes::NOT_COORDINATOR,
-                Some("this broker does not coordinate the barrier group".to_owned()),
-            ),
-            version,
-        );
-    }
-
-    let resp = match coordinator.list_cuts(&req.group).await {
-        Ok(cuts) => ListBarrierCutsResponse {
-            throttle_time_ms: 0,
-            error_code: codes::NONE,
-            error_message: None,
-            cuts: select(&cuts, req.from_epoch, req.max_results),
-            ..ListBarrierCutsResponse::default()
-        },
-        Err(error) => ListBarrierCutsResponse::error(error_code(&error), Some(error_text(&error))),
-    };
-    encode_response(&resp, version)
-}
+);
 
 /// The cuts of the response, in ascending epoch order.
 ///

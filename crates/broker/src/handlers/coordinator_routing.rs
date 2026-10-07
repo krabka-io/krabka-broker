@@ -111,3 +111,10 @@ pub(crate) fn share_group_not_found_message(
         format!("Group {group_id} not found.")
     }
 }
+
+pub(crate) fn group_actor_error_code(error: crate::task_util::AskError) -> i16 {
+    match error {
+        crate::task_util::AskError::Closed => crate::codes::COORDINATOR_LOAD_IN_PROGRESS,
+        crate::task_util::AskError::Dropped => crate::codes::UNKNOWN_SERVER_ERROR,
+    }
+}

@@ -35,24 +35,19 @@ mod tests {
 
     #[test]
     fn encode_resp_preserves_encoded_body() {
-        let resp = AssignReplicasToDirsResponse {
-            throttle_time_ms: 0,
+        let resp = unthrottled_wire!(AssignReplicasToDirsResponse {
             error_code: codes::NONE,
-            directories: vec![RespDirData {
+            directories: vec![tagged_wire!(RespDirData {
                 id: ProtocolUuid(uuid::Uuid::from_u128(0xAA).into_bytes()),
-                topics: vec![RespTopicData {
+                topics: vec![tagged_wire!(RespTopicData {
                     topic_id: ProtocolUuid(uuid::Uuid::from_u128(0xBB).into_bytes()),
-                    partitions: vec![RespPartData {
+                    partitions: vec![tagged_wire!(RespPartData {
                         partition_index: 3,
                         error_code: codes::UNKNOWN_TOPIC_ID,
-                        unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(vec![]),
-                    }],
-                    unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(vec![]),
-                }],
-                unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(vec![]),
-            }],
-            unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(vec![]),
-        };
+                    })],
+                })],
+            })],
+        });
 
         let bytes = crate::handlers::encode_response(&resp, VERSION).expect("encode response");
 

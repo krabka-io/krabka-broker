@@ -36,19 +36,10 @@ pub(super) fn raw_batch(base: i64) -> Bytes {
 /// variant, but refutable on SENDFILE-alias platforms, with two variants.
 /// Clippy stays happy on both.
 pub(super) fn inline_bytes(op: &WriteOp) -> &Bytes {
-    match op {
+    krabka_macros::sendfile_match! { match op {
         WriteOp::Inline(b) => b,
-        #[cfg(any(
-            target_os = "linux",
-            target_os = "macos",
-            target_os = "ios",
-            target_os = "tvos",
-            target_os = "watchos",
-            target_os = "freebsd",
-            target_os = "dragonfly",
-        ))]
         WriteOp::File(_) => panic!("expected an inline op"),
-    }
+    }}
 }
 
 pub(super) fn sample_response(version: i16) -> FetchResponse {
@@ -68,25 +59,7 @@ pub(super) fn sample_response(version: i16) -> FetchResponse {
         records: Some(RecordsPayload::Raw(raw_batch(1))),
         ..PartitionData::default()
     };
-    FetchResponse {
-        throttle_time_ms: 0,
-        session_id: 7,
-        responses: vec![FetchableTopicResponse {
-            topic: if version <= 12 {
-                "t".to_string()
-            } else {
-                String::new()
-            },
-            topic_id: if version >= 13 {
-                krabka_protocol::primitives::uuid::Uuid([5u8; 16])
-            } else {
-                krabka_protocol::primitives::uuid::Uuid([0u8; 16])
-            },
-            partitions: vec![p0, p1],
-            ..FetchableTopicResponse::default()
-        }],
-        ..FetchResponse::default()
-    }
+    response_with_partitions(version, vec![p0, p1])
 }
 
 crate::sendfile_cfg! {
@@ -116,6 +89,23 @@ pub(super) fn one_partition_response(
     version: i16,
     records: Option<RecordsPayload>,
 ) -> FetchResponse {
+    response_with_partitions(
+        version,
+        vec![PartitionData {
+            partition_index: 0,
+            error_code: 0,
+            high_watermark: 5,
+            last_stable_offset: 5,
+            log_start_offset: 0,
+            aborted_transactions: None,
+            preferred_read_replica: -1,
+            records,
+            ..PartitionData::default()
+        }],
+    )
+}
+
+fn response_with_partitions(version: i16, partitions: Vec<PartitionData>) -> FetchResponse {
     FetchResponse {
         throttle_time_ms: 0,
         session_id: 7,
@@ -130,17 +120,7 @@ pub(super) fn one_partition_response(
             } else {
                 krabka_protocol::primitives::uuid::Uuid([0u8; 16])
             },
-            partitions: vec![PartitionData {
-                partition_index: 0,
-                error_code: 0,
-                high_watermark: 5,
-                last_stable_offset: 5,
-                log_start_offset: 0,
-                aborted_transactions: None,
-                preferred_read_replica: -1,
-                records,
-                ..PartitionData::default()
-            }],
+            partitions,
             ..FetchableTopicResponse::default()
         }],
         ..FetchResponse::default()

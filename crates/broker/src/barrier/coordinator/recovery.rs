@@ -304,11 +304,9 @@ mod tests {
     #[tokio::test]
     async fn recovery_rebuilds_the_group_and_its_cuts() {
         let fixture = Fixture::new();
-        let coordinator = fixture.coordinator().await;
-        coordinator
-            .create_group(GROUP, spec(&["orders", "payments"], None, 8))
-            .await
-            .expect("the group is created");
+        let coordinator = fixture
+            .coordinator_with_group(GROUP, spec(&["orders", "payments"], None, 8))
+            .await;
         let first = coordinator
             .trigger_injection(GROUP, None)
             .await
@@ -358,11 +356,9 @@ mod tests {
     #[tokio::test]
     async fn recovery_finalises_an_interrupted_injection_as_partial() {
         let fixture = Fixture::new();
-        let coordinator = fixture.coordinator().await;
-        coordinator
-            .create_group(GROUP, spec(&["orders"], None, 4))
-            .await
-            .expect("the group is created");
+        let coordinator = fixture
+            .coordinator_with_group(GROUP, spec(&["orders"], None, 4))
+            .await;
 
         // A coordinator that crashed after the injection-start record leaves
         // exactly this behind.
@@ -442,11 +438,9 @@ mod tests {
             ),
         ] {
             let fixture = Fixture::new();
-            let coordinator = fixture.coordinator().await;
-            coordinator
-                .create_group(group, spec(&["orders"], None, 4))
-                .await
-                .expect("the group is created");
+            let coordinator = fixture
+                .coordinator_with_group(group, spec(&["orders"], None, 4))
+                .await;
             coordinator
                 .append_records(
                     group,
@@ -475,11 +469,9 @@ mod tests {
     #[tokio::test]
     async fn recovery_consumes_the_maximum_epoch_without_wrapping() {
         let fixture = Fixture::new();
-        let coordinator = fixture.coordinator().await;
-        coordinator
-            .create_group(GROUP, spec(&["orders"], None, 4))
-            .await
-            .expect("the group is created");
+        let coordinator = fixture
+            .coordinator_with_group(GROUP, spec(&["orders"], None, 4))
+            .await;
         let start = InjectionStartValue {
             coordinator_epoch: 3,
             triggered_at: 1_000,

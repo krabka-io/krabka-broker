@@ -150,17 +150,33 @@ pub(crate) fn write_all(
     io: &dyn LogIo,
     target: IoTarget,
     file: &File,
+    buf: &[u8],
+) -> std::io::Result<()> {
+    write_all_with(buf, |remaining| io.write_at(target, file, remaining))
+}
+
+/// Complete a scalar write, retrying interrupts and rejecting zero progress.
+pub(crate) fn write_all_with(
     mut buf: &[u8],
+    mut write: impl FnMut(&[u8]) -> std::io::Result<usize>,
 ) -> std::io::Result<()> {
     while !buf.is_empty() {
-        match io.write_at(target, file, buf) {
-            Ok(0) => return Err(std::io::ErrorKind::WriteZero.into()),
-            Ok(written) => buf = &buf[written..],
-            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
-            Err(error) => return Err(error),
-        }
+        buf = &buf[write_progress(|| write(buf))?..];
     }
     Ok(())
+}
+
+/// Retry an interrupted write and require it to make progress.
+pub(crate) fn write_progress(
+    mut write: impl FnMut() -> std::io::Result<usize>,
+) -> std::io::Result<usize> {
+    loop {
+        match write() {
+            Ok(0) => return Err(std::io::ErrorKind::WriteZero.into()),
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
+            result => return result,
+        }
+    }
 }
 
 /// Replace `path` with `bytes` atomically and durably through real file I/O:
@@ -222,7 +238,7 @@ pub(crate) fn file_io() -> std::sync::Arc<dyn LogIo> {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Mutex;
+    use std::{path::PathBuf, sync::Mutex};
 
     use assert2::check;
 
@@ -266,12 +282,17 @@ mod tests {
         (dir, file)
     }
 
-    #[test]
-    fn write_atomic_replaces_the_target_and_consumes_the_staging_file() {
+    fn existing_state(contents: &[u8]) -> (tempfile::TempDir, PathBuf, PathBuf) {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("state");
         let tmp = dir.path().join("state.tmp");
-        std::fs::write(&path, b"old contents").unwrap();
+        std::fs::write(&path, contents).unwrap();
+        (dir, path, tmp)
+    }
+
+    #[test]
+    fn write_atomic_replaces_the_target_and_consumes_the_staging_file() {
+        let (_dir, path, tmp) = existing_state(b"old contents");
 
         for contents in [b"new".as_slice(), b"newer"] {
             write_file_atomic(&tmp, &path, contents).unwrap();
@@ -282,10 +303,7 @@ mod tests {
 
     #[test]
     fn write_atomic_leaves_the_target_alone_when_the_staged_write_fails() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("state");
-        let tmp = dir.path().join("state.tmp");
-        std::fs::write(&path, b"old").unwrap();
+        let (_dir, path, tmp) = existing_state(b"old");
 
         let io = Scripted::new(vec![Err(std::io::Error::from(
             std::io::ErrorKind::StorageFull,
@@ -299,37 +317,42 @@ mod tests {
     fn write_all_resumes_short_writes_retries_interruptions_and_stops_on_no_progress() {
         let (_dir, file) = scratch_file();
 
-        // Three short writes finish a six-byte buffer, each offered only what
-        // the last one left.
-        let io = Scripted::new(vec![Ok(2), Ok(3), Ok(1)]);
-        write_all(&io, IoTarget::OffsetIndex, &file, b"abcdef").unwrap();
-        check!(
-            *io.seen.lock().unwrap() == vec![b"abcdef".to_vec(), b"cdef".to_vec(), b"f".to_vec()]
-        );
-
-        // An interrupted write is retried with the same bytes, not skipped past.
-        let io = Scripted::new(vec![
-            Ok(2),
-            Err(std::io::Error::from(std::io::ErrorKind::Interrupted)),
-            Ok(4),
-        ]);
-        write_all(&io, IoTarget::OffsetIndex, &file, b"abcdef").unwrap();
-        check!(
-            *io.seen.lock().unwrap()
-                == vec![b"abcdef".to_vec(), b"cdef".to_vec(), b"cdef".to_vec()]
-        );
-
-        // A writer that makes no progress is a `WriteZero`, not a spin.
-        let io = Scripted::new(vec![Ok(0)]);
-        let error = write_all(&io, IoTarget::OffsetIndex, &file, b"abcdef").unwrap_err();
-        check!(error.kind() == std::io::ErrorKind::WriteZero);
-
-        // Any other error is returned as it stands.
-        let io = Scripted::new(vec![
-            Ok(1),
-            Err(std::io::Error::from(std::io::ErrorKind::StorageFull)),
-        ]);
-        let error = write_all(&io, IoTarget::OffsetIndex, &file, b"abcdef").unwrap_err();
-        check!(error.kind() == std::io::ErrorKind::StorageFull);
+        for (script, expected) in [
+            // Three short writes finish a six-byte buffer, each offered only what
+            // the last one left.
+            (
+                vec![Ok(2), Ok(3), Ok(1)],
+                vec![b"abcdef".to_vec(), b"cdef".to_vec(), b"f".to_vec()],
+            ),
+            // An interrupted write is retried with the same bytes, not skipped past.
+            (
+                vec![
+                    Ok(2),
+                    Err(std::io::Error::from(std::io::ErrorKind::Interrupted)),
+                    Ok(4),
+                ],
+                vec![b"abcdef".to_vec(), b"cdef".to_vec(), b"cdef".to_vec()],
+            ),
+        ] {
+            let io = Scripted::new(script);
+            write_all(&io, IoTarget::OffsetIndex, &file, b"abcdef").unwrap();
+            check!(*io.seen.lock().unwrap() == expected);
+        }
+        for (script, expected) in [
+            // A writer that makes no progress is a `WriteZero`, not a spin.
+            (vec![Ok(0)], std::io::ErrorKind::WriteZero),
+            // Any other error is returned as it stands.
+            (
+                vec![
+                    Ok(1),
+                    Err(std::io::Error::from(std::io::ErrorKind::StorageFull)),
+                ],
+                std::io::ErrorKind::StorageFull,
+            ),
+        ] {
+            let io = Scripted::new(script);
+            let error = write_all(&io, IoTarget::OffsetIndex, &file, b"abcdef").unwrap_err();
+            check!(error.kind() == expected);
+        }
     }
 }

@@ -1,6 +1,6 @@
 {
   "profile": [],
   "proofs": {
-    "Coma": { "vc_site_loss_survivors": { "prover": "cvc5", "time": 0.092 } }
+    "Coma": { "vc_site_loss_survivors": { "prover": "cvc5", "time": 0.186 } }
   }
 }

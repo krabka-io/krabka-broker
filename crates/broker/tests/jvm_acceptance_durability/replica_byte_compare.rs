@@ -6,14 +6,11 @@
 //! the JVM tools, so it carries the container mount handling that the other
 //! cases do not need.
 
-use std::{
-    io::Write as _,
-    process::{Command, Stdio},
-};
+use std::{io::Write as _, process::Command};
 
 use assert2::assert;
 
-use crate::jvm_acceptance::{KAFKA_IMAGE, docker_run_kafka_tool};
+use crate::jvm_acceptance::KAFKA_IMAGE;
 
 // Replication byte-compare: stand up a 3-broker Krabka cluster, create a
 // `replication-factor=3` topic, produce 100 records via the JVM
@@ -51,56 +48,16 @@ async fn three_node_replication_byte_compare() {
 
     let cluster = crate::support::start_jvm_cluster(client_ports, controller_ports, |_| {}).await;
 
-    let bootstrap_1 = format!("host.docker.internal:{}", client_ports[0]);
-    let bootstrap_all = format!(
-        "host.docker.internal:{},host.docker.internal:{},host.docker.internal:{}",
-        client_ports[0], client_ports[1], client_ports[2],
-    );
-
-    // 1. CreateTopics(repl=3, partitions=1).
-    docker_run_kafka_tool(&[
-        "kafka-topics",
-        "--create",
-        "--if-not-exists",
-        "--topic",
-        TOPIC,
-        "--partitions",
-        "1",
-        "--replication-factor",
-        "3",
-        "--bootstrap-server",
-        &bootstrap_1,
-    ]);
-
-    // 2. Wait for the ISR to include all three brokers (ISR == replicas here),
-    //    i.e. the metadata propagated. The in-process image ISR is exactly what
-    //    `kafka-topics --describe` reports, so observe it directly.
-    cluster[0].0.wait_until_isr_len(TOPIC, 0, 3).await;
+    let (_bootstrap_1, bootstrap_all) =
+        crate::prepare_replication_topic(&cluster[0].0, TOPIC, &client_ports).await;
 
     // 3. Produce 100 records via kafka-console-producer with acks=all so
     //    each produce response gates on HW = LEO across the full ISR.
     //    Without this the producer returns after leader ack and we end up
     //    dumping followers before their replicators have caught up,
     //    making the byte-compare assert fail spuriously.
-    let mut producer_child = crate::support::jvm_docker_command(
-        KAFKA_IMAGE,
-        &[],
-        &[
-            "kafka-console-producer",
-            "--bootstrap-server",
-            &bootstrap_all,
-            "--topic",
-            TOPIC,
-            "--producer-property",
-            "acks=all",
-        ],
-        true,
-    )
-    .stdin(Stdio::piped())
-    .stdout(Stdio::piped())
-    .stderr(Stdio::piped())
-    .spawn()
-    .expect("spawn JVM producer");
+    let mut producer_child =
+        crate::support::jvm_acks_all_producer(KAFKA_IMAGE, &bootstrap_all, TOPIC);
     {
         let stdin = producer_child.stdin.as_mut().expect("stdin");
         for i in 0..100 {

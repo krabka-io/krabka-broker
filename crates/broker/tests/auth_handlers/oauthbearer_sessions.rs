@@ -37,8 +37,7 @@ use crate::{
     harness::{alice_password, round_trip},
     oauthbearer::{
         drive_inband_reauth, drive_sasl_oauthbearer_session_open, now_unix_secs,
-        oauthbearer_zero_skew_validator, start_oauthbearer_broker,
-        start_oauthbearer_broker_with_cap, unsecured_jws,
+        oauthbearer_zero_skew_validator, unsecured_jws,
     },
 };
 
@@ -64,9 +63,8 @@ async fn send_metadata_on_expired_session(stream: &mut TcpStream) {
 /// `SaslAuthenticateResponse v1+`.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn oauthbearer_session_lifetime_ms_set_from_token_exp() {
-    let log_dir = tempfile::tempdir().unwrap();
-    let handle = start_oauthbearer_broker(log_dir.path(), oauthbearer_zero_skew_validator()).await;
-    let addr = handle.listen_addr();
+    let (_log_dir, handle, addr) =
+        crate::oauthbearer::oauthbearer_fixture(oauthbearer_zero_skew_validator(), None).await;
 
     let exp_secs = now_unix_secs() + 600;
     let token = unsecured_jws("alice", exp_secs);
@@ -93,14 +91,11 @@ async fn oauthbearer_session_lifetime_ms_set_from_token_exp() {
 /// enforces what it told the client.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn oauthbearer_session_capped_by_connections_max_reauth() {
-    let log_dir = tempfile::tempdir().unwrap();
-    let handle = start_oauthbearer_broker_with_cap(
-        log_dir.path(),
+    let (_log_dir, handle, addr) = crate::oauthbearer::oauthbearer_fixture(
         oauthbearer_zero_skew_validator(),
         Some(krabka_units::millis(300)),
     )
     .await;
-    let addr = handle.listen_addr();
 
     // Token exp = now + 600s. Cap = 300 ms. Expected session = 300 ms.
     let exp_secs = now_unix_secs() + 600;
@@ -119,11 +114,7 @@ async fn oauthbearer_session_capped_by_connections_max_reauth() {
     tokio::time::sleep(std::time::Duration::from_millis(500)).await;
     send_metadata_on_expired_session(&mut stream).await;
 
-    let mut buf = [0_u8; 16];
-    let n = tokio::time::timeout(std::time::Duration::from_secs(5), stream.read(&mut buf))
-        .await
-        .expect("read should not hang")
-        .expect("read should not error");
+    let n = read_session_end(&mut stream).await;
     assert!(
         n == 0,
         "expected EOF after cap-bounded session expiry, got {n} bytes"
@@ -140,9 +131,8 @@ async fn oauthbearer_session_capped_by_connections_max_reauth() {
 /// dispatch loop compares each arriving request against, not a timer.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn oauthbearer_session_expires_closes_connection() {
-    let log_dir = tempfile::tempdir().unwrap();
-    let handle = start_oauthbearer_broker(log_dir.path(), oauthbearer_zero_skew_validator()).await;
-    let addr = handle.listen_addr();
+    let (_log_dir, handle, addr) =
+        crate::oauthbearer::oauthbearer_fixture(oauthbearer_zero_skew_validator(), None).await;
 
     // `now_unix_secs` truncates to whole seconds, so `now + 1` left the
     // handshake anywhere between zero and one second before the token expired,
@@ -158,20 +148,11 @@ async fn oauthbearer_session_expires_closes_connection() {
 
     // Wait out whatever is left of the token, measured after the handshake
     // rather than assumed before it, plus a margin to land past `exp`.
-    let remaining = u64::try_from(exp_secs.saturating_sub(now_unix_secs()).max(0))
-        .expect("a non-negative second count fits in u64");
-    tokio::time::sleep(
-        std::time::Duration::from_secs(remaining) + std::time::Duration::from_millis(500),
-    )
-    .await;
+    wait_past_expiration(exp_secs).await;
     send_metadata_on_expired_session(&mut stream).await;
 
     // Broker must have closed the connection. Read should EOF.
-    let mut buf = [0_u8; 16];
-    let n = tokio::time::timeout(std::time::Duration::from_secs(5), stream.read(&mut buf))
-        .await
-        .expect("read should not hang")
-        .expect("read should not error");
+    let n = read_session_end(&mut stream).await;
     assert!(n == 0, "expected EOF after session expiry, got {n} bytes");
 
     handle.shutdown().await;
@@ -186,9 +167,8 @@ async fn oauthbearer_session_expires_closes_connection() {
 /// exchange and then re-arm the session from token B's `exp`.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn oauthbearer_in_band_reauth_with_fresh_token_resets_timer() {
-    let log_dir = tempfile::tempdir().unwrap();
-    let handle = start_oauthbearer_broker(log_dir.path(), oauthbearer_zero_skew_validator()).await;
-    let addr = handle.listen_addr();
+    let (_log_dir, handle, addr) =
+        crate::oauthbearer::oauthbearer_fixture(oauthbearer_zero_skew_validator(), None).await;
 
     // Token A gets a few seconds so the handshake cannot outlive it -- see the
     // note in `oauthbearer_session_expires_closes_connection`. Token B lasts
@@ -200,12 +180,7 @@ async fn oauthbearer_in_band_reauth_with_fresh_token_resets_timer() {
         .await
         .expect("initial OAUTHBEARER must succeed");
 
-    let remaining = u64::try_from(exp_a.saturating_sub(now_unix_secs()).max(0))
-        .expect("a non-negative second count fits in u64");
-    tokio::time::sleep(
-        std::time::Duration::from_secs(remaining) + std::time::Duration::from_millis(500),
-    )
-    .await;
+    wait_past_expiration(exp_a).await;
     let token_b = unsecured_jws("alice", now_unix_secs() + 600);
     drive_inband_reauth(&mut stream, &token_b)
         .await
@@ -239,9 +214,8 @@ async fn oauthbearer_in_band_reauth_with_fresh_token_resets_timer() {
 /// in-band re-auth.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn oauthbearer_in_band_reauth_with_different_principal_closes() {
-    let log_dir = tempfile::tempdir().unwrap();
-    let handle = start_oauthbearer_broker(log_dir.path(), oauthbearer_zero_skew_validator()).await;
-    let addr = handle.listen_addr();
+    let (_log_dir, handle, addr) =
+        crate::oauthbearer::oauthbearer_fixture(oauthbearer_zero_skew_validator(), None).await;
 
     let token_alice = unsecured_jws("alice", now_unix_secs() + 600);
     let (mut stream, _) = drive_sasl_oauthbearer_session_open(addr, &token_alice)
@@ -258,11 +232,7 @@ async fn oauthbearer_in_band_reauth_with_different_principal_closes() {
     );
 
     // Broker closes after the error response.
-    let mut buf = [0_u8; 16];
-    let n = tokio::time::timeout(std::time::Duration::from_secs(5), stream.read(&mut buf))
-        .await
-        .expect("read should not hang")
-        .expect("read should not error");
+    let n = read_session_end(&mut stream).await;
     assert!(n == 0, "expected EOF after failed re-auth");
 
     handle.shutdown().await;
@@ -277,12 +247,13 @@ async fn oauthbearer_in_band_reauth_with_different_principal_closes() {
 /// otherwise accept SCRAM on a fresh connection.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn oauthbearer_in_band_reauth_with_different_mechanism_closes() {
-    let log_dir = tempfile::tempdir().unwrap();
     // Enable both OAUTHBEARER + SCRAM-SHA-512 on the same listener so a
     // fresh-connection SCRAM handshake WOULD succeed. The reject here
     // must be due to the same-mechanism rule, not "mechanism unknown".
-    let mut cfg = crate::support::sasl_plaintext_config(log_dir.path().to_path_buf());
-    cfg.enabled_sasl_mechanisms = vec![SaslMechanism::OAuthBearer, SaslMechanism::ScramSha512];
+    let (_log_dir, mut cfg) = crate::support::sasl::sasl_temp_config(vec![
+        SaslMechanism::OAuthBearer,
+        SaslMechanism::ScramSha512,
+    ]);
     cfg.oauthbearer_validator = oauthbearer_zero_skew_validator();
     let handle = Broker::start(cfg).await.expect("broker must start");
     let addr = handle.listen_addr();
@@ -386,13 +357,8 @@ async fn plain_listener_session_lifetime_ms_is_zero_and_no_timer() {
     let sh_resp = SaslHandshakeResponse::decode(&mut cur, 1).unwrap();
     assert!(sh_resp.error_code == 0, "PLAIN handshake must succeed");
 
-    let mut payload = Vec::new();
-    payload.push(0);
-    payload.extend_from_slice(b"alice");
-    payload.push(0);
-    payload.extend_from_slice(alice_password().as_bytes());
     let auth_req = SaslAuthenticateRequest {
-        auth_bytes: bytes::Bytes::from(payload),
+        auth_bytes: crate::kafka_wire::plain_payload("alice", alice_password().as_bytes()),
         ..Default::default()
     };
     let mut auth_body = BytesMut::new();
@@ -429,4 +395,21 @@ async fn plain_listener_session_lifetime_ms_is_zero_and_no_timer() {
     );
 
     handle.shutdown().await;
+}
+
+async fn read_session_end(stream: &mut TcpStream) -> usize {
+    let mut buf = [0_u8; 16];
+    tokio::time::timeout(std::time::Duration::from_secs(5), stream.read(&mut buf))
+        .await
+        .expect("read should not hang")
+        .expect("read should not error")
+}
+
+async fn wait_past_expiration(expiration: i64) {
+    let remaining = u64::try_from(expiration.saturating_sub(now_unix_secs()).max(0))
+        .expect("a non-negative second count fits in u64");
+    tokio::time::sleep(
+        std::time::Duration::from_secs(remaining) + std::time::Duration::from_millis(500),
+    )
+    .await;
 }

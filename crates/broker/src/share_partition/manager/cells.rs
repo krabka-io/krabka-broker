@@ -307,14 +307,12 @@ impl SharePartitionLeaderManager {
 
 #[cfg(test)]
 mod tests {
+
     use std::sync::Arc;
 
     use assert2::assert;
-    use krabka_ids::LeaderEpoch;
     use krabka_log::Offset;
-    use krabka_metadata::{
-        GroupConfigRecord, MetadataImage, MetadataRecord, NodeId, PartitionRecord, TopicRecord,
-    };
+    use krabka_metadata::{GroupConfigRecord, MetadataImage, MetadataRecord, NodeId, TopicRecord};
 
     use crate::{
         codes,
@@ -326,6 +324,8 @@ mod tests {
             state::AcquisitionState,
         },
     };
+
+    krabka_macros::single_replica_partition_fixture!(partition_record);
 
     /// Every `share.auto.offset.reset` strategy, resolved against one real
     /// log: two records stamped three hours ago at offsets 0-1, two stamped
@@ -402,18 +402,7 @@ mod tests {
                 partitions: 1,
                 replication_factor: 1,
             }),
-            MetadataRecord::V1Partition(PartitionRecord {
-                topic: "t".into(),
-                partition: 0,
-                leader: NodeId(1),
-                replicas: vec![NodeId(1)],
-                isr: vec![NodeId(1)],
-                leader_epoch: LeaderEpoch(0),
-                adding_replicas: vec![],
-                removing_replicas: vec![],
-                directories: vec![],
-                partition_epoch: 0,
-            }),
+            MetadataRecord::V1Partition(partition_record("t", 0, NodeId(1))),
         ];
         for (group, value) in strategies {
             records.push(MetadataRecord::V1GroupConfig(GroupConfigRecord {

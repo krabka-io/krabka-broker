@@ -76,95 +76,82 @@ crate::sendfile_cfg! {
     }
 }
 
-/// One non-blocking `sendfile(2)` attempt. It returns the bytes transferred on
-/// this call. A true would-block, with zero forward progress, surfaces as
-/// `ErrorKind::WouldBlock` so the shared readiness loop re-arms. Any positive
-/// transfer returns `Ok(n)`, even when the kernel also signalled `EAGAIN`.
-///
-/// **Linux** (`rustix`): `sendfile(out, in, Some(&mut offset), count)` returns
-/// the count and mutates `offset` in place. On `EAGAIN` it returns `Err`. The
-/// kernel does not report a partial count in `errno`, so `Err(EAGAIN)` always
-/// means zero bytes on this call. This function maps it straight to
-/// `WouldBlock`.
-#[cfg(target_os = "linux")]
-fn sendfile_once(
-    out_fd: std::os::fd::BorrowedFd<'_>,
-    in_fd: std::os::fd::BorrowedFd<'_>,
-    offset: u64,
-    count: usize,
-) -> std::io::Result<usize> {
-    let mut off = offset;
-    rustix::fs::sendfile(out_fd, in_fd, Some(&mut off), count).map_err(std::io::Error::from)
-}
+crate::sendfile_cfg! {
+    /// One non-blocking `sendfile(2)` attempt. It returns the bytes transferred on
+    /// this call. A true would-block, with zero forward progress, surfaces as
+    /// `ErrorKind::WouldBlock` so the shared readiness loop re-arms. Any positive
+    /// transfer returns `Ok(n)`, even when the kernel also signalled `EAGAIN`.
+    ///
+    /// **Linux** (`rustix`): `sendfile(out, in, Some(&mut offset), count)` returns
+    /// the count and mutates `offset` in place. On `EAGAIN` it returns `Err`. The
+    /// kernel does not report a partial count in `errno`, so `Err(EAGAIN)` always
+    /// means zero bytes on this call. This function maps it straight to
+    /// `WouldBlock`.
+    ///
+    /// **Apple / FreeBSD / `DragonFly`** (`nix`): the BSD-family `sendfile` returns
+    /// `(nix::Result<()>, off_t)`, where the `off_t` is the bytes transferred on
+    /// this call. That count is **valid even on `Err(EAGAIN)`**. This is the
+    /// correctness landmine: on these platforms `EAGAIN` with `n > 0` is *forward
+    /// progress*, not would-block. So this function does the following:
+    ///
+    /// * `Ok(())` → return `Ok(n)`. The send was full or partial, and the loop
+    ///   advances by `n`.
+    /// * `Err(EAGAIN)` with `n>0` → return `Ok(n)`. This counts the progress, and
+    ///   the loop advances and re-arms readiness for the rest.
+    /// * `Err(EAGAIN)` with `n==0` → return `Err(WouldBlock)`, a real would-block.
+    /// * any other `Err` → propagate as a hard I/O error.
+    ///
+    /// `count` is always `Some(region_remaining)` and never `None` or 0, which
+    /// would mean "to EOF", so this function never overshoots into the next batch.
+    /// The header and trailer `hdtr` slices are `None`, because the frame metadata
+    /// is a separate `WriteOp::Inline`, exactly as on Linux.
+    ///
+    /// NOTE: this arm is compile-reasoned only. The Windows/WSL toolchains used
+    /// here do not build or run it. It needs a macOS or FreeBSD CI runner to
+    /// verify the syscall semantics and the byte-exact wire output.
+    fn sendfile_once(out_fd: std::os::fd::BorrowedFd<'_>, in_fd: std::os::fd::BorrowedFd<'_>, offset: u64, count: usize) -> std::io::Result<usize> {
+        #[cfg(target_os = "linux")]
+        {
+            let mut off = offset;
+            rustix::fs::sendfile(out_fd, in_fd, Some(&mut off), count).map_err(std::io::Error::from)
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            use nix::errno::Errno;
 
-/// **Apple / FreeBSD / `DragonFly`** (`nix`): the BSD-family `sendfile` returns
-/// `(nix::Result<()>, off_t)`, where the `off_t` is the bytes transferred on
-/// this call. That count is **valid even on `Err(EAGAIN)`**. This is the
-/// correctness landmine: on these platforms `EAGAIN` with `n > 0` is *forward
-/// progress*, not would-block. So this function does the following:
-///
-/// * `Ok(())` → return `Ok(n)`. The send was full or partial, and the loop
-///   advances by `n`.
-/// * `Err(EAGAIN)` with `n>0` → return `Ok(n)`. This counts the progress, and
-///   the loop advances and re-arms readiness for the rest.
-/// * `Err(EAGAIN)` with `n==0` → return `Err(WouldBlock)`, a real would-block.
-/// * any other `Err` → propagate as a hard I/O error.
-///
-/// `count` is always `Some(region_remaining)` and never `None` or 0, which
-/// would mean "to EOF", so this function never overshoots into the next batch.
-/// The header and trailer `hdtr` slices are `None`, because the frame metadata
-/// is a separate `WriteOp::Inline`, exactly as on Linux.
-///
-/// NOTE: this arm is compile-reasoned only. The Windows/WSL toolchains used
-/// here do not build or run it. It needs a macOS or FreeBSD CI runner to
-/// verify the syscall semantics and the byte-exact wire output.
-#[cfg(any(
-    target_os = "macos",
-    target_os = "ios",
-    target_os = "tvos",
-    target_os = "watchos",
-    target_os = "freebsd",
-    target_os = "dragonfly",
-))]
-fn sendfile_once(
-    out_sock: std::os::fd::BorrowedFd<'_>,
-    in_fd: std::os::fd::BorrowedFd<'_>,
-    offset: u64,
-    count: usize,
-) -> std::io::Result<usize> {
-    use nix::errno::Errno;
+            // `off_t` is the kernel's signed file-offset type; the byte ranges we send
+            // are bounded by the segment size and always fit. Saturate defensively
+            // rather than wrap if an offset ever exceeded `off_t::MAX`.
+            let off = nix::libc::off_t::try_from(offset).unwrap_or(nix::libc::off_t::MAX);
 
-    // `off_t` is the kernel's signed file-offset type; the byte ranges we send
-    // are bounded by the segment size and always fit. Saturate defensively
-    // rather than wrap if an offset ever exceeded `off_t::MAX`.
-    let off = nix::libc::off_t::try_from(offset).unwrap_or(nix::libc::off_t::MAX);
+            // The `count` parameter's element type differs by platform: macOS/iOS take
+            // `Option<off_t>`, FreeBSD/DragonFly take `Option<usize>`. The
+            // `count_arg` shim normalizes our `usize remaining` to the right type. We
+            // never pass `None` (which would mean "send to EOF" and could overshoot the
+            // current batch into the next one in the same `.log` file).
+            let (result, sent) = bsd_sendfile(in_fd, out_fd, off, count);
 
-    // The `count` parameter's element type differs by platform: macOS/iOS take
-    // `Option<off_t>`, FreeBSD/DragonFly take `Option<usize>`. The
-    // `count_arg` shim normalizes our `usize remaining` to the right type. We
-    // never pass `None` (which would mean "send to EOF" and could overshoot the
-    // current batch into the next one in the same `.log` file).
-    let (result, sent) = bsd_sendfile(in_fd, out_sock, off, count);
-
-    let n = usize::try_from(sent).unwrap_or(0);
-    match result {
-        // Fully/partially transferred without error.
-        Ok(()) => Ok(n),
-        // EAGAIN/EWOULDBLOCK: on BSD-family this can accompany real forward
-        // progress (n > 0). Count the progress; only a zero-progress EAGAIN is a
-        // true would-block that the readiness loop must wait on.
-        Err(Errno::EAGAIN) => {
-            if n > 0 {
-                Ok(n)
-            } else {
-                Err(std::io::Error::from(std::io::ErrorKind::WouldBlock))
-            }
+            let n = usize::try_from(sent).unwrap_or(0);
+            match result {
+                // Fully/partially transferred without error.
+                Ok(()) => Ok(n),
+                // EAGAIN/EWOULDBLOCK: on BSD-family this can accompany real forward
+                // progress (n > 0). Count the progress; only a zero-progress EAGAIN is a
+                // true would-block that the readiness loop must wait on.
+                Err(Errno::EAGAIN) => {
+                    if n > 0 {
+                        Ok(n)
+                    } else {
+                        Err(std::io::Error::from(std::io::ErrorKind::WouldBlock))
+                    }
         }
         // EINTR with progress is also forward progress; without progress, retry
         // is harmless — surface as WouldBlock so the loop re-arms and re-issues.
         Err(Errno::EINTR) if n > 0 => Ok(n),
         Err(Errno::EINTR) => Err(std::io::Error::from(std::io::ErrorKind::Interrupted)),
         Err(e) => Err(std::io::Error::from_raw_os_error(e as i32)),
+    }
+        }
     }
 }
 
@@ -179,7 +166,9 @@ fn sendfile_once(
     target_os = "macos",
     target_os = "ios",
     target_os = "tvos",
-    target_os = "watchos"
+    target_os = "watchos",
+    target_os = "freebsd",
+    target_os = "dragonfly"
 ))]
 fn bsd_sendfile(
     in_fd: std::os::fd::BorrowedFd<'_>,
@@ -187,38 +176,32 @@ fn bsd_sendfile(
     offset: nix::libc::off_t,
     count: usize,
 ) -> (nix::Result<()>, nix::libc::off_t) {
-    // macOS/iOS: count is `Option<off_t>`; no header/trailer; no flags.
-    let count = Some(nix::libc::off_t::try_from(count).unwrap_or(nix::libc::off_t::MAX));
-    nix::sys::sendfile::sendfile(in_fd, out_sock, offset, count, None, None)
-}
-
-#[cfg(target_os = "freebsd")]
-fn bsd_sendfile(
-    in_fd: std::os::fd::BorrowedFd<'_>,
-    out_sock: std::os::fd::BorrowedFd<'_>,
-    offset: nix::libc::off_t,
-    count: usize,
-) -> (nix::Result<()>, nix::libc::off_t) {
-    // FreeBSD: count is `Option<usize>`; additional `SfFlags` + readahead args.
-    nix::sys::sendfile::sendfile(
-        in_fd,
-        out_sock,
-        offset,
-        Some(count),
-        None,
-        None,
-        nix::sys::sendfile::SfFlags::empty(),
-        0,
-    )
-}
-
-#[cfg(target_os = "dragonfly")]
-fn bsd_sendfile(
-    in_fd: std::os::fd::BorrowedFd<'_>,
-    out_sock: std::os::fd::BorrowedFd<'_>,
-    offset: nix::libc::off_t,
-    count: usize,
-) -> (nix::Result<()>, nix::libc::off_t) {
-    // DragonFly: count is `Option<usize>`; no flags/readahead.
-    nix::sys::sendfile::sendfile(in_fd, out_sock, offset, Some(count), None, None)
+    #[cfg(any(
+        target_os = "macos",
+        target_os = "ios",
+        target_os = "tvos",
+        target_os = "watchos"
+    ))]
+    {
+        // Apple count is Option<off_t>, without flags or headers/trailers.
+        let count = Some(nix::libc::off_t::try_from(count).unwrap_or(nix::libc::off_t::MAX));
+        nix::sys::sendfile::sendfile(in_fd, out_sock, offset, count, None, None)
+    }
+    #[cfg(target_os = "freebsd")]
+    {
+        nix::sys::sendfile::sendfile(
+            in_fd,
+            out_sock,
+            offset,
+            Some(count),
+            None,
+            None,
+            nix::sys::sendfile::SfFlags::empty(),
+            0,
+        )
+    }
+    #[cfg(target_os = "dragonfly")]
+    {
+        nix::sys::sendfile::sendfile(in_fd, out_sock, offset, Some(count), None, None)
+    }
 }

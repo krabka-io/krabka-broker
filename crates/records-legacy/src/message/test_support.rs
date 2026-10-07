@@ -37,3 +37,10 @@ pub(super) fn fixture_v1_null() -> Message {
         value: None,
     }
 }
+
+pub(super) fn round_trip(message: &Message) -> (bytes::BytesMut, Message) {
+    let mut buffer = bytes::BytesMut::new();
+    message.encode_into(&mut buffer);
+    let decoded = Message::decode_from(&mut &buffer[..], message.encoded_len()).unwrap();
+    (buffer, decoded)
+}

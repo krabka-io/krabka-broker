@@ -5,13 +5,10 @@
 //! must carry the retained `ClientSecurity`, so this test drives the whole flow
 //! with an authenticated producer to keep those secondary connections covered.
 
-use std::time::Duration;
-
 use assert2::assert;
-use krabka_client_consumer::{AutoOffsetReset, Consumer, IsolationLevel};
 use krabka_client_producer::{ConsumerGroupMetadata, Producer};
 
-use crate::txn_harness::{boot_single_sasl, create_topic_sasl, rec, sasl_plain_security};
+use crate::txn_harness::{boot_single_sasl, create_topic_sasl, sasl_plain_security};
 
 /// Full transactional flow over a `SASL_PLAINTEXT`/`PLAIN` listener.
 ///
@@ -48,14 +45,7 @@ async fn sasl_authenticated_transactional_flow_commits() {
     // this is the call that failed with Client(Disconnected) before the fix.
     producer.init_transactions().await.unwrap();
     let txn = producer.begin_transaction().await.unwrap();
-    for v in ["a", "b", "c"] {
-        drop(
-            producer
-                .enqueue(rec("sasl-txn", v))
-                .await
-                .expect("record is queued"),
-        );
-    }
+    crate::support::producer::enqueue_string_values(&producer, "sasl-txn", &["a", "b", "c"]).await;
     // send_offsets_to_transaction dials the group coordinator on a *second*
     // fresh connection — the other secondary connection that must carry SASL.
     producer
@@ -81,21 +71,11 @@ async fn sasl_authenticated_transactional_flow_commits() {
         return;
     }
 
-    let mut consumer = Consumer::builder()
-        .bootstrap(bootstrap)
-        .group_id("sasl-verify")
-        .auto_offset_reset(AutoOffsetReset::Earliest)
-        .isolation_level(IsolationLevel::ReadCommitted)
-        .security(sasl_plain_security("alice", "alice-secret"))
-        .subscribe(["sasl-txn".to_string()])
-        .build()
-        .await
-        .unwrap();
-
-    let seen = crate::txn_consumer_fixture::poll_values_until(
-        &mut consumer,
-        Duration::from_secs(10),
-        |seen| seen.len() >= 3,
+    let (consumer, seen) = crate::support::transaction_wire::committed_values(
+        bootstrap,
+        "sasl-verify",
+        "sasl-txn",
+        Some(sasl_plain_security("alice", "alice-secret")),
     )
     .await;
     assert!(seen == vec!["a", "b", "c"], "seen={seen:?}");

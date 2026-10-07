@@ -517,9 +517,22 @@ mod tests {
     use super::*;
     use crate::{
         config::LogConfig,
-        log::test_support::{compaction_ctx, keyed_batch, tiny_segments},
+        log::test_support::{
+            append_keyed_samples, compact_test_log, compacting_segments, compaction_ctx,
+            keyed_batch, set_segment_size, tiny_segments,
+        },
         name,
     };
+
+    fn read_values(log: &Log) -> Vec<Vec<u8>> {
+        log.read(Offset(0), mebibytes(1))
+            .unwrap()
+            .batches
+            .iter()
+            .flat_map(|batch| batch.records.iter())
+            .map(|record| record.value.as_deref().unwrap().to_vec())
+            .collect()
+    }
 
     /// A high watermark past every offset these logs hold, for the tests
     /// whose subject is the ratio, the lag or the rewrite rather than the
@@ -641,26 +654,15 @@ mod tests {
     fn a_pass_leaves_a_log_the_cleaner_no_longer_owes_one() {
         // Twelve distinct keys survive the pass, so the segment it produces is
         // the bulk of the log and the ratio falls under Kafka's 0.5 default.
-        let dir = tempdir().unwrap();
-        let cfg = LogConfig {
-            cleanup_policy: crate::CleanupPolicy::Compact,
-            ..tiny_segments()
-        };
-        let mut log = Log::open(dir.path(), cfg).unwrap();
-        for i in 0..12 {
-            let key = format!("k{i}");
-            let mut batch = keyed_batch(i, &[(0, key.as_bytes(), b"v")]);
-            log.append(&mut batch).unwrap();
-        }
+        let (_dir, mut log) = compact_test_log();
+        append_keyed_samples(&mut log, 12, |i| format!("k{i}"));
         assert2::check!(log.compaction_due(std::time::SystemTime::now(), UNBOUNDED_HW));
 
         // Grouping shares `segment.bytes` with the roll that packed these
         // one-record segments, so widen it before the pass: the fixture
         // still needs many small sealed segments going in, but this test is
         // about the ratio the pass leaves behind, not the grouping cap.
-        let mut roomier = log.config_snapshot();
-        roomier.segment_size = mebibytes(1);
-        log.set_config(roomier);
+        set_segment_size(&mut log, mebibytes(1));
         log.compact(&compaction_ctx()).unwrap();
         assert2::check!(!log.compaction_due(std::time::SystemTime::now(), UNBOUNDED_HW));
     }
@@ -684,6 +686,13 @@ mod tests {
     /// stamped-segment tests reason in.
     fn at_epoch_millis(millis: u64) -> std::time::SystemTime {
         std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_millis(millis)
+    }
+
+    fn compact_at(log: &mut Log, millis: u64, stable: Offset) -> Result<(), LogError> {
+        log.compact(&CompactionContext {
+            now: at_epoch_millis(millis),
+            last_stable_offset: stable,
+        })
     }
 
     /// Kafka's `min.compaction.lag.ms` withholds the young tail from the
@@ -750,10 +759,7 @@ mod tests {
     #[test]
     fn a_never_cleaned_log_has_no_clean_prefix() {
         let dir = tempdir().unwrap();
-        let cfg = LogConfig {
-            cleanup_policy: crate::CleanupPolicy::Compact,
-            ..tiny_segments()
-        };
+        let cfg = compacting_segments();
         // Two appends: one sealed segment and the active one.
         let mut log = log_stamped_a_second_apart(dir.path(), cfg, 2);
 
@@ -763,11 +769,7 @@ mod tests {
             "a single dirty sealed segment is cleanable"
         );
 
-        log.compact(&CompactionContext {
-            now: at_epoch_millis(6_000),
-            last_stable_offset: UNBOUNDED_HW,
-        })
-        .unwrap();
+        compact_at(&mut log, 6_000, UNBOUNDED_HW).unwrap();
 
         // The pass output is now the clean prefix, so the same log is not due
         // again until something else is produced.
@@ -801,21 +803,8 @@ mod tests {
         log.append(&mut first).unwrap();
         log.append(&mut second).unwrap();
         assert2::assert!(log.segments.len() == 1, "one sealed segment");
-        let read_values = |log: &Log| -> Vec<Vec<u8>> {
-            log.read(Offset(0), mebibytes(1))
-                .unwrap()
-                .batches
-                .iter()
-                .flat_map(|batch| batch.records.iter())
-                .map(|record| record.value.as_deref().unwrap().to_vec())
-                .collect()
-        };
         let compact_at = |log: &mut Log, millis: u64| {
-            log.compact(&CompactionContext {
-                now: at_epoch_millis(millis),
-                last_stable_offset: UNBOUNDED_HW,
-            })
-            .unwrap();
+            compact_at(log, millis, UNBOUNDED_HW).unwrap();
         };
 
         // Every record is younger than the lag: nothing is due, and a pass
@@ -851,23 +840,11 @@ mod tests {
         // still needs many small sealed segments going in, but this test is
         // about the min-lag withhold, not the grouping cap, so the output
         // should be free to collapse them into one.
-        let mut roomier = log.config_snapshot();
-        roomier.segment_size = mebibytes(1);
-        log.set_config(roomier);
-        log.compact(&CompactionContext {
-            now: at_epoch_millis(6_000),
-            last_stable_offset: UNBOUNDED_HW,
-        })
-        .unwrap();
+        set_segment_size(&mut log, mebibytes(1));
+        compact_at(&mut log, 6_000, UNBOUNDED_HW).unwrap();
 
         assert2::check!(log.segments.len() == 2);
-        let out = log.read(Offset(0), mebibytes(1)).unwrap();
-        let values: Vec<Vec<u8>> = out
-            .batches
-            .iter()
-            .flat_map(|batch| batch.records.iter())
-            .map(|record| record.value.as_deref().unwrap().to_vec())
-            .collect();
+        let values = read_values(&log);
         assert2::check!(values == vec![b"v3".to_vec(), b"v4".to_vec(), b"v5".to_vec()]);
     }
 
@@ -882,10 +859,7 @@ mod tests {
     #[test]
     fn the_last_stable_offset_bounds_the_cleanable_range() {
         let dir = tempdir().unwrap();
-        let cfg = LogConfig {
-            cleanup_policy: crate::CleanupPolicy::Compact,
-            ..tiny_segments()
-        };
+        let cfg = compacting_segments();
         let mut log = log_stamped_a_second_apart(dir.path(), cfg, 6);
         // Five sealed segments (one batch each) and the active sixth.
         assert2::assert!(log.segments.len() == 5);
@@ -893,11 +867,7 @@ mod tests {
         // Nothing is committed: no sealed segment ends at or below zero, so
         // there is nothing to be due for and a pass rewrites nothing.
         assert2::check!(!log.compaction_due(at_epoch_millis(6_000), Offset(0)));
-        log.compact(&CompactionContext {
-            now: at_epoch_millis(6_000),
-            last_stable_offset: Offset(0),
-        })
-        .unwrap();
+        compact_at(&mut log, 6_000, Offset(0)).unwrap();
         assert2::check!(log.segments.len() == 5, "no segment was consumed");
 
         // Committing the first three segments makes exactly those cleanable:
@@ -907,22 +877,10 @@ mod tests {
         // these one-record segments, and this test is about the last-stable-
         // offset bound, not the grouping cap.
         assert2::check!(log.compaction_due(at_epoch_millis(6_000), Offset(3)));
-        let mut roomier = log.config_snapshot();
-        roomier.segment_size = mebibytes(1);
-        log.set_config(roomier);
-        log.compact(&CompactionContext {
-            now: at_epoch_millis(6_000),
-            last_stable_offset: Offset(3),
-        })
-        .unwrap();
+        set_segment_size(&mut log, mebibytes(1));
+        compact_at(&mut log, 6_000, Offset(3)).unwrap();
         assert2::check!(log.segments.len() == 3);
-        let out = log.read(Offset(0), mebibytes(1)).unwrap();
-        let values: Vec<Vec<u8>> = out
-            .batches
-            .iter()
-            .flat_map(|batch| batch.records.iter())
-            .map(|record| record.value.as_deref().unwrap().to_vec())
-            .collect();
+        let values = read_values(&log);
         assert2::check!(
             values
                 == vec![
@@ -953,11 +911,7 @@ mod tests {
 
         // One offset short of the first segment's end: it straddles the
         // watermark, so nothing is cleanable at all.
-        log.compact(&CompactionContext {
-            now: at_epoch_millis(6_000),
-            last_stable_offset: first_end - 1,
-        })
-        .unwrap();
+        compact_at(&mut log, 6_000, first_end - 1).unwrap();
         let sealed_before = log.segments.len();
         assert2::check!(!log.compaction_due(at_epoch_millis(6_000), first_end - 1));
 
@@ -967,14 +921,8 @@ mod tests {
         // watermark straddle, not the grouping cap, and the straddling
         // segment must stay untouched either way.
         assert2::check!(log.compaction_due(at_epoch_millis(6_000), first_end));
-        let mut roomier = log.config_snapshot();
-        roomier.segment_size = mebibytes(1);
-        log.set_config(roomier);
-        log.compact(&CompactionContext {
-            now: at_epoch_millis(6_000),
-            last_stable_offset: first_end,
-        })
-        .unwrap();
+        set_segment_size(&mut log, mebibytes(1));
+        compact_at(&mut log, 6_000, first_end).unwrap();
         assert2::check!(log.segments.len() == sealed_before);
         let out = log.read(Offset(0), mebibytes(1)).unwrap();
         let kept: usize = out.batches.iter().map(|batch| batch.records.len()).sum();
@@ -1010,12 +958,7 @@ mod tests {
     }
 
     fn assert_corrupt_suffix_preserves_originals(suffix: &[u8]) {
-        let dir = tempdir().unwrap();
-        let cfg = LogConfig {
-            cleanup_policy: crate::CleanupPolicy::Compact,
-            ..tiny_segments()
-        };
-        let mut log = Log::open(dir.path(), cfg).unwrap();
+        let (dir, mut log) = compact_test_log();
         for i in 0..3 {
             let value = format!("v{i}");
             let mut batch = keyed_batch(0, &[(0, b"key", value.as_bytes())]);
@@ -1098,12 +1041,26 @@ mod tests {
         }
     }
 
+    /// Three sealed versions of k1 plus an active record outside the pass.
+    fn versioned_log(dir: &std::path::Path, active: (&[u8], &[u8])) -> Log {
+        let cfg = LogConfig {
+            cleanup_policy: crate::CleanupPolicy::Compact,
+            segment_size: bytes(256), // force rolls
+            ..Default::default()
+        };
+        let mut log = Log::open(dir, cfg).unwrap();
+        append_versions(&mut log);
+        log.append(&mut keyed_batch(0, &[(0, active.0, active.1)]))
+            .unwrap();
+        log
+    }
+
+    fn sealed_sizes(log: &Log) -> Vec<ByteSize> {
+        log.segments.iter().map(Segment::size).collect()
+    }
+
     fn append_distinct_keys(log: &mut Log) {
-        for i in 0..6 {
-            let key = format!("k{i}");
-            log.append(&mut keyed_batch(i, &[(0, key.as_bytes(), b"v")]))
-                .unwrap();
-        }
+        append_keyed_samples(log, 6, |i| format!("k{i}"));
     }
 
     #[test]
@@ -1227,19 +1184,9 @@ mod tests {
     #[test]
     fn compact_dedupes_sealed_segments_keeps_active_intact() {
         let dir = tempdir().unwrap();
-        let cfg = LogConfig {
-            cleanup_policy: crate::CleanupPolicy::Compact,
-            segment_size: bytes(256), // force rolls
-            ..Default::default()
-        };
-        let mut log = Log::open(dir.path(), cfg).unwrap();
-
-        // Write 3 sealed segments, each with one record under "k1".
-        append_versions(&mut log);
-        // Add one more append to ensure the last write is in a fresh active
-        // segment (not part of what compaction touches).
-        let mut b = keyed_batch(0, &[(0, b"active-key", b"active-value")]);
-        log.append(&mut b).unwrap();
+        // Write 3 sealed segments, each with one record under "k1", then a
+        // fresh active segment outside the compaction pass.
+        let mut log = versioned_log(dir.path(), (b"active-key", b"active-value"));
 
         let active_leo_before = log.log_end_offset();
         log.compact(&compaction_ctx()).unwrap();
@@ -1265,12 +1212,7 @@ mod tests {
     /// sealed segments.
     #[test]
     fn compact_actually_dedupes_reducing_record_count() {
-        let dir = tempdir().unwrap();
-        let cfg = LogConfig {
-            cleanup_policy: crate::CleanupPolicy::Compact,
-            ..tiny_segments()
-        };
-        let mut log = Log::open(dir.path(), cfg).unwrap();
+        let (_dir, mut log) = compact_test_log();
 
         // Three sealed segments, each one record under "k1" (v0, v1, v2).
         append_versions(&mut log);
@@ -1285,9 +1227,7 @@ mod tests {
         // Grouping shares `segment.bytes` with the roll that packed these
         // one-record segments, so widen it before the pass: this test is
         // about dedup collapsing the sealed segments, not the grouping cap.
-        let mut roomier = log.config_snapshot();
-        roomier.segment_size = mebibytes(1);
-        log.set_config(roomier);
+        set_segment_size(&mut log, mebibytes(1));
         log.compact(&compaction_ctx()).unwrap();
 
         // Sealed segments collapse to exactly one rewritten segment.
@@ -1308,15 +1248,7 @@ mod tests {
     #[test]
     fn compact_is_idempotent() {
         let dir = tempdir().unwrap();
-        let cfg = LogConfig {
-            cleanup_policy: crate::CleanupPolicy::Compact,
-            segment_size: bytes(256),
-            ..Default::default()
-        };
-        let mut log = Log::open(dir.path(), cfg).unwrap();
-        append_versions(&mut log);
-        let mut b = keyed_batch(0, &[(0, b"active", b"x")]);
-        log.append(&mut b).unwrap();
+        let mut log = versioned_log(dir.path(), (b"active", b"x"));
         log.compact(&compaction_ctx()).unwrap();
         let leo1 = log.log_end_offset();
         log.compact(&compaction_ctx()).unwrap();
@@ -1336,19 +1268,14 @@ mod tests {
     /// outputs would still (wrongly) report itself due for another pass.
     #[test]
     fn a_multi_group_pass_treats_every_output_as_clean() {
-        let dir = tempdir().unwrap();
-        let cfg = LogConfig {
-            cleanup_policy: crate::CleanupPolicy::Compact,
-            ..tiny_segments()
-        };
-        let mut log = Log::open(dir.path(), cfg).unwrap();
+        let (_dir, mut log) = compact_test_log();
         // Six distinct keys: nothing is superseded, so the pass only
         // regroups records into size-bounded outputs, it never shrinks them.
         append_distinct_keys(&mut log);
         // Five sealed segments (one record each) and the active sixth.
         assert2::assert!(log.segments.len() == 5);
 
-        let sealed_bytes: Vec<ByteSize> = log.segments.iter().map(Segment::size).collect();
+        let sealed_bytes: Vec<ByteSize> = sealed_sizes(&log);
         // A cap that fits exactly the first two sealed segments together, so
         // the pass is forced to produce more than one output group.
         let group_cap = sealed_bytes[0] + sealed_bytes[1];
@@ -1359,9 +1286,7 @@ mod tests {
 
         // `segment.bytes` at compact time is what `Log::compact` reads for
         // the grouping cap; widen it to exactly `group_cap`.
-        let mut grouped_cfg = log.config_snapshot();
-        grouped_cfg.segment_size = group_cap;
-        log.set_config(grouped_cfg);
+        set_segment_size(&mut log, group_cap);
         log.compact(&compaction_ctx()).unwrap();
 
         let output_segments = log.segments.len();
@@ -1399,21 +1324,14 @@ mod tests {
     /// precondition rules out.
     #[test]
     fn a_multi_group_pass_drops_every_original_segment_file_before_swap() {
-        let dir = tempdir().unwrap();
-        let cfg = LogConfig {
-            cleanup_policy: crate::CleanupPolicy::Compact,
-            ..tiny_segments()
-        };
-        let mut log = Log::open(dir.path(), cfg).unwrap();
+        let (dir, mut log) = compact_test_log();
         append_distinct_keys(&mut log);
         let original_bases: Vec<i64> = log.segments.iter().map(|s| s.base_offset().0).collect();
         assert2::assert!(original_bases.len() == 5);
 
-        let sealed_bytes: Vec<ByteSize> = log.segments.iter().map(Segment::size).collect();
+        let sealed_bytes: Vec<ByteSize> = sealed_sizes(&log);
         let group_cap = sealed_bytes[0] + sealed_bytes[1];
-        let mut grouped_cfg = log.config_snapshot();
-        grouped_cfg.segment_size = group_cap;
-        log.set_config(grouped_cfg);
+        set_segment_size(&mut log, group_cap);
         log.compact(&compaction_ctx()).unwrap();
         assert2::assert!(
             log.segments.len() >= 2,

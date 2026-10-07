@@ -29,14 +29,16 @@ use krabka_client_core::Client;
 use krabka_protocol::{
     owned::{
         create_topics_request::CreateTopicsRequest,
-        fetch_request::{FetchPartition, FetchRequest, FetchTopic},
-        produce_request::{PartitionProduceData, ProduceRequest, TopicProduceData},
+        fetch_request::{FetchPartition, FetchRequest},
     },
     primitives::uuid::Uuid as WireUuid,
-    records::{Record, RecordBatch},
 };
 use support::cluster_lock;
 use tempfile::TempDir;
+
+use crate::support::{
+    client::connect_client, fetch::fetch_topic_row, produce::single_partition_produce,
+};
 
 mod support;
 
@@ -96,20 +98,7 @@ async fn wait_leader_and_isr(
         .await;
 }
 
-fn record_batch(n: i32) -> RecordBatch {
-    RecordBatch {
-        base_offset: 0,
-        last_offset_delta: (n - 1).max(0),
-        records: (0..n)
-            .map(|i| Record {
-                offset_delta: i,
-                value: Some(bytes::Bytes::from(format!("v{i}"))),
-                ..Default::default()
-            })
-            .collect(),
-        ..Default::default()
-    }
-}
+use crate::support::client::value_batch as record_batch;
 
 /// Build a consumer Fetch (`replica_id` = -1) for a single (topic, partition)
 /// at `offset`, with `rack_id`. The shared `Client` negotiates the broker's
@@ -124,18 +113,17 @@ fn consumer_fetch(topic: &str, topic_id: WireUuid, offset: i64, rack: &str) -> F
         session_id: 0,
         session_epoch: -1, // sessionless full fetch
         rack_id: rack.to_string(),
-        topics: vec![FetchTopic {
-            topic: topic.into(),
+        topics: vec![fetch_topic_row(
+            topic,
             topic_id,
-            partitions: vec![FetchPartition {
+            vec![FetchPartition {
                 partition: 0,
                 fetch_offset: offset,
                 current_leader_epoch: -1,
                 partition_max_bytes: 1_048_576,
                 ..Default::default()
             }],
-            ..Default::default()
-        }],
+        )],
         ..Default::default()
     }
 }
@@ -191,11 +179,7 @@ async fn rack_aware_consumer_is_redirected_to_same_rack_follower() {
     let follower_addr = cluster[1].1.listen_addr.to_string();
 
     // Step 2: CreateTopics("t", partitions=1, rf=2) against the leader.
-    let admin = Client::builder()
-        .bootstrap(leader_addr.clone())
-        .build()
-        .await
-        .unwrap();
+    let admin = connect_client(leader_addr.clone(), None).await;
     let resp = admin
         .send(CreateTopicsRequest {
             // Node 1 leads and node 2 follows. An automatic placement over the
@@ -228,27 +212,15 @@ async fn rack_aware_consumer_is_redirected_to_same_rack_follower() {
     let follower_node = i32::try_from(follower_id).unwrap();
 
     // Step 3: produce N records to the leader with acks=all so they commit.
-    let producer = Client::builder()
-        .bootstrap(leader_addr.clone())
-        .build()
-        .await
-        .unwrap();
+    let producer = connect_client(leader_addr.clone(), None).await;
     let prod = producer
-        .send(ProduceRequest {
-            acks: -1,
-            timeout_ms: 5_000,
-            topic_data: vec![TopicProduceData {
-                name: "t".into(),
-                topic_id,
-                partition_data: vec![PartitionProduceData {
-                    index: 0,
-                    records: Some(record_batch(N_RECORDS).into()),
-                    ..Default::default()
-                }],
-                ..Default::default()
-            }],
-            ..Default::default()
-        })
+        .send(single_partition_produce(
+            "t",
+            topic_id,
+            0,
+            Some(record_batch(N_RECORDS).into()),
+            (-1, 5_000),
+        ))
         .await
         .expect("Produce");
     assert!(
@@ -265,11 +237,7 @@ async fn rack_aware_consumer_is_redirected_to_same_rack_follower() {
 
     // Step 5: consumer Fetch to the LEADER with rack_id=rack-b → the
     // selector should redirect to the same-rack follower (node 2).
-    let leader_client = Client::builder()
-        .bootstrap(leader_addr.clone())
-        .build()
-        .await
-        .unwrap();
+    let leader_client = connect_client(leader_addr.clone(), None).await;
     let r_leader = leader_client
         .send(consumer_fetch("t", topic_id, 0, RACK_B))
         .await
@@ -284,11 +252,7 @@ async fn rack_aware_consumer_is_redirected_to_same_rack_follower() {
     // Step 6: consumer Fetch to the FOLLOWER (broker 2) with rack_id=rack-b.
     // Bounded retry until the follower's HW has advanced enough to serve
     // all N records (HW propagation can lag the local log slightly).
-    let follower_client = Client::builder()
-        .bootstrap(follower_addr.clone())
-        .build()
-        .await
-        .unwrap();
+    let follower_client = connect_client(follower_addr.clone(), None).await;
     let got = fetch_all_from_follower(&follower_client, topic_id).await;
     assert!(got == N_RECORDS as usize, "follower returned all N records");
 
@@ -296,7 +260,5 @@ async fn rack_aware_consumer_is_redirected_to_same_rack_follower() {
     // (same rack as the leader) yields no redirect.
     assert_leader_serves_same_rack(&leader_client, topic_id).await;
 
-    for (h, _, _) in cluster {
-        h.shutdown().await;
-    }
+    crate::support::shutdown_cluster(cluster).await;
 }

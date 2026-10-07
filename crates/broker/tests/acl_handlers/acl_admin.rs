@@ -11,27 +11,18 @@
 
 use std::{io, net::SocketAddr};
 
-use assert2::assert;
-use bytes::BytesMut;
-use krabka_protocol::{
-    Decode, Encode,
-    owned::{
-        create_acls_request::{AclCreation, CreateAclsRequest},
-        create_acls_response::CreateAclsResponse,
-        create_topics_request::{CreatableTopic, CreateTopicsRequest},
-        create_topics_response::CreateTopicsResponse,
-        delete_acls_request::DeleteAclsRequest,
-        delete_acls_response::DeleteAclsResponse,
-        describe_acls_request::DescribeAclsRequest,
-        describe_acls_response::DescribeAclsResponse,
-    },
+use krabka_protocol::owned::{
+    create_acls_request::{AclCreation, CreateAclsRequest},
+    create_acls_response::CreateAclsResponse,
+    delete_acls_request::DeleteAclsRequest,
+    delete_acls_response::DeleteAclsResponse,
+    describe_acls_request::DescribeAclsRequest,
+    describe_acls_response::DescribeAclsResponse,
 };
 
 use crate::{
-    CREATE_ACLS_VERSION, CREATE_TOPICS_VERSION, DELETE_ACLS_VERSION, DESCRIBE_ACLS_VERSION,
-    OPERATION_ANY, PATTERN_TYPE_ANY, PATTERN_TYPE_LITERAL, PERMISSION_ALLOW, PERMISSION_ANY,
-    RESOURCE_TYPE_TOPIC,
-    framing::{round_trip, sasl_plain_authenticate},
+    CREATE_ACLS_VERSION, DELETE_ACLS_VERSION, DESCRIBE_ACLS_VERSION, OPERATION_ANY,
+    PATTERN_TYPE_ANY, PATTERN_TYPE_LITERAL, PERMISSION_ALLOW, PERMISSION_ANY, RESOURCE_TYPE_TOPIC,
 };
 
 /// Shorthand for `Allow <op> on Topic LITERAL <name> for <principal> from *`.
@@ -70,41 +61,13 @@ pub fn describe_all_topic_acls() -> DescribeAclsRequest {
 /// for the requested topic. The T23 tests use it to materialise a
 /// partition before they produce to it or fetch from it.
 pub async fn create_topic_as_admin(addr: SocketAddr, name: &str, partitions: i32) {
-    let req = CreateTopicsRequest {
-        topics: vec![CreatableTopic {
-            name: name.to_string(),
-            num_partitions: partitions,
-            replication_factor: 1,
-            ..Default::default()
-        }],
-        timeout_ms: 5_000,
-        ..Default::default()
-    };
-    let resp = drive_create_topics_as_plain(addr, "admin", b"admin-secret", req)
-        .await
-        .expect("CreateTopics as super-user must round-trip");
-    assert!(resp.topics.len() == 1, "one topic in response");
-    assert!(
-        resp.topics[0].error_code == 0,
-        "CreateTopics({name}) must succeed: {:?}",
-        resp.topics[0].error_message
-    );
-}
-
-async fn drive_create_topics_as_plain(
-    addr: SocketAddr,
-    user: &str,
-    password: &[u8],
-    req: CreateTopicsRequest,
-) -> Result<CreateTopicsResponse, io::Error> {
-    let mut stream = sasl_plain_authenticate(addr, user, password).await?;
-    let mut body = BytesMut::new();
-    req.encode(&mut body, CREATE_TOPICS_VERSION)
-        .map_err(|e| io::Error::other(format!("CreateTopics encode: {e}")))?;
-    let resp_bytes = round_trip(&mut stream, 19, CREATE_TOPICS_VERSION, 4, true, &body).await?;
-    let mut cur: &[u8] = &resp_bytes;
-    CreateTopicsResponse::decode(&mut cur, CREATE_TOPICS_VERSION)
-        .map_err(|e| io::Error::other(format!("CreateTopics decode: {e}")))
+    crate::kafka_wire::create_topic_as_super_user(
+        addr,
+        crate::framing::CLIENT_ID,
+        name,
+        partitions,
+    )
+    .await;
 }
 
 pub async fn drive_create_acls_as_plain(
@@ -113,14 +76,16 @@ pub async fn drive_create_acls_as_plain(
     password: &[u8],
     req: CreateAclsRequest,
 ) -> Result<CreateAclsResponse, io::Error> {
-    let mut stream = sasl_plain_authenticate(addr, user, password).await?;
-    let mut body = BytesMut::new();
-    req.encode(&mut body, CREATE_ACLS_VERSION)
-        .map_err(|e| io::Error::other(format!("CreateAcls encode: {e}")))?;
-    let resp_bytes = round_trip(&mut stream, 30, CREATE_ACLS_VERSION, 4, true, &body).await?;
-    let mut cur: &[u8] = &resp_bytes;
-    CreateAclsResponse::decode(&mut cur, CREATE_ACLS_VERSION)
-        .map_err(|e| io::Error::other(format!("CreateAcls decode: {e}")))
+    crate::framing::request_as_plain(
+        addr,
+        user,
+        password,
+        &req,
+        30,
+        CREATE_ACLS_VERSION,
+        "CreateAcls",
+    )
+    .await
 }
 
 pub async fn drive_describe_acls_as_plain(
@@ -129,14 +94,16 @@ pub async fn drive_describe_acls_as_plain(
     password: &[u8],
     req: DescribeAclsRequest,
 ) -> Result<DescribeAclsResponse, io::Error> {
-    let mut stream = sasl_plain_authenticate(addr, user, password).await?;
-    let mut body = BytesMut::new();
-    req.encode(&mut body, DESCRIBE_ACLS_VERSION)
-        .map_err(|e| io::Error::other(format!("DescribeAcls encode: {e}")))?;
-    let resp_bytes = round_trip(&mut stream, 29, DESCRIBE_ACLS_VERSION, 4, true, &body).await?;
-    let mut cur: &[u8] = &resp_bytes;
-    DescribeAclsResponse::decode(&mut cur, DESCRIBE_ACLS_VERSION)
-        .map_err(|e| io::Error::other(format!("DescribeAcls decode: {e}")))
+    crate::framing::request_as_plain(
+        addr,
+        user,
+        password,
+        &req,
+        29,
+        DESCRIBE_ACLS_VERSION,
+        "DescribeAcls",
+    )
+    .await
 }
 
 pub async fn drive_delete_acls_as_plain(
@@ -145,12 +112,14 @@ pub async fn drive_delete_acls_as_plain(
     password: &[u8],
     req: DeleteAclsRequest,
 ) -> Result<DeleteAclsResponse, io::Error> {
-    let mut stream = sasl_plain_authenticate(addr, user, password).await?;
-    let mut body = BytesMut::new();
-    req.encode(&mut body, DELETE_ACLS_VERSION)
-        .map_err(|e| io::Error::other(format!("DeleteAcls encode: {e}")))?;
-    let resp_bytes = round_trip(&mut stream, 31, DELETE_ACLS_VERSION, 4, true, &body).await?;
-    let mut cur: &[u8] = &resp_bytes;
-    DeleteAclsResponse::decode(&mut cur, DELETE_ACLS_VERSION)
-        .map_err(|e| io::Error::other(format!("DeleteAcls decode: {e}")))
+    crate::framing::request_as_plain(
+        addr,
+        user,
+        password,
+        &req,
+        31,
+        DELETE_ACLS_VERSION,
+        "DeleteAcls",
+    )
+    .await
 }

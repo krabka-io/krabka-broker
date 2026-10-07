@@ -10,11 +10,7 @@ proptest! {
         step in 1usize..8,
         span in 0usize..5,
     ) {
-        let offsets: Vec<_> = records.keys().copied().collect();
-        let timestamps: Vec<_> = records.values().copied().collect();
-        let rows: Vec<_> = (0..records.len()).step_by(step)
-            .map(|indexed| (indexed, (indexed + span).min(records.len() - 1)))
-            .collect();
+        let (offsets, timestamps, rows) = timestamp_records(&records, step, span);
         let entries: Vec<_> = rows.iter().map(|(indexed, through)|
             running_maximum_index_entry(&offsets, &timestamps, *indexed, *through)).collect();
         let expected = timestamps.iter().position(|timestamp| *timestamp >= target);

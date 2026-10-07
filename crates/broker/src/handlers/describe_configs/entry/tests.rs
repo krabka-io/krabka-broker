@@ -74,7 +74,7 @@ fn the_chain_head_decides_the_value_and_the_source() {
 
     assert!(
         entry
-            == DescribeConfigsResourceResult {
+            == tagged_wire!(DescribeConfigsResourceResult {
                 name: "log.retention.ms".to_owned(),
                 value: Some("90000".to_owned()),
                 read_only: false,
@@ -91,8 +91,7 @@ fn the_chain_head_decides_the_value_and_the_source() {
                 ],
                 config_type: ConfigType::Long.wire(),
                 documentation: Some(SECRET_FREE.doc.to_owned()),
-                unknown_tagged_fields: UnknownTaggedFields::default(),
-            }
+            })
     );
 }
 
@@ -153,12 +152,11 @@ const SECRET_FREE: registry::ConfigKey = registry::ConfigKey {
 };
 
 fn synonym(name: &str, value: &str, source: i8) -> DescribeConfigsSynonym {
-    DescribeConfigsSynonym {
+    tagged_wire!(DescribeConfigsSynonym {
         name: name.to_owned(),
         value: Some(value.to_owned()),
         source,
-        unknown_tagged_fields: UnknownTaggedFields::default(),
-    }
+    })
 }
 
 #[test]
@@ -248,30 +246,27 @@ fn a_sensitive_key_reports_no_value_anywhere_in_the_chain() {
 
     assert!(
         entry
-            == DescribeConfigsResourceResult {
+            == tagged_wire!(DescribeConfigsResourceResult {
                 name: SECRET.name.to_owned(),
                 value: None,
                 read_only: false,
                 config_source: CONFIG_SOURCE_STATIC_BROKER,
                 is_sensitive: true,
                 synonyms: vec![
-                    DescribeConfigsSynonym {
+                    tagged_wire!(DescribeConfigsSynonym {
                         name: SECRET.name.to_owned(),
                         value: None,
                         source: CONFIG_SOURCE_STATIC_BROKER,
-                        unknown_tagged_fields: UnknownTaggedFields::default(),
-                    },
-                    DescribeConfigsSynonym {
+                    }),
+                    tagged_wire!(DescribeConfigsSynonym {
                         name: SECRET.name.to_owned(),
                         value: None,
                         source: CONFIG_SOURCE_DEFAULT,
-                        unknown_tagged_fields: UnknownTaggedFields::default(),
-                    },
+                    }),
                 ],
                 config_type: ConfigType::String.wire(),
                 documentation: Some(SECRET.doc.to_owned()),
-                unknown_tagged_fields: UnknownTaggedFields::default(),
-            }
+            })
     );
 }
 
@@ -297,12 +292,11 @@ fn a_key_with_no_registry_row_is_treated_as_one_the_broker_may_not_disclose() {
     check!(entry.documentation == None);
     check!(
         entry.synonyms
-            == vec![DescribeConfigsSynonym {
+            == vec![tagged_wire!(DescribeConfigsSynonym {
                 name: "some.key.no.row.covers".to_owned(),
                 value: None,
                 source: CONFIG_SOURCE_DYNAMIC_BROKER,
-                unknown_tagged_fields: UnknownTaggedFields::default(),
-            }]
+            })]
     );
 }
 

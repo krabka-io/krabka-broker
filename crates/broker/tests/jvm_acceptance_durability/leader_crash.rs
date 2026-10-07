@@ -9,7 +9,7 @@ use std::process::Stdio;
 
 use assert2::assert;
 
-use crate::jvm_acceptance::{KAFKA_IMAGE, docker_run_kafka_tool};
+use crate::jvm_acceptance::KAFKA_IMAGE;
 
 // `acks=all` survives a leader crash mid-produce burst: 3-broker Krabka
 // cluster, JVM `kafka-console-producer --request-required-acks=-1` writes
@@ -40,34 +40,8 @@ async fn acks_all_survives_leader_crash() {
     })
     .await;
 
-    let bootstrap_1 = format!("host.docker.internal:{}", client_ports[0]);
-    // Multi-broker bootstrap so the JVM producer can find a survivor when
-    // broker 1 (the partition leader) is killed mid-burst. Without this the
-    // producer hangs on bootstrap because its only known broker is dead.
-    let bootstrap_all = format!(
-        "host.docker.internal:{},host.docker.internal:{},host.docker.internal:{}",
-        client_ports[0], client_ports[1], client_ports[2],
-    );
-
-    // 1. Create topic with replication-factor=3.
-    docker_run_kafka_tool(&[
-        "kafka-topics",
-        "--create",
-        "--if-not-exists",
-        "--topic",
-        TOPIC,
-        "--partitions",
-        "1",
-        "--replication-factor",
-        "3",
-        "--bootstrap-server",
-        &bootstrap_1,
-    ]);
-
-    // 2. Wait for ISR to include all three brokers before starting the produce
-    //    burst. The in-process metadata image ISR is exactly what the JVM
-    //    `kafka-topics --describe` reports, so observe it directly.
-    cluster[0].0.wait_until_isr_len(TOPIC, 0, 3).await;
+    let (_bootstrap_1, bootstrap_all) =
+        crate::prepare_replication_topic(&cluster[0].0, TOPIC, &client_ports).await;
     // The consumer at the end needs `__consumer_offsets`, which takes three
     // replicas. Create it while all three brokers are up, as Kafka's
     // `IntegrationTestHarness.createOffsetsTopic` does before a test.
@@ -77,11 +51,9 @@ async fn acks_all_survives_leader_crash() {
     let leader_node_id = {
         use krabka_protocol::owned::metadata_request::{MetadataRequest, MetadataRequestTopic};
         let local_bootstrap = format!("127.0.0.1:{}", client_ports[0]);
-        let probe = krabka_client_core::Client::builder()
-            .bootstrap(local_bootstrap)
-            .build()
-            .await
-            .expect("metadata probe");
+        let probe =
+            crate::support::client::connect_with_context(local_bootstrap, None, "metadata probe")
+                .await;
         let resp = probe
             .send(MetadataRequest {
                 topics: Some(vec![MetadataRequestTopic {
@@ -92,11 +64,7 @@ async fn acks_all_survives_leader_crash() {
             })
             .await
             .expect("metadata");
-        resp.topics
-            .iter()
-            .find(|t| t.name.as_deref() == Some(TOPIC))
-            .and_then(|t| t.partitions.first())
-            .map_or(1, |p| p.leader_id)
+        crate::support::discovery::metadata_first_leader(&resp, TOPIC, 1)
     };
 
     // 4. Spawn JVM producer in background (100 records, acks=-1, long timeout
@@ -164,22 +132,9 @@ async fn acks_all_survives_leader_crash() {
         .collect();
     let survivor_bootstrap = format!("host.docker.internal:{}", surviving_ports[0]);
 
-    let consume_out = docker_run_kafka_tool(&[
-        "kafka-console-consumer",
-        "--bootstrap-server",
-        &survivor_bootstrap,
-        "--topic",
-        TOPIC,
-        "--isolation-level",
-        "read_committed",
-        "--from-beginning",
-        "--max-messages",
-        "1",
-        "--timeout-ms",
-        "20000",
-    ]);
+    let consume_out = crate::jvm_acceptance::consume_committed_at(&survivor_bootstrap, TOPIC, 1);
     let stdout = String::from_utf8_lossy(&consume_out.stdout);
-    let line_count = stdout.lines().filter(|l| !l.trim().is_empty()).count();
+    let line_count = crate::support::jvm_output_lines(&consume_out).len();
     assert!(
         line_count >= 1,
         "expected at least 1 readable record after leader crash; got {line_count}: {stdout}"

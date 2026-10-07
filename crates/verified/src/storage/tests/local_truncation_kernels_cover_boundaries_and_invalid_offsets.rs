@@ -1,5 +1,7 @@
 use super::*;
 
+krabka_macros::remote_segment_transition_matrix!(expected_transitions);
+
 #[test]
 fn local_truncation_kernels_cover_boundaries_and_invalid_offsets() {
     assert2::check!(
@@ -65,12 +67,7 @@ fn remote_segment_transition_matrix_matches_kafka() {
 
     let states = [CopyStarted, CopyFinished, DeleteStarted, DeleteFinished];
     // Kafka's `RemoteLogSegmentState.isValidTransition`, row = source.
-    let expected = [
-        [true, true, true, false],
-        [false, true, true, false],
-        [false, false, true, true],
-        [false, false, false, true],
-    ];
+    let expected = expected_transitions();
     for (from, row) in states.into_iter().zip(expected) {
         for (to, want) in states.into_iter().zip(row) {
             assert2::check!(

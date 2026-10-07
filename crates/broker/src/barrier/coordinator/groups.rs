@@ -132,23 +132,9 @@ impl BarrierCoordinator {
             )));
         }
 
-        let definition = GroupValue {
-            topics: spec.topics,
-            interval: spec.interval,
-            retained_cuts: spec.retained_cuts,
-            last_epoch: entry.last_epoch(),
-        };
-        self.append_records(
-            group,
-            vec![(
-                RecordKey::group(group),
-                Some(encode_group(&definition)?.into()),
-            )],
-        )
-        .await?;
-
-        entry.definition = definition.clone();
-        schedule_next(&mut entry, now_ms());
+        let definition = self
+            .persist_group_definition(group, &mut entry, spec)
+            .await?;
         drop(entry);
         self.report_group_count();
         Ok(definition)
@@ -185,6 +171,16 @@ impl BarrierCoordinator {
             });
         }
 
+        self.persist_group_definition(group, &mut entry, spec).await
+    }
+
+    /// Persist the replacement before publishing it to the locked group entry.
+    async fn persist_group_definition(
+        &self,
+        group: &str,
+        entry: &mut GroupEntry,
+        spec: GroupSpec,
+    ) -> Result<GroupValue, BarrierError> {
         let definition = GroupValue {
             topics: spec.topics,
             interval: spec.interval,
@@ -201,7 +197,7 @@ impl BarrierCoordinator {
         .await?;
 
         entry.definition = definition.clone();
-        schedule_next(&mut entry, now_ms());
+        schedule_next(entry, now_ms());
         Ok(definition)
     }
 
@@ -430,11 +426,9 @@ mod tests {
     #[tokio::test]
     async fn a_second_create_of_the_same_name_is_refused() {
         let fixture = Fixture::new();
-        let coordinator = fixture.coordinator().await;
-        coordinator
-            .create_group(GROUP, spec(&["orders"], None, 4))
-            .await
-            .expect("the group is created");
+        let coordinator = fixture
+            .coordinator_with_group(GROUP, spec(&["orders"], None, 4))
+            .await;
         let again = coordinator
             .create_group(GROUP, spec(&["payments"], None, 4))
             .await;
@@ -466,11 +460,9 @@ mod tests {
     #[tokio::test]
     async fn a_deleted_group_leaves_no_state_behind() {
         let fixture = Fixture::new();
-        let coordinator = fixture.coordinator().await;
-        coordinator
-            .create_group(GROUP, spec(&["orders"], None, 4))
-            .await
-            .expect("the group is created");
+        let coordinator = fixture
+            .coordinator_with_group(GROUP, spec(&["orders"], None, 4))
+            .await;
         coordinator
             .trigger_injection(GROUP, None)
             .await

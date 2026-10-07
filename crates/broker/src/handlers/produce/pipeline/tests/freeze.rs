@@ -9,9 +9,7 @@ use std::sync::Arc;
 
 use assert2::check;
 use bytes::Bytes;
-use krabka_metadata::{
-    MetadataImage, MetadataRecord, PartitionRecord, PatternType, TopicFreezeRecord, TopicRecord,
-};
+use krabka_metadata::{MetadataImage, MetadataRecord, PatternType, TopicFreezeRecord, TopicRecord};
 use krabka_protocol::{
     owned::produce_response::PartitionProduceResponse,
     records::{Record, RecordBatch},
@@ -59,18 +57,9 @@ fn add_topic(image: &mut MetadataImage, topic: &str, topic_id: Uuid) {
         partitions: 1,
         replication_factor: 1,
     }));
-    image.apply(&MetadataRecord::V1Partition(PartitionRecord {
-        topic: topic.into(),
-        partition: 0,
-        leader: krabka_audit::NodeId(1),
-        replicas: vec![krabka_audit::NodeId(1)],
-        isr: vec![krabka_audit::NodeId(1)],
-        leader_epoch: krabka_metadata::LeaderEpoch(0),
-        adding_replicas: vec![],
-        removing_replicas: vec![],
-        directories: vec![],
-        partition_epoch: 0,
-    }));
+    image.apply(&MetadataRecord::V1Partition(
+        crate::handlers::test_support::single_replica_partition(topic, 0, krabka_audit::NodeId(1)),
+    ));
 }
 
 #[test]

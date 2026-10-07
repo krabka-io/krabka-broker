@@ -67,19 +67,14 @@ pub use self::{
     error::{BackupError, EXIT_BAD_ARGUMENT, EXIT_CLUSTER, EXIT_INTEGRITY, EXIT_UNREADABLE},
 };
 
-/// Run the tool from an argv-style iterator, returning its exit code.
-///
-/// # Panics
-///
-/// Panics if `argv` does not parse, which for a caller passing a literal
-/// argument list is a bug in that list rather than a runtime condition.
-pub async fn run_from_args<I, T>(argv: I) -> i32
-where
-    I: IntoIterator<Item = T>,
-    T: Into<std::ffi::OsString> + Clone,
-{
-    run(Cli::parse_from(argv)).await
-}
+krabka_macros::parsed_cli_entrypoint!({
+    /// Run the tool from an argv-style iterator, returning its exit code.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `argv` does not parse, which for a caller passing a literal
+    /// argument list is a bug in that list rather than a runtime condition.
+});
 
 /// Run one parsed command line, mapping its error onto an exit code.
 pub async fn run(cli: Cli) -> i32 {
@@ -141,15 +136,8 @@ mod tests {
         manifest::{MANIFEST, RLMM_SNAPSHOT},
     };
 
-    /// A log directory holding the RLMM snapshot a capture takes off a node.
-    fn node() -> tempfile::TempDir {
-        let log_dir = tempfile::tempdir().expect("log dir");
-        let rlmm = log_dir.path().join("remote-log-metadata");
-        std::fs::create_dir_all(&rlmm).expect("create the rlmm dir");
-        std::fs::write(rlmm.join("snapshot"), b"rlmm snapshot bytes")
-            .expect("write the rlmm snapshot");
-        log_dir
-    }
+    // A log directory holding the RLMM snapshot a capture takes off a node.
+    krabka_macros::snapshot_node_fixture!(node);
 
     /// The one capture id the archive holds, which `latest` also resolves to.
     fn only_capture(archive_root: &std::path::Path) -> String {

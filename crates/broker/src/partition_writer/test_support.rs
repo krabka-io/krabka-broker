@@ -8,7 +8,7 @@ use std::sync::{
 
 use krabka_ids::PartitionIndex;
 use krabka_log::{Log, LogConfig, Offset};
-use krabka_protocol::records::{Record, RecordBatch};
+use krabka_protocol::records::RecordBatch;
 use tokio::sync::{Notify, mpsc, oneshot};
 
 use super::{run_with_sequencer, writer_macros::run_writer};
@@ -49,19 +49,7 @@ pub(super) fn test_sequencer() -> Arc<dyn crate::wal::OffsetSequencer> {
     })
 }
 
-pub(super) fn sample_batch(n: i32) -> RecordBatch {
-    let mut b = RecordBatch {
-        last_offset_delta: n - 1,
-        ..RecordBatch::default()
-    };
-    for i in 0..n {
-        b.records.push(Record {
-            offset_delta: i,
-            ..Default::default()
-        });
-    }
-    b
-}
+pub(super) use crate::test_support::default_records_batch as sample_batch;
 
 pub(super) struct GatedWal {
     sync_started: Mutex<Option<oneshot::Sender<()>>>,

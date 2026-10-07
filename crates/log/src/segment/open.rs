@@ -5,7 +5,11 @@
 //! create, a no-scan open, and an active open that walks the trailing bytes --
 //! together with the walk itself.
 
-use std::{fs::OpenOptions, path::Path, sync::Arc};
+use std::{
+    fs::{File, OpenOptions},
+    path::Path,
+    sync::Arc,
+};
 
 use krabka_ids::Offset;
 use krabka_protocol::records::RecordBatch;
@@ -45,6 +49,31 @@ struct TailScan {
 }
 
 impl Segment {
+    /// Attach the sparse indexes and initial frontiers to an already-open log file.
+    fn from_log_file(
+        dir: &Path,
+        base_offset: Offset,
+        log_file: File,
+        log_size: u64,
+    ) -> Result<Self, LogError> {
+        let offset_index = OffsetIndex::open(&name::index_path(dir, base_offset.0))?;
+        let time_index = TimeIndex::open(&name::timeindex_path(dir, base_offset.0))?;
+        Ok(Self {
+            dir: dir.to_path_buf(),
+            base_offset,
+            log_file: Arc::new(log_file),
+            io: Arc::new(FileIo),
+            log_size,
+            offset_index,
+            time_index,
+            sealed: false,
+            max_timestamp: i64::MIN,
+            max_timestamp_offset: base_offset - 1,
+            first_timestamp: None,
+            last_offset: base_offset - 1,
+        })
+    }
+
     /// Create a fresh active segment at the given base offset. This fails if
     /// the `.log` file already exists.
     #[instrument(
@@ -62,22 +91,7 @@ impl Segment {
             .write(true)
             .create_new(true)
             .open(&log_path)?;
-        let offset_index = OffsetIndex::open(&name::index_path(dir, base_offset.0))?;
-        let time_index = TimeIndex::open(&name::timeindex_path(dir, base_offset.0))?;
-        Ok(Self {
-            dir: dir.to_path_buf(),
-            base_offset,
-            log_file: Arc::new(log_file),
-            io: Arc::new(FileIo),
-            log_size: 0,
-            offset_index,
-            time_index,
-            sealed: false,
-            max_timestamp: i64::MIN,
-            max_timestamp_offset: base_offset - 1,
-            first_timestamp: None,
-            last_offset: base_offset - 1,
-        })
+        Self::from_log_file(dir, base_offset, log_file, 0)
     }
 
     /// Open as the active segment.
@@ -252,22 +266,7 @@ impl Segment {
         let log_file = OpenOptions::new().read(true).write(true).open(&log_path)?;
         let log_size = log_file.metadata()?.len();
         seek_to_log_size(&log_file, log_size)?;
-        let offset_index = OffsetIndex::open(&name::index_path(dir, base_offset.0))?;
-        let time_index = TimeIndex::open(&name::timeindex_path(dir, base_offset.0))?;
-        Ok(Self {
-            dir: dir.to_path_buf(),
-            base_offset,
-            log_file: Arc::new(log_file),
-            io: Arc::new(FileIo),
-            log_size,
-            offset_index,
-            time_index,
-            sealed: false,
-            max_timestamp: i64::MIN,
-            max_timestamp_offset: base_offset - 1,
-            first_timestamp: None,
-            last_offset: base_offset - 1,
-        })
+        Self::from_log_file(dir, base_offset, log_file, log_size)
     }
 }
 
@@ -279,16 +278,12 @@ mod tests {
     use tempfile::tempdir;
 
     use super::*;
-    use crate::segment::test_support::{DENSE_INDEX, NO_LIMIT, sample_batch};
+    use crate::segment::test_support::{DENSE_INDEX, NO_LIMIT, sample_batch, seeded_segment};
 
     #[test]
     fn append_after_open_active_writes_at_eof() {
         let dir = tempdir().unwrap();
-        {
-            let mut seg = Segment::create(dir.path(), Offset(0)).unwrap();
-            seg.append(&sample_batch(0, 1, 100), DENSE_INDEX).unwrap();
-            seg.append(&sample_batch(1, 1, 200), DENSE_INDEX).unwrap();
-        }
+        drop(seeded_segment(dir.path(), 0, &[(0, 1, 100), (1, 1, 200)]));
 
         let mut seg = Segment::open_active(dir.path(), Offset(0), true).unwrap();
         let position = seg.append(&sample_batch(2, 1, 300), DENSE_INDEX).unwrap();
@@ -297,11 +292,11 @@ mod tests {
         assert2::assert!(position > 0);
         assert2::assert!(seg.last_offset() == Offset(2));
         assert2::assert!(
-            read == vec![
-                sample_batch(0, 1, 100),
-                sample_batch(1, 1, 200),
-                sample_batch(2, 1, 300),
-            ]
+            read == crate::segment::test_support::sample_batches(&[
+                (0, 1, 100),
+                (1, 1, 200),
+                (2, 1, 300)
+            ])
         );
     }
 
@@ -311,9 +306,7 @@ mod tests {
     fn recover_active_tail_truncates_trailing_garbage() {
         let dir = tempdir().unwrap();
         let valid_size = {
-            let mut seg = Segment::create(dir.path(), Offset(0)).unwrap();
-            seg.append(&sample_batch(0, 3, 100), DENSE_INDEX).unwrap();
-            seg.append(&sample_batch(3, 2, 200), DENSE_INDEX).unwrap();
+            let mut seg = seeded_segment(dir.path(), 0, &[(0, 3, 100), (3, 2, 200)]);
             seg.flush().unwrap();
             let valid_size = seg.log_size;
             let stale_position = u32::try_from(valid_size).unwrap();

@@ -1,4 +1,4 @@
-(* #"/workspace/crates/verified/src/transaction.rs" 10 27 10 32 *)
+(* #"/workspace/crates/verified/src/transaction.rs" 20 19 20 36 *)
 
 (* <transaction::LogBatchKind as std::clone::Clone> *)
 
@@ -10,8 +10,8 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let clone_LogBatchKind [#"/workspace/crates/verified/src/transaction.rs" 10 27 10 32]
-  (self: t_LogBatchKind) (return (x: t_LogBatchKind)) = (! bb0
+let clone_LogBatchKind [#"/workspace/crates/verified/src/transaction.rs" 20 19 20 36] (self: t_LogBatchKind)
+  (return (x: t_LogBatchKind)) = (! bb0
   [ bb0 = s0 [ s0 = [ &_ret <- self ] s1 | s1 = return {_ret} ] ]
   [ & _ret: t_LogBatchKind = Any.any_l () | & self: t_LogBatchKind = self ])
   [ return (result: t_LogBatchKind) -> (! return {result}) ]

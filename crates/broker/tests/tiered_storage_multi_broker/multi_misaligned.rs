@@ -18,7 +18,7 @@
 
 use std::{
     collections::BTreeSet,
-    path::{Path, PathBuf},
+    path::Path,
     time::{Duration, Instant},
 };
 
@@ -26,7 +26,6 @@ use assert2::{assert, check};
 use krabka_broker::{BrokerHandle, NodeId, metrics::TopicLabel};
 use krabka_client_core::Client;
 use krabka_protocol::{
-    owned::create_topics_request::{CreatableTopic, CreateTopicsRequest},
     primitives::uuid::Uuid as WireUuid,
     records::{Record, RecordBatch},
 };
@@ -38,6 +37,7 @@ use crate::{
         start_three_tiered_brokers_with_segment_sizes,
     },
     multi_workload::local_segment_bases,
+    support::{client::connect_owned, records::batch_from_records},
 };
 
 /// The topic this suite produces into. It sets no `segment.bytes`, so each
@@ -62,35 +62,7 @@ struct RemoteSegment {
 /// them, so a duplicate here is a duplicate object in the store and a hole
 /// here is a hole in the only copy that survives local retention.
 fn remote_segments(root: &Path) -> Vec<RemoteSegment> {
-    fn walk(dir: &Path, out: &mut Vec<PathBuf>) {
-        let Ok(entries) = std::fs::read_dir(dir) else {
-            return;
-        };
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.is_dir() {
-                walk(&path, out);
-            } else if path.extension().and_then(|e| e.to_str()) == Some("log")
-                || path.file_name().and_then(|n| n.to_str()) == Some("log")
-            {
-                out.push(path);
-            }
-        }
-    }
-    let mut files = Vec::new();
-    let Ok(entries) = std::fs::read_dir(root) else {
-        return Vec::new();
-    };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        let is_topic_dir = path
-            .file_name()
-            .and_then(|n| n.to_str())
-            .is_some_and(|name| name.starts_with(TOPIC));
-        if path.is_dir() && is_topic_dir {
-            walk(&path, &mut files);
-        }
-    }
+    let files = crate::support::storage::topic_remote_log_files(root, TOPIC);
     let mut segments: Vec<RemoteSegment> = files
         .iter()
         .filter_map(|path| {
@@ -117,13 +89,10 @@ fn remote_segments(root: &Path) -> Vec<RemoteSegment> {
 /// so both replicas see many small batches and roll on their own byte budget.
 async fn produce_records(client: &Client, topic_id: WireUuid, prefix: &str, count: usize) {
     for index in 0..count {
-        let batch = RecordBatch {
-            records: vec![Record {
-                value: Some(bytes::Bytes::from(format!("{prefix}-record-{index}"))),
-                ..Default::default()
-            }],
+        let batch = batch_from_records(vec![Record {
+            value: Some(bytes::Bytes::from(format!("{prefix}-record-{index}"))),
             ..Default::default()
-        };
+        }]);
         let response =
             crate::support::client::produce_batch(client, TOPIC, topic_id, batch, 1, 10_000).await;
         assert!(response.error_code == 0, "Produce failed: {response:?}");
@@ -141,43 +110,15 @@ async fn produce_records(client: &Client, topic_id: WireUuid, prefix: &str, coun
 /// its `CopySegmentStarted` write before it uploaded anything. Kafka reads a
 /// manual assignment as `num_partitions = -1, replication_factor = -1`.
 async fn create_misaligned_topic(admin: &Client, b1: &BrokerHandle, b2: &BrokerHandle) {
-    let response = admin
-        .send(CreateTopicsRequest {
-            topics: vec![CreatableTopic {
-                configs: crate::topic_fixture::tiered_configs(None),
-                ..crate::support::topic_on(TOPIC, &[&[2, 1]])
-            }],
-            timeout_ms: 10_000,
-            ..Default::default()
-        })
-        .await
-        .expect("CreateTopics");
-    assert!(
-        response.topics[0].error_code == 0,
-        "CreateTopics failed: {response:?}"
-    );
+    crate::topic_fixture::create_assigned_topic(admin, TOPIC, &[2, 1], None).await;
 
-    let deadline = Instant::now() + Duration::from_secs(30);
-    loop {
-        let ready = |broker: &BrokerHandle| {
-            broker
-                .partition_log_config_for_test(TOPIC, 0)
-                .is_some_and(|config| {
-                    config.remote_storage_enable
-                        && config.local_retention_size == Some(krabka_units::bytes(1))
-                })
-        };
-        if ready(b1) && ready(b2) {
-            return;
-        }
-        assert!(
-            Instant::now() <= deadline,
-            "the tiered configuration did not reach both replicas"
-        );
-        // intentional: topic-config propagation to both replicas has no
-        // image-level signal this test can await, so it polls the snapshot.
-        tokio::time::sleep(Duration::from_millis(200)).await;
-    }
+    crate::topic_fixture::await_tiered_replicas(
+        &[b1, b2],
+        TOPIC,
+        None,
+        "the tiered configuration did not reach both replicas",
+    )
+    .await;
 }
 
 /// Polls the shared store until it holds at least `wanted` segments of
@@ -249,12 +190,7 @@ async fn a_new_leader_resumes_the_copy_from_the_tiers_coverage() {
     await_all_rlmm_active(&b1, &b2, &b3).await;
 
     let b1_bootstrap = format!("127.0.0.1:{}", b1.listen_addr().port());
-    let admin = Client::builder()
-        .bootstrap(&b1_bootstrap)
-        .client_id("tiered-misaligned-admin")
-        .build()
-        .await
-        .expect("admin client");
+    let admin = connect_owned(&b1_bootstrap, "tiered-misaligned-admin", "admin client").await;
     create_misaligned_topic(&admin, &b1, &b2).await;
 
     // With 3 registered brokers and rf=2 the partition sits on brokers 1 and
@@ -281,12 +217,12 @@ async fn a_new_leader_resumes_the_copy_from_the_tiers_coverage() {
     } else {
         format!("127.0.0.1:{}", b2.listen_addr().port())
     };
-    let producer = Client::builder()
-        .bootstrap(&leader_addr)
-        .client_id("tiered-misaligned-producer")
-        .build()
-        .await
-        .expect("producer client");
+    let producer = connect_owned(
+        &leader_addr,
+        "tiered-misaligned-producer",
+        "producer client",
+    )
+    .await;
     let leader_dir = log_dirs[leader_index].path().join(format!("{TOPIC}-0"));
     let survivor_dir = log_dirs[survivor_index].path().join(format!("{TOPIC}-0"));
 
@@ -350,12 +286,12 @@ async fn a_new_leader_resumes_the_copy_from_the_tiers_coverage() {
         .await;
 
     let survivor_bootstrap = format!("127.0.0.1:{}", survivor.listen_addr().port());
-    let survivor_client = Client::builder()
-        .bootstrap(&survivor_bootstrap)
-        .client_id("tiered-misaligned-survivor")
-        .build()
-        .await
-        .expect("survivor client");
+    let survivor_client = connect_owned(
+        &survivor_bootstrap,
+        "tiered-misaligned-survivor",
+        "survivor client",
+    )
+    .await;
     produce_records(&survivor_client, topic_id, "after", RECORDS).await;
 
     // The new leader's copy pass has to reach past what the old one tiered.

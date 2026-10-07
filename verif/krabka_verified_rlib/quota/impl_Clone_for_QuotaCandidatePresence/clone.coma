@@ -1,4 +1,4 @@
-(* #"/workspace/crates/verified/src/quota.rs" 97 27 97 32 *)
+(* #"/workspace/crates/verified/src/quota.rs" 67 19 67 36 *)
 
 (* <quota::QuotaCandidatePresence as std::clone::Clone> *)
 
@@ -10,7 +10,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let clone_QuotaCandidatePresence [#"/workspace/crates/verified/src/quota.rs" 97 27 97 32]
+let clone_QuotaCandidatePresence [#"/workspace/crates/verified/src/quota.rs" 67 19 67 36]
   (self: t_QuotaCandidatePresence) (return (x: t_QuotaCandidatePresence)) = (! bb0
   [ bb0 = s0 [ s0 = [ &_ret <- self ] s1 | s1 = return {_ret} ] ]
   [ & _ret: t_QuotaCandidatePresence = Any.any_l () | & self: t_QuotaCandidatePresence = self ])

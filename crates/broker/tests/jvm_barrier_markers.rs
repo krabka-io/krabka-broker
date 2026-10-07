@@ -201,12 +201,7 @@ fn jvm_consume(partition: i32, expected: usize, isolation: &str) -> Vec<String> 
             "30000",
         ],
     );
-    String::from_utf8_lossy(&out.stdout)
-        .lines()
-        .map(str::trim)
-        .filter(|line| !line.is_empty())
-        .map(ToOwned::to_owned)
-        .collect()
+    support::jvm_output_lines(&out)
 }
 
 /// The log end offset that the JVM tooling reports for one partition.
@@ -233,10 +228,7 @@ fn jvm_log_end_offset(partition: i32) -> i64 {
         .unwrap_or_else(|| {
             panic!("kafka-get-offsets printed no row for partition {partition}: {stdout}")
         });
-    line.rsplit(':')
-        .next()
-        .and_then(|offset| offset.parse::<i64>().ok())
-        .unwrap_or_else(|| panic!("kafka-get-offsets row is not an offset: {line}"))
+    crate::support::jvm_parse_offset(line)
 }
 
 /// A JVM consumer reads across barrier markers and never sees one.
@@ -277,12 +269,7 @@ async fn a_jvm_consumer_reads_across_barrier_markers_unchanged() {
         .build()
         .await
         .expect("producer");
-    let client = Client::builder()
-        .bootstrap(&bootstrap)
-        .client_id("barrier-jvm")
-        .build()
-        .await
-        .expect("client build");
+    let client = support::client::connect_owned(&bootstrap, "barrier-jvm", "client build").await;
 
     wait_for_coordinator(&client).await;
     create_barrier_group(&client).await;

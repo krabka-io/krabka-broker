@@ -23,29 +23,20 @@
 
 use std::{
     collections::{HashMap, HashSet},
-    time::{Duration, Instant},
+    time::Duration,
 };
 
 use assert2::assert;
 use bytes::Bytes;
-use krabka_broker::BrokerHandle;
-use krabka_client_consumer::{AutoOffsetReset, Consumer};
-use krabka_client_core::Client;
-use krabka_client_producer::{Acks, Producer, ProducerRecord};
+use krabka_client_consumer::AutoOffsetReset;
+use krabka_client_producer::{Acks, Producer};
 use support::cluster_lock;
+
+use crate::support::client::connect_client;
 
 mod support;
 
-async fn wait_for_local_replica(broker: &BrokerHandle, topic: &str, partition: i32) {
-    let deadline = Instant::now() + Duration::from_secs(30);
-    while broker.local_log_end_offset(topic, partition).is_none() {
-        assert!(
-            Instant::now() <= deadline,
-            "broker never materialized a local replica for {topic}/{partition}"
-        );
-        tokio::time::sleep(Duration::from_millis(100)).await;
-    }
-}
+use crate::support::partitions::wait_for_local_replica;
 
 /// A native `Producer` against a 3-broker rf=1 cluster must store every
 /// partition's record on the partition's leader. This includes partitions whose
@@ -59,8 +50,7 @@ async fn wait_for_local_replica(broker: &BrokerHandle, topic: &str, partition: i
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn producer_routes_to_non_bootstrap_leaders() {
     let _g = cluster_lock().lock().await;
-    let cluster = support::start_n_node_with_retry(3).await;
-    support::wait_for_all_brokers_registered(&cluster, 3).await;
+    let cluster = crate::support::registered_cluster(3).await;
 
     // Bootstrap everything (admin, producer, consumer) at node 1.
     let bootstrap = cluster[0].1.listen_addr.to_string();
@@ -70,11 +60,7 @@ async fn producer_routes_to_non_bootstrap_leaders() {
     // brokers. We assert below that at least one is off-bootstrap.
     let n_partitions: i32 = 6;
 
-    let admin = Client::builder()
-        .bootstrap(bootstrap.clone())
-        .build()
-        .await
-        .unwrap();
+    let admin = connect_client(bootstrap.clone(), None).await;
 
     // Create the topic with replication_factor=1. Each partition lives on
     // exactly ONE broker; the bootstrap broker has NO replica for partitions
@@ -91,7 +77,6 @@ async fn producer_routes_to_non_bootstrap_leaders() {
 
     // Wait until node 1 knows every partition's leader (controller image
     // propagation may lag slightly after the partitions become present).
-    let bootstrap_node = cluster[0].0.node_id();
     cluster[0]
         .0
         .wait_for_image(|img| {
@@ -120,22 +105,10 @@ async fn producer_routes_to_non_bootstrap_leaders() {
     // non-bootstrap broker, otherwise the test exercises no cross-broker
     // routing and is vacuous. With 6 partitions on 3 brokers at rf=1 this is
     // virtually guaranteed, but we verify explicitly.
-    let non_bootstrap_partitions: Vec<i32> = (0..n_partitions)
-        .filter(|&p| {
-            cluster[0]
-                .0
-                .partition_leader_for_test(topic, p)
-                .is_some_and(|l| l != bootstrap_node)
-        })
-        .collect();
-    assert!(
-        !non_bootstrap_partitions.is_empty(),
-        "all {n_partitions} partitions are led by the bootstrap node — \
-         no cross-broker routing to exercise; test would be vacuous"
-    );
-    eprintln!(
-        "partitions led by non-bootstrap brokers: {non_bootstrap_partitions:?} \
-         (bootstrap = node {bootstrap_node})"
+    let non_bootstrap_partitions = crate::support::partitions::require_non_bootstrap_partitions(
+        &cluster[0].0,
+        topic,
+        n_partitions,
     );
 
     // Build ONE idempotent producer bootstrapped at node 1. It must route each
@@ -163,12 +136,12 @@ async fn producer_routes_to_non_bootstrap_leaders() {
     for p in 0..n_partitions {
         let v = format!("p{p}");
         let rx = producer
-            .enqueue(ProducerRecord {
-                topic: topic.into(),
-                partition: Some(p),
-                value: Some(Bytes::from(v.clone())),
-                ..Default::default()
-            })
+            .enqueue(crate::support::producer::producer_record(
+                topic,
+                Some(p),
+                None,
+                Some(Bytes::from(v.clone())),
+            ))
             .await
             .expect("enqueue record");
         futs.push((p, rx));
@@ -190,31 +163,26 @@ async fn producer_routes_to_non_bootstrap_leaders() {
     // Durability check: consume every record back through a native consumer
     // (which routes per-leader). For partitions on non-bootstrap leaders the
     // records can only be present if the producer actually stored them there.
-    let mut consumer = Consumer::builder()
-        .bootstrap(bootstrap.clone())
-        .client_id("routing-consumer-rf1")
-        .group_id("routing-producer-grp-rf1")
-        .session_timeout(krabka_units::secs(30))
-        .max_poll_interval(krabka_units::secs(2))
-        .heartbeat_interval(krabka_units::secs(1))
-        .auto_offset_reset(AutoOffsetReset::Earliest)
-        .subscribe([topic.to_string()])
-        .build()
-        .await
-        .unwrap();
+    let mut consumer = crate::support::consumer_groups::routing_consumer(
+        &bootstrap,
+        "routing-consumer-rf1",
+        "routing-producer-grp-rf1",
+        topic,
+        AutoOffsetReset::Earliest,
+    )
+    .await;
 
     // Track which partition each consumed record came from so we can prove the
     // non-bootstrap partitions are durably stored on their leaders.
-    let mut seen: HashSet<String> = HashSet::new();
     let mut seen_partitions: HashMap<i32, String> = HashMap::new();
-    let deadline = Instant::now() + Duration::from_secs(30);
-    while seen.len() < expected.len() && Instant::now() < deadline {
-        for r in consumer.poll(krabka_units::millis(300)).await.unwrap() {
-            let v = String::from_utf8_lossy(r.value.as_deref().unwrap_or(&[])).into_owned();
-            seen.insert(v.clone());
-            seen_partitions.insert(r.partition, v);
-        }
-    }
+    let seen = crate::support::consumer_groups::collect_routing_values(
+        &mut consumer,
+        expected.len(),
+        |partition, value| {
+            seen_partitions.insert(partition, value);
+        },
+    )
+    .await;
     assert!(
         seen == expected,
         "consumer must read back every produced record (incl. those on non-bootstrap leaders);\n\
@@ -236,7 +204,5 @@ async fn producer_routes_to_non_bootstrap_leaders() {
 
     consumer.close().await.unwrap();
     producer.close().await.unwrap();
-    for (h, _, _) in cluster {
-        h.shutdown().await;
-    }
+    crate::support::shutdown_cluster(cluster).await;
 }

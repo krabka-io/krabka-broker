@@ -1,20 +1,20 @@
-(* #"/workspace/crates/verified/src/reassignment.rs" 92 0 96 23 *)
+(* #"/workspace/crates/verified/src/reassignment.rs" 88 0 92 23 *)
 
 let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
 let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
 let%span swell_founded = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/well_founded.rs" 43 8 43 33
 let%span sslice = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 331 18 331 22
-let%span sreassignment = "/workspace/crates/verified/src/reassignment.rs" 103 16 103 22
-let%span sreassignment'0 = "/workspace/crates/verified/src/reassignment.rs" 106 14 106 43
-let%span sreassignment'1 = "/workspace/crates/verified/src/reassignment.rs" 107 14 107 37
-let%span sreassignment'2 = "/workspace/crates/verified/src/reassignment.rs" 105 16 105 74
-let%span sreassignment'3 = "/workspace/crates/verified/src/reassignment.rs" 104 16 104 46
-let%span sreassignment'4 = "/workspace/crates/verified/src/reassignment.rs" 108 11 108 31
-let%span sreassignment'5 = "/workspace/crates/verified/src/reassignment.rs" 111 13 111 14
-let%span sreassignment'6 = "/workspace/crates/verified/src/reassignment.rs" 111 8 111 14
-let%span sreassignment'7 = "/workspace/crates/verified/src/reassignment.rs" 77 10 77 80
-let%span sreassignment'8 = "/workspace/crates/verified/src/reassignment.rs" 78 10 78 88
-let%span sreassignment'9 = "/workspace/crates/verified/src/reassignment.rs" 79 10 90 1
+let%span sreassignment = "/workspace/crates/verified/src/reassignment.rs" 99 16 99 22
+let%span sreassignment'0 = "/workspace/crates/verified/src/reassignment.rs" 102 14 102 43
+let%span sreassignment'1 = "/workspace/crates/verified/src/reassignment.rs" 103 14 103 37
+let%span sreassignment'2 = "/workspace/crates/verified/src/reassignment.rs" 101 16 101 74
+let%span sreassignment'3 = "/workspace/crates/verified/src/reassignment.rs" 100 16 100 46
+let%span sreassignment'4 = "/workspace/crates/verified/src/reassignment.rs" 104 11 104 31
+let%span sreassignment'5 = "/workspace/crates/verified/src/reassignment.rs" 107 13 107 14
+let%span sreassignment'6 = "/workspace/crates/verified/src/reassignment.rs" 107 8 107 14
+let%span sreassignment'7 = "/workspace/crates/verified/src/reassignment.rs" 73 10 73 80
+let%span sreassignment'8 = "/workspace/crates/verified/src/reassignment.rs" 74 10 74 88
+let%span sreassignment'9 = "/workspace/crates/verified/src/reassignment.rs" 75 10 86 1
 
 use creusot.int.UInt64
 use seq.Seq
@@ -46,9 +46,8 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let reassignment_action [#"/workspace/crates/verified/src/reassignment.rs" 92 0 96 23]
-  (completion_ready: bool) (leader_removed: bool) (eligible_handoffs: Slice64.slice bool)
-  (return (x: t_ReassignmentAction)) = (! bb0
+let reassignment_action [#"/workspace/crates/verified/src/reassignment.rs" 88 0 92 23] (completion_ready: bool)
+  (leader_removed: bool) (eligible_handoffs: Slice64.slice bool) (return (x: t_ReassignmentAction)) = (! bb0
   [ bb0 = any [ br0 -> {completion_ready = false} (! bb1) | br1 -> {completion_ready} (! bb2) ]
   | bb2 = any [ br0 -> {leader_removed = false} (! bb4) | br1 -> {leader_removed} (! bb3) ]
   | bb3 = s0 [ s0 = [ &i <- [%#sreassignment] (0: UInt64.t) ] s1 | s1 = bb5 ]

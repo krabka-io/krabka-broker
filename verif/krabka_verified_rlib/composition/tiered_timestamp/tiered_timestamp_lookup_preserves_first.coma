@@ -1,13 +1,13 @@
 (* #"/workspace/crates/verified/src/composition/tiered_timestamp.rs" 38 0 45 33 *)
 
-let%span sord = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
-let%span soption = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/option.rs" 193 19 193 79
-let%span soption'0 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/option.rs" 194 18 197 9
-let%span soption'1 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/option.rs" 148 18 148 22
-let%span soption'2 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/option.rs" 149 18 149 22
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span soption = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/option.rs" 193 19 193 79
+let%span soption'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/option.rs" 194 18 197 9
+let%span soption'1 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/option.rs" 148 18 148 22
+let%span soption'2 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/option.rs" 149 18 149 22
 let%span sselection_model = "/workspace/crates/verified/src/list_offsets/selection_model.rs" 12 10 25 1
-let%span sselection_model'0 = "/workspace/crates/verified/src/list_offsets/selection_model.rs" 161 8 195 9
-let%span stimestamp = "/workspace/crates/verified/src/timestamp.rs" 119 10 126 1
+let%span sselection_model'0 = "/workspace/crates/verified/src/list_offsets/selection_model.rs" 158 8 192 9
+let%span stimestamp = "/workspace/crates/verified/src/timestamp.rs" 132 10 139 1
 let%span sselection_decision = "/workspace/crates/verified/src/list_offsets/selection_decision.rs" 12 10 12 55
 let%span stiered_timestamp = "/workspace/crates/verified/src/composition/tiered_timestamp.rs" 46 17 46 70
 let%span stiered_timestamp'0 = "/workspace/crates/verified/src/composition/tiered_timestamp.rs" 46 17 46 89
@@ -250,7 +250,7 @@ type t_ListOffsetsSelectionFacts = {
 
 type t_ListOffsetsSelectionDecision = RejectMalformed | Unknown | Resolved Int64.t Int64.t Int32.t
 
-function list_offsets_selection_model [#"/workspace/crates/verified/src/list_offsets/selection_model.rs" 157 0 159 33] (facts: t_ListOffsetsSelectionFacts) : t_ListOffsetsSelectionDecision
+function list_offsets_selection_model [#"/workspace/crates/verified/src/list_offsets/selection_model.rs" 154 0 156 33] (facts: t_ListOffsetsSelectionFacts) : t_ListOffsetsSelectionDecision
  = [%#sselection_model'0] if facts.kind = Unsupported
   \/ Int64.to_int facts.candidate_offset < - 1
   \/ Int32.to_int facts.candidate_epoch < - 1 \/ Int64.to_int facts.last_fetchable < 0 then

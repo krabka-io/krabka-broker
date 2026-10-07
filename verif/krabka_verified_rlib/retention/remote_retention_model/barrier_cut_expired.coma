@@ -1,8 +1,8 @@
 (* #"/workspace/crates/verified/src/retention/remote_retention_model.rs" 16 0 16 93 *)
 
-let%span sord = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
-let%span sord'0 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
-let%span sconvert = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/convert.rs" 274 26 274 51
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sconvert = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/convert.rs" 274 26 274 51
 let%span sremote_retention_model = "/workspace/crates/verified/src/retention/remote_retention_model.rs" 17 24 17 25
 let%span sremote_retention_model'0 = "/workspace/crates/verified/src/retention/remote_retention_model.rs" 18 15 18 20
 let%span sremote_retention_model'1 = "/workspace/crates/verified/src/retention/remote_retention_model.rs" 20 24 20 48

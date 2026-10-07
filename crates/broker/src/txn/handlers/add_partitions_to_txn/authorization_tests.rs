@@ -29,7 +29,7 @@ use super::{
     test_support::{enlisted, seed_transaction, start_coordinator, topic, topic_result},
 };
 use crate::{
-    authorizer::{AclSource, AuthorizationRequest, AuthorizationResult, Authorizer},
+    authorizer::AuthorizationResult,
     codes,
     coordinator::bootstrap::OFFSETS_TOPIC,
     test_support::{peer, principal, request_context},
@@ -46,31 +46,25 @@ const CLIENT_TOPICS: [&str; 3] = ["a", "missing", OFFSETS_TOPIC];
 #[derive(Debug)]
 struct Grants;
 
-impl Authorizer for Grants {
-    fn authorize(
-        &self,
-        _source: &dyn AclSource,
-        request: &AuthorizationRequest<'_>,
-    ) -> AuthorizationResult {
-        let allowed = match (
-            request.principal.name.as_str(),
-            request.resource_type,
-            request.operation,
-        ) {
-            (BROKER, ResourceType::Cluster, AclOperation::ClusterAction)
-            | (CLIENT, ResourceType::TransactionalId, AclOperation::Write) => true,
-            (CLIENT, ResourceType::Topic, AclOperation::Write) => {
-                CLIENT_TOPICS.contains(&request.resource_name)
-            }
-            _ => false,
-        };
-        if allowed {
-            AuthorizationResult::Allow
-        } else {
-            AuthorizationResult::Deny
+krabka_macros::test_authorizer! { Grants, request; {
+    let allowed = match (
+        request.principal.name.as_str(),
+        request.resource_type,
+        request.operation,
+    ) {
+        (BROKER, ResourceType::Cluster, AclOperation::ClusterAction)
+        | (CLIENT, ResourceType::TransactionalId, AclOperation::Write) => true,
+        (CLIENT, ResourceType::Topic, AclOperation::Write) => {
+            CLIENT_TOPICS.contains(&request.resource_name)
         }
+        _ => false,
+    };
+    if allowed {
+        AuthorizationResult::Allow
+    } else {
+        AuthorizationResult::Deny
     }
-}
+}}
 
 /// What one case expects back.
 #[derive(Debug)]

@@ -19,14 +19,17 @@ use krabka_protocol::{
         describe_share_group_offsets_response::{
             DescribeShareGroupOffsetsResponsePartition, DescribeShareGroupOffsetsResponseTopic,
         },
-        update_features_request::{FeatureUpdateKey, UpdateFeaturesRequest},
+        update_features_request::UpdateFeaturesRequest,
     },
     primitives::uuid::Uuid,
 };
 
-use crate::harness::{
-    ACCEPT, NONE, ShareAck, UNSUPPORTED_VERSION, acquired_count, bootstrap_share_state,
-    broker_config, broker_test_permit, connect, create_topic, fetch_until_acquired, share_ack,
+use crate::{
+    harness::{
+        ACCEPT, NONE, ShareAck, UNSUPPORTED_VERSION, acquired_count, bootstrap_share_state,
+        broker_config, broker_test_permit, connect, create_topic, fetch_until_acquired, share_ack,
+    },
+    support::configs::feature_update,
 };
 
 /// `UpdateFeatures` `UpgradeType` 2, `SAFE_DOWNGRADE`.
@@ -116,8 +119,8 @@ pub async fn describe_until(
 /// reports to `ListOffsets`, is 0.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn describe_reflects_spso_after_consume() {
-    let _permit = broker_test_permit().await;
-    let (broker, client, _dir, tid) = crate::support::share::topic_fixture("t", 1, |_| {}).await;
+    let (_permit, broker, client, _dir, tid) =
+        crate::support::share::permitted_topic_fixture("t", 1, |_| {}).await;
     let (member, _epoch) = crate::harness::initialize_consumption(&broker, &client, tid, 3).await;
 
     // Acquire 0..2, Accept all → SPSO advances to 3.
@@ -224,12 +227,7 @@ async fn admin_offsets_rejected_when_share_disabled() {
 
     let downgrade = client
         .send(UpdateFeaturesRequest {
-            feature_updates: vec![FeatureUpdateKey {
-                feature: "share.version".into(),
-                max_version_level: 0,
-                upgrade_type: SAFE_DOWNGRADE,
-                ..Default::default()
-            }],
+            feature_updates: vec![feature_update("share.version", 0, SAFE_DOWNGRADE)],
             ..Default::default()
         })
         .await
@@ -242,4 +240,22 @@ async fn admin_offsets_rejected_when_share_disabled() {
         "share-disabled describe must be UNSUPPORTED_VERSION (35), got {}",
         group.error_code
     );
+}
+
+/// The initialized partition indexes for a topic; missing topics have no indexes.
+pub fn initialized_partitions(
+    group: &krabka_protocol::owned::describe_share_group_offsets_response::DescribeShareGroupOffsetsResponseGroup,
+    topic: &str,
+) -> Vec<i32> {
+    group
+        .topics
+        .iter()
+        .find(|row| row.topic_name == topic)
+        .map(|row| {
+            row.partitions
+                .iter()
+                .map(|partition| partition.partition_index)
+                .collect()
+        })
+        .unwrap_or_default()
 }

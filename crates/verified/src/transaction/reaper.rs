@@ -104,19 +104,11 @@ pub fn transaction_reaper_completion_decision(
         && !((next_producer_id@ == -1 && next_producer_epoch@ == -1)
             || (next_producer_id@ >= 0 && next_producer_epoch@ >= 0))))]
 #[ensures((result == TransactionPidInstallDecision::RejectCollision)
-    == (partition_matches
-        && producer_id@ >= 0
-        && producer_epoch@ >= 0
-        && ((next_producer_id@ == -1 && next_producer_epoch@ == -1)
-            || (next_producer_id@ >= 0 && next_producer_epoch@ >= 0))
+    == (pid_install_input_valid(partition_matches, producer_id@, producer_epoch@, next_producer_id@, next_producer_epoch@)
         && (!current_owner_matches
             || (next_producer_id@ >= 0 && !next_owner_matches))))]
 #[ensures((result == TransactionPidInstallDecision::Apply)
-    == (partition_matches
-        && producer_id@ >= 0
-        && producer_epoch@ >= 0
-        && ((next_producer_id@ == -1 && next_producer_epoch@ == -1)
-            || (next_producer_id@ >= 0 && next_producer_epoch@ >= 0))
+    == (pid_install_input_valid(partition_matches, producer_id@, producer_epoch@, next_producer_id@, next_producer_epoch@)
         && current_owner_matches
         && (next_producer_id@ < 0 || next_owner_matches)))]
 #[must_use]
@@ -144,6 +136,16 @@ pub fn transaction_pid_install_decision(
     }
 }
 
+open_logic! {
+fn registration_generation_ready(facts: TransactionRegistrationFacts) -> bool {
+    pearlite! { facts.ownership.is_coordinator
+    && facts.ownership.producer_id_valid
+    && facts.ownership.entry_exists
+    && facts.identity.matching.transactional_id_matches
+    && !facts.identity.pending_transition }
+}
+}
+
 /// Fence a partition registration against coordinator ownership and one exact
 /// transactional-id, producer-id, and producer-epoch generation.
 #[ensures((result == TransactionRegistrationDecision::RejectNotCoordinator)
@@ -160,46 +162,26 @@ pub fn transaction_pid_install_decision(
         && facts.identity.matching.transactional_id_matches
         && facts.identity.pending_transition))]
 #[ensures((result == TransactionRegistrationDecision::RejectProducerId)
-    == (facts.ownership.is_coordinator
-        && facts.ownership.producer_id_valid
-        && facts.ownership.entry_exists
-        && facts.identity.matching.transactional_id_matches
-        && !facts.identity.pending_transition
+    == (registration_generation_ready(facts)
         && !facts.identity.matching.producer_id_matches))]
 #[ensures((result == TransactionRegistrationDecision::RejectProducerEpoch)
-    == (facts.ownership.is_coordinator
-        && facts.ownership.producer_id_valid
-        && facts.ownership.entry_exists
-        && facts.identity.matching.transactional_id_matches
-        && !facts.identity.pending_transition
+    == (registration_generation_ready(facts)
         && facts.identity.matching.producer_id_matches
         && !facts.identity.matching.producer_epoch_matches))]
 #[ensures((result == TransactionRegistrationDecision::RejectState)
-    == (facts.ownership.is_coordinator
-        && facts.ownership.producer_id_valid
-        && facts.ownership.entry_exists
-        && facts.identity.matching.transactional_id_matches
-        && !facts.identity.pending_transition
+    == (registration_generation_ready(facts)
         && facts.identity.matching.producer_id_matches
         && facts.identity.matching.producer_epoch_matches
         && !facts.state.state_allows_registration))]
 #[ensures((result == TransactionRegistrationDecision::PersistRetry)
-    == (facts.ownership.is_coordinator
-        && facts.ownership.producer_id_valid
-        && facts.ownership.entry_exists
-        && facts.identity.matching.transactional_id_matches
-        && !facts.identity.pending_transition
+    == (registration_generation_ready(facts)
         && facts.identity.matching.producer_id_matches
         && facts.identity.matching.producer_epoch_matches
         && facts.state.state_allows_registration
         && facts.state.state_is_ongoing
         && facts.state.exact_partitions_registered))]
 #[ensures((result == TransactionRegistrationDecision::PersistRegistration)
-    == (facts.ownership.is_coordinator
-        && facts.ownership.producer_id_valid
-        && facts.ownership.entry_exists
-        && facts.identity.matching.transactional_id_matches
-        && !facts.identity.pending_transition
+    == (registration_generation_ready(facts)
         && facts.identity.matching.producer_id_matches
         && facts.identity.matching.producer_epoch_matches
         && facts.state.state_allows_registration
@@ -228,4 +210,18 @@ pub fn transaction_partition_registration(
     } else {
         TransactionRegistrationDecision::PersistRegistration
     }
+}
+
+open_logic! {
+/// The partition matches and both producer-ID pairs are well formed before ownership checks.
+fn pid_install_input_valid(
+    partition_matches: bool,
+    producer: Int,
+    epoch: Int,
+    next_producer: Int,
+    next_epoch: Int,
+) -> bool {
+    pearlite! { partition_matches && producer >= 0 && epoch >= 0
+    && ((next_producer == -1 && next_epoch == -1) || (next_producer >= 0 && next_epoch >= 0)) }
+}
 }

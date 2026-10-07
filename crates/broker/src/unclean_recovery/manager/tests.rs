@@ -6,7 +6,7 @@ use assert2::{assert, check};
 use krabka_audit::{AuditEvent, AuditLog, AuditOutcome, PrivilegedPhase};
 use krabka_metadata::{
     BreakGlassAction, BrokerRegistrationRecord, MetadataImage, MetadataRecord, PartitionElrRecord,
-    PartitionRecord, TopicRecord,
+    PartitionRecord,
 };
 use krabka_units::secs;
 use tokio::sync::oneshot;
@@ -38,26 +38,12 @@ fn source_with(leader: Option<u64>, image: MetadataImage) -> Arc<FakeMetadataSou
 const NODE: u64 = 10;
 
 fn image_with_partition(leader: u64, replicas: &[u64]) -> MetadataImage {
-    let mut img = MetadataImage::new(Uuid::nil());
-    img.apply(&MetadataRecord::V1Topic(TopicRecord {
-        name: "t".into(),
-        topic_id: Uuid::nil(),
-        partitions: 1,
-        replication_factor: i16::try_from(replicas.len()).unwrap(),
-    }));
-    img.apply(&MetadataRecord::V1Partition(PartitionRecord {
-        topic: "t".into(),
-        partition: 0,
-        leader: NodeId(leader),
-        replicas: replicas.iter().copied().map(NodeId).collect(),
-        isr: replicas.iter().copied().map(NodeId).collect(),
-        leader_epoch: krabka_metadata::LeaderEpoch(5),
-        adding_replicas: vec![],
-        removing_replicas: vec![],
-        directories: vec![],
-        partition_epoch: 0,
-    }));
-    img
+    crate::test_support::directory_partition_image(
+        NodeId(leader),
+        replicas.iter().copied().map(NodeId),
+        replicas.iter().copied().map(NodeId),
+        &[],
+    )
 }
 
 /// Rewrite the ISR the record for partition 0 of topic `t` names, leaving
@@ -199,6 +185,27 @@ fn approved_job() -> RecoveryJob {
         proposal: Some(Uuid::from_u128(0x000B_ADC0_FFEE)),
         ..job()
     }
+}
+
+async fn commit_fixture_election(
+    manager: &UncleanRecoveryManager,
+    image: &MetadataImage,
+    job: &RecoveryJob,
+    election: Election,
+) -> RecoveryOutcome {
+    let partition = image
+        .partition("t", 0)
+        .expect("the partition is in the image");
+    let selected_replicas: Vec<u64> = partition.replicas.iter().map(|node| node.0).collect();
+    manager
+        .commit_elected_leader(
+            job,
+            image,
+            partition,
+            election,
+            (partition.partition_epoch, &selected_replicas, false),
+        )
+        .await
 }
 
 #[tokio::test]
@@ -357,17 +364,7 @@ async fn audit_only_elects_and_records_the_bypass() {
     let pr = image
         .partition("t", 0)
         .expect("the partition is in the image");
-
-    let selected_replicas: Vec<u64> = pr.replicas.iter().map(|node| node.0).collect();
-    let outcome = mgr
-        .commit_elected_leader(
-            &job(),
-            &image,
-            pr,
-            fallback_to(2),
-            (pr.partition_epoch, &selected_replicas, false),
-        )
-        .await;
+    let outcome = commit_fixture_election(&mgr, &image, &job(), fallback_to(2)).await;
 
     assert!(outcome == RecoveryOutcome::Elected(NodeId(2)));
     let batches = source.submitted();
@@ -419,24 +416,16 @@ async fn an_elr_election_is_recorded_as_applied_and_meters_no_loss() {
         &gated(BackgroundUncleanRecovery::AuditOnly),
         audit_log,
     );
-    let pr = image
-        .partition("t", 0)
-        .expect("the partition is in the image");
-    let election = Election {
-        leader: NodeId(2),
-        basis: ElectionBasis::EligibleLeaderReplica,
-    };
-    let selected_replicas: Vec<u64> = pr.replicas.iter().map(|node| node.0).collect();
-
-    let outcome = mgr
-        .commit_elected_leader(
-            &job(),
-            &image,
-            pr,
-            election,
-            (pr.partition_epoch, &selected_replicas, false),
-        )
-        .await;
+    let outcome = commit_fixture_election(
+        &mgr,
+        &image,
+        &job(),
+        Election {
+            leader: NodeId(2),
+            basis: ElectionBasis::EligibleLeaderReplica,
+        },
+    )
+    .await;
 
     assert!(outcome == RecoveryOutcome::Elected(NodeId(2)));
     let submitted = source.submitted();
@@ -600,20 +589,7 @@ async fn a_recovery_that_nobody_bypassed_is_applied_rather_than_bypassed() {
             &gated(mode),
             audit_log,
         );
-        let pr = image
-            .partition("t", 0)
-            .expect("the partition is in the image");
-
-        let selected_replicas: Vec<u64> = pr.replicas.iter().map(|node| node.0).collect();
-        let outcome = mgr
-            .commit_elected_leader(
-                &job,
-                &image,
-                pr,
-                fallback_to(2),
-                (pr.partition_epoch, &selected_replicas, false),
-            )
-            .await;
+        let outcome = commit_fixture_election(&mgr, &image, &job, fallback_to(2)).await;
 
         check!(
             outcome == RecoveryOutcome::Elected(NodeId(2)),
@@ -918,24 +894,16 @@ async fn an_applied_election_names_the_proposal_that_authorized_it() {
             &gated(BackgroundUncleanRecovery::AuditOnly),
             audit_log,
         );
-        let pr = image
-            .partition("t", 0)
-            .expect("the partition is in the image");
-        let election = Election {
-            leader: NodeId(2),
-            basis: ElectionBasis::EligibleLeaderReplica,
-        };
-        let selected_replicas: Vec<u64> = pr.replicas.iter().map(|node| node.0).collect();
-
-        let outcome = mgr
-            .commit_elected_leader(
-                &job,
-                &image,
-                pr,
-                election,
-                (pr.partition_epoch, &selected_replicas, false),
-            )
-            .await;
+        let outcome = commit_fixture_election(
+            &mgr,
+            &image,
+            &job,
+            Election {
+                leader: NodeId(2),
+                basis: ElectionBasis::EligibleLeaderReplica,
+            },
+        )
+        .await;
 
         check!(
             outcome == RecoveryOutcome::Elected(NodeId(2)),

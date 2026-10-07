@@ -5,11 +5,7 @@
 use std::{io, net::SocketAddr};
 
 use assert2::assert;
-use krabka_broker::Broker;
-use krabka_protocol::owned::{
-    sasl_authenticate_response::SaslAuthenticateResponse,
-    sasl_handshake_request::SaslHandshakeRequest, sasl_handshake_response::SaslHandshakeResponse,
-};
+use krabka_protocol::owned::sasl_authenticate_response::SaslAuthenticateResponse;
 use krabka_security::SaslMechanism;
 use tokio::net::TcpStream;
 
@@ -24,12 +20,7 @@ use crate::harness::{alice_password, wrong_scram_password};
 /// request succeeds.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn sasl_scram_sha512_happy_path() {
-    let log_dir = tempfile::tempdir().unwrap();
-    let handle =
-        crate::harness::start_scram_alice(log_dir.path().to_path_buf(), SaslMechanism::ScramSha512)
-            .await;
-
-    let addr = handle.listen_addr();
+    let (_log_dir, handle, addr) = scram_fixture(SaslMechanism::ScramSha512).await;
     let result =
         drive_sasl_scram_session(addr, "alice", &alice_password(), SaslMechanism::ScramSha512)
             .await;
@@ -46,12 +37,7 @@ async fn sasl_scram_sha512_happy_path() {
 /// returns no bytes.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn sasl_scram_sha512_wrong_password_closes_connection() {
-    let log_dir = tempfile::tempdir().unwrap();
-    let handle =
-        crate::harness::start_scram_alice(log_dir.path().to_path_buf(), SaslMechanism::ScramSha512)
-            .await;
-
-    let addr = handle.listen_addr();
+    let (_log_dir, handle, addr) = scram_fixture(SaslMechanism::ScramSha512).await;
     let result = drive_sasl_scram_session(
         addr,
         "alice",
@@ -74,12 +60,7 @@ async fn sasl_scram_sha512_wrong_password_closes_connection() {
 /// SHA-512 code by accident.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn sasl_scram_sha256_happy_path() {
-    let log_dir = tempfile::tempdir().unwrap();
-    let handle =
-        crate::harness::start_scram_alice(log_dir.path().to_path_buf(), SaslMechanism::ScramSha256)
-            .await;
-
-    let addr = handle.listen_addr();
+    let (_log_dir, handle, addr) = scram_fixture(SaslMechanism::ScramSha256).await;
     let result =
         drive_sasl_scram_session(addr, "alice", &alice_password(), SaslMechanism::ScramSha256)
             .await;
@@ -91,12 +72,7 @@ async fn sasl_scram_sha256_happy_path() {
 /// the same as in the SHA-512 variant.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn sasl_scram_sha256_wrong_password_closes_connection() {
-    let log_dir = tempfile::tempdir().unwrap();
-    let handle =
-        crate::harness::start_scram_alice(log_dir.path().to_path_buf(), SaslMechanism::ScramSha256)
-            .await;
-
-    let addr = handle.listen_addr();
+    let (_log_dir, handle, addr) = scram_fixture(SaslMechanism::ScramSha256).await;
     let result = drive_sasl_scram_session(
         addr,
         "alice",
@@ -148,34 +124,10 @@ pub async fn scram_authenticate(
     mechanism: SaslMechanism,
 ) -> Result<SaslAuthenticateResponse, io::Error> {
     *corr += 1;
-    let sh_resp: SaslHandshakeResponse = crate::kafka_wire::exchange(
-        stream,
-        &SaslHandshakeRequest {
-            mechanism: mechanism.wire_name().to_string(),
-            ..Default::default()
-        },
-        17,
-        1,
-        *corr,
-        "krabka-sasl-test",
-        false,
-    )
-    .await?;
-    if sh_resp.error_code != 0 {
-        return Err(io::Error::other(format!(
-            "SaslHandshake failed: error_code={}",
-            sh_resp.error_code
-        )));
-    }
+    crate::kafka_wire::sasl_handshake_on(stream, "krabka-sasl-test", *corr, mechanism.wire_name())
+        .await?;
 
-    let client = krabka_security::ScramClientExchange::new(
-        user.to_string(),
-        password.as_bytes().to_vec(),
-        mechanism,
-    );
-    let (client_first, client) = client
-        .client_first()
-        .map_err(|e| io::Error::other(format!("scram client_first: {e:?}")))?;
+    let (client_first, client) = krabka_macros::scram_client_first!(user, password, mechanism)?;
     *corr += 1;
     let first = crate::kafka_wire::sasl_authenticate_on(
         stream,
@@ -199,39 +151,6 @@ pub async fn scram_authenticate(
         bytes::Bytes::from(client_final),
     )
     .await
-}
-
-/// A `SASL_PLAINTEXT` broker serving SCRAM-SHA-512 for alice and bob, with the
-/// KIP-368 window set to `max_reauth` and the idle window switched off.
-pub async fn start_scram_reauth_broker(
-    log_dir: &std::path::Path,
-    max_reauth: krabka_units::Time,
-) -> krabka_broker::BrokerHandle {
-    let mut cfg = crate::harness::reauth_config(log_dir, max_reauth);
-
-    cfg.enabled_sasl_mechanisms = vec![SaslMechanism::ScramSha512];
-    let handle = Broker::start(cfg).await.expect("broker must start");
-    for user in ["alice", "bob"] {
-        let cred = krabka_security::hash_scram_password(
-            alice_password().as_bytes(),
-            SaslMechanism::ScramSha512,
-            4096,
-        );
-        handle
-            .submit_metadata_record_for_test(krabka_metadata::MetadataRecord::V1ScramCredential(
-                krabka_metadata::ScramCredentialRecord {
-                    user: user.into(),
-                    mechanism: SaslMechanism::ScramSha512,
-                    salt: cred.salt,
-                    stored_key: cred.stored_key,
-                    server_key: cred.server_key,
-                    iterations: cred.iterations,
-                },
-            ))
-            .await
-            .expect("submit V1ScramCredential");
-    }
-    handle
 }
 
 /// KIP-368: a SCRAM session under `connections.max.reauth.ms` reports the
@@ -282,4 +201,13 @@ async fn scram_reauth_after_the_window_elapsed_keeps_serving_round_after_round()
         900..=1_000,
     )
     .await;
+}
+
+async fn scram_fixture(
+    mechanism: SaslMechanism,
+) -> (tempfile::TempDir, krabka_broker::BrokerHandle, SocketAddr) {
+    let log_dir = tempfile::tempdir().unwrap();
+    let handle = crate::harness::start_scram_alice(log_dir.path().to_path_buf(), mechanism).await;
+    let addr = handle.listen_addr();
+    (log_dir, handle, addr)
 }

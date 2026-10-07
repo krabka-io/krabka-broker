@@ -82,17 +82,27 @@ pub(super) async fn read_response_frame<R: tokio::io::AsyncRead + Unpin>(
 }
 
 pub(super) fn sasl_test_config() -> BrokerRaftHandshake {
-    let mut plain_credentials = HashMap::new();
-    plain_credentials.insert("broker".to_string(), "secret".to_string());
+    handshake_config(
+        ListenerProtocol::SaslPlaintext,
+        vec![SaslMechanism::Plain],
+        HashMap::from([("broker".to_owned(), "secret".to_owned())]),
+    )
+}
+
+pub(super) fn handshake_config(
+    protocol: ListenerProtocol,
+    enabled_sasl_mechanisms: Vec<SaslMechanism>,
+    plain_credentials: HashMap<String, String>,
+) -> BrokerRaftHandshake {
     BrokerRaftHandshake {
         tls_acceptor: None,
         plain_credentials,
-        enabled_sasl_mechanisms: vec![SaslMechanism::Plain],
+        enabled_sasl_mechanisms,
         gssapi: None,
         oauthbearer_validator: krabka_security::OAuthBearerValidator::default(),
         oauthbearer_jwks_cache_generation: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         oauthbearer_jwks_last_successful_fetch_ms: Arc::new(std::sync::atomic::AtomicI64::new(0)),
-        protocol: ListenerProtocol::SaslPlaintext,
+        protocol,
         controller: Arc::new(OnceCell::new()),
         delegation_token_secret_key: None,
         audit_log: Arc::new(OnceCell::new()),

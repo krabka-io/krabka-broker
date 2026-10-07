@@ -283,9 +283,7 @@ principal_claim_name = "client_id"
 jwks_refresh_interval_ms = 60000
 jwks_expiry_seconds = 360
 "#;
-        let file: FileConfig = toml::from_str(src).expect("parse");
-        let mut cfg = crate::config::BrokerConfig::default();
-        file.apply_to(&mut cfg).unwrap();
+        let cfg = crate::file_config::test_support::configured(src, "parse").unwrap();
         assert!(cfg.oauthbearer_jwks_endpoint.as_deref() == Some("https://idp.example/jwks"));
         assert!(cfg.oauthbearer_jwks_refresh_interval == minutes(1));
         match cfg.oauthbearer_validator {
@@ -334,10 +332,11 @@ allowable_clock_skew_ms = 5000
 
     #[test]
     fn apply_to_oauthbearer_allow_unsecured_opts_into_unsecured_validator() {
-        let file: FileConfig =
-            toml::from_str(&oauthbearer_listener_toml("allow_unsecured = true")).expect("parse");
-        let mut cfg = crate::config::BrokerConfig::default();
-        file.apply_to(&mut cfg).unwrap();
+        let cfg = crate::file_config::test_support::configured(
+            &oauthbearer_listener_toml("allow_unsecured = true"),
+            "parse",
+        )
+        .unwrap();
         assert!(cfg.oauthbearer_jwks_endpoint.is_none());
         match cfg.oauthbearer_validator {
             krabka_security::OAuthBearerValidator::Unsecured(v) => {
@@ -356,9 +355,7 @@ allowable_clock_skew_ms = 5000
 principal_claim_name = "sub"
 allowable_clock_skew_ms = 5000
 "#;
-        let file: FileConfig = toml::from_str(src).expect("parse");
-        let mut cfg = crate::config::BrokerConfig::default();
-        file.apply_to(&mut cfg).unwrap();
+        let cfg = crate::file_config::test_support::configured(src, "parse").unwrap();
         assert!(cfg.oauthbearer_jwks_endpoint.is_none());
         assert!(matches!(
             cfg.oauthbearer_validator,
@@ -396,9 +393,7 @@ bind_addr = "0.0.0.0:9092"
 advertised = "host:9092"
 protocol = "Plaintext"
 "#;
-        let file: FileConfig = toml::from_str(src).expect("parse");
-        let mut cfg = crate::config::BrokerConfig::default();
-        file.apply_to(&mut cfg).unwrap();
+        let cfg = crate::file_config::test_support::configured(src, "parse").unwrap();
         assert!(cfg.oauthbearer_jwks_endpoint.is_none());
         assert!(matches!(
             cfg.oauthbearer_validator,
@@ -413,9 +408,7 @@ protocol = "Plaintext"
 jwks_endpoint_uri = "https://idp.example/certs"
 idp_tls_trust = "/etc/krabka/oauth/idp-ca.pem"
 "#;
-        let file: FileConfig = toml::from_str(toml).unwrap();
-        let mut cfg = crate::config::BrokerConfig::default();
-        file.apply_to(&mut cfg).unwrap();
+        let cfg = crate::file_config::test_support::configured_unwrap_parse(toml).unwrap();
         assert!(
             cfg.oauthbearer_idp_tls_trust.as_deref()
                 == Some(std::path::Path::new("/etc/krabka/oauth/idp-ca.pem"))
@@ -428,9 +421,7 @@ idp_tls_trust = "/etc/krabka/oauth/idp-ca.pem"
 [oauthbearer]
 jwks_endpoint_uri = "https://idp.example/certs"
 "#;
-        let file: FileConfig = toml::from_str(toml).unwrap();
-        let mut cfg = crate::config::BrokerConfig::default();
-        file.apply_to(&mut cfg).unwrap();
+        let cfg = crate::file_config::test_support::configured_unwrap_parse(toml).unwrap();
         assert!(cfg.oauthbearer_idp_tls_trust.is_none());
     }
 
@@ -448,9 +439,7 @@ introspection_client_secret_path = '{}'
 "#,
             secret_path.display()
         );
-        let file: FileConfig = toml::from_str(&toml).unwrap();
-        let mut cfg = crate::config::BrokerConfig::default();
-        file.apply_to(&mut cfg).unwrap();
+        let cfg = crate::file_config::test_support::configured_unwrap_parse(&toml).unwrap();
         assert!(matches!(
             cfg.oauthbearer_validator,
             krabka_security::OAuthBearerValidator::Introspection(_)
@@ -473,9 +462,7 @@ introspection_client_secret_path = '{}'
 "#,
             secret_path.display()
         );
-        let file: FileConfig = toml::from_str(&toml).unwrap();
-        let mut cfg = crate::config::BrokerConfig::default();
-        file.apply_to(&mut cfg).unwrap();
+        let _cfg = crate::file_config::test_support::configured_unwrap_parse(&toml).unwrap();
     }
 
     #[test]
@@ -492,9 +479,7 @@ introspection_client_secret_path = '{}'
 "#,
             secret_path.display()
         );
-        let file: FileConfig = toml::from_str(&toml).unwrap();
-        let mut cfg = crate::config::BrokerConfig::default();
-        file.apply_to(&mut cfg).unwrap();
+        let _cfg = crate::file_config::test_support::configured_unwrap_parse(&toml).unwrap();
     }
 
     #[test]
@@ -505,9 +490,7 @@ introspection_client_secret_path = '{}'
 introspection_endpoint_uri = "https://idp.example/introspect"
 introspection_client_id = "kafka-broker"
 "#;
-        let file: FileConfig = toml::from_str(toml).unwrap();
-        let mut cfg = crate::config::BrokerConfig::default();
-        file.apply_to(&mut cfg).unwrap();
+        let _cfg = crate::file_config::test_support::configured_unwrap_parse(toml).unwrap();
     }
 
     #[test]
@@ -525,9 +508,7 @@ introspection_client_secret_path = '{}'
 "#,
             secret_path.display()
         );
-        let file: FileConfig = toml::from_str(&toml).unwrap();
-        let mut cfg = crate::config::BrokerConfig::default();
-        file.apply_to(&mut cfg).unwrap();
+        let cfg = crate::file_config::test_support::configured_unwrap_parse(&toml).unwrap();
         match cfg.oauthbearer_validator {
             krabka_security::OAuthBearerValidator::Introspection(v) => assert!(v.call_userinfo),
             other => panic!("expected Introspection, got {other:?}"),
@@ -548,9 +529,7 @@ introspection_client_secret_path = '{}'
 "#,
             secret_path.display()
         );
-        let file: FileConfig = toml::from_str(&toml).unwrap();
-        let mut cfg = crate::config::BrokerConfig::default();
-        file.apply_to(&mut cfg).unwrap();
+        let cfg = crate::file_config::test_support::configured_unwrap_parse(&toml).unwrap();
         match cfg.oauthbearer_validator {
             krabka_security::OAuthBearerValidator::Introspection(v) => assert!(!v.call_userinfo),
             other => panic!("expected Introspection, got {other:?}"),

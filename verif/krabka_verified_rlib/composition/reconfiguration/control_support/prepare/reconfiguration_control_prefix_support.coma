@@ -1,92 +1,100 @@
-(* #"/workspace/crates/verified/src/composition/reconfiguration/control_support/prepare.rs" 67 0 75 21 *)
+(* #"/workspace/crates/verified/src/composition/reconfiguration/control_support/prepare.rs" 34 0 42 21 *)
 
-let%span sord = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
-let%span sord'0 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
-let%span swell_founded = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/well_founded.rs" 43 8 43 33
-let%span sslice = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 413 18 413 53
-let%span sslice'0 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 414 18 414 77
-let%span sslice'1 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 331 18 331 22
-let%span sslice'2 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 67 20 67 29
-let%span sops = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/ops.rs" 688 18 691 9
-let%span sops'0 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/ops.rs" 702 25 702 33
-let%span sops'1 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/ops.rs" 701 18 701 32
-let%span svec = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 104 18 104 36
-let%span svec'0 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 118 18 118 48
-let%span svec'1 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 114 18 114 40
-let%span svec'2 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 202 18 202 34
-let%span svec'3 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 18 14 18 41
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span swell_founded = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/well_founded.rs" 43 8 43 33
+let%span sslice = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 413 18 413 53
+let%span sslice'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 414 18 414 77
+let%span sslice'1 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 331 18 331 22
+let%span sslice'2 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 67 20 67 29
+let%span sops = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/ops.rs" 688 18 691 9
+let%span sops'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/ops.rs" 702 25 702 33
+let%span sops'1 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/ops.rs" 701 18 701 32
+let%span ssequence = "/workspace/crates/verified/src/sequence.rs" 7 16 7 71
+let%span ssequence'0 = "/workspace/crates/verified/src/sequence.rs" 21 16 22 44
+let%span svec = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 104 18 104 36
+let%span svec'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 118 18 118 48
+let%span svec'1 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 114 18 114 40
+let%span svec'2 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 202 18 202 34
+let%span svec'3 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 18 14 18 41
 let%span sfuture_log_swap_admission = "/workspace/crates/verified/src/storage/future_log_swap_admission.rs" 9 10 22 1
-let%span sspec = "/workspace/crates/verified/src/composition/reconfiguration/control_support/spec.rs" 66 10 66 15
-let%span sspec'0 = "/workspace/crates/verified/src/composition/reconfiguration/control_support/spec.rs" 59 11 59 77
-let%span sspec'1 = "/workspace/crates/verified/src/composition/reconfiguration/control_support/spec.rs" 60 11 61 80
-let%span sspec'2 = "/workspace/crates/verified/src/composition/reconfiguration/control_support/spec.rs" 62 11 63 54
-let%span sspec'3 = "/workspace/crates/verified/src/composition/reconfiguration/control_support/spec.rs" 64 10 65 62
-let%span sspec'4 = "/workspace/crates/verified/src/composition/reconfiguration/control_support/spec.rs" 109 16 109 83
-let%span sspec'5 = "/workspace/crates/verified/src/composition/reconfiguration/control_support/spec.rs" 95 8 99 9
-let%span sspec'6 = "/workspace/crates/verified/src/composition/reconfiguration/control_support/spec.rs" 11 16 15 5
-let%span sspec'7 = "/workspace/crates/verified/src/composition/reconfiguration/control_support/spec.rs" 32 10 32 15
-let%span sspec'8 = "/workspace/crates/verified/src/composition/reconfiguration/control_support/spec.rs" 42 16 51 5
-let%span sspec'9 = "/workspace/crates/verified/src/composition/reconfiguration/control_support/spec.rs" 23 16 24 54
-let%span sspec'10 = "/workspace/crates/verified/src/composition/reconfiguration/spec.rs" 12 16 12 70
-let%span sspec'11 = "/workspace/crates/verified/src/composition/reconfiguration/spec.rs" 49 16 53 5
-let%span sspec'12 = "/workspace/crates/verified/src/composition/reconfiguration/spec.rs" 20 16 21 63
-let%span sspec'13 = "/workspace/crates/verified/src/composition/reconfiguration/spec.rs" 34 16 35 85
-let%span sspec'14 = "/workspace/crates/verified/src/composition/reconfiguration/spec.rs" 107 8 109 92
-let%span sspec'15 = "/workspace/crates/verified/src/composition/reconfiguration/spec.rs" 70 10 70 15
-let%span sspec'16 = "/workspace/crates/verified/src/composition/reconfiguration/spec.rs" 79 16 86 5
-let%span smetadata_record_offset_deltas = "/workspace/crates/verified/src/raft/metadata_record_offset_deltas.rs" 174 28 180 1
-let%span sprepare = "/workspace/crates/verified/src/composition/reconfiguration/control_support/prepare.rs" 77 8 77 87
-let%span sprepare'0 = "/workspace/crates/verified/src/composition/reconfiguration/control_support/prepare.rs" 77 8 77 88
-let%span sprepare'1 = "/workspace/crates/verified/src/composition/reconfiguration/control_support/prepare.rs" 79 33 79 43
-let%span sprepare'2 = "/workspace/crates/verified/src/composition/reconfiguration/control_support/prepare.rs" 81 31 81 41
-let%span sprepare'3 = "/workspace/crates/verified/src/composition/reconfiguration/control_support/prepare.rs" 83 8 83 24
-let%span sprepare'4 = "/workspace/crates/verified/src/composition/reconfiguration/control_support/prepare.rs" 86 8 86 24
-let%span sprepare'5 = "/workspace/crates/verified/src/composition/reconfiguration/control_support/prepare.rs" 88 47 88 60
-let%span sprepare'6 = "/workspace/crates/verified/src/composition/reconfiguration/control_support/prepare.rs" 88 17 88 61
-let%span sprepare'7 = "/workspace/crates/verified/src/composition/reconfiguration/control_support/prepare.rs" 88 17 88 62
-let%span sprepare'8 = "/workspace/crates/verified/src/composition/reconfiguration/control_support/prepare.rs" 89 16 89 29
-let%span sprepare'9 = "/workspace/crates/verified/src/composition/reconfiguration/control_support/prepare.rs" 89 16 89 30
-let%span sprepare'10 = "/workspace/crates/verified/src/composition/reconfiguration/control_support/prepare.rs" 90 19 90 61
-let%span sprepare'11 = "/workspace/crates/verified/src/composition/reconfiguration/control_support/prepare.rs" 90 19 90 62
-let%span sprepare'12 = "/workspace/crates/verified/src/composition/reconfiguration/control_support/prepare.rs" 91 39 91 49
-let%span sprepare'13 = "/workspace/crates/verified/src/composition/reconfiguration/control_support/prepare.rs" 92 16 92 22
-let%span sprepare'14 = "/workspace/crates/verified/src/composition/reconfiguration/control_support/prepare.rs" 96 14 96 33
-let%span sprepare'15 = "/workspace/crates/verified/src/composition/reconfiguration/control_support/prepare.rs" 97 14 97 27
-let%span sprepare'16 = "/workspace/crates/verified/src/composition/reconfiguration/control_support/prepare.rs" 94 16 95 90
-let%span sprepare'17 = "/workspace/crates/verified/src/composition/reconfiguration/control_support/prepare.rs" 93 16 93 58
-let%span sprepare'18 = "/workspace/crates/verified/src/composition/reconfiguration/control_support/prepare.rs" 98 20 98 30
-let%span sprepare'19 = "/workspace/crates/verified/src/composition/reconfiguration/control_support/prepare.rs" 98 20 98 32
-let%span sprepare'20 = "/workspace/crates/verified/src/composition/reconfiguration/control_support/prepare.rs" 98 41 98 51
-let%span sprepare'21 = "/workspace/crates/verified/src/composition/reconfiguration/control_support/prepare.rs" 98 41 98 53
-let%span sprepare'22 = "/workspace/crates/verified/src/composition/reconfiguration/control_support/prepare.rs" 98 8 98 62
-let%span sprepare'23 = "/workspace/crates/verified/src/composition/reconfiguration/control_support/prepare.rs" 99 13 99 14
-let%span sprepare'24 = "/workspace/crates/verified/src/composition/reconfiguration/control_support/prepare.rs" 99 8 99 14
-let%span sprepare'25 = "/workspace/crates/verified/src/composition/reconfiguration/control_support/prepare.rs" 102 86 102 92
-let%span sprepare'26 = "/workspace/crates/verified/src/composition/reconfiguration/control_support/prepare.rs" 102 8 102 93
-let%span sprepare'27 = "/workspace/crates/verified/src/composition/reconfiguration/control_support/prepare.rs" 102 8 102 94
-let%span sprepare'28 = "/workspace/crates/verified/src/composition/reconfiguration/control_support/prepare.rs" 104 8 104 105
-let%span sprepare'29 = "/workspace/crates/verified/src/composition/reconfiguration/control_support/prepare.rs" 111 17 111 24
-let%span sprepare'30 = "/workspace/crates/verified/src/composition/reconfiguration/control_support/prepare.rs" 34 11 34 59
-let%span sprepare'31 = "/workspace/crates/verified/src/composition/reconfiguration/control_support/prepare.rs" 35 10 43 65
-let%span sprepare'32 = "/workspace/crates/verified/src/composition/reconfiguration/control_support/prepare.rs" 44 10 66 1
-let%span sadmitted_plan = "/workspace/crates/verified/src/reconfiguration/admitted_plan.rs" 177 8 192 9
-let%span sadmitted_plan'0 = "/workspace/crates/verified/src/reconfiguration/admitted_plan.rs" 100 8 159 9
-let%span sadmitted_plan'1 = "/workspace/crates/verified/src/reconfiguration/admitted_plan.rs" 19 8 22 47
-let%span sadmitted_plan'2 = "/workspace/crates/verified/src/reconfiguration/admitted_plan.rs" 51 8 51 87
-let%span sadmitted_plan'3 = "/workspace/crates/verified/src/reconfiguration/admitted_plan.rs" 70 8 71 67
-let%span smembership = "/workspace/crates/verified/src/composition/reconfiguration/membership.rs" 24 11 24 45
-let%span smembership'0 = "/workspace/crates/verified/src/composition/reconfiguration/membership.rs" 25 10 29 6
-let%span smembership'1 = "/workspace/crates/verified/src/composition/reconfiguration/membership.rs" 30 10 40 1
-let%span squorum = "/workspace/crates/verified/src/composition/reconfiguration/quorum.rs" 33 11 33 45
-let%span squorum'0 = "/workspace/crates/verified/src/composition/reconfiguration/quorum.rs" 34 11 34 41
-let%span squorum'1 = "/workspace/crates/verified/src/composition/reconfiguration/quorum.rs" 35 10 39 6
-let%span squorum'2 = "/workspace/crates/verified/src/composition/reconfiguration/quorum.rs" 40 10 55 1
-let%span squorum'3 = "/workspace/crates/verified/src/composition/reconfiguration/quorum.rs" 56 10 58 1
+let%span sspec = "/workspace/crates/verified/src/composition/reconfiguration/control_support/spec.rs" 75 10 75 15
+let%span sspec'0 = "/workspace/crates/verified/src/composition/reconfiguration/control_support/spec.rs" 69 11 69 77
+let%span sspec'1 = "/workspace/crates/verified/src/composition/reconfiguration/control_support/spec.rs" 70 11 71 80
+let%span sspec'2 = "/workspace/crates/verified/src/composition/reconfiguration/control_support/spec.rs" 72 11 72 59
+let%span sspec'3 = "/workspace/crates/verified/src/composition/reconfiguration/control_support/spec.rs" 73 10 74 62
+let%span sspec'4 = "/workspace/crates/verified/src/composition/reconfiguration/control_support/spec.rs" 115 16 115 83
+let%span sspec'5 = "/workspace/crates/verified/src/composition/reconfiguration/control_support/spec.rs" 101 8 105 9
+let%span sspec'6 = "/workspace/crates/verified/src/composition/reconfiguration/control_support/spec.rs" 8 16 12 5
+let%span sspec'7 = "/workspace/crates/verified/src/composition/reconfiguration/control_support/spec.rs" 58 8 59 113
+let%span sspec'8 = "/workspace/crates/verified/src/composition/reconfiguration/spec.rs" 149 16 149 113
+let%span sspec'9 = "/workspace/crates/verified/src/composition/reconfiguration/control_support/spec.rs" 25 10 25 15
+let%span sspec'10 = "/workspace/crates/verified/src/composition/reconfiguration/control_support/spec.rs" 35 16 44 5
+let%span sspec'11 = "/workspace/crates/verified/src/composition/reconfiguration/control_support/spec.rs" 127 16 129 41
+let%span sspec'12 = "/workspace/crates/verified/src/composition/reconfiguration/spec.rs" 22 8 26 13
+let%span sspec'13 = "/workspace/crates/verified/src/composition/reconfiguration/spec.rs" 136 16 137 61
+let%span sspec'14 = "/workspace/crates/verified/src/composition/reconfiguration/spec.rs" 120 8 122 44
+let%span sspec'15 = "/workspace/crates/verified/src/composition/reconfiguration/spec.rs" 82 10 82 15
+let%span sspec'16 = "/workspace/crates/verified/src/composition/reconfiguration/spec.rs" 91 16 98 5
+let%span sspec'17 = "/workspace/crates/verified/src/composition/reconfiguration/spec.rs" 33 16 33 70
+let%span sspec'18 = "/workspace/crates/verified/src/composition/reconfiguration/spec.rs" 39 16 39 67
+let%span sspec'19 = "/workspace/crates/verified/src/composition/reconfiguration/spec.rs" 50 16 51 85
+let%span sspec'20 = "/workspace/crates/verified/src/composition/reconfiguration/control_support/spec.rs" 18 16 19 54
+let%span sspec'21 = "/workspace/crates/verified/src/composition/reconfiguration/spec.rs" 63 16 67 5
+let%span smetadata_record_offset_deltas = "/workspace/crates/verified/src/raft/metadata_record_offset_deltas.rs" 169 28 175 1
+let%span sprepare = "/workspace/crates/verified/src/composition/reconfiguration/control_support/prepare.rs" 44 8 44 87
+let%span sprepare'0 = "/workspace/crates/verified/src/composition/reconfiguration/control_support/prepare.rs" 44 8 44 88
+let%span sprepare'1 = "/workspace/crates/verified/src/composition/reconfiguration/control_support/prepare.rs" 46 33 46 43
+let%span sprepare'2 = "/workspace/crates/verified/src/composition/reconfiguration/control_support/prepare.rs" 48 31 48 41
+let%span sprepare'3 = "/workspace/crates/verified/src/composition/reconfiguration/control_support/prepare.rs" 50 8 50 24
+let%span sprepare'4 = "/workspace/crates/verified/src/composition/reconfiguration/control_support/prepare.rs" 53 8 53 24
+let%span sprepare'5 = "/workspace/crates/verified/src/composition/reconfiguration/control_support/prepare.rs" 55 47 55 60
+let%span sprepare'6 = "/workspace/crates/verified/src/composition/reconfiguration/control_support/prepare.rs" 55 17 55 61
+let%span sprepare'7 = "/workspace/crates/verified/src/composition/reconfiguration/control_support/prepare.rs" 55 17 55 62
+let%span sprepare'8 = "/workspace/crates/verified/src/composition/reconfiguration/control_support/prepare.rs" 56 16 56 29
+let%span sprepare'9 = "/workspace/crates/verified/src/composition/reconfiguration/control_support/prepare.rs" 56 16 56 30
+let%span sprepare'10 = "/workspace/crates/verified/src/composition/reconfiguration/control_support/prepare.rs" 57 19 57 61
+let%span sprepare'11 = "/workspace/crates/verified/src/composition/reconfiguration/control_support/prepare.rs" 57 19 57 62
+let%span sprepare'12 = "/workspace/crates/verified/src/composition/reconfiguration/control_support/prepare.rs" 58 39 58 49
+let%span sprepare'13 = "/workspace/crates/verified/src/composition/reconfiguration/control_support/prepare.rs" 59 16 59 22
+let%span sprepare'14 = "/workspace/crates/verified/src/composition/reconfiguration/control_support/prepare.rs" 63 14 63 33
+let%span sprepare'15 = "/workspace/crates/verified/src/composition/reconfiguration/control_support/prepare.rs" 64 14 64 27
+let%span sprepare'16 = "/workspace/crates/verified/src/composition/reconfiguration/control_support/prepare.rs" 61 16 62 90
+let%span sprepare'17 = "/workspace/crates/verified/src/composition/reconfiguration/control_support/prepare.rs" 60 16 60 58
+let%span sprepare'18 = "/workspace/crates/verified/src/composition/reconfiguration/control_support/prepare.rs" 65 20 65 30
+let%span sprepare'19 = "/workspace/crates/verified/src/composition/reconfiguration/control_support/prepare.rs" 65 20 65 32
+let%span sprepare'20 = "/workspace/crates/verified/src/composition/reconfiguration/control_support/prepare.rs" 65 41 65 51
+let%span sprepare'21 = "/workspace/crates/verified/src/composition/reconfiguration/control_support/prepare.rs" 65 41 65 53
+let%span sprepare'22 = "/workspace/crates/verified/src/composition/reconfiguration/control_support/prepare.rs" 65 8 65 62
+let%span sprepare'23 = "/workspace/crates/verified/src/composition/reconfiguration/control_support/prepare.rs" 66 13 66 14
+let%span sprepare'24 = "/workspace/crates/verified/src/composition/reconfiguration/control_support/prepare.rs" 66 8 66 14
+let%span sprepare'25 = "/workspace/crates/verified/src/composition/reconfiguration/control_support/prepare.rs" 69 86 69 92
+let%span sprepare'26 = "/workspace/crates/verified/src/composition/reconfiguration/control_support/prepare.rs" 69 8 69 93
+let%span sprepare'27 = "/workspace/crates/verified/src/composition/reconfiguration/control_support/prepare.rs" 69 8 69 94
+let%span sprepare'28 = "/workspace/crates/verified/src/composition/reconfiguration/control_support/prepare.rs" 71 8 71 105
+let%span sprepare'29 = "/workspace/crates/verified/src/composition/reconfiguration/control_support/prepare.rs" 78 17 78 24
+let%span sprepare'30 = "/workspace/crates/verified/src/composition/reconfiguration/control_support/prepare.rs" 8 11 8 59
+let%span sprepare'31 = "/workspace/crates/verified/src/composition/reconfiguration/control_support/prepare.rs" 9 10 13 85
+let%span sprepare'32 = "/workspace/crates/verified/src/composition/reconfiguration/control_support/prepare.rs" 14 10 33 1
+let%span sadmitted_plan = "/workspace/crates/verified/src/reconfiguration/admitted_plan.rs" 164 8 179 9
+let%span sadmitted_plan'0 = "/workspace/crates/verified/src/reconfiguration/admitted_plan.rs" 89 8 148 9
+let%span sadmitted_plan'1 = "/workspace/crates/verified/src/reconfiguration/admitted_plan.rs" 16 8 19 47
+let%span sadmitted_plan'2 = "/workspace/crates/verified/src/reconfiguration/admitted_plan.rs" 44 8 44 87
+let%span sadmitted_plan'3 = "/workspace/crates/verified/src/reconfiguration/admitted_plan.rs" 61 8 62 67
+let%span smembership = "/workspace/crates/verified/src/composition/reconfiguration/membership.rs" 23 11 23 45
+let%span smembership'0 = "/workspace/crates/verified/src/composition/reconfiguration/membership.rs" 24 10 24 106
+let%span smembership'1 = "/workspace/crates/verified/src/composition/reconfiguration/membership.rs" 25 10 33 1
+let%span squorum = "/workspace/crates/verified/src/composition/reconfiguration/quorum.rs" 29 11 29 45
+let%span squorum'0 = "/workspace/crates/verified/src/composition/reconfiguration/quorum.rs" 30 11 30 41
+let%span squorum'1 = "/workspace/crates/verified/src/composition/reconfiguration/quorum.rs" 31 10 31 106
+let%span squorum'2 = "/workspace/crates/verified/src/composition/reconfiguration/quorum.rs" 32 10 45 1
+let%span squorum'3 = "/workspace/crates/verified/src/composition/reconfiguration/quorum.rs" 46 10 48 1
 
 use creusot.slice.Slice64
 use creusot.int.UInt64
 use creusot.int.UInt16
 use seq.Seq
+use map.Map
 use creusot.int.Int64
 use creusot.int.Int32
 use creusot.prelude.MutBorrow
@@ -129,15 +137,23 @@ predicate gt_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord'0] oth
 
 meta "rewrite_def" predicate gt_log_Int
 
-predicate valid_old [#"/workspace/crates/verified/src/composition/reconfiguration/spec.rs" 19 0 19 41] (nodes: Seq.seq UInt64.t) =
-  [%#sspec'12] gt_log_Int (Seq.length nodes) 0
-  /\ (forall i: int, j: int. 0 <= i /\ i < j /\ j < Seq.length nodes -> Seq.get nodes i <> Seq.get nodes j)
+type tup2_u64_u64 = { f0'1: UInt64.t; f1'1: UInt64.t }
 
-predicate has_node [#"/workspace/crates/verified/src/composition/reconfiguration/spec.rs" 11 0 11 63] (nodes: Seq.seq UInt64.t) (count: int) (node: UInt64.t) =
-  [%#sspec'10] exists i: int. 0 <= i /\ i < count /\ Seq.get nodes i = node
+predicate pairwise_u64 [#"/workspace/crates/verified/src/sequence.rs" 20 0 20 95] (values: Seq.seq UInt64.t) (relation: Map.map tup2_u64_u64 bool) =
+  [%#ssequence'0] forall i: int, j: int. 0 <= i /\ i < j /\ j < Seq.length values
+    -> Map.get relation { f0'1 = Seq.get values i; f1'1 = Seq.get values j }
 
-predicate membership_coherent [#"/workspace/crates/verified/src/composition/reconfiguration/spec.rs" 28 0 33 9] (nodes: Seq.seq UInt64.t) (node: UInt64.t) (membership'0: t_TargetMembership) (kind'0: t_VoterChangeKind) =
-  [%#sspec'13] kind'0 = FinalizeKraftVersion \/ has_node nodes (Seq.length nodes) node = (membership'0 <> Absent)
+predicate distinct_u64 [#"/workspace/crates/verified/src/sequence.rs" 6 0 6 42] (values: Seq.seq UInt64.t) =
+  [%#ssequence] pairwise_u64 values (fun (__0: tup2_u64_u64) -> let {f0'1 = left; f1'1 = right} = __0 in left <> right)
+
+predicate valid_old [#"/workspace/crates/verified/src/composition/reconfiguration/spec.rs" 38 0 38 41] (nodes: Seq.seq UInt64.t) =
+  [%#sspec'18] gt_log_Int (Seq.length nodes) 0 /\ distinct_u64 nodes
+
+predicate has_node [#"/workspace/crates/verified/src/composition/reconfiguration/spec.rs" 32 0 32 63] (nodes: Seq.seq UInt64.t) (count: int) (node: UInt64.t) =
+  [%#sspec'17] exists i: int. 0 <= i /\ i < count /\ Seq.get nodes i = node
+
+predicate membership_coherent [#"/workspace/crates/verified/src/composition/reconfiguration/spec.rs" 44 0 49 9] (nodes: Seq.seq UInt64.t) (node: UInt64.t) (membership'0: t_TargetMembership) (kind'0: t_VoterChangeKind) =
+  [%#sspec'19] kind'0 = FinalizeKraftVersion \/ has_node nodes (Seq.length nodes) node = (membership'0 <> Absent)
 
 type t_VoterReconfigurationDecision =
   | NotLeader
@@ -157,13 +173,13 @@ type t_Option_VoterReconfigurationDecision = None'0 | Some'0 t_VoterReconfigurat
 
 constant const_MAX: UInt64.t = (18446744073709551615: UInt64.t)
 
-predicate voter_set_removes [#"/workspace/crates/verified/src/reconfiguration/admitted_plan.rs" 49 0 49 87] (membership'0: t_TargetMembership) (voters: t_CurrentVoterSet) =
+predicate voter_set_removes [#"/workspace/crates/verified/src/reconfiguration/admitted_plan.rs" 42 0 42 87] (membership'0: t_TargetMembership) (voters: t_CurrentVoterSet) =
   [%#sadmitted_plan'2] membership'0 = PresentSameDirectory /\ gt_log_Int (UInt64.t'int voters.voter_count) 1
 
-predicate update_key_matches [#"/workspace/crates/verified/src/reconfiguration/admitted_plan.rs" 68 0 68 63] (membership'0: t_TargetMembership) =
+predicate update_key_matches [#"/workspace/crates/verified/src/reconfiguration/admitted_plan.rs" 59 0 59 63] (membership'0: t_TargetMembership) =
   [%#sadmitted_plan'3] membership'0 = PresentUnknownDirectory \/ membership'0 = PresentSameDirectory
 
-function voter_reconfiguration_rejection [#"/workspace/crates/verified/src/reconfiguration/admitted_plan.rs" 93 0 98 41] (leadership: t_ReconfigurationLeadership) (voters: t_CurrentVoterSet) (request: t_VoterChangeRequest) (target: t_TargetVoter) : t_Option_VoterReconfigurationDecision
+function voter_reconfiguration_rejection [#"/workspace/crates/verified/src/reconfiguration/admitted_plan.rs" 82 0 87 41] (leadership: t_ReconfigurationLeadership) (voters: t_CurrentVoterSet) (request: t_VoterChangeRequest) (target: t_TargetVoter) : t_Option_VoterReconfigurationDecision
  = [%#sadmitted_plan'0] if not leadership.is_leader then
     Some'0 (NotLeader)
   else
@@ -232,7 +248,15 @@ function voter_reconfiguration_rejection [#"/workspace/crates/verified/src/recon
 
 
 
-predicate admitted_plan [#"/workspace/crates/verified/src/reconfiguration/admitted_plan.rs" 171 0 175 9] (voters: t_CurrentVoterSet) (kind'0: t_VoterChangeKind) (plan: t_VoterReconfigurationPlan) =
+predicate reconfiguration_admitted [#"/workspace/crates/verified/src/composition/reconfiguration/spec.rs" 13 0 20 9] (old': Seq.seq UInt64.t) (node: UInt64.t) (leadership: t_ReconfigurationLeadership) (context: t_CurrentVoterSet) (request: t_VoterChangeRequest) (target: t_TargetVoter) =
+  [%#sspec'12] valid_old old'
+  /\ membership_coherent old' node target.membership request.kind
+  /\ match voter_reconfiguration_rejection leadership context request target with
+    | None'0 -> true
+    | Some'0 _ -> false
+    end
+
+predicate admitted_plan [#"/workspace/crates/verified/src/reconfiguration/admitted_plan.rs" 158 0 162 9] (voters: t_CurrentVoterSet) (kind'0: t_VoterChangeKind) (plan: t_VoterReconfigurationPlan) =
   [%#sadmitted_plan] match kind'0 with
     | Add -> UInt64.t'int plan.next_voter_count = UInt64.t'int voters.voter_count + 1
     /\ plan.next_kraft_version = voters.kraft_version
@@ -249,9 +273,14 @@ predicate admitted_plan [#"/workspace/crates/verified/src/reconfiguration/admitt
     /\ plan.write_voters /\ plan.write_kraft_version /\ not plan.preflight_only
     end
 
-predicate may_reconfigure [#"/workspace/crates/verified/src/reconfiguration/admitted_plan.rs" 17 0 17 94] (leadership: t_ReconfigurationLeadership) (voters: t_CurrentVoterSet) =
+predicate may_reconfigure [#"/workspace/crates/verified/src/reconfiguration/admitted_plan.rs" 14 0 14 94] (leadership: t_ReconfigurationLeadership) (voters: t_CurrentVoterSet) =
   [%#sadmitted_plan'1] leadership.is_leader
   /\ leadership.no_pending_change /\ leadership.epoch_committed /\ voters.latest_controls_committed
+
+predicate admitted_membership [#"/workspace/crates/verified/src/composition/reconfiguration/spec.rs" 129 0 135 9] (context: t_CurrentVoterSet) (kind'0: t_VoterChangeKind) (plan: t_VoterReconfigurationPlan) (leadership: t_ReconfigurationLeadership) (next: Seq.seq UInt64.t) =
+  [%#sspec'13] admitted_plan context kind'0 plan
+  /\ may_reconfigure leadership context
+  /\ Seq.length next = UInt64.t'int plan.next_voter_count /\ gt_log_Int (Seq.length next) 0
 
 function view_Vec_u64_Global (self: t_Vec_u64_Global) : Seq.seq UInt64.t
 
@@ -259,18 +288,20 @@ axiom view_Vec_u64_Global_spec:
   forall self: t_Vec_u64_Global [view_Vec_u64_Global self]. [%#svec'3] Seq.length (view_Vec_u64_Global self)
     <= UInt64.t'int const_MAX
 
-predicate expected_member [#"/workspace/crates/verified/src/composition/reconfiguration/spec.rs" 42 0 48 9] (nodes: Seq.seq UInt64.t) (count: int) (kind'0: t_VoterChangeKind) (target: UInt64.t) (node: UInt64.t) =
-  [%#sspec'11] match kind'0 with
+predicate expected_member [#"/workspace/crates/verified/src/composition/reconfiguration/spec.rs" 56 0 62 9] (nodes: Seq.seq UInt64.t) (count: int) (kind'0: t_VoterChangeKind) (target: UInt64.t) (node: UInt64.t) =
+  [%#sspec'21] match kind'0 with
     | Add -> has_node nodes count node \/ node = target
     | Remove -> has_node nodes count node /\ node <> target
     | Update | FinalizeKraftVersion -> has_node nodes count node
     end
 
-predicate single_change_shape [#"/workspace/crates/verified/src/composition/reconfiguration/spec.rs" 100 0 105 9] (old': Seq.seq UInt64.t) (next: Seq.seq UInt64.t) (kind'0: t_VoterChangeKind) (node: UInt64.t) =
+predicate membership_matches_change [#"/workspace/crates/verified/src/composition/reconfiguration/spec.rs" 143 0 148 9] (old': Seq.seq UInt64.t) (next: Seq.seq UInt64.t) (kind'0: t_VoterChangeKind) (node: UInt64.t) =
+  [%#sspec'8] forall id: UInt64.t. has_node next (Seq.length next) id
+    = expected_member old' (Seq.length old') kind'0 node id
+
+predicate single_change_shape [#"/workspace/crates/verified/src/composition/reconfiguration/spec.rs" 113 0 118 9] (old': Seq.seq UInt64.t) (next: Seq.seq UInt64.t) (kind'0: t_VoterChangeKind) (node: UInt64.t) =
   [%#sspec'14] Seq.length old' - 1 <= Seq.length next
-  /\ Seq.length next <= Seq.length old' + 1
-  /\ (forall id: UInt64.t. has_node next (Seq.length next) id = expected_member old' (Seq.length old') kind'0 node id)
-  /\ (forall i: int, j: int. 0 <= i /\ i < j /\ j < Seq.length next -> Seq.get next i <> Seq.get next j)
+  /\ Seq.length next <= Seq.length old' + 1 /\ membership_matches_change old' next kind'0 node /\ distinct_u64 next
 
 let constructed_voter_reconfiguration (old': Slice64.slice UInt64.t) (leadership: t_ReconfigurationLeadership)
   (context: t_CurrentVoterSet) (request: t_VoterChangeRequest) (node: UInt64.t) (target: t_TargetVoter)
@@ -279,22 +310,12 @@ let constructed_voter_reconfiguration (old': Slice64.slice UInt64.t) (leadership
   = Seq.length (Slice64.view old')}
   any
   [ return (result: t_Option_tup2_VoterReconfigurationPlan_Vec_u64_Global) ->
-  {[@stop_split] [@expl:constructed_voter_reconfiguration ensures] ([@stop_split] [@expl:constructed_voter_reconfiguration ensures #0] [%#smembership'0] match result with
-          | None -> false
-          | Some _ -> true
-          end
-      = (valid_old (Slice64.view old')
-      /\ membership_coherent (Slice64.view old') node target.membership request.kind
-      /\ match voter_reconfiguration_rejection leadership context request target with
-        | None'0 -> true
-        | Some'0 _ -> false
-        end))
+  {[@stop_split] [@expl:constructed_voter_reconfiguration ensures] ([@stop_split] [@expl:constructed_voter_reconfiguration ensures #0] [%#smembership'0] (result
+        <> None)
+      = reconfiguration_admitted (Slice64.view old') node leadership context request target)
     /\ ([@stop_split] [@expl:constructed_voter_reconfiguration ensures #1] [%#smembership'1] match result with
       | None -> true
-      | Some {f0'0 = plan; f1'0 = next} -> admitted_plan context request.kind plan
-      /\ may_reconfigure leadership context
-      /\ Seq.length (view_Vec_u64_Global next) = UInt64.t'int plan.next_voter_count
-      /\ gt_log_Int (Seq.length (view_Vec_u64_Global next)) 0
+      | Some {f0'0 = plan; f1'0 = next} -> admitted_membership context request.kind plan leadership (view_Vec_u64_Global next)
       /\ single_change_shape (Slice64.view old') (view_Vec_u64_Global next) request.kind node
       /\ match request.kind with
         | Add -> Seq.length (view_Vec_u64_Global next) = Seq.length (Slice64.view old') + 1
@@ -319,7 +340,7 @@ predicate inv_Option_Infallible (_1: t_Option_Infallible)
 axiom inv_axiom [@rewrite]: forall x: t_Option_Infallible [inv_Option_Infallible x]. inv_Option_Infallible x
     = match x with
       | None'1 -> true
-      | Some'1 f0'1 -> inv_Infallible f0'1
+      | Some'1 f0'2 -> inv_Infallible f0'2
       end
 
 predicate inv_ControlFlow_Option_Infallible_tup2_VoterReconfigurationPlan_Vec_u64_Global (_1: t_ControlFlow_Option_Infallible_tup2_VoterReconfigurationPlan_Vec_u64_Global)
@@ -327,8 +348,8 @@ predicate inv_ControlFlow_Option_Infallible_tup2_VoterReconfigurationPlan_Vec_u6
 axiom inv_axiom'0 [@rewrite]:
   forall x: t_ControlFlow_Option_Infallible_tup2_VoterReconfigurationPlan_Vec_u64_Global [inv_ControlFlow_Option_Infallible_tup2_VoterReconfigurationPlan_Vec_u64_Global x]. inv_ControlFlow_Option_Infallible_tup2_VoterReconfigurationPlan_Vec_u64_Global x
     = match x with
-      | Continue f0'1 -> true
-      | Break f0'1 -> inv_Option_Infallible f0'1
+      | Continue f0'2 -> true
+      | Break f0'2 -> inv_Option_Infallible f0'2
       end
 
 let branch_Option_tup2_VoterReconfigurationPlan_Vec_u64_Global
@@ -343,8 +364,8 @@ let branch_Option_tup2_VoterReconfigurationPlan_Vec_u64_Global
     (! return {result}) ]
 
 let elim_Break (_x: t_ControlFlow_Option_Infallible_tup2_VoterReconfigurationPlan_Vec_u64_Global)
-  (return (f0'1: t_Option_Infallible)) = any
-  [ _k (f0'1: t_Option_Infallible) -> {Break f0'1 = _x} (! return {f0'1})
+  (return (f0'2: t_Option_Infallible)) = any
+  [ _k (f0'2: t_Option_Infallible) -> {Break f0'2 = _x} (! return {f0'2})
   | _chk -> (! {[@expl:elim Break] match _x with
       | Break _ -> true
       | _ -> false
@@ -353,17 +374,17 @@ let elim_Break (_x: t_ControlFlow_Option_Infallible_tup2_VoterReconfigurationPla
 
 type t_Vec_i32_Global
 
-type tup2_usize_usize = { f0'1: UInt64.t; f1'1: UInt64.t }
+type tup2_usize_usize = { f0'2: UInt64.t; f1'2: UInt64.t }
 
-type tup3_i64_tup2_usize_usize_u64 = { f0'2: Int64.t; f1'2: tup2_usize_usize; f2'2: UInt64.t }
+type tup3_i64_tup2_usize_usize_u64 = { f0'3: Int64.t; f1'3: tup2_usize_usize; f2'3: UInt64.t }
 
 type t_Option_tup3_i64_tup2_usize_usize_u64 = None'2 | Some'2 tup3_i64_tup2_usize_usize_u64
 
 type tup4_VoterReconfigurationPlan_Vec_u64_Global_Vec_i32_Global_Option_tup3_i64_tup2_usize_usize_u64 = {
-  f0'3: t_VoterReconfigurationPlan;
-  f1'3: t_Vec_u64_Global;
-  f2'3: t_Vec_i32_Global;
-  f3'3: t_Option_tup3_i64_tup2_usize_usize_u64 }
+  f0'4: t_VoterReconfigurationPlan;
+  f1'4: t_Vec_u64_Global;
+  f2'4: t_Vec_i32_Global;
+  f3'4: t_Option_tup3_i64_tup2_usize_usize_u64 }
 
 type t_Option_tup4_VoterReconfigurationPlan_Vec_u64_Global_Vec_i32_Global_Option_tup3_i64_tup2_usize_usize_u64 =
   | None'3
@@ -380,8 +401,8 @@ let from_residual_Option_tup4_VoterReconfigurationPlan_Vec_u64_Global_Vec_i32_Gl
     (! return {result}) ]
 
 let elim_Continue (_x: t_ControlFlow_Option_Infallible_tup2_VoterReconfigurationPlan_Vec_u64_Global)
-  (return (f0'4: tup2_VoterReconfigurationPlan_Vec_u64_Global)) = any
-  [ _k (f0'4: tup2_VoterReconfigurationPlan_Vec_u64_Global) -> {Continue f0'4 = _x} (! return {f0'4})
+  (return (f0'5: tup2_VoterReconfigurationPlan_Vec_u64_Global)) = any
+  [ _k (f0'5: tup2_VoterReconfigurationPlan_Vec_u64_Global) -> {Continue f0'5 = _x} (! return {f0'5})
   | _chk -> (! {[@expl:elim Continue] match _x with
       | Continue _ -> true
       | _ -> false
@@ -445,8 +466,8 @@ predicate inv_ControlFlow_Option_Infallible_Vec_i32_Global (_1: t_ControlFlow_Op
 axiom inv_axiom'1 [@rewrite]:
   forall x: t_ControlFlow_Option_Infallible_Vec_i32_Global [inv_ControlFlow_Option_Infallible_Vec_i32_Global x]. inv_ControlFlow_Option_Infallible_Vec_i32_Global x
     = match x with
-      | Continue'0 f0'4 -> true
-      | Break'0 f0'4 -> inv_Option_Infallible f0'4
+      | Continue'0 f0'5 -> true
+      | Break'0 f0'5 -> inv_Option_Infallible f0'5
       end
 
 let branch_Option_Vec_i32_Global (self_: t_Option_Vec_i32_Global)
@@ -459,16 +480,16 @@ let branch_Option_Vec_i32_Global (self_: t_Option_Vec_i32_Global)
       end)}
     (! return {result}) ]
 
-let elim_Break'0 (_x: t_ControlFlow_Option_Infallible_Vec_i32_Global) (return (f0'4: t_Option_Infallible)) = any
-  [ _k (f0'4: t_Option_Infallible) -> {Break'0 f0'4 = _x} (! return {f0'4})
+let elim_Break'0 (_x: t_ControlFlow_Option_Infallible_Vec_i32_Global) (return (f0'5: t_Option_Infallible)) = any
+  [ _k (f0'5: t_Option_Infallible) -> {Break'0 f0'5 = _x} (! return {f0'5})
   | _chk -> (! {[@expl:elim Break] match _x with
       | Break'0 _ -> true
       | _ -> false
       end}
     any) ]
 
-let elim_Continue'0 (_x: t_ControlFlow_Option_Infallible_Vec_i32_Global) (return (f0'4: t_Vec_i32_Global)) = any
-  [ _k (f0'4: t_Vec_i32_Global) -> {Continue'0 f0'4 = _x} (! return {f0'4})
+let elim_Continue'0 (_x: t_ControlFlow_Option_Infallible_Vec_i32_Global) (return (f0'5: t_Vec_i32_Global)) = any
+  [ _k (f0'5: t_Vec_i32_Global) -> {Continue'0 f0'5 = _x} (! return {f0'5})
   | _chk -> (! {[@expl:elim Continue] match _x with
       | Continue'0 _ -> true
       | _ -> false
@@ -502,8 +523,8 @@ predicate inv_ControlFlow_Option_Infallible_ref_i32 (_1: t_ControlFlow_Option_In
 axiom inv_axiom'2 [@rewrite]:
   forall x: t_ControlFlow_Option_Infallible_ref_i32 [inv_ControlFlow_Option_Infallible_ref_i32 x]. inv_ControlFlow_Option_Infallible_ref_i32 x
     = match x with
-      | Continue'1 f0'4 -> true
-      | Break'1 f0'4 -> inv_Option_Infallible f0'4
+      | Continue'1 f0'5 -> true
+      | Break'1 f0'5 -> inv_Option_Infallible f0'5
       end
 
 let branch_Option_ref_i32 (self_: t_Option_ref_i32) (return (x: t_ControlFlow_Option_Infallible_ref_i32)) = any
@@ -515,23 +536,23 @@ let branch_Option_ref_i32 (self_: t_Option_ref_i32) (return (x: t_ControlFlow_Op
       end)}
     (! return {result}) ]
 
-let elim_Break'1 (_x: t_ControlFlow_Option_Infallible_ref_i32) (return (f0'4: t_Option_Infallible)) = any
-  [ _k (f0'4: t_Option_Infallible) -> {Break'1 f0'4 = _x} (! return {f0'4})
+let elim_Break'1 (_x: t_ControlFlow_Option_Infallible_ref_i32) (return (f0'5: t_Option_Infallible)) = any
+  [ _k (f0'5: t_Option_Infallible) -> {Break'1 f0'5 = _x} (! return {f0'5})
   | _chk -> (! {[@expl:elim Break] match _x with
       | Break'1 _ -> true
       | _ -> false
       end}
     any) ]
 
-let elim_Continue'1 (_x: t_ControlFlow_Option_Infallible_ref_i32) (return (f0'4: Int32.t)) = any
-  [ _k (f0'4: Int32.t) -> {Continue'1 f0'4 = _x} (! return {f0'4})
+let elim_Continue'1 (_x: t_ControlFlow_Option_Infallible_ref_i32) (return (f0'5: Int32.t)) = any
+  [ _k (f0'5: Int32.t) -> {Continue'1 f0'5 = _x} (! return {f0'5})
   | _chk -> (! {[@expl:elim Continue] match _x with
       | Continue'1 _ -> true
       | _ -> false
       end}
     any) ]
 
-type tup2_i64_i64 = { f0'4: Int64.t; f1'4: Int64.t }
+type tup2_i64_i64 = { f0'5: Int64.t; f1'5: Int64.t }
 
 type t_Option_tup2_i64_i64 = None'6 | Some'6 tup2_i64_i64
 
@@ -545,7 +566,7 @@ let local_append_coordinates (expected_base: Int64.t) (supplied_base: Int64.t) (
   (return (x: t_Option_tup2_i64_i64)) = any
   [ return (result: t_Option_tup2_i64_i64) ->
   {[@stop_split] [@expl:local_append_coordinates ensures] [%#sfuture_log_swap_admission] match result with
-      | Some'6 {f0'4 = last; f1'4 = next} -> ge_log_Int (Int64.to_int expected_base) 0
+      | Some'6 {f0'5 = last; f1'5 = next} -> ge_log_Int (Int64.to_int expected_base) 0
       /\ ge_log_Int (Int64.to_int supplied_base) (Int64.to_int expected_base)
       /\ ge_log_Int (Int32.to_int last_offset_delta) 0
       /\ Int64.to_int last = Int64.to_int supplied_base + Int32.to_int last_offset_delta
@@ -566,8 +587,8 @@ predicate inv_ControlFlow_Option_Infallible_tup2_i64_i64 (_1: t_ControlFlow_Opti
 axiom inv_axiom'3 [@rewrite]:
   forall x: t_ControlFlow_Option_Infallible_tup2_i64_i64 [inv_ControlFlow_Option_Infallible_tup2_i64_i64 x]. inv_ControlFlow_Option_Infallible_tup2_i64_i64 x
     = match x with
-      | Continue'2 f0'5 -> true
-      | Break'2 f0'5 -> inv_Option_Infallible f0'5
+      | Continue'2 f0'6 -> true
+      | Break'2 f0'6 -> inv_Option_Infallible f0'6
       end
 
 let branch_Option_tup2_i64_i64 (self_: t_Option_tup2_i64_i64)
@@ -580,16 +601,16 @@ let branch_Option_tup2_i64_i64 (self_: t_Option_tup2_i64_i64)
       end)}
     (! return {result}) ]
 
-let elim_Break'2 (_x: t_ControlFlow_Option_Infallible_tup2_i64_i64) (return (f0'5: t_Option_Infallible)) = any
-  [ _k (f0'5: t_Option_Infallible) -> {Break'2 f0'5 = _x} (! return {f0'5})
+let elim_Break'2 (_x: t_ControlFlow_Option_Infallible_tup2_i64_i64) (return (f0'6: t_Option_Infallible)) = any
+  [ _k (f0'6: t_Option_Infallible) -> {Break'2 f0'6 = _x} (! return {f0'6})
   | _chk -> (! {[@expl:elim Break] match _x with
       | Break'2 _ -> true
       | _ -> false
       end}
     any) ]
 
-let elim_Continue'2 (_x: t_ControlFlow_Option_Infallible_tup2_i64_i64) (return (f0'5: tup2_i64_i64)) = any
-  [ _k (f0'5: tup2_i64_i64) -> {Continue'2 f0'5 = _x} (! return {f0'5})
+let elim_Continue'2 (_x: t_ControlFlow_Option_Infallible_tup2_i64_i64) (return (f0'6: tup2_i64_i64)) = any
+  [ _k (f0'6: tup2_i64_i64) -> {Continue'2 f0'6 = _x} (! return {f0'6})
   | _chk -> (! {[@expl:elim Continue] match _x with
       | Continue'2 _ -> true
       | _ -> false
@@ -598,7 +619,7 @@ let elim_Continue'2 (_x: t_ControlFlow_Option_Infallible_tup2_i64_i64) (return (
 
 type t_Vec_tup2_bool_bool_Global
 
-type tup2_bool_bool = { f0'5: bool; f1'5: bool }
+type tup2_bool_bool = { f0'6: bool; f1'6: bool }
 
 function view_Vec_tup2_bool_bool_Global (self: t_Vec_tup2_bool_bool_Global) : Seq.seq tup2_bool_bool
 
@@ -635,17 +656,17 @@ any
 type t_Option_u64 = None'7 | Some'7 UInt64.t
 
 type tup5_VoterReconfigurationPlan_Vec_u64_Global_tup2_usize_usize_tup2_bool_bool_Option_u64 = {
-  f0'6: t_VoterReconfigurationPlan;
-  f1'6: t_Vec_u64_Global;
-  f2'6: tup2_usize_usize;
-  f3'6: tup2_bool_bool;
-  f4'6: t_Option_u64 }
+  f0'7: t_VoterReconfigurationPlan;
+  f1'7: t_Vec_u64_Global;
+  f2'7: tup2_usize_usize;
+  f3'7: tup2_bool_bool;
+  f4'7: t_Option_u64 }
 
 type t_Option_tup5_VoterReconfigurationPlan_Vec_u64_Global_tup2_usize_usize_tup2_bool_bool_Option_u64 =
   | None'8
   | Some'8 tup5_VoterReconfigurationPlan_Vec_u64_Global_tup2_usize_usize_tup2_bool_bool_Option_u64
 
-function grant_count [#"/workspace/crates/verified/src/composition/reconfiguration/spec.rs" 71 0 78 8] (old': Seq.seq UInt64.t) (next: Seq.seq UInt64.t) (votes: Seq.seq tup2_bool_bool) (node: UInt64.t) (new: bool) (count: int) : int
+function grant_count [#"/workspace/crates/verified/src/composition/reconfiguration/spec.rs" 83 0 90 8] (old': Seq.seq UInt64.t) (next: Seq.seq UInt64.t) (votes: Seq.seq tup2_bool_bool) (node: UInt64.t) (new: bool) (count: int) : int
 
 axiom grant_count_def:
   forall old': Seq.seq UInt64.t, next: Seq.seq UInt64.t, votes: Seq.seq tup2_bool_bool, node: UInt64.t, new: bool, count: int [grant_count old' next votes node new count]. grant_count old' next votes node new count
@@ -654,7 +675,7 @@ axiom grant_count_def:
     else
       grant_count old' next votes node new (count - 1)
       + (if new then
-        if (Seq.get votes (count - 1)).f1'5
+        if (Seq.get votes (count - 1)).f1'6
         /\ (if count - 1 < Seq.length old' then
           has_node next (Seq.length next) (Seq.get old' (count - 1))
         else
@@ -665,7 +686,7 @@ axiom grant_count_def:
           0
 
       else
-        if count - 1 < Seq.length old' /\ (Seq.get votes (count - 1)).f0'5 then 1 else 0
+        if count - 1 < Seq.length old' /\ (Seq.get votes (count - 1)).f0'6 then 1 else 0
       )
     )
 
@@ -679,33 +700,23 @@ let reconfigured_majorities_overlap (old': Slice64.slice UInt64.t) (leadership: 
   = Seq.length (Slice64.view old') + 1)}
   any
   [ return (result: t_Option_tup5_VoterReconfigurationPlan_Vec_u64_Global_tup2_usize_usize_tup2_bool_bool_Option_u64) ->
-  {[@stop_split] [@expl:reconfigured_majorities_overlap ensures] ([@stop_split] [@expl:reconfigured_majorities_overlap ensures #0] [%#squorum'1] match result with
-          | None'8 -> false
-          | Some'8 _ -> true
-          end
-      = (valid_old (Slice64.view old')
-      /\ membership_coherent (Slice64.view old') node target.membership request.kind
-      /\ match voter_reconfiguration_rejection leadership context request target with
-        | None'0 -> true
-        | Some'0 _ -> false
-        end))
+  {[@stop_split] [@expl:reconfigured_majorities_overlap ensures] ([@stop_split] [@expl:reconfigured_majorities_overlap ensures #0] [%#squorum'1] (result
+        <> None'8)
+      = reconfiguration_admitted (Slice64.view old') node leadership context request target)
     /\ ([@stop_split] [@expl:reconfigured_majorities_overlap ensures #1] [%#squorum'2] match result with
         | None'8 -> true
-        | Some'8 {f0'6 = plan; f1'6 = next; f2'6 = counts; f3'6 = quorums; f4'6 = common} -> admitted_plan context request.kind plan
-        /\ may_reconfigure leadership context
-        /\ Seq.length (view_Vec_u64_Global next) = UInt64.t'int plan.next_voter_count
-        /\ gt_log_Int (Seq.length (view_Vec_u64_Global next)) 0
-        /\ UInt64.t'int counts.f0'1 <= Seq.length (Slice64.view old')
-        /\ UInt64.t'int counts.f1'1 <= Seq.length (view_Vec_u64_Global next)
-        /\ UInt64.t'int counts.f0'1
+        | Some'8 {f0'7 = plan; f1'7 = next; f2'7 = counts; f3'7 = quorums; f4'7 = common} -> admitted_membership context request.kind plan leadership (view_Vec_u64_Global next)
+        /\ UInt64.t'int counts.f0'2 <= Seq.length (Slice64.view old')
+        /\ UInt64.t'int counts.f1'2 <= Seq.length (view_Vec_u64_Global next)
+        /\ UInt64.t'int counts.f0'2
           = grant_count (Slice64.view old') (view_Vec_u64_Global next) (Slice64.view votes) node false (Seq.length (Slice64.view votes))
-        /\ UInt64.t'int counts.f1'1
+        /\ UInt64.t'int counts.f1'2
           = grant_count (Slice64.view old') (view_Vec_u64_Global next) (Slice64.view votes) node true (Seq.length (Slice64.view votes))
-        /\ quorums.f0'5
-          = ge_log_Int (UInt64.t'int counts.f0'1) (ComputerDivision.div (Seq.length (Slice64.view old')) 2 + 1)
-        /\ quorums.f1'5
-          = ge_log_Int (UInt64.t'int counts.f1'1) (ComputerDivision.div (Seq.length (view_Vec_u64_Global next)) 2 + 1)
-        /\ (quorums.f0'5 /\ quorums.f1'5
+        /\ quorums.f0'6
+          = ge_log_Int (UInt64.t'int counts.f0'2) (ComputerDivision.div (Seq.length (Slice64.view old')) 2 + 1)
+        /\ quorums.f1'6
+          = ge_log_Int (UInt64.t'int counts.f1'2) (ComputerDivision.div (Seq.length (view_Vec_u64_Global next)) 2 + 1)
+        /\ (quorums.f0'6 /\ quorums.f1'6
           -> match common with
             | None'7 -> false
             | Some'7 _ -> true
@@ -713,23 +724,23 @@ let reconfigured_majorities_overlap (old': Slice64.slice UInt64.t) (leadership: 
         /\ (common = None'7)
           = (not (exists i: int. 0 <= i
             /\ i < Seq.length (Slice64.view old')
-            /\ (Seq.get (Slice64.view votes) i).f0'5
-            /\ (Seq.get (Slice64.view votes) i).f1'5
+            /\ (Seq.get (Slice64.view votes) i).f0'6
+            /\ (Seq.get (Slice64.view votes) i).f1'6
             /\ has_node (view_Vec_u64_Global next) (Seq.length (view_Vec_u64_Global next)) (Seq.get (Slice64.view old') i)))
         /\ match common with
           | None'7 -> true
           | Some'7 id -> exists i: int. 0 <= i
             /\ i < Seq.length (Slice64.view old')
             /\ Seq.get (Slice64.view old') i = id
-            /\ (Seq.get (Slice64.view votes) i).f0'5
-            /\ (Seq.get (Slice64.view votes) i).f1'5
+            /\ (Seq.get (Slice64.view votes) i).f0'6
+            /\ (Seq.get (Slice64.view votes) i).f1'6
             /\ (exists j: int. 0 <= j
               /\ j < Seq.length (view_Vec_u64_Global next) /\ Seq.get (view_Vec_u64_Global next) j = id)
           end
         end)
     /\ ([@stop_split] [@expl:reconfigured_majorities_overlap ensures #2] [%#squorum'3] match result with
       | None'8 -> true
-      | Some'8 {f1'6 = next} -> single_change_shape (Slice64.view old') (view_Vec_u64_Global next) request.kind node
+      | Some'8 {f1'7 = next} -> single_change_shape (Slice64.view old') (view_Vec_u64_Global next) request.kind node
       end)}
     (! return {result}) ]
 
@@ -742,8 +753,8 @@ predicate inv_ControlFlow_Option_Infallible_tup5_VoterReconfigurationPlan_Vec_u6
 axiom inv_axiom'4 [@rewrite]:
   forall x: t_ControlFlow_Option_Infallible_tup5_VoterReconfigurationPlan_Vec_u64_Global_tup2_usize_usize_tup2_bool_bool_Option_u64 [inv_ControlFlow_Option_Infallible_tup5_VoterReconfigurationPlan_Vec_u64_Global_tup2_usize_usize_tup2_bool_bool_Option_u64 x]. inv_ControlFlow_Option_Infallible_tup5_VoterReconfigurationPlan_Vec_u64_Global_tup2_usize_usize_tup2_bool_bool_Option_u64 x
     = match x with
-      | Continue'3 f0'7 -> true
-      | Break'3 f0'7 -> inv_Option_Infallible f0'7
+      | Continue'3 f0'8 -> true
+      | Break'3 f0'8 -> inv_Option_Infallible f0'8
       end
 
 let branch_Option_tup5_VoterReconfigurationPlan_Vec_u64_Global_tup2_usize_usize_tup2_bool_bool_Option_u64
@@ -761,8 +772,8 @@ any
 
 let elim_Break'3
   (_x: t_ControlFlow_Option_Infallible_tup5_VoterReconfigurationPlan_Vec_u64_Global_tup2_usize_usize_tup2_bool_bool_Option_u64)
-  (return (f0'7: t_Option_Infallible)) = any
-  [ _k (f0'7: t_Option_Infallible) -> {Break'3 f0'7 = _x} (! return {f0'7})
+  (return (f0'8: t_Option_Infallible)) = any
+  [ _k (f0'8: t_Option_Infallible) -> {Break'3 f0'8 = _x} (! return {f0'8})
   | _chk -> (! {[@expl:elim Break] match _x with
       | Break'3 _ -> true
       | _ -> false
@@ -771,38 +782,38 @@ let elim_Break'3
 
 let elim_Continue'3
   (_x: t_ControlFlow_Option_Infallible_tup5_VoterReconfigurationPlan_Vec_u64_Global_tup2_usize_usize_tup2_bool_bool_Option_u64)
-  (return (f0'7: tup5_VoterReconfigurationPlan_Vec_u64_Global_tup2_usize_usize_tup2_bool_bool_Option_u64)) = any
-  [ _k (f0'7: tup5_VoterReconfigurationPlan_Vec_u64_Global_tup2_usize_usize_tup2_bool_bool_Option_u64) ->
-  {Continue'3 f0'7 = _x}
-    (! return {f0'7})
+  (return (f0'8: tup5_VoterReconfigurationPlan_Vec_u64_Global_tup2_usize_usize_tup2_bool_bool_Option_u64)) = any
+  [ _k (f0'8: tup5_VoterReconfigurationPlan_Vec_u64_Global_tup2_usize_usize_tup2_bool_bool_Option_u64) ->
+  {Continue'3 f0'8 = _x}
+    (! return {f0'8})
   | _chk -> (! {[@expl:elim Continue] match _x with
       | Continue'3 _ -> true
       | _ -> false
       end}
     any) ]
 
-function prefix_count [#"/workspace/crates/verified/src/composition/reconfiguration/control_support/spec.rs" 33 0 41 8] (old': Seq.seq UInt64.t) (reports: Seq.seq tup2_i64_i64) (kind'0: t_VoterChangeKind) (node: UInt64.t) (end': int) (new: bool) (count: int) : int
+function prefix_count [#"/workspace/crates/verified/src/composition/reconfiguration/control_support/spec.rs" 26 0 34 8] (old': Seq.seq UInt64.t) (reports: Seq.seq tup2_i64_i64) (kind'0: t_VoterChangeKind) (node: UInt64.t) (end': int) (new: bool) (count: int) : int
 
 axiom prefix_count_def:
   forall old': Seq.seq UInt64.t, reports: Seq.seq tup2_i64_i64, kind'0: t_VoterChangeKind, node: UInt64.t, end': int, new: bool, count: int [prefix_count old' reports kind'0 node end' new count]. prefix_count old' reports kind'0 node end' new count
-    = ([%#sspec'8] if count <= 0 then
+    = ([%#sspec'10] if count <= 0 then
       0
     else
       prefix_count old' reports kind'0 node end' new (count - 1)
       + (if count - 1 < Seq.length old' then
         if new then
-          if ge_log_Int (Int64.to_int (Seq.get reports (count - 1)).f1'4) end'
+          if ge_log_Int (Int64.to_int (Seq.get reports (count - 1)).f1'5) end'
           /\ expected_member old' (Seq.length old') kind'0 node (Seq.get old' (count - 1)) then
             1
           else
             0
 
         else
-          if ge_log_Int (Int64.to_int (Seq.get reports (count - 1)).f0'4) end' then 1 else 0
+          if ge_log_Int (Int64.to_int (Seq.get reports (count - 1)).f0'5) end' then 1 else 0
 
       else
         if new
-        /\ ge_log_Int (Int64.to_int (Seq.get reports (count - 1)).f1'4) end'
+        /\ ge_log_Int (Int64.to_int (Seq.get reports (count - 1)).f1'5) end'
         /\ not has_node old' (Seq.length old') node /\ expected_member old' (Seq.length old') kind'0 node node then
           1
         else
@@ -811,17 +822,16 @@ axiom prefix_count_def:
       )
     )
 
-function prefix_grants_agree [#"/workspace/crates/verified/src/composition/reconfiguration/control_support/spec.rs" 67 0 77 1] (old': Seq.seq UInt64.t) (next: Seq.seq UInt64.t) (votes: Seq.seq tup2_bool_bool) (reports: Seq.seq tup2_i64_i64) (kind'0: t_VoterChangeKind) (node: UInt64.t) (end': int) (new: bool) (count: int) : ()
+function prefix_grants_agree [#"/workspace/crates/verified/src/composition/reconfiguration/control_support/spec.rs" 76 0 86 1] (old': Seq.seq UInt64.t) (next: Seq.seq UInt64.t) (votes: Seq.seq tup2_bool_bool) (reports: Seq.seq tup2_i64_i64) (kind'0: t_VoterChangeKind) (node: UInt64.t) (end': int) (new: bool) (count: int) : ()
 
 axiom prefix_grants_agree_spec:
   forall old': Seq.seq UInt64.t, next: Seq.seq UInt64.t, votes: Seq.seq tup2_bool_bool, reports: Seq.seq tup2_i64_i64, kind'0: t_VoterChangeKind, node: UInt64.t, end': int, new: bool, count: int. ([%#sspec'0] 0
         <= count
       /\ count <= Seq.length votes /\ Seq.length votes = Seq.length reports)
     -> ([%#sspec'1] forall i: int. 0 <= i /\ i < Seq.length votes
-        -> (Seq.get votes i).f0'5 = ge_log_Int (Int64.to_int (Seq.get reports i).f0'4) end'
-        /\ (Seq.get votes i).f1'5 = ge_log_Int (Int64.to_int (Seq.get reports i).f1'4) end')
-    -> ([%#sspec'2] forall id: UInt64.t. has_node next (Seq.length next) id
-        = expected_member old' (Seq.length old') kind'0 node id)
+        -> (Seq.get votes i).f0'6 = ge_log_Int (Int64.to_int (Seq.get reports i).f0'5) end'
+        /\ (Seq.get votes i).f1'6 = ge_log_Int (Int64.to_int (Seq.get reports i).f1'5) end')
+    -> ([%#sspec'2] membership_matches_change old' next kind'0 node)
     -> ([%#sspec'3] grant_count old' next votes node new count = prefix_count old' reports kind'0 node end' new count)
 
 type t_ControlFlow_Option_Infallible_u64 = Continue'4 UInt64.t | Break'4 t_Option_Infallible
@@ -831,8 +841,8 @@ predicate inv_ControlFlow_Option_Infallible_u64 (_1: t_ControlFlow_Option_Infall
 axiom inv_axiom'5 [@rewrite]:
   forall x: t_ControlFlow_Option_Infallible_u64 [inv_ControlFlow_Option_Infallible_u64 x]. inv_ControlFlow_Option_Infallible_u64 x
     = match x with
-      | Continue'4 f0'7 -> true
-      | Break'4 f0'7 -> inv_Option_Infallible f0'7
+      | Continue'4 f0'8 -> true
+      | Break'4 f0'8 -> inv_Option_Infallible f0'8
       end
 
 let branch_Option_u64 (self_: t_Option_u64) (return (x: t_ControlFlow_Option_Infallible_u64)) = any
@@ -844,26 +854,26 @@ let branch_Option_u64 (self_: t_Option_u64) (return (x: t_ControlFlow_Option_Inf
       end)}
     (! return {result}) ]
 
-let elim_Break'4 (_x: t_ControlFlow_Option_Infallible_u64) (return (f0'7: t_Option_Infallible)) = any
-  [ _k (f0'7: t_Option_Infallible) -> {Break'4 f0'7 = _x} (! return {f0'7})
+let elim_Break'4 (_x: t_ControlFlow_Option_Infallible_u64) (return (f0'8: t_Option_Infallible)) = any
+  [ _k (f0'8: t_Option_Infallible) -> {Break'4 f0'8 = _x} (! return {f0'8})
   | _chk -> (! {[@expl:elim Break] match _x with
       | Break'4 _ -> true
       | _ -> false
       end}
     any) ]
 
-let elim_Continue'4 (_x: t_ControlFlow_Option_Infallible_u64) (return (f0'7: UInt64.t)) = any
-  [ _k (f0'7: UInt64.t) -> {Continue'4 f0'7 = _x} (! return {f0'7})
+let elim_Continue'4 (_x: t_ControlFlow_Option_Infallible_u64) (return (f0'8: UInt64.t)) = any
+  [ _k (f0'8: UInt64.t) -> {Continue'4 f0'8 = _x} (! return {f0'8})
   | _chk -> (! {[@expl:elim Continue] match _x with
       | Continue'4 _ -> true
       | _ -> false
       end}
     any) ]
 
-predicate control_inputs_coherent [#"/workspace/crates/verified/src/composition/reconfiguration/control_support/spec.rs" 104 0 108 9] (old': Seq.seq UInt64.t) (context: t_CurrentVoterSet) (reports: Seq.seq tup2_i64_i64) =
+predicate control_inputs_coherent [#"/workspace/crates/verified/src/composition/reconfiguration/control_support/spec.rs" 110 0 114 9] (old': Seq.seq UInt64.t) (context: t_CurrentVoterSet) (reports: Seq.seq tup2_i64_i64) =
   [%#sspec'4] UInt64.t'int context.voter_count = Seq.length old' /\ Seq.length reports = Seq.length old' + 1
 
-predicate control_request_admitted [#"/workspace/crates/verified/src/composition/reconfiguration/control_support/spec.rs" 84 0 93 9] (old': Seq.seq UInt64.t) (state: tup2_ReconfigurationLeadership_CurrentVoterSet) (request: t_VoterChangeRequest) (node: UInt64.t) (target: t_TargetVoter) =
+predicate control_request_admitted [#"/workspace/crates/verified/src/composition/reconfiguration/control_support/spec.rs" 93 0 99 9] (old': Seq.seq UInt64.t) (state: tup2_ReconfigurationLeadership_CurrentVoterSet) (request: t_VoterChangeRequest) (node: UInt64.t) (target: t_TargetVoter) =
   [%#sspec'5] valid_old old'
   /\ membership_coherent old' node target.membership request.kind
   /\ match voter_reconfiguration_rejection state.f0 state.f1 request target with
@@ -871,25 +881,38 @@ predicate control_request_admitted [#"/workspace/crates/verified/src/composition
     | None'0 -> true
     end
 
-function control_record_count [#"/workspace/crates/verified/src/composition/reconfiguration/control_support/spec.rs" 10 0 10 71] (version: UInt16.t) (kind'0: t_VoterChangeKind) : int
+function control_record_count [#"/workspace/crates/verified/src/composition/reconfiguration/control_support/spec.rs" 7 0 7 71] (version: UInt16.t) (kind'0: t_VoterChangeKind) : int
  = [%#sspec'6] match kind'0 with
     | FinalizeKraftVersion -> 2
     | Update -> if UInt16.t'int version = 0 then 0 else 1
     | Add | Remove -> 1
     end
 
-function next_size [#"/workspace/crates/verified/src/composition/reconfiguration/control_support/spec.rs" 22 0 22 58] (count: int) (kind'0: t_VoterChangeKind) : int
- = [%#sspec'9] match kind'0 with
+function next_size [#"/workspace/crates/verified/src/composition/reconfiguration/control_support/spec.rs" 17 0 17 58] (count: int) (kind'0: t_VoterChangeKind) : int
+ = [%#sspec'20] match kind'0 with
     | Add -> count + 1
     | Remove -> count - 1
     | _ -> count
     end
 
+predicate control_prefix_majorities [#"/workspace/crates/verified/src/composition/reconfiguration/control_support/spec.rs" 50 0 56 9] (old': Seq.seq UInt64.t) (reports: Seq.seq tup2_i64_i64) (kind'0: t_VoterChangeKind) (node: UInt64.t) (end': int) =
+  [%#sspec'7] ge_log_Int (prefix_count old' reports kind'0 node end' false (Seq.length reports)) (ComputerDivision.div (Seq.length old') 2
+    + 1)
+  /\ ge_log_Int (prefix_count old' reports kind'0 node end' true (Seq.length reports)) (ComputerDivision.div (next_size (Seq.length old') kind'0) 2
+  + 1)
+
+predicate common_prefix_reported [#"/workspace/crates/verified/src/composition/reconfiguration/control_support/spec.rs" 120 0 126 9] (old': Seq.seq UInt64.t) (reports: Seq.seq tup2_i64_i64) (next: Seq.seq UInt64.t) (common: UInt64.t) (end': int) =
+  [%#sspec'11] exists i: int. 0 <= i
+    /\ i < Seq.length old'
+    /\ Seq.get old' i = common
+    /\ ge_log_Int (Int64.to_int (Seq.get reports i).f0'5) end'
+    /\ ge_log_Int (Int64.to_int (Seq.get reports i).f1'5) end' /\ has_node next (Seq.length next) common
+
 meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let reconfiguration_control_prefix_support [#"/workspace/crates/verified/src/composition/reconfiguration/control_support/prepare.rs" 67 0 75 21]
+let reconfiguration_control_prefix_support [#"/workspace/crates/verified/src/composition/reconfiguration/control_support/prepare.rs" 34 0 42 21]
   (old': Slice64.slice UInt64.t) (state: tup2_ReconfigurationLeadership_CurrentVoterSet) (request: t_VoterChangeRequest)
   (node: UInt64.t) (target: t_TargetVoter) (base: Int64.t) (reports: Slice64.slice tup2_i64_i64)
   (return (x: t_Option_tup4_VoterReconfigurationPlan_Vec_u64_Global_Vec_i32_Global_Option_tup3_i64_tup2_usize_usize_u64)) =
@@ -920,7 +943,7 @@ let reconfiguration_control_prefix_support [#"/workspace/crates/verified/src/com
   | bb11 = s0
     [ s0 = new_i32 [%#sprepare'1] (fun (_x: t_Vec_i32_Global) -> [ &_49 <- _x ] s1)
     | s1 = [ &_50 <- None'2 ] s2
-    | s2 = [ &_46 <- { f0'3 = plan; f1'3 = next; f2'3 = _49; f3'3 = _50 } ] s3
+    | s2 = [ &_46 <- { f0'4 = plan; f1'4 = next; f2'4 = _49; f3'4 = _50 } ] s3
     | s3 = [ &_ret <- Some'3 _46 ] s4
     | s4 = return {_ret} ]
   | bb16 = s0
@@ -993,7 +1016,7 @@ let reconfiguration_control_prefix_support [#"/workspace/crates/verified/src/com
   | bb48 = s0
     [ s0 = elim_Continue'2 {_86} (fun (r0: tup2_i64_i64) -> [ &val''2 <- r0 ] s1)
     | s1 = [ &_85 <- val''2 ] s2
-    | s2 = [ &end' <- _85.f1'4 ] s3
+    | s2 = [ &end' <- _85.f1'5 ] s3
     | s3 = new_tup2_bool_bool [%#sprepare'12] (fun (_x: t_Vec_tup2_bool_bool_Global) -> [ &votes <- _x ] s4)
     | s4 = [ &i <- [%#sprepare'13] (0: UInt64.t) ] s5
     | s5 = bb52 ]
@@ -1005,10 +1028,10 @@ let reconfiguration_control_prefix_support [#"/workspace/crates/verified/src/com
     | bb52invariant = {[@expl:loop invariant #0] [%#sprepare'17] UInt64.t'int i <= Seq.length (Slice64.view reports)
       /\ Seq.length (view_Vec_tup2_bool_bool_Global votes) = UInt64.t'int i}
       {[@expl:loop invariant #1] [%#sprepare'16] forall j: int. 0 <= j /\ j < UInt64.t'int i
-        -> (Seq.get (view_Vec_tup2_bool_bool_Global votes) j).f0'5
-          = ge_log_Int (Int64.to_int (Seq.get (Slice64.view reports) j).f0'4) (Int64.to_int end')
-        /\ (Seq.get (view_Vec_tup2_bool_bool_Global votes) j).f1'5
-        = ge_log_Int (Int64.to_int (Seq.get (Slice64.view reports) j).f1'4) (Int64.to_int end')}
+        -> (Seq.get (view_Vec_tup2_bool_bool_Global votes) j).f0'6
+          = ge_log_Int (Int64.to_int (Seq.get (Slice64.view reports) j).f0'5) (Int64.to_int end')
+        /\ (Seq.get (view_Vec_tup2_bool_bool_Global votes) j).f1'6
+        = ge_log_Int (Int64.to_int (Seq.get (Slice64.view reports) j).f1'5) (Int64.to_int end')}
       (! [ &variant_old_bb52 <- [%#sprepare'14] Seq.length (Slice64.view reports) - UInt64.t'int i ] s0)
       [ s0 = len_tup2_i64_i64 [%#sprepare'15] {reports} (fun (_x: UInt64.t) -> [ &_115 <- _x ] s1)
       | s1 = [ &_113 <- UInt64.lt i _115 ] s2
@@ -1019,16 +1042,16 @@ let reconfiguration_control_prefix_support [#"/workspace/crates/verified/src/com
         | s2 = [ &_124 <- UInt64.lt _122 _123 ] s3
         | s3 = {[@expl:index in bounds] [%#sprepare'18] _124} s4
         | s4 = Slice64.get [%#sprepare'19] <tup2_i64_i64> {reports} {_122}
-            (fun (r: tup2_i64_i64) -> [ &_121 <- r.f0'4 ] s5)
+            (fun (r: tup2_i64_i64) -> [ &_121 <- r.f0'5 ] s5)
         | s5 = [ &_120 <- Int64.ge _121 end' ] s6
         | s6 = [ &_128 <- i ] s7
         | s7 = [ &_129 <- Slice64.length reports ] s8
         | s8 = [ &_130 <- UInt64.lt _128 _129 ] s9
         | s9 = {[@expl:index in bounds] [%#sprepare'20] _130} s10
         | s10 = Slice64.get [%#sprepare'21] <tup2_i64_i64> {reports} {_128}
-            (fun (r: tup2_i64_i64) -> [ &_127 <- r.f1'4 ] s11)
+            (fun (r: tup2_i64_i64) -> [ &_127 <- r.f1'5 ] s11)
         | s11 = [ &_126 <- Int64.ge _127 end' ] s12
-        | s12 = [ &_119 <- { f0'5 = _120; f1'5 = _126 } ] s13
+        | s12 = [ &_119 <- { f0'6 = _120; f1'6 = _126 } ] s13
         | s13 = MutBorrow.borrow_mut <t_Vec_tup2_bool_bool_Global> {votes}
             (fun (_bor: MutBorrow.t t_Vec_tup2_bool_bool_Global) -> [ &_118 <- _bor ] [ &votes <- _bor.final ] s14)
         | s14 = push_tup2_bool_bool [%#sprepare'22] {_118} {_119} (fun (_x: ()) -> [ &_117 <- _x ] s15)
@@ -1064,16 +1087,16 @@ let reconfiguration_control_prefix_support [#"/workspace/crates/verified/src/com
         (fun (r0: tup5_VoterReconfigurationPlan_Vec_u64_Global_tup2_usize_usize_tup2_bool_bool_Option_u64) ->
           [ &val''3 <- r0 ] s1)
     | s1 = [ &_138 <- val''3 ] s2
-    | s2 = [ &plan'0 <- _138.f0'6 ] s3
-    | s3 = [ &next'0 <- _138.f1'6 ] s4
-    | s4 = [ &counts <- _138.f2'6 ] s5
-    | s5 = [ &quorums <- _138.f3'6 ] s6
-    | s6 = [ &common <- _138.f4'6 ] s7
+    | s2 = [ &plan'0 <- _138.f0'7 ] s3
+    | s3 = [ &next'0 <- _138.f1'7 ] s4
+    | s4 = [ &counts <- _138.f2'7 ] s5
+    | s5 = [ &quorums <- _138.f3'7 ] s6
+    | s6 = [ &common <- _138.f4'7 ] s7
     | s7 =
       {[@expl:assertion] [%#sprepare'28] let _ = prefix_grants_agree (Slice64.view old') (view_Vec_u64_Global next'0) (view_Vec_tup2_bool_bool_Global votes) (Slice64.view reports) request.kind node (Int64.to_int end') false (Seq.length (view_Vec_tup2_bool_bool_Global votes)) in let _ = prefix_grants_agree (Slice64.view old') (view_Vec_u64_Global next'0) (view_Vec_tup2_bool_bool_Global votes) (Slice64.view reports) request.kind node (Int64.to_int end') true (Seq.length (view_Vec_tup2_bool_bool_Global votes)) in true}
       s8
-    | s8 = any [ br0 -> {quorums.f0'5 = false} (! bb72) | br1 -> {quorums.f0'5} (! bb71) ] ]
-  | bb71 = any [ br0 -> {quorums.f1'5 = false} (! bb72) | br1 -> {quorums.f1'5} (! bb73) ]
+    | s8 = any [ br0 -> {quorums.f0'6 = false} (! bb72) | br1 -> {quorums.f0'6} (! bb71) ] ]
+  | bb71 = any [ br0 -> {quorums.f1'6 = false} (! bb72) | br1 -> {quorums.f1'6} (! bb73) ]
   | bb73 = s0
     [ s0 = branch_Option_u64 [%#sprepare'29] {common}
         (fun (_x: t_ControlFlow_Option_Infallible_u64) -> [ &_170 <- _x ] s1)
@@ -1091,9 +1114,9 @@ let reconfiguration_control_prefix_support [#"/workspace/crates/verified/src/com
   | bb77 = s0
     [ s0 = elim_Continue'4 {_170} (fun (r0: UInt64.t) -> [ &val''4 <- r0 ] s1)
     | s1 = [ &common'0 <- val''4 ] s2
-    | s2 = [ &_182 <- { f0'2 = end'; f1'2 = counts; f2'2 = common'0 } ] s3
+    | s2 = [ &_182 <- { f0'3 = end'; f1'3 = counts; f2'3 = common'0 } ] s3
     | s3 = [ &_181 <- Some'2 _182 ] s4
-    | s4 = [ &_177 <- { f0'3 = plan'0; f1'3 = next'0; f2'3 = deltas; f3'3 = _181 } ] s5
+    | s4 = [ &_177 <- { f0'4 = plan'0; f1'4 = next'0; f2'4 = deltas; f3'4 = _181 } ] s5
     | s5 = [ &_ret <- Some'3 _177 ] s6
     | s6 = return {_ret} ]
   | bb72 = s0 [ s0 = [ &_ret <- None'3 ] s1 | s1 = return {_ret} ] ]
@@ -1180,55 +1203,42 @@ let reconfiguration_control_prefix_support [#"/workspace/crates/verified/src/com
   | & variant_old_bb52: int = Any.any_l () ])
   [ return
     (result: t_Option_tup4_VoterReconfigurationPlan_Vec_u64_Global_Vec_i32_Global_Option_tup3_i64_tup2_usize_usize_u64) ->
-  {[@stop_split] [@expl:reconfiguration_control_prefix_support ensures] ([@stop_split] [@expl:reconfiguration_control_prefix_support ensures #0] [%#sprepare'31] match result with
-          | None'3 -> false
-          | Some'3 _ -> true
-          end
+  {[@stop_split] [@expl:reconfiguration_control_prefix_support ensures] ([@stop_split] [@expl:reconfiguration_control_prefix_support ensures #0] [%#sprepare'31] (result
+        <> None'3)
       = (control_request_admitted (Slice64.view old') state request node target
       /\ (control_record_count state.f1.kraft_version request.kind = 0
       \/ ge_log_Int (Int64.to_int base) 0
       /\ Int64.to_int base + control_record_count state.f1.kraft_version request.kind <= Int64.to_int const_MAX'1
-      /\ ge_log_Int (prefix_count (Slice64.view old') (Slice64.view reports) request.kind node (Int64.to_int base
-        + control_record_count state.f1.kraft_version request.kind) false (Seq.length (Slice64.view reports))) (ComputerDivision.div (Seq.length (Slice64.view old')) 2
-        + 1)
-      /\ ge_log_Int (prefix_count (Slice64.view old') (Slice64.view reports) request.kind node (Int64.to_int base
-      + control_record_count state.f1.kraft_version request.kind) true (Seq.length (Slice64.view reports))) (ComputerDivision.div (next_size (Seq.length (Slice64.view old')) request.kind) 2
-      + 1))))
+      /\ control_prefix_majorities (Slice64.view old') (Slice64.view reports) request.kind node (Int64.to_int base
+      + control_record_count state.f1.kraft_version request.kind))))
     /\ ([@stop_split] [@expl:reconfiguration_control_prefix_support ensures #1] [%#sprepare'32] match result with
       | None'3 -> true
-      | Some'3 {f0'3 = plan; f1'3 = next; f2'3 = deltas; f3'3 = support} -> admitted_plan state.f1 request.kind plan
+      | Some'3 {f0'4 = plan; f1'4 = next; f2'4 = deltas; f3'4 = support} -> admitted_plan state.f1 request.kind plan
       /\ Seq.length (view_Vec_u64_Global next) = UInt64.t'int plan.next_voter_count
       /\ gt_log_Int (Seq.length (view_Vec_u64_Global next)) 0
-      /\ (forall id: UInt64.t. has_node (view_Vec_u64_Global next) (Seq.length (view_Vec_u64_Global next)) id
-          = expected_member (Slice64.view old') (Seq.length (Slice64.view old')) request.kind node id)
-      /\ (forall i: int, j: int. 0 <= i /\ i < j /\ j < Seq.length (view_Vec_u64_Global next)
-          -> Seq.get (view_Vec_u64_Global next) i <> Seq.get (view_Vec_u64_Global next) j)
+      /\ membership_matches_change (Slice64.view old') (view_Vec_u64_Global next) request.kind node
+      /\ distinct_u64 (view_Vec_u64_Global next)
       /\ Seq.length (view_Vec_i32_Global deltas) = control_record_count state.f1.kraft_version request.kind
       /\ (forall i: int. 0 <= i /\ i < Seq.length (view_Vec_i32_Global deltas)
           -> Int32.to_int (Seq.get (view_Vec_i32_Global deltas) i) = i)
       /\ (support = None'2) = (Seq.length (view_Vec_i32_Global deltas) = 0)
       /\ match support with
         | None'2 -> plan.preflight_only
-        | Some'2 {f0'2 = end'; f1'2 = counts; f2'2 = common} -> not plan.preflight_only
+        | Some'2 {f0'3 = end'; f1'3 = counts; f2'3 = common} -> not plan.preflight_only
         /\ ge_log_Int (Int64.to_int base) 0
         /\ Int64.to_int end' = Int64.to_int base + Seq.length (view_Vec_i32_Global deltas)
         /\ Int64.to_int base < Int64.to_int end'
-        /\ UInt64.t'int counts.f0'1 <= Seq.length (Slice64.view old')
-        /\ UInt64.t'int counts.f1'1 <= Seq.length (view_Vec_u64_Global next)
-        /\ UInt64.t'int counts.f0'1
+        /\ UInt64.t'int counts.f0'2 <= Seq.length (Slice64.view old')
+        /\ UInt64.t'int counts.f1'2 <= Seq.length (view_Vec_u64_Global next)
+        /\ UInt64.t'int counts.f0'2
           = prefix_count (Slice64.view old') (Slice64.view reports) request.kind node (Int64.to_int end') false (Seq.length (Slice64.view reports))
-        /\ UInt64.t'int counts.f1'1
+        /\ UInt64.t'int counts.f1'2
           = prefix_count (Slice64.view old') (Slice64.view reports) request.kind node (Int64.to_int end') true (Seq.length (Slice64.view reports))
-        /\ ge_log_Int (UInt64.t'int counts.f0'1) (ComputerDivision.div (Seq.length (Slice64.view old')) 2 + 1)
-        /\ ge_log_Int (UInt64.t'int counts.f1'1) (ComputerDivision.div (Seq.length (view_Vec_u64_Global next)) 2 + 1)
-        /\ (exists i: int. 0 <= i
-          /\ i < Seq.length (Slice64.view old')
-          /\ Seq.get (Slice64.view old') i = common
-          /\ ge_log_Int (Int64.to_int (Seq.get (Slice64.view reports) i).f0'4) (Int64.to_int end')
-          /\ ge_log_Int (Int64.to_int (Seq.get (Slice64.view reports) i).f1'4) (Int64.to_int end')
-          /\ has_node (view_Vec_u64_Global next) (Seq.length (view_Vec_u64_Global next)) common
-          /\ (forall j: int. 0 <= j /\ j < Seq.length (view_Vec_i32_Global deltas)
-            -> Int64.to_int base + Int32.to_int (Seq.get (view_Vec_i32_Global deltas) j) < Int64.to_int end'))
+        /\ ge_log_Int (UInt64.t'int counts.f0'2) (ComputerDivision.div (Seq.length (Slice64.view old')) 2 + 1)
+        /\ ge_log_Int (UInt64.t'int counts.f1'2) (ComputerDivision.div (Seq.length (view_Vec_u64_Global next)) 2 + 1)
+        /\ common_prefix_reported (Slice64.view old') (Slice64.view reports) (view_Vec_u64_Global next) common (Int64.to_int end')
+        /\ (forall j: int. 0 <= j /\ j < Seq.length (view_Vec_i32_Global deltas)
+          -> Int64.to_int base + Int32.to_int (Seq.get (view_Vec_i32_Global deltas) j) < Int64.to_int end')
         end
       end)}
     (! return {result}) ]

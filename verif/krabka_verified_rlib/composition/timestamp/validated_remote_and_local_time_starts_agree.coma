@@ -1,40 +1,42 @@
-(* #"/workspace/crates/verified/src/composition/timestamp.rs" 159 0 163 34 *)
+(* #"/workspace/crates/verified/src/composition/timestamp.rs" 152 0 156 34 *)
 
-let%span sord = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
-let%span sord'0 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
-let%span swell_founded = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/well_founded.rs" 43 8 43 33
-let%span sslice = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 331 18 331 22
-let%span stimestamp = "/workspace/crates/verified/src/composition/timestamp.rs" 164 16 164 22
-let%span stimestamp'0 = "/workspace/crates/verified/src/composition/timestamp.rs" 171 14 171 33
-let%span stimestamp'1 = "/workspace/crates/verified/src/composition/timestamp.rs" 172 14 172 27
-let%span stimestamp'2 = "/workspace/crates/verified/src/composition/timestamp.rs" 169 16 170 79
-let%span stimestamp'3 = "/workspace/crates/verified/src/composition/timestamp.rs" 168 16 168 83
-let%span stimestamp'4 = "/workspace/crates/verified/src/composition/timestamp.rs" 167 16 167 79
-let%span stimestamp'5 = "/workspace/crates/verified/src/composition/timestamp.rs" 166 16 166 36
-let%span stimestamp'6 = "/workspace/crates/verified/src/composition/timestamp.rs" 173 36 173 46
-let%span stimestamp'7 = "/workspace/crates/verified/src/composition/timestamp.rs" 173 13 173 22
-let%span stimestamp'8 = "/workspace/crates/verified/src/composition/timestamp.rs" 173 24 173 32
-let%span stimestamp'9 = "/workspace/crates/verified/src/composition/timestamp.rs" 174 12 174 87
-let%span stimestamp'10 = "/workspace/crates/verified/src/composition/timestamp.rs" 178 13 178 14
-let%span stimestamp'11 = "/workspace/crates/verified/src/composition/timestamp.rs" 178 8 178 14
-let%span stimestamp'12 = "/workspace/crates/verified/src/composition/timestamp.rs" 180 16 180 66
-let%span stimestamp'13 = "/workspace/crates/verified/src/composition/timestamp.rs" 181 29 181 30
-let%span stimestamp'14 = "/workspace/crates/verified/src/composition/timestamp.rs" 181 33 181 34
-let%span stimestamp'15 = "/workspace/crates/verified/src/composition/timestamp.rs" 181 60 181 61
-let%span stimestamp'16 = "/workspace/crates/verified/src/composition/timestamp.rs" 181 52 181 61
-let%span stimestamp'17 = "/workspace/crates/verified/src/composition/timestamp.rs" 181 44 181 62
-let%span stimestamp'18 = "/workspace/crates/verified/src/composition/timestamp.rs" 181 44 181 64
-let%span stimestamp'19 = "/workspace/crates/verified/src/composition/timestamp.rs" 182 16 182 54
-let%span stimestamp'20 = "/workspace/crates/verified/src/composition/timestamp.rs" 150 10 158 1
-let%span stimestamp'21 = "/workspace/crates/verified/src/composition/timestamp.rs" 140 8 142 80
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span swell_founded = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/well_founded.rs" 43 8 43 33
+let%span sslice = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 331 18 331 22
+let%span stimestamp = "/workspace/crates/verified/src/composition/timestamp.rs" 157 16 157 22
+let%span stimestamp'0 = "/workspace/crates/verified/src/composition/timestamp.rs" 164 14 164 33
+let%span stimestamp'1 = "/workspace/crates/verified/src/composition/timestamp.rs" 165 14 165 27
+let%span stimestamp'2 = "/workspace/crates/verified/src/composition/timestamp.rs" 162 16 163 79
+let%span stimestamp'3 = "/workspace/crates/verified/src/composition/timestamp.rs" 161 16 161 83
+let%span stimestamp'4 = "/workspace/crates/verified/src/composition/timestamp.rs" 160 16 160 79
+let%span stimestamp'5 = "/workspace/crates/verified/src/composition/timestamp.rs" 159 16 159 36
+let%span stimestamp'6 = "/workspace/crates/verified/src/composition/timestamp.rs" 166 36 166 46
+let%span stimestamp'7 = "/workspace/crates/verified/src/composition/timestamp.rs" 166 13 166 22
+let%span stimestamp'8 = "/workspace/crates/verified/src/composition/timestamp.rs" 166 24 166 32
+let%span stimestamp'9 = "/workspace/crates/verified/src/composition/timestamp.rs" 167 12 167 87
+let%span stimestamp'10 = "/workspace/crates/verified/src/composition/timestamp.rs" 171 13 171 14
+let%span stimestamp'11 = "/workspace/crates/verified/src/composition/timestamp.rs" 171 8 171 14
+let%span stimestamp'12 = "/workspace/crates/verified/src/composition/timestamp.rs" 173 16 173 66
+let%span stimestamp'13 = "/workspace/crates/verified/src/composition/timestamp.rs" 174 29 174 30
+let%span stimestamp'14 = "/workspace/crates/verified/src/composition/timestamp.rs" 174 33 174 34
+let%span stimestamp'15 = "/workspace/crates/verified/src/composition/timestamp.rs" 174 60 174 61
+let%span stimestamp'16 = "/workspace/crates/verified/src/composition/timestamp.rs" 174 52 174 61
+let%span stimestamp'17 = "/workspace/crates/verified/src/composition/timestamp.rs" 174 44 174 62
+let%span stimestamp'18 = "/workspace/crates/verified/src/composition/timestamp.rs" 174 44 174 64
+let%span stimestamp'19 = "/workspace/crates/verified/src/composition/timestamp.rs" 175 16 175 54
+let%span stimestamp'20 = "/workspace/crates/verified/src/composition/timestamp.rs" 144 10 151 1
+let%span stimestamp'21 = "/workspace/crates/verified/src/composition/timestamp.rs" 134 8 135 54
+let%span stimestamp'22 = "/workspace/crates/verified/src/composition/timestamp.rs" 240 16 241 62
+let%span stimestamp'23 = "/workspace/crates/verified/src/composition/timestamp.rs" 232 16 233 85
 let%span srestore_producer_ids_strict = "/workspace/crates/verified/src/restore_sidecar/restore_producer_ids_strict.rs" 72 10 77 6
 let%span slog_index = "/workspace/crates/verified/src/log_index.rs" 59 11 60 40
 let%span slog_index'0 = "/workspace/crates/verified/src/log_index.rs" 61 10 66 52
 let%span slog_index'1 = "/workspace/crates/verified/src/log_index.rs" 67 10 68 20
-let%span sremote_time_index_candidate_count = "/workspace/crates/verified/src/remote_read/remote_time_index_candidate_count.rs" 158 10 158 35
-let%span sremote_time_index_candidate_count'0 = "/workspace/crates/verified/src/remote_read/remote_time_index_candidate_count.rs" 159 10 160 42
-let%span sremote_time_index_candidate_count'1 = "/workspace/crates/verified/src/remote_read/remote_time_index_candidate_count.rs" 161 10 162 43
-let%span sremote_time_index_candidate_count'2 = "/workspace/crates/verified/src/remote_read/remote_time_index_candidate_count.rs" 163 10 165 52
+let%span sremote_time_index_candidate_count = "/workspace/crates/verified/src/remote_read/remote_time_index_candidate_count.rs" 141 10 141 35
+let%span sremote_time_index_candidate_count'0 = "/workspace/crates/verified/src/remote_read/remote_time_index_candidate_count.rs" 142 10 143 42
+let%span sremote_time_index_candidate_count'1 = "/workspace/crates/verified/src/remote_read/remote_time_index_candidate_count.rs" 144 10 145 43
+let%span sremote_time_index_candidate_count'2 = "/workspace/crates/verified/src/remote_read/remote_time_index_candidate_count.rs" 146 10 148 52
 
 use creusot.int.UInt64
 use creusot.int.Int64
@@ -127,18 +129,25 @@ let time_index_scan_start (entries: Slice64.slice tup2_i64_u32) (target_timestam
     -> UInt32.t'int result = 0)}
     (! return {result}) ]
 
-predicate time_archive_valid [#"/workspace/crates/verified/src/composition/timestamp.rs" 138 0 138 78] (entries: Seq.seq tup2_i64_u32) (max_relative: int) =
+predicate time_rows_ordered [#"/workspace/crates/verified/src/composition/timestamp.rs" 231 0 231 70] (entries: Seq.seq tup2_i64_u32) (count: int) =
+  [%#stimestamp'23] forall left: int, right: int. 0 <= left /\ left < right /\ right < count
+    -> Int64.to_int (Seq.get entries left).f0 <= Int64.to_int (Seq.get entries right).f0
+    /\ UInt32.t'int (Seq.get entries left).f1 < UInt32.t'int (Seq.get entries right).f1
+
+predicate time_archive_valid [#"/workspace/crates/verified/src/composition/timestamp.rs" 132 0 132 78] (entries: Seq.seq tup2_i64_u32) (max_relative: int) =
   [%#stimestamp'21] (forall i: int. 0 <= i /\ i < Seq.length entries
       -> UInt32.t'int (Seq.get entries i).f1 <= max_relative)
-  /\ (forall i: int, j: int. 0 <= i /\ i < j /\ j < Seq.length entries
-    -> Int64.to_int (Seq.get entries i).f0 <= Int64.to_int (Seq.get entries j).f0
-    /\ UInt32.t'int (Seq.get entries i).f1 < UInt32.t'int (Seq.get entries j).f1)
+  /\ time_rows_ordered entries (Seq.length entries)
+
+predicate timestamp_archive_prefix [#"/workspace/crates/verified/src/composition/timestamp.rs" 239 0 239 97] (entries: Seq.seq tup2_i64_u32) (target: int) (count: int) =
+  [%#stimestamp'22] (forall i: int. 0 <= i /\ i < count -> Int64.to_int (Seq.get entries i).f0 < target)
+  /\ (count < Seq.length entries -> ge_log_Int (Int64.to_int (Seq.get entries count).f0) target)
 
 meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let validated_remote_and_local_time_starts_agree [#"/workspace/crates/verified/src/composition/timestamp.rs" 159 0 163 34]
+let validated_remote_and_local_time_starts_agree [#"/workspace/crates/verified/src/composition/timestamp.rs" 152 0 156 34]
   (entries: Slice64.slice tup2_i64_u32) (max_relative: Int64.t) (target: Int64.t)
   (return (x: t_Result_tup3_usize_u32_u32_unit)) = (! bb0
   [ bb0 = s0 [ s0 = [ &i <- [%#stimestamp] (0: UInt64.t) ] s1 | s1 = [ &previous <- None ] s2 | s2 = bb1 ]
@@ -238,9 +247,6 @@ let validated_remote_and_local_time_starts_agree [#"/workspace/crates/verified/s
           (Seq.get (Slice64.view entries) (UInt64.t'int count - 1)).f1
         )
       /\ (Seq.length (Slice64.view entries) = 0 \/ UInt32.t'int remote <= Int64.to_int max_relative)
-      /\ (forall i: int. 0 <= i /\ i < UInt64.t'int count
-          -> Int64.to_int (Seq.get (Slice64.view entries) i).f0 < Int64.to_int target)
-      /\ (UInt64.t'int count < Seq.length (Slice64.view entries)
-      -> ge_log_Int (Int64.to_int (Seq.get (Slice64.view entries) (UInt64.t'int count)).f0) (Int64.to_int target))
+      /\ timestamp_archive_prefix (Slice64.view entries) (Int64.to_int target) (UInt64.t'int count)
       end}
     (! return {result}) ]

@@ -4,15 +4,15 @@
     "Coma": {
       "vc_credential_free_session_cap_bounds_requests": {
         "prover": "alt-ergo",
-        "time": 0.02
+        "time": 0.028
       },
-      "vc_request_auth_admission": { "prover": "alt-ergo", "time": 0.008 },
+      "vc_request_auth_admission": { "prover": "alt-ergo", "time": 0.011 },
       "vc_sasl_session_expiry": { "prover": "alt-ergo", "time": 0.008 },
       "vc_session_expired_for_request": {
         "prover": "alt-ergo",
-        "time": 0.008
+        "time": 0.007
       },
-      "vc_unwrap_i64": { "prover": "alt-ergo", "time": 0.005 }
+      "vc_unwrap_i64": { "prover": "alt-ergo", "time": 0.011 }
     }
   }
 }

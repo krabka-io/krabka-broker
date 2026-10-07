@@ -2,24 +2,15 @@
 //! max.message.bytes=...`, `kafka-configs --alter --add-config`, and the
 //! `DescribeConfigs` read-back both of them show.
 
-use assert2::{assert, check};
+use assert2::check;
 use krabka_broker::codes;
 use krabka_client_core::Client;
-use krabka_protocol::owned::{
-    describe_configs_request::{DescribeConfigsRequest, DescribeConfigsResource},
-    describe_configs_response::DescribeConfigsResourceResult,
-    incremental_alter_configs_request::{
-        AlterConfigsResource, AlterableConfig, IncrementalAlterConfigsRequest,
-    },
-};
+use krabka_protocol::owned::describe_configs_response::DescribeConfigsResourceResult;
 
 use crate::{
     support,
     wire::{MAX_MESSAGE_BYTES, accepted, create_topic, produce_batch_of_wire_len, too_large},
 };
-
-/// Kafka's `RESOURCE_TYPE` for a topic, which both config paths take.
-const RESOURCE_TYPE_TOPIC: i8 = 2;
 
 /// `IncrementalAlterConfigs` `config_operation` SET.
 const CONFIG_OP_SET: i8 = 0;
@@ -137,53 +128,17 @@ async fn the_alter_path_rejects_the_values_kafka_rejects() {
 
 /// Read the topic's `max.message.bytes` entry back through `DescribeConfigs`.
 async fn describe_max_message_bytes(client: &Client, topic: &str) -> DescribeConfigsResourceResult {
-    let response = client
-        .send(DescribeConfigsRequest {
-            resources: vec![DescribeConfigsResource {
-                resource_type: RESOURCE_TYPE_TOPIC,
-                resource_name: topic.to_owned(),
-                configuration_keys: Some(vec![MAX_MESSAGE_BYTES.to_owned()]),
-                ..Default::default()
-            }],
-            include_synonyms: false,
-            include_documentation: false,
-            ..Default::default()
-        })
-        .await
-        .expect("DescribeConfigs");
-    let result = &response.results[0];
-    assert!(
-        result.error_code == codes::NONE,
-        "DescribeConfigs({topic}): {result:?}"
-    );
-    result
-        .configs
-        .iter()
-        .find(|entry| entry.name == MAX_MESSAGE_BYTES)
-        .cloned()
-        .unwrap_or_else(|| panic!("no {MAX_MESSAGE_BYTES} entry for {topic}"))
+    crate::support::configs::topic_config(client, topic, MAX_MESSAGE_BYTES).await
 }
 
 /// Drive `kafka-configs --alter --add-config max.message.bytes=<value>`.
 async fn set_max_message_bytes(client: &Client, topic: &str, value: &str) -> (i16, Option<String>) {
-    let response = client
-        .send(IncrementalAlterConfigsRequest {
-            resources: vec![AlterConfigsResource {
-                resource_type: RESOURCE_TYPE_TOPIC,
-                resource_name: topic.to_owned(),
-                configs: vec![AlterableConfig {
-                    name: MAX_MESSAGE_BYTES.to_owned(),
-                    config_operation: CONFIG_OP_SET,
-                    value: Some(value.to_owned()),
-                    ..Default::default()
-                }],
-                ..Default::default()
-            }],
-            validate_only: false,
-            ..Default::default()
-        })
-        .await
-        .expect("IncrementalAlterConfigs");
-    let row = &response.responses[0];
-    (row.error_code, row.error_message.clone())
+    crate::support::configs::alter_topic_config(
+        client,
+        topic,
+        MAX_MESSAGE_BYTES,
+        CONFIG_OP_SET,
+        Some(value),
+    )
+    .await
 }

@@ -13,15 +13,10 @@
 //! value — earns `INVALID_REQUEST` whether or not the principal may touch the
 //! resource. That check runs first here too.
 
-use krabka_metadata::{AclOperation, ResourceType};
-use krabka_protocol::{
-    UnknownTaggedFields,
-    owned::{
-        alter_configs_request::AlterConfigsResource,
-        alter_configs_response::AlterConfigsResourceResponse,
-    },
+use krabka_protocol::owned::{
+    alter_configs_request::AlterConfigsResource,
+    alter_configs_response::AlterConfigsResourceResponse,
 };
-use krabka_raft::RaftError;
 
 use super::{
     RESOURCE_TYPE_BROKER, RESOURCE_TYPE_CLIENT_METRICS, RESOURCE_TYPE_GROUP, RESOURCE_TYPE_TOPIC,
@@ -29,7 +24,7 @@ use super::{
     group_configs::group_config_record, topic_configs::topic_config_record,
     validate_resource_shape,
 };
-use crate::{broker::Broker, codes};
+use crate::{broker::Broker, handlers::response_encoding::ErrorRow as _};
 
 pub(super) async fn process_resource(
     broker: &Broker,
@@ -39,155 +34,58 @@ pub(super) async fn process_resource(
     validate_only: bool,
     is_duplicate: bool,
 ) -> AlterConfigsResourceResponse {
-    let mut out = AlterConfigsResourceResponse {
-        resource_type: resource.resource_type,
-        resource_name: resource.resource_name.clone(),
-        error_code: codes::NONE,
-        error_message: None,
-        unknown_tagged_fields: UnknownTaggedFields::default(),
-    };
+    super::config_resource_preamble!(
+        (out, broker, image, ctx, resource),
+        AlterConfigsResourceResponse,
+        false,
+        validate_resource_shape(
+            is_duplicate,
+            resource
+                .configs
+                .iter()
+                .map(|cfg| (cfg.name.as_str(), cfg.value.is_none())),
+        )
+    );
 
-    // ── Kafka validates the request shape before it authorizes ──
-    // Legacy `AlterConfigs` never deletes by omitting a value the way
-    // `IncrementalAlterConfigs`' DELETE operation does, so every null is
-    // refused.
-    if let Err((code, message)) = validate_resource_shape(
-        is_duplicate,
-        resource
-            .configs
-            .iter()
-            .map(|cfg| (cfg.name.as_str(), cfg.value.is_none())),
-    ) {
-        out.error_code = code;
-        out.error_message = Some(message);
-        return out;
-    }
-
-    // ── ACL preamble ────────────────────────────────────────
-    // Per-resource authorization based on resource_type, matching
-    // `ControllerApis.authorizeAlterResource` for the types it handles
-    // (Topic, ClientMetrics, Group) and the legacy in-broker path for Broker.
-    // Topic (2)          → AlterConfigs on Topic(resource_name)     → TOPIC_AUTHORIZATION_FAILED, "Topic authorization failed."
-    // Broker (4)         → AlterConfigs on Cluster("kafka-cluster") → CLUSTER_AUTHORIZATION_FAILED, "Cluster authorization failed."
-    // ClientMetrics (16) → AlterConfigs on Cluster("kafka-cluster") → CLUSTER_AUTHORIZATION_FAILED, "Cluster authorization failed."
-    // Group (32)         → AlterConfigs on Group(resource_name)     → GROUP_AUTHORIZATION_FAILED, "Group authorization failed."
-    // `preprocess` refuses any other type with INVALID_REQUEST, "Unknown
-    // resource type <n>".
-    let (acl_type, acl_name, denied_code, denied_message) = match resource.resource_type {
-        RESOURCE_TYPE_TOPIC => (
-            ResourceType::Topic,
-            resource.resource_name.as_str(),
-            codes::TOPIC_AUTHORIZATION_FAILED,
-            "Topic authorization failed.",
-        ),
-        RESOURCE_TYPE_BROKER | RESOURCE_TYPE_CLIENT_METRICS => (
-            ResourceType::Cluster,
-            crate::handlers::acl_wire::CLUSTER_RESOURCE_NAME,
-            codes::CLUSTER_AUTHORIZATION_FAILED,
-            "Cluster authorization failed.",
-        ),
-        RESOURCE_TYPE_GROUP => (
-            ResourceType::Group,
-            resource.resource_name.as_str(),
-            codes::GROUP_AUTHORIZATION_FAILED,
-            "Group authorization failed.",
-        ),
-        other => {
-            out.error_code = codes::INVALID_REQUEST;
-            out.error_message = Some(format!("Unknown resource type {other}"));
-            return out;
-        }
-    };
-    if crate::handlers::acl_denied(
-        broker.config.authorizer.as_ref(),
-        image,
-        ctx,
-        acl_type,
-        acl_name,
-        AclOperation::AlterConfigs,
-    ) {
-        out.error_code = denied_code;
-        out.error_message = Some(denied_message.into());
-        return out;
-    }
-
-    let mut records = match resource.resource_type {
-        RESOURCE_TYPE_TOPIC => {
-            match topic_config_record(
-                &resource,
-                image,
-                &broker.config.topic_policy,
-                broker.config.remote_storage_backend.is_some(),
-                broker.config.features.unstable_api_versions,
-            ) {
-                Ok(record) => vec![record],
-                Err((code, message)) => {
-                    out.error_code = code;
-                    out.error_message = Some(message);
-                    return out;
-                }
-            }
-        }
-        RESOURCE_TYPE_BROKER => match broker_config_records(
+    let records = match resource.resource_type {
+        RESOURCE_TYPE_TOPIC => topic_config_record(
+            &resource,
+            image,
+            &broker.config.topic_policy,
+            broker.config.remote_storage_backend.is_some(),
+            broker.config.features.unstable_api_versions,
+        )
+        .map(|record| vec![record]),
+        RESOURCE_TYPE_BROKER => broker_config_records(
             &resource,
             image,
             krabka_metadata::NodeId(broker.config.node_id.0),
             &broker.config.broker_log_dirs(),
             broker.config.features.unstable_api_versions,
-        ) {
-            Ok(records) => records,
-            Err((code, message)) => {
-                out.error_code = code;
-                out.error_message = Some(message);
-                return out;
-            }
-        },
-        RESOURCE_TYPE_GROUP => match group_config_record(
+        ),
+        RESOURCE_TYPE_GROUP => group_config_record(
             &resource,
             &crate::config_keys::group::GroupBounds::of(&broker.config),
             broker.config.features.unstable_api_versions,
-        ) {
-            Ok(record) => vec![record],
-            Err((code, message)) => {
-                out.error_code = code;
-                out.error_message = Some(message);
-                return out;
-            }
-        },
-        RESOURCE_TYPE_CLIENT_METRICS => match client_metrics_config_record(&resource) {
-            Ok(record) => vec![record],
-            Err((code, message)) => {
-                out.error_code = code;
-                out.error_message = Some(message);
-                return out;
-            }
-        },
+        )
+        .map(|record| vec![record]),
+        RESOURCE_TYPE_CLIENT_METRICS => {
+            client_metrics_config_record(&resource).map(|record| vec![record])
+        }
         _ => unreachable!("resource type passed ACL dispatch"),
     };
+    let mut records = match records {
+        Ok(records) => records,
+        Err((code, message)) => {
+            return out.with_error(code, message);
+        }
+    };
     if let Some((code, message)) = super::config_value_size_error(&records) {
-        out.error_code = code;
-        out.error_message = Some(message);
-        return out;
+        return out.with_error(code, message);
     }
-    let min_isr_changed = records.iter().any(|record| match record {
-        krabka_metadata::MetadataRecord::V1TopicConfig(config) => {
-            image
-                .topic_config(&config.topic)
-                .and_then(|current| current.get(crate::config_keys::MIN_INSYNC_REPLICAS))
-                != config
-                    .overrides
-                    .get(crate::config_keys::MIN_INSYNC_REPLICAS)
-        }
-        krabka_metadata::MetadataRecord::V1BrokerConfig(config) => {
-            config.node_id == krabka_metadata::DEFAULT_BROKER_CONFIG_NODE_ID
-                && config.config_name == crate::config_keys::MIN_INSYNC_REPLICAS
-                && image
-                    .broker_config(config.node_id)
-                    .and_then(|current| current.get(&config.config_name))
-                    != config.config_value.as_ref()
-        }
-        _ => false,
-    });
+    let min_isr_changed = records
+        .iter()
+        .any(|record| super::changes_min_isr(image, record, true));
     if min_isr_changed {
         let topic = (resource.resource_type == RESOURCE_TYPE_TOPIC)
             .then_some(resource.resource_name.as_str());
@@ -203,15 +101,9 @@ pub(super) async fn process_resource(
     if records.is_empty() {
         return out;
     }
-    match broker.controller.submit_change(records).await {
-        Ok(_) => {}
-        Err(RaftError::NotLeader { .. } | RaftError::LeaderUnknown) => {
-            out.error_code = codes::NOT_CONTROLLER;
-        }
-        Err(e) => {
-            tracing::error!(error = %e, "AlterConfigs submit_change failed");
-            out.error_code = codes::UNKNOWN_SERVER_ERROR;
-        }
-    }
+    out.error_code = super::submission_code(
+        broker.controller.submit_change(records).await,
+        |e| tracing::error!(error = %e, "AlterConfigs submit_change failed"),
+    );
     out
 }

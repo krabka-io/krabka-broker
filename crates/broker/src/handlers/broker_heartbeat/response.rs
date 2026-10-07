@@ -27,34 +27,28 @@ mod tests {
 
     #[test]
     fn heartbeat_response_builders_preserve_non_default_fields() {
-        let expected_not_controller = BrokerHeartbeatResponse {
-            throttle_time_ms: 0,
+        let expected_not_controller = unthrottled_wire!(BrokerHeartbeatResponse {
             error_code: codes::NOT_CONTROLLER,
             is_caught_up: false,
             is_fenced: true,
             should_shut_down: false,
-            unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(Vec::new()),
-        };
+        });
         assert!(BrokerHeartbeatResponse::error(codes::NOT_CONTROLLER) == expected_not_controller);
 
-        let expected_success = BrokerHeartbeatResponse {
-            throttle_time_ms: 0,
+        let expected_success = unthrottled_wire!(BrokerHeartbeatResponse {
             error_code: codes::NONE,
             is_caught_up: true,
             is_fenced: false,
             should_shut_down: true,
-            unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(Vec::new()),
-        };
+        });
         assert!(success_response(true, false, true) == expected_success);
 
-        let expected_denied = BrokerHeartbeatResponse {
-            throttle_time_ms: 0,
+        let expected_denied = unthrottled_wire!(BrokerHeartbeatResponse {
             error_code: codes::CLUSTER_AUTHORIZATION_FAILED,
             is_caught_up: false,
             is_fenced: true,
             should_shut_down: false,
-            unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(Vec::new()),
-        };
+        });
         assert!(
             BrokerHeartbeatResponse::error(codes::CLUSTER_AUTHORIZATION_FAILED) == expected_denied
         );

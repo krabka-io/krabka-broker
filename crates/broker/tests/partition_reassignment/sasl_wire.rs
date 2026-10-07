@@ -7,25 +7,11 @@
 
 use std::net::SocketAddr;
 
-pub use crate::support::sasl::start_sasl_plaintext_with_acl_users as start_single_broker_sasl_plaintext_with_users;
-use crate::{kafka_wire, plaintext_wire::CLIENT_ID};
-
 /// Creates a topic over SASL/PLAIN as the given admin user. Copied from
 /// `create_topic_sasl_plain` in `elect_leaders.rs`.
-pub async fn create_topic_as_admin(
-    addr: SocketAddr,
-    topic: &str,
-    partitions: i32,
-    replication_factor: i16,
-) {
-    kafka_wire::create_topic_sasl(
-        addr,
-        CLIENT_ID,
-        ("admin", b"admin-secret"),
-        kafka_wire::topic(topic, partitions, replication_factor),
-    )
-    .await;
-}
+pub use crate::kafka_wire::create_topic_as_admin;
+pub use crate::support::sasl::start_sasl_plaintext_with_acl_users as start_single_broker_sasl_plaintext_with_users;
+use crate::{kafka_wire, plaintext_wire::CLIENT_ID};
 
 /// Drives `AlterPartitionReassignments` over a SASL/PLAIN authenticated
 /// connection. It returns `(topic_name, [(partition_index, error_code)])`

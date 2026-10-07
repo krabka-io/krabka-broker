@@ -144,7 +144,6 @@ const fn authorization_failed_message(error_code: i16) -> &'static str {
 mod tests {
     use assert2::assert;
     use krabka_metadata::MetadataImage;
-    use krabka_protocol::UnknownTaggedFields;
     use uuid::Uuid;
 
     use super::*;
@@ -154,33 +153,33 @@ mod tests {
         crate::test_support::principal("ANONYMOUS")
     }
 
+    macro_rules! empty_acl_resource_check {
+        (($authorizer:ident, $image:ident, $peer:ident, $code:ident), $kind:expr, $name:expr) => {
+            let $authorizer =
+                crate::authorizer::SimpleAclAuthorizer::new(std::collections::HashSet::new());
+            let $image = MetadataImage::new(Uuid::nil());
+            let $peer = peer();
+            let $code =
+                super::resource_authz_failure(&$authorizer, &$image, &anon(), &$peer, $kind, $name);
+        };
+    }
+
     #[test]
     fn topic_resource_denied_yields_topic_authorization_failed() {
-        let authz = crate::authorizer::SimpleAclAuthorizer::new(std::collections::HashSet::new());
-        let image = MetadataImage::new(Uuid::nil());
-        let peer = peer();
-        let code = super::resource_authz_failure(
-            &authz,
-            &image,
-            &anon(),
-            &peer,
-            super::RESOURCE_TYPE_TOPIC,
-            "t",
-        );
+        empty_acl_resource_check!((authz, image, peer, code), super::RESOURCE_TYPE_TOPIC, "t");
         assert!(code == Some(crate::codes::TOPIC_AUTHORIZATION_FAILED));
         let res = super::denied_result(
             super::RESOURCE_TYPE_TOPIC,
             "t".into(),
             crate::codes::TOPIC_AUTHORIZATION_FAILED,
         );
-        let expected = DescribeConfigsResult {
+        let expected = tagged_wire!(DescribeConfigsResult {
             error_code: crate::codes::TOPIC_AUTHORIZATION_FAILED,
             error_message: Some("Topic authorization failed.".to_string()),
             resource_type: super::RESOURCE_TYPE_TOPIC,
             resource_name: "t".to_string(),
             configs: Vec::new(),
-            unknown_tagged_fields: UnknownTaggedFields::default(),
-        };
+        });
         assert!(res == expected);
     }
 
@@ -229,14 +228,13 @@ mod tests {
         );
         assert!(
             denied
-                == DescribeConfigsResult {
+                == tagged_wire!(DescribeConfigsResult {
                     error_code: crate::codes::CLUSTER_AUTHORIZATION_FAILED,
                     error_message: Some("Cluster authorization failed.".to_owned()),
                     resource_type: super::RESOURCE_TYPE_CLIENT_METRICS,
                     resource_name: "sub-a".to_owned(),
                     configs: Vec::new(),
-                    unknown_tagged_fields: UnknownTaggedFields::default(),
-                }
+                })
         );
     }
 
@@ -259,18 +257,19 @@ mod tests {
         assert!(unexpected_resource_type_results(&known).is_none());
 
         let mixed = [resource(RESOURCE_TYPE_TOPIC, "t"), resource(0, "x")];
-        let refused = |resource_type, name: &str| DescribeConfigsResult {
-            error_code: crate::codes::INVALID_REQUEST,
-            error_message: Some(
-                "This most likely occurs because of a request being malformed by the client \
+        let refused = |resource_type, name: &str| {
+            tagged_wire!(DescribeConfigsResult {
+                error_code: crate::codes::INVALID_REQUEST,
+                error_message: Some(
+                    "This most likely occurs because of a request being malformed by the client \
                  library or the message was sent to an incompatible broker. See the broker logs \
                  for more details."
-                    .to_owned(),
-            ),
-            resource_type,
-            resource_name: name.to_owned(),
-            configs: Vec::new(),
-            unknown_tagged_fields: UnknownTaggedFields::default(),
+                        .to_owned(),
+                ),
+                resource_type,
+                resource_name: name.to_owned(),
+                configs: Vec::new(),
+            })
         };
         assert!(
             unexpected_resource_type_results(&mixed)
@@ -280,17 +279,7 @@ mod tests {
 
     #[test]
     fn broker_resource_denied_yields_cluster_authorization_failed() {
-        let authz = crate::authorizer::SimpleAclAuthorizer::new(std::collections::HashSet::new());
-        let image = MetadataImage::new(Uuid::nil());
-        let peer = peer();
-        let code = super::resource_authz_failure(
-            &authz,
-            &image,
-            &anon(),
-            &peer,
-            super::RESOURCE_TYPE_BROKER,
-            "1",
-        );
+        empty_acl_resource_check!((authz, image, peer, code), super::RESOURCE_TYPE_BROKER, "1");
         assert!(code == Some(crate::codes::CLUSTER_AUTHORIZATION_FAILED));
     }
 }

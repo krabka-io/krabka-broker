@@ -163,7 +163,6 @@ mod tests {
     use krabka_log::Offset;
     use krabka_metadata::{MetadataRecord, ResourceType, TopicRecord};
     use krabka_protocol::{
-        UnknownTaggedFields,
         owned::describe_share_group_offsets_response::{
             DescribeShareGroupOffsetsResponsePartition, DescribeShareGroupOffsetsResponseTopic,
         },
@@ -172,7 +171,7 @@ mod tests {
 
     use super::*;
     use crate::{
-        authorizer::{AuthorizationRequest, AuthorizationResult, Authorizer},
+        authorizer::{AuthorizationResult, Authorizer},
         coordinator::unified::share::persistence::{
             ShareGroupMetadataValue, ShareGroupStatePartitionMetadataValue, TopicPartitionsInfo,
         },
@@ -186,22 +185,16 @@ mod tests {
     #[derive(Debug)]
     struct DenyDescribeOnTopic(&'static str);
 
-    impl Authorizer for DenyDescribeOnTopic {
-        fn authorize(
-            &self,
-            _source: &dyn krabka_authz::AclSource,
-            request: &AuthorizationRequest<'_>,
-        ) -> AuthorizationResult {
-            if request.resource_type == ResourceType::Topic
-                && request.operation == AclOperation::Describe
-                && request.resource_name == self.0
-            {
-                AuthorizationResult::Deny
-            } else {
-                AuthorizationResult::Allow
-            }
+    test_authorizer!(DenyDescribeOnTopic, (self, _source, request), {
+        if request.resource_type == ResourceType::Topic
+            && request.operation == AclOperation::Describe
+            && request.resource_name == self.0
+        {
+            AuthorizationResult::Deny
+        } else {
+            AuthorizationResult::Allow
         }
-    }
+    });
 
     fn topic(name: &str, partitions: Vec<i32>) -> DescribeShareGroupOffsetsRequestTopic {
         DescribeShareGroupOffsetsRequestTopic {
@@ -222,6 +215,54 @@ mod tests {
         }
     }
 
+    fn replay_initialized_group(
+        broker: &Broker,
+        group: &str,
+        (orders, secret): (uuid::Uuid, uuid::Uuid),
+        secret_partitions: Vec<i32>,
+    ) {
+        broker
+            .group_coordinator
+            .replay_share_group_metadata(group, ShareGroupMetadataValue { epoch: 1 });
+        broker
+            .group_coordinator
+            .replay_share_state_partition_metadata(
+                group,
+                ShareGroupStatePartitionMetadataValue {
+                    initializing: Vec::new(),
+                    initialized: vec![
+                        TopicPartitionsInfo {
+                            topic_id: orders,
+                            topic_name: "orders".into(),
+                            partitions: vec![0],
+                        },
+                        TopicPartitionsInfo {
+                            topic_id: secret,
+                            topic_name: "secret".into(),
+                            partitions: secret_partitions,
+                        },
+                    ],
+                    deleting: Vec::new(),
+                },
+            );
+    }
+
+    async fn describe_initialized_group(
+        broker: &Broker,
+        image: &krabka_metadata::MetadataImage,
+        ctx: &crate::handlers::RequestContext<'_>,
+        request: DescribeShareGroupOffsetsRequestGroup,
+    ) -> DescribeShareGroupOffsetsResponseGroup {
+        describe_group(
+            broker,
+            Some(broker.group_coordinator.as_ref()),
+            image,
+            ctx,
+            request,
+        )
+        .await
+    }
+
     /// A row read from initialized share state over an empty log: Kafka's
     /// initial leader epoch 0, and the lag `0 - start offset - 0`, since
     /// initialize sets the delivery complete count to 0 for a start offset it
@@ -230,27 +271,39 @@ mod tests {
         index: i32,
         start_offset: i64,
     ) -> DescribeShareGroupOffsetsResponsePartition {
-        DescribeShareGroupOffsetsResponsePartition {
+        tagged_wire!(DescribeShareGroupOffsetsResponsePartition {
             partition_index: index,
             start_offset,
             leader_epoch: 0,
             lag: -start_offset,
             error_code: codes::NONE,
             error_message: None,
-            unknown_tagged_fields: UnknownTaggedFields(Vec::new()),
-        }
+        })
     }
 
     fn denied_partition(index: i32) -> DescribeShareGroupOffsetsResponsePartition {
-        DescribeShareGroupOffsetsResponsePartition {
+        tagged_wire!(DescribeShareGroupOffsetsResponsePartition {
             partition_index: index,
             start_offset: -1,
             leader_epoch: 0,
             lag: -1,
             error_code: codes::TOPIC_AUTHORIZATION_FAILED,
             error_message: Some("Topic authorization failed.".to_string()),
-            unknown_tagged_fields: UnknownTaggedFields(Vec::new()),
-        }
+        })
+    }
+
+    macro_rules! orders_and_secret_image {
+        (($orders:ident, $secret:ident, $image:ident), $secret_partitions:expr) => {
+            let $orders = uuid::Uuid::from_u128(1);
+            let $secret = uuid::Uuid::from_u128(2);
+            let mut $image = image_with_topic("orders", $orders);
+            $image.apply(&MetadataRecord::V1Topic(TopicRecord {
+                name: "secret".into(),
+                topic_id: $secret,
+                partitions: $secret_partitions,
+                replication_factor: 1,
+            }));
+        };
     }
 
     /// A denied topic requested with an empty `partitions` list answers a
@@ -259,63 +312,29 @@ mod tests {
     /// named, and does not look the group's initialized partitions up.
     #[tokio::test]
     async fn a_denied_topic_named_with_no_partitions_has_no_partition_rows() {
-        let orders_id = uuid::Uuid::from_u128(1);
-        let secret_id = uuid::Uuid::from_u128(2);
-        let mut image = image_with_topic("orders", orders_id);
-        image.apply(&MetadataRecord::V1Topic(TopicRecord {
-            name: "secret".into(),
-            topic_id: secret_id,
-            partitions: 2,
-            replication_factor: 1,
-        }));
+        orders_and_secret_image!((orders_id, secret_id, image), 2);
 
-        let (broker_handle, _dir) =
-            crate::test_support::start_share_broker(Arc::new(DenyDescribeOnTopic("secret")), true)
-                .await;
-        let broker = broker_handle.broker_arc_for_test();
-        let persister = broker
-            .group_coordinator
-            .share_persister()
-            .cloned()
-            .expect("share persister");
+        broker_fixture!(
+            (broker_handle, _dir, broker, persister),
+            share_persister(Arc::new(DenyDescribeOnTopic("secret")), true)
+        );
         register_topic(&broker, "orders", orders_id).await;
         persister
             .initialize("g3", orders_id, 0, 1, Offset(5))
             .await
             .expect("seed orders state");
 
-        broker
-            .group_coordinator
-            .replay_share_group_metadata("g3", ShareGroupMetadataValue { epoch: 1 });
-        broker
-            .group_coordinator
-            .replay_share_state_partition_metadata(
-                "g3",
-                ShareGroupStatePartitionMetadataValue {
-                    initializing: Vec::new(),
-                    initialized: vec![
-                        TopicPartitionsInfo {
-                            topic_id: orders_id,
-                            topic_name: "orders".into(),
-                            partitions: vec![0],
-                        },
-                        TopicPartitionsInfo {
-                            topic_id: secret_id,
-                            topic_name: "secret".into(),
-                            partitions: vec![0, 1],
-                        },
-                    ],
-                    deleting: Vec::new(),
-                },
-            );
+        replay_initialized_group(&broker, "g3", (orders_id, secret_id), vec![0, 1]);
 
-        let principal = crate::test_support::principal("alice");
-        let peer = peer();
-        let ctx = crate::test_support::request_context(&principal, &peer, "admin-client");
+        request_identity!(
+            (principal, peer, ctx),
+            crate::test_support::principal("alice"),
+            client_id = "admin-client",
+            address = peer()
+        );
 
-        let result = describe_group(
+        let result = describe_initialized_group(
             &broker,
-            Some(broker.group_coordinator.as_ref()),
             &image,
             &ctx,
             request_group(
@@ -350,18 +369,16 @@ mod tests {
 
         let topic_id = uuid::Uuid::from_u128(0xD5C0);
         let orders_wire_id = WireUuid(*topic_id.as_bytes());
-        let orders_row = DescribeShareGroupOffsetsResponseTopic {
+        let orders_row = tagged_wire!(DescribeShareGroupOffsetsResponseTopic {
             topic_name: "orders".into(),
             topic_id: orders_wire_id,
             partitions: vec![normal_partition(0, 33)],
-            unknown_tagged_fields: UnknownTaggedFields(Vec::new()),
-        };
-        let secret_denied_row = DescribeShareGroupOffsetsResponseTopic {
+        });
+        let secret_denied_row = tagged_wire!(DescribeShareGroupOffsetsResponseTopic {
             topic_name: "secret".into(),
             topic_id: WireUuid::default(),
             partitions: vec![denied_partition(0), denied_partition(1)],
-            unknown_tagged_fields: UnknownTaggedFields(Vec::new()),
-        };
+        });
         let cases = vec![
             Case {
                 name: "all topics allowed returns the normal row",
@@ -378,14 +395,10 @@ mod tests {
         ];
 
         for case in cases {
-            let (broker_handle, _dir) =
-                crate::test_support::start_share_broker(case.authorizer, true).await;
-            let broker = broker_handle.broker_arc_for_test();
-            let persister = broker
-                .group_coordinator
-                .share_persister()
-                .cloned()
-                .expect("share persister");
+            broker_fixture!(
+                (broker_handle, _dir, broker, persister),
+                share_persister(case.authorizer, true)
+            );
             let image = image_with_topic("orders", topic_id);
             register_topic(&broker, "orders", topic_id).await;
             persister
@@ -398,26 +411,27 @@ mod tests {
                 requested.push(topic("secret", vec![0, 1]));
             }
 
-            let principal = crate::test_support::principal("alice");
-            let peer = peer();
-            let ctx = crate::test_support::request_context(&principal, &peer, "admin-client");
+            request_identity!(
+                (principal, peer, ctx),
+                crate::test_support::principal("alice"),
+                client_id = "admin-client",
+                address = peer()
+            );
 
-            let result = describe_group(
+            let result = describe_initialized_group(
                 &broker,
-                Some(broker.group_coordinator.as_ref()),
                 &image,
                 &ctx,
                 request_group("g1", Some(requested)),
             )
             .await;
 
-            let expected = DescribeShareGroupOffsetsResponseGroup {
+            let expected = tagged_wire!(DescribeShareGroupOffsetsResponseGroup {
                 group_id: "g1".into(),
                 topics: case.expected,
                 error_code: codes::NONE,
                 error_message: None,
-                unknown_tagged_fields: UnknownTaggedFields(Vec::new()),
-            };
+            });
             assert!(result == expected, "case: {}", case.name);
             broker_handle.shutdown().await;
         }
@@ -447,24 +461,12 @@ mod tests {
         ];
 
         for case in cases {
-            let (broker_handle, _dir) =
-                crate::test_support::start_share_broker(case.authorizer, true).await;
-            let broker = broker_handle.broker_arc_for_test();
-            let persister = broker
-                .group_coordinator
-                .share_persister()
-                .cloned()
-                .expect("share persister");
+            broker_fixture!(
+                (broker_handle, _dir, broker, persister),
+                share_persister(case.authorizer, true)
+            );
 
-            let orders_id = uuid::Uuid::from_u128(1);
-            let secret_id = uuid::Uuid::from_u128(2);
-            let mut image = image_with_topic("orders", orders_id);
-            image.apply(&MetadataRecord::V1Topic(TopicRecord {
-                name: "secret".into(),
-                topic_id: secret_id,
-                partitions: 1,
-                replication_factor: 1,
-            }));
+            orders_and_secret_image!((orders_id, secret_id, image), 1);
             register_topic(&broker, "orders", orders_id).await;
             persister
                 .initialize("g2", orders_id, 0, 1, Offset(7))
@@ -476,43 +478,17 @@ mod tests {
                 .await
                 .expect("seed secret state");
 
-            broker
-                .group_coordinator
-                .replay_share_group_metadata("g2", ShareGroupMetadataValue { epoch: 1 });
-            broker
-                .group_coordinator
-                .replay_share_state_partition_metadata(
-                    "g2",
-                    ShareGroupStatePartitionMetadataValue {
-                        initializing: Vec::new(),
-                        initialized: vec![
-                            TopicPartitionsInfo {
-                                topic_id: orders_id,
-                                topic_name: "orders".into(),
-                                partitions: vec![0],
-                            },
-                            TopicPartitionsInfo {
-                                topic_id: secret_id,
-                                topic_name: "secret".into(),
-                                partitions: vec![0],
-                            },
-                        ],
-                        deleting: Vec::new(),
-                    },
-                );
+            replay_initialized_group(&broker, "g2", (orders_id, secret_id), vec![0]);
 
-            let principal = crate::test_support::principal("alice");
-            let peer = peer();
-            let ctx = crate::test_support::request_context(&principal, &peer, "admin-client");
+            request_identity!(
+                (principal, peer, ctx),
+                crate::test_support::principal("alice"),
+                client_id = "admin-client",
+                address = peer()
+            );
 
-            let result = describe_group(
-                &broker,
-                Some(broker.group_coordinator.as_ref()),
-                &image,
-                &ctx,
-                request_group("g2", None),
-            )
-            .await;
+            let result =
+                describe_initialized_group(&broker, &image, &ctx, request_group("g2", None)).await;
 
             assert!(result.error_code == codes::NONE, "case: {}", case.name);
             let names: Vec<&str> = result
@@ -533,17 +509,15 @@ mod tests {
     /// failing this assertion.
     #[tokio::test]
     async fn empty_topic_list_never_reaches_the_coordinator() {
-        let (broker_handle, _dir) = crate::test_support::start_share_broker(
-            Arc::new(crate::authorizer::AllowAllAuthorizer),
-            true,
-        )
-        .await;
-        let broker = broker_handle.broker_arc_for_test();
+        broker_fixture!((broker_handle, _dir, broker), share_allow_all);
         let image = image_with_topic("orders", uuid::Uuid::from_u128(1));
 
-        let principal = crate::test_support::principal("alice");
-        let peer = peer();
-        let ctx = crate::test_support::request_context(&principal, &peer, "admin-client");
+        request_identity!(
+            (principal, peer, ctx),
+            crate::test_support::principal("alice"),
+            client_id = "admin-client",
+            address = peer()
+        );
 
         let result = describe_group(
             &broker,
@@ -554,13 +528,12 @@ mod tests {
         )
         .await;
 
-        let expected = DescribeShareGroupOffsetsResponseGroup {
+        let expected = tagged_wire!(DescribeShareGroupOffsetsResponseGroup {
             group_id: "g3".into(),
             topics: Vec::new(),
             error_code: codes::NONE,
             error_message: None,
-            unknown_tagged_fields: UnknownTaggedFields(Vec::new()),
-        };
+        });
         assert!(result == expected);
         broker_handle.shutdown().await;
     }

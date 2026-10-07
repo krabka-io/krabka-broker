@@ -42,8 +42,6 @@ pub(crate) fn probe_ktls_support() -> std::future::Ready<bool> {
 
 #[cfg(target_os = "linux")]
 async fn try_probe_ktls() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    use std::sync::Arc;
-
     use tokio::{
         io::{AsyncReadExt, AsyncWriteExt},
         net::{TcpListener, TcpStream},
@@ -54,27 +52,13 @@ async fn try_probe_ktls() -> Result<(), Box<dyn std::error::Error + Send + Sync>
     let key = rcgen::KeyPair::generate_for(&rcgen::PKCS_ECDSA_P256_SHA256)?;
     let params = rcgen::CertificateParams::new(vec!["localhost".to_string()])?;
     let cert = params.self_signed(&key)?;
-    let cert_der = rustls::pki_types::CertificateDer::from(cert.der().to_vec());
     let key_der = rustls::pki_types::PrivateKeyDer::try_from(key.serialize_der())
         .map_err(|e| format!("probe key der: {e}"))?;
 
     // 2. Server config WITH secret extraction (the prerequisite for kTLS), and
     //    a client config that trusts the throwaway cert. Restrict to TLS 1.3 so
     //    the probe is deterministic across kernels.
-    let mut server_cfg =
-        rustls::ServerConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
-            .with_no_client_auth()
-            .with_single_cert(vec![cert_der.clone()], key_der)?;
-    server_cfg.enable_secret_extraction = true;
-    let acceptor = tokio_rustls::TlsAcceptor::from(Arc::new(server_cfg));
-
-    let mut roots = rustls::RootCertStore::empty();
-    roots.add(cert_der)?;
-    let client_cfg =
-        rustls::ClientConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
-            .with_root_certificates(roots)
-            .with_no_client_auth();
-    let connector = tokio_rustls::TlsConnector::from(Arc::new(client_cfg));
+    let (acceptor, connector) = tls13_pair(&cert, key_der)?;
 
     // 3. Loopback TCP pair.
     let listener = TcpListener::bind("127.0.0.1:0").await?;
@@ -108,6 +92,32 @@ async fn try_probe_ktls() -> Result<(), Box<dyn std::error::Error + Send + Sync>
     drop(ktls_stream);
     client.abort();
     Ok(())
+}
+
+/// Server secret extraction is required by the kernel TLS transition; the client trusts the same certificate.
+#[cfg(target_os = "linux")]
+pub(super) fn tls13_pair(
+    cert: &rcgen::Certificate,
+    key_der: rustls::pki_types::PrivateKeyDer<'static>,
+) -> Result<(tokio_rustls::TlsAcceptor, tokio_rustls::TlsConnector), rustls::Error> {
+    use std::sync::Arc;
+    let cert_der = rustls::pki_types::CertificateDer::from(cert.der().to_vec());
+    let mut server_cfg =
+        rustls::ServerConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
+            .with_no_client_auth()
+            .with_single_cert(vec![cert_der.clone()], key_der)?;
+    server_cfg.enable_secret_extraction = true;
+    let acceptor = tokio_rustls::TlsAcceptor::from(Arc::new(server_cfg));
+    let mut roots = rustls::RootCertStore::empty();
+    roots.add(cert_der)?;
+    let client_cfg =
+        rustls::ClientConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
+            .with_root_certificates(roots)
+            .with_no_client_auth();
+    Ok((
+        acceptor,
+        tokio_rustls::TlsConnector::from(Arc::new(client_cfg)),
+    ))
 }
 
 #[cfg(target_os = "linux")]

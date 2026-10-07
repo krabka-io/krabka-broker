@@ -240,7 +240,7 @@ mod tests {
     use tempfile::tempdir;
 
     use super::*;
-    use crate::segment::test_support::{DENSE_INDEX, NO_LIMIT, sample_batch};
+    use crate::segment::test_support::{DENSE_INDEX, NO_LIMIT, sample_batch, seeded_segment};
 
     /// Truncating to a relative offset keeps every batch that ends before it,
     /// and leaves the segment describing exactly what it kept.
@@ -298,8 +298,7 @@ mod tests {
     #[test]
     fn is_sealed_follows_seal() {
         let dir = tempdir().unwrap();
-        let mut seg = Segment::create(dir.path(), Offset(0)).unwrap();
-        seg.append(&sample_batch(0, 2, 100), DENSE_INDEX).unwrap();
+        let mut seg = seeded_segment(dir.path(), 0, &[(0, 2, 100)]);
         check!(!seg.is_sealed(), "a fresh segment is open");
         seg.seal().unwrap();
         check!(seg.is_sealed(), "a sealed segment reports it");
@@ -336,8 +335,7 @@ mod tests {
             ),
         ];
         for (label, batches, expected) in cases {
-            let dir = tempdir().unwrap();
-            let mut seg = Segment::create(dir.path(), Offset(0)).unwrap();
+            let (_dir, mut seg) = crate::segment::test_support::test_segment();
             for (base, timestamp, interval) in batches {
                 seg.append(&sample_batch(base, 1, timestamp), interval)
                     .unwrap();
@@ -361,9 +359,14 @@ mod tests {
     #[test]
     fn truncate_to_relative_uses_batch_last_offset() {
         let dir = tempdir().unwrap();
-        let mut seg = Segment::create(dir.path(), Offset(0)).unwrap();
-        seg.append(&sample_batch(0, 3, 100), DENSE_INDEX).unwrap(); // offsets 0..=2
-        seg.append(&sample_batch(3, 3, 200), DENSE_INDEX).unwrap(); // offsets 3..=5
+        let mut seg = seeded_segment(
+            dir.path(),
+            0,
+            &[
+                (0, 3, 100), // offsets 0..=2
+                (3, 3, 200), // offsets 3..=5
+            ],
+        );
         assert2::assert!(seg.last_offset() == 5);
 
         // target_abs = base(0) + rel(3) = 3. Drop batches with last >= 3.
@@ -377,8 +380,7 @@ mod tests {
 
     #[test]
     fn truncate_to_relative_rejects_an_absolute_offset_overflow() {
-        let dir = tempdir().unwrap();
-        let mut seg = Segment::create(dir.path(), Offset(i64::MAX)).unwrap();
+        let (_dir, mut seg) = crate::segment::test_support::segment_at(i64::MAX);
 
         let error = seg
             .truncate_to_relative(1)
@@ -388,8 +390,7 @@ mod tests {
 
     #[test]
     fn flush_succeeds() {
-        let dir = tempdir().unwrap();
-        let mut seg = Segment::create(dir.path(), Offset(0)).unwrap();
+        let (_dir, mut seg) = crate::segment::test_support::test_segment();
         seg.append(&sample_batch(0, 1, 42), kibibytes(4)).unwrap();
         seg.flush().unwrap();
     }

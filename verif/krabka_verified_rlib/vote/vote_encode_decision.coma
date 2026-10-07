@@ -1,11 +1,11 @@
-(* #"/workspace/crates/verified/src/vote.rs" 52 0 57 23 *)
+(* #"/workspace/crates/verified/src/vote.rs" 48 0 53 23 *)
 
-let%span svote = "/workspace/crates/verified/src/vote.rs" 58 18 58 31
-let%span svote'0 = "/workspace/crates/verified/src/vote.rs" 59 26 59 39
-let%span svote'1 = "/workspace/crates/verified/src/vote.rs" 60 29 60 42
-let%span svote'2 = "/workspace/crates/verified/src/vote.rs" 61 24 61 37
-let%span svote'3 = "/workspace/crates/verified/src/vote.rs" 49 10 50 81
-let%span svote'4 = "/workspace/crates/verified/src/vote.rs" 39 8 42 39
+let%span svote = "/workspace/crates/verified/src/vote.rs" 54 18 54 31
+let%span svote'0 = "/workspace/crates/verified/src/vote.rs" 55 26 55 39
+let%span svote'1 = "/workspace/crates/verified/src/vote.rs" 56 29 56 42
+let%span svote'2 = "/workspace/crates/verified/src/vote.rs" 57 24 57 37
+let%span svote'3 = "/workspace/crates/verified/src/vote.rs" 45 10 46 81
+let%span svote'4 = "/workspace/crates/verified/src/vote.rs" 35 8 38 39
 
 use creusot.int.UInt64
 use creusot.int.UInt32
@@ -17,7 +17,7 @@ type t_VoteEncodeDecision = Reject | Accept
 
 constant const_MAX: Int32.t = (2147483647: Int32.t)
 
-predicate vote_fields_fit_int32 [#"/workspace/crates/verified/src/vote.rs" 32 0 37 9] (voter_id: UInt64.t) (candidate_id: UInt64.t) (candidate_epoch: UInt32.t) (last_epoch: UInt32.t) =
+predicate vote_fields_fit_int32 [#"/workspace/crates/verified/src/vote.rs" 28 0 33 9] (voter_id: UInt64.t) (candidate_id: UInt64.t) (candidate_epoch: UInt32.t) (last_epoch: UInt32.t) =
   [%#svote'4] UInt64.t'int voter_id <= Int32.to_int const_MAX
   /\ UInt64.t'int candidate_id <= Int32.to_int const_MAX
   /\ UInt32.t'int candidate_epoch <= Int32.to_int const_MAX /\ UInt32.t'int last_epoch <= Int32.to_int const_MAX
@@ -26,7 +26,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let vote_encode_decision [#"/workspace/crates/verified/src/vote.rs" 52 0 57 23] (voter_id: UInt64.t)
+let vote_encode_decision [#"/workspace/crates/verified/src/vote.rs" 48 0 53 23] (voter_id: UInt64.t)
   (candidate_id: UInt64.t) (candidate_epoch: UInt32.t) (last_epoch: UInt32.t) (return (x: t_VoteEncodeDecision)) =
 (! bb0
   [ bb0 = s0

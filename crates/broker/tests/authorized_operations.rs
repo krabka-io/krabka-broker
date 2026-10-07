@@ -17,46 +17,36 @@
 //! handler dispatch. There is no SASL framing step. The tests drive
 //! `BrokerConfig.authorizer` directly with a `SimpleAclAuthorizer`.
 
+mod support;
+
 use std::{collections::HashSet, sync::Arc};
 
 use assert2::assert;
-use bytes::{Buf, BufMut, BytesMut};
+use bytes::{Buf, BytesMut};
 use krabka_broker::{Broker, BrokerConfig, authorizer::SimpleAclAuthorizer};
 use krabka_client_core::Client;
 use krabka_protocol::{
     Decode, Encode,
     owned::{
-        create_topics_request::{CreatableTopic, CreateTopicsRequest},
         describe_cluster_request::DescribeClusterRequest,
-        describe_groups_request::DescribeGroupsRequest,
-        metadata_request::{MetadataRequest, MetadataRequestTopic},
+        describe_groups_request::DescribeGroupsRequest, metadata_request::MetadataRequest,
         metadata_response::MetadataResponse,
     },
 };
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
+use crate::support::{
+    acl::{
+        BIT_ALTER, BIT_ALTER_CONFIGS, BIT_CLUSTER_ACTION, BIT_CREATE, BIT_DELETE, BIT_DESCRIBE,
+        BIT_DESCRIBE_CONFIGS, BIT_IDEMPOTENT_WRITE, BIT_READ, TOPIC_FULL_MASK,
+    },
+    client::connect_owned,
+    topics::{creatable_topic, create_topic_request, metadata_topic},
+};
+
 // Bit positions match Kafka's `AclOperation.code()` (verified by the
 // helper's unit tests). Spelled out here so the assertions don't depend
 // on importing the crate-private helper module.
-const BIT_READ: i32 = 1 << 3;
-const BIT_WRITE: i32 = 1 << 4;
-const BIT_CREATE: i32 = 1 << 5;
-const BIT_DELETE: i32 = 1 << 6;
-const BIT_ALTER: i32 = 1 << 7;
-const BIT_DESCRIBE: i32 = 1 << 8;
-const BIT_CLUSTER_ACTION: i32 = 1 << 9;
-const BIT_DESCRIBE_CONFIGS: i32 = 1 << 10;
-const BIT_ALTER_CONFIGS: i32 = 1 << 11;
-const BIT_IDEMPOTENT_WRITE: i32 = 1 << 12;
-
-const TOPIC_FULL_MASK: i32 = BIT_READ
-    | BIT_WRITE
-    | BIT_CREATE
-    | BIT_DELETE
-    | BIT_ALTER
-    | BIT_DESCRIBE
-    | BIT_DESCRIBE_CONFIGS
-    | BIT_ALTER_CONFIGS;
 
 const GROUP_FULL_MASK: i32 =
     BIT_READ | BIT_DESCRIBE | BIT_DELETE | BIT_DESCRIBE_CONFIGS | BIT_ALTER_CONFIGS;
@@ -107,12 +97,12 @@ fn boot_with_super_user(super_user: &str) -> impl std::future::Future<Output = H
         let handle = Broker::start(cfg).await.expect("broker start");
         // `DescribeGroups` needs a loaded group coordinator.
         handle.wait_until_group_coordinator_ready().await;
-        let client = Client::builder()
-            .bootstrap(handle.listen_addr().to_string())
-            .client_id("krabka-kip-430-test")
-            .build()
-            .await
-            .expect("client build");
+        let client = connect_owned(
+            handle.listen_addr().to_string(),
+            "krabka-kip-430-test",
+            "client build",
+        )
+        .await;
         Harness {
             handle,
             client,
@@ -123,19 +113,37 @@ fn boot_with_super_user(super_user: &str) -> impl std::future::Future<Output = H
 
 async fn create_topic(client: &Client, name: &str, partitions: i32) {
     let resp = client
-        .send(CreateTopicsRequest {
-            topics: vec![CreatableTopic {
-                name: name.to_string(),
-                num_partitions: partitions,
-                replication_factor: 1,
-                ..Default::default()
-            }],
-            timeout_ms: 5_000,
-            ..Default::default()
-        })
+        .send(create_topic_request(
+            creatable_topic(name.to_string(), partitions, 1),
+            5_000,
+        ))
         .await
         .expect("CreateTopics");
     assert!(resp.topics[0].error_code == 0, "topic create: {resp:?}");
+}
+
+async fn seeded_group() -> Harness {
+    let h = boot_with_super_user("ANONYMOUS").await;
+    h.handle.group_create_for_test("g1");
+    h
+}
+
+async fn describe_group(
+    client: &Client,
+    include_authorized_operations: bool,
+) -> krabka_protocol::owned::describe_groups_response::DescribeGroupsResponse {
+    let resp = client
+        .send(DescribeGroupsRequest {
+            groups: vec!["g1".into()],
+            include_authorized_operations,
+            ..Default::default()
+        })
+        .await
+        .expect("DescribeGroups");
+    assert!(resp.groups.len() == 1);
+    let g = &resp.groups[0];
+    assert!(g.error_code == 0, "DescribeGroups error: {g:?}");
+    resp
 }
 
 // ── Metadata ────────────────────────────────────────────────────────────────
@@ -151,10 +159,10 @@ async fn metadata_topic_authorized_operations_default_is_not_present() {
     let resp = h
         .client
         .send(MetadataRequest {
-            topics: Some(vec![MetadataRequestTopic {
-                name: Some("foo".into()),
-                ..Default::default()
-            }]),
+            topics: Some(vec![metadata_topic(
+                Some("foo".into()),
+                krabka_protocol::primitives::uuid::Uuid::default(),
+            )]),
             // include_topic_authorized_operations defaults to false.
             ..Default::default()
         })
@@ -187,12 +195,8 @@ async fn metadata_topic_authorized_operations_super_user_gets_full_mask() {
     let resp = h
         .client
         .send(MetadataRequest {
-            topics: Some(vec![MetadataRequestTopic {
-                name: Some("foo".into()),
-                ..Default::default()
-            }]),
             include_topic_authorized_operations: true,
-            ..Default::default()
+            ..crate::support::discovery::named_topic_metadata("foo")
         })
         .await
         .expect("Metadata");
@@ -260,20 +264,10 @@ async fn describe_cluster_authorized_operations_super_user_gets_full_mask() {
 /// the full mask.
 #[tokio::test]
 async fn describe_groups_authorized_operations_default_is_not_present() {
-    let h = boot_with_super_user("ANONYMOUS").await;
-    h.handle.group_create_for_test("g1");
+    let h = seeded_group().await;
 
-    let resp = h
-        .client
-        .send(DescribeGroupsRequest {
-            groups: vec!["g1".into()],
-            ..Default::default()
-        })
-        .await
-        .expect("DescribeGroups");
-    assert!(resp.groups.len() == 1);
+    let resp = describe_group(&h.client, false).await;
     let g = &resp.groups[0];
-    assert!(g.error_code == 0, "DescribeGroups error: {g:?}");
     assert!(
         g.authorized_operations == i32::MIN,
         "opt-out must leave the sentinel"
@@ -285,21 +279,10 @@ async fn describe_groups_authorized_operations_default_is_not_present() {
 /// full group mask on a seeded group.
 #[tokio::test]
 async fn describe_groups_authorized_operations_super_user_gets_full_mask() {
-    let h = boot_with_super_user("ANONYMOUS").await;
-    h.handle.group_create_for_test("g1");
+    let h = seeded_group().await;
 
-    let resp = h
-        .client
-        .send(DescribeGroupsRequest {
-            groups: vec!["g1".into()],
-            include_authorized_operations: true,
-            ..Default::default()
-        })
-        .await
-        .expect("DescribeGroups");
-    assert!(resp.groups.len() == 1);
+    let resp = describe_group(&h.client, true).await;
     let g = &resp.groups[0];
-    assert!(g.error_code == 0, "DescribeGroups error: {g:?}");
     assert!(
         g.authorized_operations == GROUP_FULL_MASK,
         "super-user must see the full group mask, got 0b{:b}",
@@ -336,15 +319,13 @@ async fn metadata_cluster_authorized_operations_super_user_gets_full_mask_v9() {
 
     // Build the v2 request header (flexible — Metadata went flexible at
     // v9). One TCP round-trip, plaintext, no SASL.
-    let mut frame = BytesMut::with_capacity(16 + body.len());
-    frame.put_i16(3); // api_key = Metadata
-    frame.put_i16(version);
-    frame.put_i32(7); // correlation_id
-    let client_id = "krabka-kip-430-v9";
-    frame.put_i16(i16::try_from(client_id.len()).unwrap());
-    frame.put_slice(client_id.as_bytes());
-    frame.put_u8(0); // header tagged-fields byte
-    frame.put_slice(&body);
+    let frame = crate::support::wire::request_frame(
+        (3, version, 7, true),
+        "krabka-kip-430-v9",
+        &body,
+        Some(16 + body.len()),
+        None,
+    );
 
     let mut stream = tokio::net::TcpStream::connect(h.handle.listen_addr())
         .await

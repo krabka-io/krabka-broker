@@ -7,10 +7,8 @@
 
 use std::net::SocketAddr;
 
-use krabka_broker::{Broker, BrokerHandle, authorizer::SimpleAclAuthorizer};
-use krabka_metadata::{
-    AclEntry, AclOperation, MetadataRecord, PatternType, PermissionType, ResourceType,
-};
+use krabka_broker::BrokerHandle;
+use krabka_metadata::{AclOperation, MetadataRecord, ResourceType};
 use krabka_security::SaslMechanism;
 use tempfile::TempDir;
 
@@ -43,21 +41,15 @@ pub(crate) fn start_single_broker_sasl_plaintext_with_acl_authorizer(
     super_users: &[&str],
     users: &[(&str, &str)],
 ) -> BrokerStartup {
-    let log_dir = tempfile::tempdir().unwrap();
-    let mut cfg = crate::support::sasl_plaintext_config(log_dir.path().to_path_buf());
-    cfg.enabled_sasl_mechanisms = vec![SaslMechanism::Plain];
+    let (log_dir, mut cfg) = crate::support::sasl::sasl_temp_config(vec![SaslMechanism::Plain]);
     for (name, pass) in users {
         cfg.plain_credentials
             .insert((*name).to_string(), (*pass).to_string());
     }
     cfg.super_users = super_users.iter().map(|user| (*user).to_string()).collect();
-    cfg.authorizer = std::sync::Arc::new(SimpleAclAuthorizer::new(cfg.super_users.clone()));
+    crate::support::acl::use_simple_acl_authorizer(&mut cfg);
 
-    Box::pin(async move {
-        let handle = Broker::start(cfg).await.expect("broker must start");
-        let addr = handle.listen_addr();
-        (handle, log_dir, addr)
-    })
+    Box::pin(crate::support::sasl::start_broker(cfg, log_dir))
 }
 
 pub(crate) async fn seed_cluster_acl(
@@ -66,15 +58,11 @@ pub(crate) async fn seed_cluster_acl(
     operation: AclOperation,
 ) {
     handle
-        .submit_metadata_record_for_test(MetadataRecord::V1AccessControlEntry(AclEntry {
-            resource_type: ResourceType::Cluster,
-            resource_name: "kafka-cluster".into(),
-            pattern_type: PatternType::Literal,
-            principal: format!("User:{principal}"),
-            host: "*".into(),
+        .submit_metadata_record_for_test(crate::support::acl::cluster_acl_record(
+            &format!("User:{principal}"),
+            "*",
             operation,
-            permission_type: PermissionType::Allow,
-        }))
+        ))
         .await
         .expect("seed cluster ACL");
     handle

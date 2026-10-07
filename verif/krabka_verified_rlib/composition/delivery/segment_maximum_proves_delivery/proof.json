@@ -6,14 +6,11 @@
         "prover": "alt-ergo",
         "time": 0.009
       },
-      "vc_elim_Some": { "prover": "alt-ergo", "time": 0.008 },
-      "vc_scheduled_delivery_visible": {
-        "prover": "alt-ergo",
-        "time": 0.009
-      },
+      "vc_elim_Some": { "prover": "alt-ergo", "time": 0.013 },
+      "vc_scheduled_delivery_visible": { "prover": "alt-ergo", "time": 0.02 },
       "vc_segment_maximum_proves_delivery": {
         "prover": "alt-ergo",
-        "time": 0.019
+        "time": 0.055
       }
     }
   }

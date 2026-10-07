@@ -57,6 +57,8 @@ mod tests {
 
     use super::*;
 
+    krabka_macros::remote_segment_transition_matrix!(expected_transitions);
+
     #[test]
     fn segment_state_transition_matrix_is_exhaustive() {
         use RemoteLogSegmentState::{
@@ -69,12 +71,7 @@ mod tests {
             DeleteSegmentFinished,
         ];
         // Kafka's `RemoteLogSegmentState.isValidTransition`, row = source.
-        let expected = [
-            [true, true, true, false],
-            [false, true, true, false],
-            [false, false, true, true],
-            [false, false, false, true],
-        ];
+        let expected = expected_transitions();
         for (from_index, from) in states.into_iter().enumerate() {
             for (to_index, to) in states.into_iter().enumerate() {
                 check!(

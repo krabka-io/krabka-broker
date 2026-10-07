@@ -1,6 +1,8 @@
 //! The two shapes the broker's tasks repeat: asking an actor a question over
 //! its `mpsc` mailbox, and running a body on a fixed cadence until shutdown.
 
+use std::time::Duration;
+
 use tokio::{
     sync::{mpsc, oneshot},
     time::{Interval, MissedTickBehavior},
@@ -32,6 +34,24 @@ pub(crate) async fn ask<M, T>(
     rx.await.map_err(|_| AskError::Dropped)
 }
 
+/// Send shutdown without a send timeout, then bound only the reply wait.
+pub(crate) async fn shutdown_actor<M>(
+    tx: &mpsc::Sender<M>,
+    shutdown: impl FnOnce(oneshot::Sender<()>) -> M,
+    timeout: Duration,
+) {
+    let (reply, ack) = oneshot::channel();
+    if tx.send(shutdown(reply)).await.is_ok() {
+        let _ = tokio::time::timeout(timeout, ack).await;
+    }
+}
+
+/// Clone every registry value before callers perform work that can await.
+#[must_use]
+pub(crate) fn cloned_registry_values<V: Clone>(registry: &dashmap::DashMap<String, V>) -> Vec<V> {
+    registry.iter().map(|entry| entry.value().clone()).collect()
+}
+
 /// Run the future `body` makes on every tick of `tick` until `shutdown` is
 /// cancelled.
 ///
@@ -55,6 +75,37 @@ pub(crate) async fn run_every<F: Future<Output = ()>>(
         }
     }
 }
+
+/// Await already spawned tasks in order, reporting each failed join to its caller.
+/// Dropping the handles without calling this function leaves their tasks running.
+pub(crate) async fn finish_tasks(
+    tasks: Vec<tokio::task::JoinHandle<()>>,
+    mut on_error: impl FnMut(tokio::task::JoinError),
+) {
+    for handle in tasks {
+        if let Err(error) = handle.await {
+            on_error(error);
+        }
+    }
+}
+
+/// Declare a concrete task collection whose join errors are logged at its caller.
+macro_rules! scheduled_tasks_type {
+    ($(#[$doc:meta])* $vis:vis struct $name:ident;
+        $(#[$finished_doc:meta])* |$error:ident| $on_error:block) => {
+        $(#[$doc])*
+        #[derive(Debug, Default)]
+        $vis struct $name(Vec<tokio::task::JoinHandle<()>>);
+
+        impl $name {
+            $(#[$finished_doc])*
+            $vis async fn finished(self) {
+                $crate::task_util::finish_tasks(self.0, |$error| $on_error).await;
+            }
+        }
+    };
+}
+pub(crate) use scheduled_tasks_type;
 
 #[cfg(test)]
 mod tests {

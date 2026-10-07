@@ -13,6 +13,29 @@ use assert2::{assert, check};
 use jvm_acceptance::*;
 use krabka_broker::Broker;
 
+// 200 records of ~30 bytes seal several segments at TIERED_SEGMENT_SIZE.
+const RECORDS: usize = 200;
+
+type MinioTopic = (
+    u16,
+    MinioContainer,
+    krabka_broker::BrokerHandle,
+    tempfile::TempDir,
+    krabka_broker::BrokerConfig,
+);
+
+async fn start_minio_topic(topic: &str, rlmm: krabka_broker::RlmmKind) -> MinioTopic {
+    let port = minio_port();
+    let minio = MinioContainer::start();
+    minio_make_bucket(MINIO_BUCKET);
+    let s3 = mutable_minio_config(port);
+    let (broker, dir, config) = start_host_broker_with_minio_tier(s3, rlmm).await;
+    nc_check_connectivity();
+    create_tiered_topic(&broker, topic).await;
+    produce_records(topic, RECORDS);
+    (port, minio, broker, dir, config)
+}
+
 // Same multi-thread caveat as `console_producer_round_trip`: blocking
 // `Command::output()` calls would starve the broker accept loop on a
 // single-threaded runtime.
@@ -20,22 +43,9 @@ use krabka_broker::Broker;
 #[ignore = "requires Docker"]
 async fn tiered_storage_round_trip_through_minio() {
     const TOPIC: &str = "krabka-tiered-minio-itest";
-    // 200 records of ~30 bytes each → ~6 KiB total. With the broker's
-    // `TIERED_SEGMENT_SIZE` default that rolls into ~3 sealed segments plus
-    // the active one — enough to exercise the copy path multiple times.
-    const RECORDS: usize = 200;
 
-    let minio_port = minio_port();
-    let _minio = MinioContainer::start();
-    minio_make_bucket(MINIO_BUCKET);
-
-    let s3 = mutable_minio_config(minio_port);
-    let (broker, _dir, _cfg) =
-        start_host_broker_with_minio_tier(s3, krabka_broker::RlmmKind::InMemory).await;
-    nc_check_connectivity();
-
-    create_tiered_topic(&broker, TOPIC).await;
-    produce_records(TOPIC, RECORDS);
+    let (_minio_port, _minio, broker, _dir, _cfg) =
+        start_minio_topic(TOPIC, krabka_broker::RlmmKind::InMemory).await;
 
     // Give the `RemoteLogManager` enough ticks (1 s interval) to (a) copy
     // every sealed segment to MinIO and (b) run the local-retention pass.
@@ -72,19 +82,9 @@ async fn tiered_storage_round_trip_through_minio() {
 #[ignore = "requires Docker"]
 async fn tiered_storage_disable_needs_delete_on_disable() {
     const TOPIC: &str = "krabka-tiered-disable-itest";
-    const RECORDS: usize = 200;
 
-    let minio_port = minio_port();
-    let _minio = MinioContainer::start();
-    minio_make_bucket(MINIO_BUCKET);
-
-    let s3 = mutable_minio_config(minio_port);
-    let (broker, _dir, _cfg) =
-        start_host_broker_with_minio_tier(s3, krabka_broker::RlmmKind::InMemory).await;
-    nc_check_connectivity();
-
-    create_tiered_topic(&broker, TOPIC).await;
-    produce_records(TOPIC, RECORDS);
+    let (_minio_port, _minio, broker, _dir, _cfg) =
+        start_minio_topic(TOPIC, krabka_broker::RlmmKind::InMemory).await;
     wait_for_minio_segments(MINIO_BUCKET, 2).await;
 
     let bootstrap = broker0_advertised();
@@ -165,16 +165,6 @@ async fn tiered_storage_disable_needs_delete_on_disable() {
 #[ignore = "requires Docker"]
 async fn tiered_storage_topic_rlmm_survives_restart() {
     const TOPIC: &str = "krabka-tiered-restart-itest";
-    // 200 records of ~30 bytes each → ~6 KiB total. With the broker's
-    // `TIERED_SEGMENT_SIZE` default that rolls into ~3 sealed segments plus
-    // the active one — enough to exercise the copy path multiple times.
-    const RECORDS: usize = 200;
-
-    let minio_port = minio_port();
-    let _minio = MinioContainer::start();
-    minio_make_bucket(MINIO_BUCKET);
-
-    let s3 = mutable_minio_config(minio_port);
 
     // Boot with the durable topic-backed RLMM.
     //
@@ -184,8 +174,8 @@ async fn tiered_storage_topic_rlmm_survives_restart() {
     // the fix that makes empty bootstrap work for plaintext single-broker
     // setups without an explicit address. `snapshot_dir` is left empty; the
     // broker derives it from `log.dir` at startup.
-    let (broker, _dir, config) = start_host_broker_with_minio_tier(
-        s3,
+    let (_minio_port, _minio, broker, _dir, config) = start_minio_topic(
+        TOPIC,
         krabka_broker::RlmmKind::TopicBacked(krabka_broker::KafkaRlmmConfig {
             bootstrap: String::new(),
             num_partitions: 5,
@@ -198,10 +188,6 @@ async fn tiered_storage_topic_rlmm_survives_restart() {
         }),
     )
     .await;
-    nc_check_connectivity();
-
-    create_tiered_topic(&broker, TOPIC).await;
-    produce_records(TOPIC, RECORDS);
 
     // Wait for ≥2 segment `.log` objects to appear in MinIO: that means at
     // least two sealed segments have been copied and the local-retention pass
@@ -326,19 +312,9 @@ fn restore_argv(minio_port: u16, log_dir: &std::path::Path) -> Vec<String> {
 #[ignore = "requires Docker"]
 async fn restored_cluster_serves_the_jvm_console_consumer() {
     const TOPIC: &str = "krabka-tiered-restore-itest";
-    const RECORDS: usize = 200;
 
-    let minio_port = minio_port();
-    let _minio = MinioContainer::start();
-    minio_make_bucket(MINIO_BUCKET);
-
-    let s3 = mutable_minio_config(minio_port);
-    let (broker, source_dir, _cfg) =
-        start_host_broker_with_minio_tier(s3, krabka_broker::RlmmKind::InMemory).await;
-    nc_check_connectivity();
-
-    create_tiered_topic(&broker, TOPIC).await;
-    produce_records(TOPIC, RECORDS);
+    let (minio_port, _minio, broker, source_dir, _cfg) =
+        start_minio_topic(TOPIC, krabka_broker::RlmmKind::InMemory).await;
     // Not `wait_for_minio_segments`: that returns as soon as the `.log`
     // objects appear, and `copy_segment_objects` uploads the `.log` before the
     // indexes, producer snapshot and leader-epoch checkpoint that

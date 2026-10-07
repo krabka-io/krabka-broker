@@ -6,7 +6,78 @@
 //! needs the piggybacked acknowledgement batches in a shape that no longer
 //! borrows the request.
 
+use krabka_metadata::MetadataImage;
 use krabka_protocol::owned::share_fetch_request::{FetchPartition, ShareFetchRequest};
+
+use crate::{
+    broker::Broker, codes, coordinator::unified::share::config::ShareGroupConfig,
+    handlers::RequestContext, share_partition::group_settings::GroupShareSettings,
+};
+
+/// The authorized member and resolved group settings shared by fetch and ack.
+pub(crate) struct ShareRequestIdentity {
+    pub(crate) group: String,
+    pub(crate) settings: GroupShareSettings,
+    pub(crate) lock_timeout_ms: i32,
+    pub(crate) member: String,
+}
+
+/// Apply Kafka's feature, group-id, group-read and member-id gates in order.
+/// Settings resolve after authorization and before the member's format check.
+pub(crate) fn resolve_share_identity(
+    broker: &Broker,
+    image: &MetadataImage,
+    ctx: &RequestContext<'_>,
+    defaults: &ShareGroupConfig,
+    group_id: Option<&String>,
+    member_id: Option<&String>,
+) -> Result<ShareRequestIdentity, i16> {
+    if !crate::features::share_groups_enabled(image) {
+        return Err(codes::UNSUPPORTED_VERSION);
+    }
+    let group = group_id.cloned().ok_or(codes::INVALID_REQUEST)?;
+    if crate::handlers::group_read_denied(broker.config.authorizer.as_ref(), image, ctx, &group) {
+        return Err(codes::GROUP_AUTHORIZATION_FAILED);
+    }
+    let settings = GroupShareSettings::resolve(image, &group, defaults);
+    let lock_timeout_ms = settings.record_lock_duration_ms();
+    let member = member_id
+        .cloned()
+        .filter(|id| super::member_id_is_valid(id))
+        .ok_or(codes::INVALID_REQUEST)?;
+    Ok(ShareRequestIdentity {
+        group,
+        settings,
+        lock_timeout_ms,
+        member,
+    })
+}
+
+/// Keep the settings snapshot and identity bindings alive for the whole handler.
+macro_rules! share_request_identity {
+    (($defaults:ident, $image:ident, $group:ident, $settings:ident, $lock_timeout:ident, $member:ident),
+        $response:ident, $broker:ident, $request:ident, $context:ident) => {
+        let $defaults = $broker.config.share_group.clone();
+        let $image = $broker.controller.current_image();
+        let crate::handlers::share_fetch::ShareRequestIdentity {
+            group: $group,
+            settings: $settings,
+            lock_timeout_ms: $lock_timeout,
+            member: $member,
+        } = match crate::handlers::share_fetch::resolve_share_identity(
+            $broker,
+            &$image,
+            $context,
+            &$defaults,
+            $request.group_id.as_ref(),
+            $request.member_id.as_ref(),
+        ) {
+            Ok(identity) => identity,
+            Err(code) => return Ok($response::error(code, None)),
+        };
+    };
+}
+pub(crate) use share_request_identity;
 
 /// One piggybacked acknowledgement batch, that is
 /// `(first_offset, last_offset, per-offset acknowledge_types)`.

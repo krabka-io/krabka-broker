@@ -4,9 +4,19 @@
 
 use krabka_metadata::NodeId;
 use krabka_units::prelude::{Time, TimeExt as _, millis, secs};
+use tokio::io::AsyncReadExt;
 use uuid::Uuid;
 
 use crate::{error::RaftError, kraft::KraftController};
+
+/// Read a complete length-prefixed listener response.
+pub(super) async fn read_frame<R: AsyncReadExt + Unpin>(stream: &mut R) -> Vec<u8> {
+    let mut len = [0u8; 4];
+    stream.read_exact(&mut len).await.expect("response length");
+    let mut frame = vec![0u8; usize::try_from(i32::from_be_bytes(len)).unwrap()];
+    stream.read_exact(&mut frame).await.expect("response frame");
+    frame
+}
 
 /// Election timeout for the in-test engines: short, so a single voter wins
 /// immediately.
@@ -98,12 +108,10 @@ pub(super) async fn activate_dynamic_membership(engine: &KraftController) {
 }
 
 pub(super) fn topic_record(name: &str) -> krabka_metadata::MetadataRecord {
-    krabka_metadata::MetadataRecord::V1Topic(krabka_metadata::TopicRecord {
-        name: name.to_string(),
-        topic_id: uuid::Uuid::new_v4(),
-        partitions: 1,
-        replication_factor: 1,
-    })
+    krabka_metadata::MetadataRecord::V1Topic(crate::test_support::single_partition_topic(
+        name,
+        uuid::Uuid::new_v4(),
+    ))
 }
 
 /// Encodes `message` at `version`.

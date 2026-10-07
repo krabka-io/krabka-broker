@@ -472,6 +472,23 @@ mod tests {
     /// locally-led partition in the entry's partition set. Each append advances
     /// that partition's LEO by one. A whole-function `Ok(())` replacement would
     /// skip the dispatch entirely and leave the LEO at 0.
+    async fn init_verified(
+        coordinator: &Arc<TxnCoordinator>,
+        tid: &str,
+        identity: (i64, i16),
+    ) -> Result<InitProducerIdResponse, BrokerError> {
+        handle_transactional(
+            coordinator,
+            tid,
+            TxnVersion::Verified,
+            60_000,
+            false,
+            false,
+            identity,
+        )
+        .await
+    }
+
     #[tokio::test]
     async fn dispatch_abort_markers_appends_marker_to_local_partition() {
         let dir = tempfile::tempdir().unwrap();
@@ -488,15 +505,8 @@ mod tests {
         let part_dir = crate::log_dir::partition_dir(dir.path(), "orders", 0);
         std::fs::create_dir_all(&part_dir).unwrap();
         let log = Log::open(&part_dir, LogConfig::default()).unwrap();
-        let part = crate::broker::spawn_partition(
-            "orders".to_string(),
-            PartitionIndex(0),
-            dir.path().to_path_buf(),
-            log,
-            crate::log_dir_status::LogDirRegistry::default(),
-            Arc::new(crate::producer_state::ProducerState::new()),
-            false,
-        );
+        let part =
+            crate::test_support::spawn_standalone_partition(dir.path(), "orders", 0, log, false);
         assert!(part.log_end_offset() == 0);
         // The metadata reconcile installs this broker, node 1, as the leader.
         part.install_leader_change(1, 0).await;
@@ -624,17 +634,9 @@ mod tests {
         let (coordinator, _part) = coordinator_with_completed_transaction(dir.path(), SEEDED).await;
         check!(coordinator.get(UNKNOWN).is_none());
 
-        let response = handle_transactional(
-            &coordinator,
-            UNKNOWN,
-            TxnVersion::Verified,
-            60_000,
-            false,
-            false,
-            (4242, 7),
-        )
-        .await
-        .expect("init responds");
+        let response = init_verified(&coordinator, UNKNOWN, (4242, 7))
+            .await
+            .expect("init responds");
 
         check!(response.error_code == codes::NONE);
         check!(response.producer_id != 4242);
@@ -651,13 +653,11 @@ mod tests {
         let (coordinator, _state) = coordinator_with_completed_transaction(dir, tid).await;
         let data_dir = crate::log_dir::partition_dir(dir, "orders", 0);
         std::fs::create_dir_all(&data_dir).expect("create the data partition directory");
-        let data = crate::broker::spawn_partition(
-            "orders".to_string(),
-            PartitionIndex(0),
-            dir.to_path_buf(),
+        let data = crate::test_support::spawn_standalone_partition(
+            dir,
+            "orders",
+            0,
             Log::open(&data_dir, LogConfig::default()).expect("open the data log"),
-            crate::log_dir_status::LogDirRegistry::default(),
-            Arc::new(crate::producer_state::ProducerState::new()),
             false,
         );
         // The metadata reconcile installs this broker, node 1, as the leader.
@@ -954,17 +954,9 @@ mod tests {
             entry.producer_epoch = i16::MAX - 1;
         }
 
-        let rotated = handle_transactional(
-            &coordinator,
-            TID,
-            TxnVersion::Verified,
-            60_000,
-            false,
-            false,
-            (1000, i16::MAX - 1),
-        )
-        .await
-        .expect("init responds");
+        let rotated = init_verified(&coordinator, TID, (1000, i16::MAX - 1))
+            .await
+            .expect("init responds");
         check!(rotated.error_code == codes::NONE);
         check!(rotated.producer_id != 1000);
         check!(rotated.producer_epoch == 0);
@@ -972,17 +964,9 @@ mod tests {
         check!(entry.prev_producer_id == ProducerId(1000));
         check!(entry.last_producer_epoch == i16::MAX - 1);
 
-        let retried = handle_transactional(
-            &coordinator,
-            TID,
-            TxnVersion::Verified,
-            60_000,
-            false,
-            false,
-            (1000, i16::MAX - 1),
-        )
-        .await
-        .expect("init responds");
+        let retried = init_verified(&coordinator, TID, (1000, i16::MAX - 1))
+            .await
+            .expect("init responds");
         check!(
             (
                 retried.error_code,
@@ -1023,16 +1007,7 @@ mod tests {
         for _ in 0..2 {
             let coordinator = Arc::clone(&coordinator);
             calls.push(tokio::spawn(async move {
-                handle_transactional(
-                    &coordinator,
-                    TID,
-                    TxnVersion::Verified,
-                    60_000,
-                    false,
-                    false,
-                    (1000, 3),
-                )
-                .await
+                init_verified(&coordinator, TID, (1000, 3)).await
             }));
             tokio::task::yield_now().await;
         }
@@ -1074,16 +1049,7 @@ mod tests {
         for _ in 0..2 {
             let coordinator = Arc::clone(&coordinator);
             calls.push(tokio::spawn(async move {
-                handle_transactional(
-                    &coordinator,
-                    TID,
-                    TxnVersion::Verified,
-                    60_000,
-                    false,
-                    false,
-                    (-1, -1),
-                )
-                .await
+                init_verified(&coordinator, TID, (-1, -1)).await
             }));
         }
         for _ in 0..10 {
@@ -1184,13 +1150,11 @@ mod tests {
             // abort.
             let ghost_dir = crate::log_dir::partition_dir(dir.path(), "ghost", 0);
             std::fs::create_dir_all(&ghost_dir).expect("create ghost partition dir");
-            let ghost = crate::broker::spawn_partition(
-                "ghost".to_string(),
-                PartitionIndex(0),
-                dir.path().to_path_buf(),
+            let ghost = crate::test_support::spawn_standalone_partition(
+                dir.path(),
+                "ghost",
+                0,
                 Log::open(&ghost_dir, LogConfig::default()).expect("open ghost log"),
-                crate::log_dir_status::LogDirRegistry::default(),
-                Arc::new(crate::producer_state::ProducerState::new()),
                 false,
             );
             ghost.install_leader_change(1, 0).await;
@@ -1258,18 +1222,7 @@ mod tests {
 
         let init = {
             let coordinator = Arc::clone(&coordinator);
-            tokio::spawn(async move {
-                handle_transactional(
-                    &coordinator,
-                    TID,
-                    TxnVersion::Verified,
-                    60_000,
-                    false,
-                    false,
-                    (-1, -1),
-                )
-                .await
-            })
+            tokio::spawn(async move { init_verified(&coordinator, TID, (-1, -1)).await })
         };
         tokio::task::yield_now().await;
 
@@ -1317,17 +1270,9 @@ mod tests {
         ongoing.state = TxnState::Ongoing;
         seed(&coordinator, ongoing).await;
 
-        let fenced = handle_transactional(
-            &coordinator,
-            TID,
-            TxnVersion::Verified,
-            60_000,
-            false,
-            false,
-            (1000, i16::MAX - 1),
-        )
-        .await
-        .expect("init responds");
+        let fenced = init_verified(&coordinator, TID, (1000, i16::MAX - 1))
+            .await
+            .expect("init responds");
         check!(
             fenced
                 == InitProducerIdResponse {
@@ -1351,17 +1296,9 @@ mod tests {
         // The producer that names its old, exhausted identity again is
         // recognised as a retry of the rotation, and answered the rotated pair
         // without a write.
-        let stale = handle_transactional(
-            &coordinator,
-            TID,
-            TxnVersion::Verified,
-            60_000,
-            false,
-            false,
-            (1000, i16::MAX - 1),
-        )
-        .await
-        .expect("init responds");
+        let stale = init_verified(&coordinator, TID, (1000, i16::MAX - 1))
+            .await
+            .expect("init responds");
         check!(
             stale
                 == InitProducerIdResponse {
@@ -1373,17 +1310,9 @@ mod tests {
 
         // `initTransactions()` names no identity, so the retry gets the
         // rotated identity the abort's completion already staged.
-        let retried = handle_transactional(
-            &coordinator,
-            TID,
-            TxnVersion::Verified,
-            60_000,
-            false,
-            false,
-            (-1, -1),
-        )
-        .await
-        .expect("init responds");
+        let retried = init_verified(&coordinator, TID, (-1, -1))
+            .await
+            .expect("init responds");
         check!(retried.error_code == codes::NONE);
         check!(retried.producer_id == entry.producer_id.get());
         check!(retried.producer_epoch == entry.producer_epoch + 1);
@@ -1411,30 +1340,14 @@ mod tests {
 
         // The seeded entry starts at epoch 3. Bump it once (3 -> 4) so the
         // legitimate 4 -> 5 bump below has a live epoch to name.
-        handle_transactional(
-            &coordinator,
-            TID,
-            TxnVersion::Verified,
-            60_000,
-            false,
-            false,
-            (1000, 3),
-        )
-        .await
-        .expect("first bump responds");
+        init_verified(&coordinator, TID, (1000, 3))
+            .await
+            .expect("first bump responds");
 
         // The legitimate 4 -> 5 bump: recorded epoch 4 as the retry token.
-        let bumped = handle_transactional(
-            &coordinator,
-            TID,
-            TxnVersion::Verified,
-            60_000,
-            false,
-            false,
-            (1000, 4),
-        )
-        .await
-        .expect("bump responds");
+        let bumped = init_verified(&coordinator, TID, (1000, 4))
+            .await
+            .expect("bump responds");
         check!(
             (bumped.error_code, bumped.producer_id, bumped.producer_epoch)
                 == (codes::NONE, 1000, 5)
@@ -1450,17 +1363,9 @@ mod tests {
         // A second InitProducerId call finds the transaction Ongoing and
         // fences it, aborting at epoch 6.
         // (Kafka `prepareAbortOrCommit` at TV2: `epoch + 1`, `lastEpoch = epoch`.)
-        let fenced = handle_transactional(
-            &coordinator,
-            TID,
-            TxnVersion::Verified,
-            60_000,
-            false,
-            false,
-            (1000, 5),
-        )
-        .await
-        .expect("init responds");
+        let fenced = init_verified(&coordinator, TID, (1000, 5))
+            .await
+            .expect("init responds");
         check!(fenced == concurrent_transactions_response());
         let entry = coordinator.get(TID).expect("entry").lock().await.clone();
         // TV2 bumps once, and the epoch the fenced producer held is the last
@@ -1473,17 +1378,9 @@ mod tests {
         // The zombie holding the pre-bump token (4) belongs to the
         // generation the fence just ended and must be fenced, not admitted
         // as a retry of the entry the fence produced.
-        let zombie = handle_transactional(
-            &coordinator,
-            TID,
-            TxnVersion::Verified,
-            60_000,
-            false,
-            false,
-            (1000, 4),
-        )
-        .await
-        .expect("init responds");
+        let zombie = init_verified(&coordinator, TID, (1000, 4))
+            .await
+            .expect("init responds");
         check!(zombie.error_code == codes::PRODUCER_FENCED, "{zombie:?}");
     }
 
@@ -1504,17 +1401,9 @@ mod tests {
 
         // Bumps epoch 3 -> 4 and records 3 as the last epoch, exactly as a
         // caller whose response was lost would leave it.
-        let bumped = handle_transactional(
-            &coordinator,
-            TID,
-            TxnVersion::Verified,
-            60_000,
-            false,
-            false,
-            (1000, 3),
-        )
-        .await
-        .expect("bump responds");
+        let bumped = init_verified(&coordinator, TID, (1000, 3))
+            .await
+            .expect("bump responds");
         check!(
             (bumped.error_code, bumped.producer_id, bumped.producer_epoch)
                 == (codes::NONE, 1000, 4)
@@ -1535,17 +1424,9 @@ mod tests {
         // The zombie's retransmitted InitProducerId, still naming the
         // pre-bump epoch, arrives after the live transaction is already
         // open.
-        let retried = handle_transactional(
-            &coordinator,
-            TID,
-            TxnVersion::Verified,
-            60_000,
-            false,
-            false,
-            (1000, 3),
-        )
-        .await
-        .expect("retry responds");
+        let retried = init_verified(&coordinator, TID, (1000, 3))
+            .await
+            .expect("retry responds");
 
         check!(
             (
@@ -1584,17 +1465,9 @@ mod tests {
         // on this same tid's lock would hold it.
         let pre_call_handle = coordinator.get(TID).expect("the seeded entry");
 
-        let response = handle_transactional(
-            &coordinator,
-            TID,
-            TxnVersion::Verified,
-            60_000,
-            false,
-            false,
-            (1000, 3),
-        )
-        .await
-        .expect("bump responds");
+        let response = init_verified(&coordinator, TID, (1000, 3))
+            .await
+            .expect("bump responds");
         check!(
             (
                 response.error_code,

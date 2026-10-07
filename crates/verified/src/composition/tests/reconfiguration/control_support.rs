@@ -1,25 +1,22 @@
-use std::collections::BTreeSet;
-
 use assert2::assert;
 
-use super::{oracle::expected_membership, *};
-
-type ExpectedControl = Option<(
-    VoterReconfigurationPlan,
-    Vec<u64>,
-    Vec<i32>,
-    Option<(i64, (usize, usize), u64)>,
-)>;
+use super::{
+    oracle::{expected_membership, grant_sets},
+    *,
+};
+use crate::{
+    composition::reconfiguration::SupportedControl, reconfiguration::ReconfigurationState,
+};
 
 pub(super) fn expected_control(
     old: &[u64],
-    state: (ReconfigurationLeadership, CurrentVoterSet),
+    state: ReconfigurationState,
     request: VoterChangeRequest,
     node: u64,
     candidate: TargetVoter,
     base: i64,
     reports: &[(i64, i64)],
-) -> ExpectedControl {
+) -> SupportedControl {
     expected_membership(old, state.0, state.1, request, node, candidate).and_then(|(plan, next)| {
         let count = usize::from(plan.write_kraft_version) + usize::from(plan.write_voters);
         let deltas: Vec<_> = (0..count).map(|i| i32::try_from(i).unwrap()).collect();
@@ -31,22 +28,8 @@ pub(super) fn expected_control(
             return None;
         }
         let end = i64::try_from(end).unwrap();
-        let next_ids: BTreeSet<_> = next.iter().copied().collect();
-        let old_grants: BTreeSet<_> = old
-            .iter()
-            .enumerate()
-            .filter(|(i, _)| reports[*i].0 >= end)
-            .map(|(_, id)| *id)
-            .collect();
-        let mut new_grants: BTreeSet<_> = old
-            .iter()
-            .enumerate()
-            .filter(|(i, id)| reports[*i].1 >= end && next_ids.contains(*id))
-            .map(|(_, id)| *id)
-            .collect();
-        if !old.contains(&node) && next_ids.contains(&node) && reports[old.len()].1 >= end {
-            new_grants.insert(node);
-        }
+        let votes: Vec<_> = reports.iter().map(|r| (r.0 >= end, r.1 >= end)).collect();
+        let (old_grants, new_grants) = grant_sets(old, &next, node, &votes);
         let counts = (old_grants.len(), new_grants.len());
         if counts.0 <= old.len() / 2 || counts.1 <= next.len() / 2 {
             return None;
@@ -62,7 +45,7 @@ pub(super) fn expected_control(
 
 fn check_control(
     old: &[u64],
-    state: (ReconfigurationLeadership, CurrentVoterSet),
+    state: ReconfigurationState,
     request: VoterChangeRequest,
     node: u64,
     candidate: TargetVoter,
@@ -78,12 +61,10 @@ fn check_control(
 proptest! {
     #[test]
     fn control_support_matches_actual_prefix_sets(
-        old in prop::collection::vec(0u64..12, 0..10), node in 0u64..13,
-        bits in any::<u16>(), operation in 0u8..4, membership in 0u8..4,
-        version in 0u16..3, requested in 0u16..3, base in any::<i64>(),
-        reports in prop::collection::vec((any::<i64>(), any::<i64>()), 11),
+        input in request_cases(), base in any::<i64>(),
+        reports in prefix_report_cases(),
     ) {
-        let (leader, context, request, candidate) = generated_request(old.len(), bits, operation, membership, version, requested);
+        let (old, node, (leader, context, request, candidate)) = input;
         check_control(&old, (leader, context), request, node, candidate, base, &reports[..=old.len()]);
     }
 }

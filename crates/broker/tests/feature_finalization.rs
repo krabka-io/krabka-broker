@@ -7,23 +7,17 @@
 //! check and persists nothing.
 
 use assert2::assert;
+
+use crate::support::{configs::feature_update, discovery::api_versions_request_for};
 mod support;
 
 use krabka_format::LATEST_PRODUCTION_METADATA_VERSION;
 use krabka_metadata::metadata_version::METADATA_VERSION_MAX;
-use krabka_protocol::owned::{
-    api_versions_request::ApiVersionsRequest,
-    update_features_request::{FeatureUpdateKey, UpdateFeaturesRequest},
-};
+use krabka_protocol::owned::update_features_request::UpdateFeaturesRequest;
 
 fn metadata_version_update(level: i16) -> UpdateFeaturesRequest {
     UpdateFeaturesRequest {
-        feature_updates: vec![FeatureUpdateKey {
-            feature: "metadata.version".into(),
-            max_version_level: level,
-            upgrade_type: 1,
-            ..Default::default()
-        }],
+        feature_updates: vec![feature_update("metadata.version", level, 1)],
         ..Default::default()
     }
 }
@@ -64,11 +58,7 @@ async fn an_unstable_metadata_version_is_refused_by_default() {
     assert_feature_error(&resp, "metadata.version");
     let av = p
         .client
-        .send(ApiVersionsRequest {
-            client_software_name: "krabka-test".into(),
-            client_software_version: "0.0.0".into(),
-            ..Default::default()
-        })
+        .send(api_versions_request_for("krabka-test", "0.0.0"))
         .await
         .expect("ApiVersions");
     let supported = av
@@ -106,11 +96,7 @@ async fn finalizes_metadata_version_and_surfaces_in_api_versions() {
     // ApiVersions now surfaces the finalized feature with a real epoch.
     let av = p
         .client
-        .send(ApiVersionsRequest {
-            client_software_name: "krabka-test".into(),
-            client_software_version: "0.0.0".into(),
-            ..Default::default()
-        })
+        .send(api_versions_request_for("krabka-test", "0.0.0"))
         .await
         .expect("ApiVersions");
     let fin = av
@@ -126,12 +112,7 @@ async fn finalizes_metadata_version_and_surfaces_in_api_versions() {
 
 fn share_version_update(level: i16) -> UpdateFeaturesRequest {
     UpdateFeaturesRequest {
-        feature_updates: vec![FeatureUpdateKey {
-            feature: "share.version".into(),
-            max_version_level: level,
-            upgrade_type: 1,
-            ..Default::default()
-        }],
+        feature_updates: vec![feature_update("share.version", level, 1)],
         ..Default::default()
     }
 }
@@ -140,11 +121,7 @@ fn share_version_update(level: i16) -> UpdateFeaturesRequest {
 async fn share_version_in_api_versions(p: &support::InProcess) -> (Option<i16>, Option<i16>) {
     let av = p
         .client
-        .send(ApiVersionsRequest {
-            client_software_name: "krabka-test".into(),
-            client_software_version: "0.0.0".into(),
-            ..Default::default()
-        })
+        .send(api_versions_request_for("krabka-test", "0.0.0"))
         .await
         .expect("ApiVersions");
     (
@@ -279,11 +256,8 @@ async fn validate_only_does_not_persist() {
     // then assert neither moved — validate_only must run the checks without
     // persisting (no epoch bump, no level change).
     let api_versions = || {
-        p.client.send(ApiVersionsRequest {
-            client_software_name: "krabka-test".into(),
-            client_software_version: "0.0.0".into(),
-            ..Default::default()
-        })
+        p.client
+            .send(api_versions_request_for("krabka-test", "0.0.0"))
     };
 
     let before = api_versions().await.expect("ApiVersions");

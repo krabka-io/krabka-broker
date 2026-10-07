@@ -414,6 +414,19 @@ impl ConnectionAuth {
     }
 }
 
+/// Run an ordinary SASL round and restore or renew the previous session when this is reauthentication.
+pub(super) fn authenticate_with_reauth(
+    auth: &mut ConnectionAuth,
+    authenticate: impl FnOnce(&mut ConnectionAuth) -> SaslAuthenticateResponse,
+) -> SaslAuthenticateResponse {
+    let previous = begin_reauth(auth);
+    let response = authenticate(auth);
+    match previous {
+        Some(previous) => finish_reauth(auth, previous, response),
+        None => response,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use assert2::{assert, check};
@@ -597,16 +610,13 @@ mod tests {
 
     #[test]
     fn authenticated_returns_principal() {
-        let a = ConnectionAuth::Authenticated {
-            principal: Principal {
-                name: "alice".into(),
-                auth_method: krabka_security::AuthMethod::SaslScramSha512,
-                groups: vec![],
-            },
-            mechanism: SaslMechanism::ScramSha512,
-            expires_at_ms: None,
-            authenticated_via_token: false,
-        };
+        let a = crate::network::auth::test_support::authenticated(
+            "alice",
+            krabka_security::AuthMethod::SaslScramSha512,
+            SaslMechanism::ScramSha512,
+            None,
+            false,
+        );
         assert!(a.is_authenticated());
         let p = a.principal().expect("principal");
         assert!(p.name == "alice");
@@ -617,16 +627,13 @@ mod tests {
 
     #[test]
     fn authenticated_state_carries_mechanism_and_expires_at_ms() {
-        let auth = ConnectionAuth::Authenticated {
-            principal: Principal {
-                name: "alice".to_string(),
-                auth_method: krabka_security::AuthMethod::SaslOAuthBearer,
-                groups: vec![],
-            },
-            mechanism: SaslMechanism::OAuthBearer,
-            expires_at_ms: Some(2_000_000),
-            authenticated_via_token: false,
-        };
+        let auth = crate::network::auth::test_support::authenticated(
+            "alice",
+            krabka_security::AuthMethod::SaslOAuthBearer,
+            SaslMechanism::OAuthBearer,
+            Some(2_000_000),
+            false,
+        );
         match auth {
             ConnectionAuth::Authenticated {
                 principal,
@@ -644,20 +651,7 @@ mod tests {
 
     #[test]
     fn allows_request_during_reauthenticating_only_sasl_authenticate() {
-        let auth = ConnectionAuth::Reauthenticating {
-            previous: AuthenticatedSnapshot {
-                principal: Principal {
-                    name: "alice".to_string(),
-                    auth_method: krabka_security::AuthMethod::SaslOAuthBearer,
-                    groups: vec![],
-                },
-                mechanism: SaslMechanism::OAuthBearer,
-                expires_at_ms: Some(2_000_000),
-                authenticated_via_token: false,
-            },
-            exchange: SaslExchange::OAuthBearer,
-            pending_token_expiry_ms: None,
-        };
+        let auth = crate::network::auth::test_support::oauth_reauthenticating("alice", 2_000_000);
         let cases = [
             (36, true),  // SaslAuthenticate
             (17, false), // SaslHandshake
@@ -671,16 +665,13 @@ mod tests {
 
     #[test]
     fn allows_request_authenticated_allows_all() {
-        let auth = ConnectionAuth::Authenticated {
-            principal: Principal {
-                name: "alice".into(),
-                auth_method: krabka_security::AuthMethod::SaslScramSha512,
-                groups: vec![],
-            },
-            mechanism: SaslMechanism::ScramSha512,
-            expires_at_ms: None,
-            authenticated_via_token: false,
-        };
+        let auth = crate::network::auth::test_support::authenticated(
+            "alice",
+            krabka_security::AuthMethod::SaslScramSha512,
+            SaslMechanism::ScramSha512,
+            None,
+            false,
+        );
         for api_key in [0, 3, 17, 36] {
             assert!(auth.allows_request(api_key), "api key {api_key}");
         }
@@ -693,36 +684,27 @@ mod tests {
     #[test]
     fn an_expired_session_admits_a_re_authentication_and_nothing_else() {
         let now_ms = 1_000_i64;
-        let expired = ConnectionAuth::Authenticated {
-            principal: Principal {
-                name: "alice".into(),
-                auth_method: AuthMethod::SaslScramSha512,
-                groups: vec![],
-            },
-            mechanism: SaslMechanism::ScramSha512,
-            expires_at_ms: Some(now_ms - 1),
-            authenticated_via_token: false,
-        };
-        let live = ConnectionAuth::Authenticated {
-            principal: Principal {
-                name: "alice".into(),
-                auth_method: AuthMethod::SaslScramSha512,
-                groups: vec![],
-            },
-            mechanism: SaslMechanism::ScramSha512,
-            expires_at_ms: Some(now_ms + 1),
-            authenticated_via_token: false,
-        };
-        let uncapped = ConnectionAuth::Authenticated {
-            principal: Principal {
-                name: "alice".into(),
-                auth_method: AuthMethod::SaslScramSha512,
-                groups: vec![],
-            },
-            mechanism: SaslMechanism::ScramSha512,
-            expires_at_ms: None,
-            authenticated_via_token: false,
-        };
+        let expired = crate::network::auth::test_support::authenticated(
+            "alice",
+            krabka_security::AuthMethod::SaslScramSha512,
+            SaslMechanism::ScramSha512,
+            Some(now_ms - 1),
+            false,
+        );
+        let live = crate::network::auth::test_support::authenticated(
+            "alice",
+            krabka_security::AuthMethod::SaslScramSha512,
+            SaslMechanism::ScramSha512,
+            Some(now_ms + 1),
+            false,
+        );
+        let uncapped = crate::network::auth::test_support::authenticated(
+            "alice",
+            krabka_security::AuthMethod::SaslScramSha512,
+            SaslMechanism::ScramSha512,
+            None,
+            false,
+        );
         let reauthenticating = ConnectionAuth::Reauthenticating {
             previous: AuthenticatedSnapshot {
                 principal: Principal {
@@ -779,20 +761,8 @@ mod tests {
             exchange: SaslExchange::Plain,
             pending_token_expiry_ms: None,
         };
-        let reauthenticating = ConnectionAuth::Reauthenticating {
-            previous: AuthenticatedSnapshot {
-                principal: Principal {
-                    name: "alice".to_string(),
-                    auth_method: krabka_security::AuthMethod::SaslOAuthBearer,
-                    groups: vec![],
-                },
-                mechanism: SaslMechanism::OAuthBearer,
-                expires_at_ms: Some(2_000_000),
-                authenticated_via_token: false,
-            },
-            exchange: SaslExchange::OAuthBearer,
-            pending_token_expiry_ms: None,
-        };
+        let reauthenticating =
+            crate::network::auth::test_support::oauth_reauthenticating("alice", 2_000_000);
         let authenticated = ConnectionAuth::Authenticated {
             principal: crate::test_support::principal("ANONYMOUS"),
             mechanism: SaslMechanism::Plain,
@@ -822,6 +792,23 @@ mod tests {
     /// The session a re-authentication is measured against: SCRAM-SHA-256
     /// under a delegation token, so that a restore which drops either the
     /// mechanism or the KIP-48 token flag is visible.
+    fn assert_previous_session_restored(auth: ConnectionAuth) {
+        match auth {
+            ConnectionAuth::Authenticated {
+                principal,
+                mechanism,
+                expires_at_ms,
+                authenticated_via_token,
+            } => {
+                check!(principal.name == "alice");
+                check!(mechanism == SaslMechanism::ScramSha256);
+                check!(expires_at_ms == Some(9_000));
+                check!(authenticated_via_token);
+            }
+            other => panic!("expected the previous session restored, got {other:?}"),
+        }
+    }
+
     fn previous_session() -> AuthenticatedSnapshot {
         AuthenticatedSnapshot {
             principal: alice(),
@@ -985,12 +972,13 @@ mod tests {
     /// the KIP-368 window.
     #[test]
     fn finish_reauth_keeps_a_same_principal_session_and_its_new_window() {
-        let mut auth = ConnectionAuth::Authenticated {
-            principal: alice(),
-            mechanism: SaslMechanism::Plain,
-            expires_at_ms: Some(40_000),
-            authenticated_via_token: false,
-        };
+        let mut auth = crate::network::auth::test_support::authenticated(
+            "alice",
+            krabka_security::AuthMethod::SaslPlain,
+            SaslMechanism::Plain,
+            Some(40_000),
+            false,
+        );
         let resp = finish_reauth(&mut auth, previous_session(), ok_response(30_000));
 
         check!(resp == ok_response(30_000));
@@ -1068,20 +1056,7 @@ mod tests {
                 unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(Vec::new()),
             }
         );
-        match auth {
-            ConnectionAuth::Authenticated {
-                principal,
-                mechanism,
-                expires_at_ms,
-                authenticated_via_token,
-            } => {
-                check!(principal.name == "alice");
-                check!(mechanism == SaslMechanism::ScramSha256);
-                check!(expires_at_ms == Some(9_000));
-                check!(authenticated_via_token);
-            }
-            other => panic!("expected the previous session restored, got {other:?}"),
-        }
+        assert_previous_session_restored(auth);
     }
 
     /// A re-authentication the mechanism rejected leaves the connection on its
@@ -1101,19 +1076,6 @@ mod tests {
         let resp = finish_reauth(&mut auth, previous_session(), failure.clone());
 
         check!(resp == failure);
-        match auth {
-            ConnectionAuth::Authenticated {
-                principal,
-                mechanism,
-                expires_at_ms,
-                authenticated_via_token,
-            } => {
-                check!(principal.name == "alice");
-                check!(mechanism == SaslMechanism::ScramSha256);
-                check!(expires_at_ms == Some(9_000));
-                check!(authenticated_via_token);
-            }
-            other => panic!("expected the previous session restored, got {other:?}"),
-        }
+        assert_previous_session_restored(auth);
     }
 }

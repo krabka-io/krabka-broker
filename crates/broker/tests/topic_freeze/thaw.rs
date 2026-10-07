@@ -21,7 +21,7 @@ use crate::{
     control_plane::{cluster_id, freeze_scope, set_freeze, wait_for_registry_len},
     signing::{SignedFreeze, signed_request},
     support,
-    wire::{CONTROL, accepted, create_topic, now_ms, produce_outcome, refused},
+    wire::{CONTROL, accepted, create_topic, now_ms, refused},
 };
 
 /// The `ThawTopicFreeze` break-glass action, on the wire.
@@ -90,13 +90,10 @@ async fn a_thaw_restores_writes() {
     let alice = support::sasl_client(&bootstrap, "alice", "pw").await;
     let frozen = create_topic(&broker, &alice, "orders").await;
     let control = create_topic(&broker, &alice, CONTROL).await;
-    check!(produce_outcome(&broker, &alice, "orders", frozen).await == accepted(1));
+    crate::wire::check_produce!(&broker, &alice, "orders", frozen => accepted(1));
 
     freeze_scope(&alice, PATTERN_TYPE_LITERAL, "orders", "cutover").await;
-    check!(
-        produce_outcome(&broker, &alice, "orders", frozen).await
-            == refused("literal", "orders", "cutover", 1)
-    );
+    crate::wire::check_produce!(&broker, &alice, "orders", frozen => refused("literal", "orders", "cutover", 1));
 
     // Alice proposes and may not approve her own proposal, so the two
     // approvals come from two other people.
@@ -123,7 +120,7 @@ async fn a_thaw_restores_writes() {
     check!(thaw.error_code == codes::NONE, "thaw: {thaw:?}");
     wait_for_registry_len(&alice, 0).await;
 
-    check!(produce_outcome(&broker, &alice, "orders", frozen).await == accepted(2));
-    check!(produce_outcome(&broker, &alice, CONTROL, control).await == accepted(1));
+    crate::wire::check_produce!(&broker, &alice, "orders", frozen => accepted(2));
+    crate::wire::check_produce!(&broker, &alice, CONTROL, control => accepted(1));
     broker.shutdown().await;
 }

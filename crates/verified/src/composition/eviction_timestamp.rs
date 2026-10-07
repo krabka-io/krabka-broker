@@ -17,7 +17,7 @@ use super::{
     && frontiers.3@ + frontiers.2@.max(0) <= frontiers.1@)]
 #[requires(0 <= frontiers.4@ && frontiers.4@ <= frontiers.0@
     && frontiers.4@ + frontiers.2@.max(0) <= frontiers.1@)]
-#[requires(forall<i: Int> 0 <= i && i < window.0@.len() ==> base@ + window.0@[i]@ <= i64::MAX@)]
+#[requires(super::time_index::absolute_record_prefix_bounded(window.0@, window.0@.len(), base@, i64::MAX@))]
 #[ensures(frontiers.3@ <= result.0@ && frontiers.4@ <= result.1@)]
 #[ensures(result.0@ <= frontiers.0@ && result.1@ <= frontiers.0@)]
 #[ensures(result.0@ + frontiers.2@.max(0) <= frontiers.1@ && result.1@ + frontiers.2@.max(0) <= frontiers.1@)]

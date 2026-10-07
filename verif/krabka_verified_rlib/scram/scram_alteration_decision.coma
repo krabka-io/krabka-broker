@@ -1,13 +1,15 @@
-(* #"/workspace/crates/verified/src/scram.rs" 121 0 121 88 *)
+(* #"/workspace/crates/verified/src/scram.rs" 112 0 112 88 *)
 
 let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
 let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
-let%span sscram = "/workspace/crates/verified/src/scram.rs" 134 26 134 27
-let%span sscram'0 = "/workspace/crates/verified/src/scram.rs" 134 50 134 51
-let%span sscram'1 = "/workspace/crates/verified/src/scram.rs" 149 34 149 35
-let%span sscram'2 = "/workspace/crates/verified/src/scram.rs" 63 10 117 1
-let%span sscram'3 = "/workspace/crates/verified/src/scram.rs" 118 10 118 83
-let%span sscram'4 = "/workspace/crates/verified/src/scram.rs" 119 10 119 83
+let%span sscram = "/workspace/crates/verified/src/scram.rs" 125 26 125 27
+let%span sscram'0 = "/workspace/crates/verified/src/scram.rs" 125 50 125 51
+let%span sscram'1 = "/workspace/crates/verified/src/scram.rs" 140 34 140 35
+let%span sscram'2 = "/workspace/crates/verified/src/scram.rs" 68 10 108 1
+let%span sscram'3 = "/workspace/crates/verified/src/scram.rs" 109 10 109 83
+let%span sscram'4 = "/workspace/crates/verified/src/scram.rs" 110 10 110 83
+let%span sscram'5 = "/workspace/crates/verified/src/scram.rs" 57 16 59 24
+let%span sscram'6 = "/workspace/crates/verified/src/scram.rs" 50 16 51 55
 
 use creusot.int.Int8
 use creusot.int.Int32
@@ -41,6 +43,12 @@ type t_ScramAlterationDecision =
   | AcceptSha256
   | AcceptSha512
 
+predicate alteration_name_admitted [#"/workspace/crates/verified/src/scram.rs" 56 0 56 68] (facts: t_ScramAlterationFacts) =
+  [%#sscram'5] facts.prior = Unseen /\ facts.authorized /\ not facts.name_empty
+
+predicate alteration_mechanism_admitted [#"/workspace/crates/verified/src/scram.rs" 49 0 49 69] (facts: t_ScramAlterationFacts) =
+  [%#sscram'6] alteration_name_admitted facts /\ (Int8.to_int facts.mechanism = 1 \/ Int8.to_int facts.mechanism = 2)
+
 predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other <= self
 
 meta "rewrite_def" predicate ge_log_Int
@@ -53,7 +61,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let scram_alteration_decision [#"/workspace/crates/verified/src/scram.rs" 121 0 121 88] (facts: t_ScramAlterationFacts)
+let scram_alteration_decision [#"/workspace/crates/verified/src/scram.rs" 112 0 112 88] (facts: t_ScramAlterationFacts)
   (return (x: t_ScramAlterationDecision)) = (! bb0
   [ bb0 = any
     [ br0 -> {facts.prior = Unseen} (! bb4)
@@ -65,67 +73,54 @@ let scram_alteration_decision [#"/workspace/crates/verified/src/scram.rs" 121 0 
   | bb7 = any [ br0 -> {facts.name_empty = false} (! bb10) | br1 -> {facts.name_empty} (! bb9) ]
   | bb9 = s0 [ s0 = [ &_ret <- EmptyName ] s1 | s1 = return {_ret} ]
   | bb10 = s0
-    [ s0 = [ &_27 <- facts.mechanism <> ([%#sscram] (1: Int8.t)) ] s1
-    | s1 = any [ br0 -> {_27 = false} (! bb15) | br1 -> {_27} (! bb11) ] ]
+    [ s0 = [ &_19 <- facts.mechanism <> ([%#sscram] (1: Int8.t)) ] s1
+    | s1 = any [ br0 -> {_19 = false} (! bb15) | br1 -> {_19} (! bb11) ] ]
   | bb11 = s0
-    [ s0 = [ &_29 <- facts.mechanism <> ([%#sscram'0] (2: Int8.t)) ] s1
-    | s1 = any [ br0 -> {_29 = false} (! bb15) | br1 -> {_29} (! bb13) ] ]
+    [ s0 = [ &_21 <- facts.mechanism <> ([%#sscram'0] (2: Int8.t)) ] s1
+    | s1 = any [ br0 -> {_21 = false} (! bb15) | br1 -> {_21} (! bb13) ] ]
   | bb13 = s0 [ s0 = [ &_ret <- UnsupportedMechanism ] s1 | s1 = return {_ret} ]
   | bb15 = any [ br0 -> {facts.kind = Delete} (! bb23) | br1 -> {facts.kind = Upsert} (! bb22) ]
   | bb22 = s0
-    [ s0 = [ &_35 <- Int32.lt facts.iterations facts.min_iterations ] s1
-    | s1 = any [ br0 -> {_35 = false} (! bb21) | br1 -> {_35} (! bb26) ] ]
+    [ s0 = [ &_27 <- Int32.lt facts.iterations facts.min_iterations ] s1
+    | s1 = any [ br0 -> {_27 = false} (! bb21) | br1 -> {_27} (! bb26) ] ]
   | bb26 = s0 [ s0 = [ &_ret <- TooFewIterations ] s1 | s1 = return {_ret} ]
   | bb21 = s0
-    [ s0 = [ &_38 <- Int32.gt facts.iterations facts.max_iterations ] s1
-    | s1 = any [ br0 -> {_38 = false} (! bb20) | br1 -> {_38} (! bb28) ] ]
+    [ s0 = [ &_30 <- Int32.gt facts.iterations facts.max_iterations ] s1
+    | s1 = any [ br0 -> {_30 = false} (! bb20) | br1 -> {_30} (! bb28) ] ]
   | bb28 = s0 [ s0 = [ &_ret <- TooManyIterations ] s1 | s1 = return {_ret} ]
   | bb23 = any
     [ br0 -> {facts.deletion_target_exists = false} (! bb25) | br1 -> {facts.deletion_target_exists} (! bb20) ]
   | bb20 = s0
-    [ s0 = [ &_41 <- facts.mechanism = ([%#sscram'1] (1: Int8.t)) ] s1
-    | s1 = any [ br0 -> {_41 = false} (! bb31) | br1 -> {_41} (! bb30) ] ]
+    [ s0 = [ &_33 <- facts.mechanism = ([%#sscram'1] (1: Int8.t)) ] s1
+    | s1 = any [ br0 -> {_33 = false} (! bb31) | br1 -> {_33} (! bb30) ] ]
   | bb30 = s0 [ s0 = [ &_ret <- AcceptSha256 ] s1 | s1 = return {_ret} ]
   | bb31 = s0 [ s0 = [ &_ret <- AcceptSha512 ] s1 | s1 = return {_ret} ]
   | bb25 = s0 [ s0 = [ &_ret <- MissingCredential ] s1 | s1 = return {_ret} ]
   | bb8 = s0 [ s0 = [ &_ret <- Unauthorized ] s1 | s1 = return {_ret} ] ]
   [ & _ret: t_ScramAlterationDecision = Any.any_l ()
   | & facts: t_ScramAlterationFacts = facts
+  | & _19: bool = Any.any_l ()
+  | & _21: bool = Any.any_l ()
   | & _27: bool = Any.any_l ()
-  | & _29: bool = Any.any_l ()
-  | & _35: bool = Any.any_l ()
-  | & _38: bool = Any.any_l ()
-  | & _41: bool = Any.any_l () ])
+  | & _30: bool = Any.any_l ()
+  | & _33: bool = Any.any_l () ])
   [ return (result: t_ScramAlterationDecision) ->
   {[@stop_split] [@expl:scram_alteration_decision ensures] ([@stop_split] [@expl:scram_alteration_decision ensures #0] [%#sscram'2] match result with
         | KeepPriorError -> facts.prior = Rejected
         | Duplicate -> facts.prior = Accepted
         | Unauthorized -> facts.prior = Unseen /\ not facts.authorized
         | EmptyName -> facts.prior = Unseen /\ facts.authorized /\ facts.name_empty
-        | UnsupportedMechanism -> facts.prior = Unseen
-        /\ facts.authorized
-        /\ not facts.name_empty /\ Int8.to_int facts.mechanism <> 1 /\ Int8.to_int facts.mechanism <> 2
-        | TooFewIterations -> facts.prior = Unseen
-        /\ facts.authorized
-        /\ not facts.name_empty
-        /\ (Int8.to_int facts.mechanism = 1 \/ Int8.to_int facts.mechanism = 2)
+        | UnsupportedMechanism -> alteration_name_admitted facts
+        /\ Int8.to_int facts.mechanism <> 1 /\ Int8.to_int facts.mechanism <> 2
+        | TooFewIterations -> alteration_mechanism_admitted facts
         /\ facts.kind = Upsert /\ Int32.to_int facts.iterations < Int32.to_int facts.min_iterations
-        | TooManyIterations -> facts.prior = Unseen
-        /\ facts.authorized
-        /\ not facts.name_empty
-        /\ (Int8.to_int facts.mechanism = 1 \/ Int8.to_int facts.mechanism = 2)
+        | TooManyIterations -> alteration_mechanism_admitted facts
         /\ facts.kind = Upsert
         /\ ge_log_Int (Int32.to_int facts.iterations) (Int32.to_int facts.min_iterations)
         /\ gt_log_Int (Int32.to_int facts.iterations) (Int32.to_int facts.max_iterations)
-        | MissingCredential -> facts.prior = Unseen
-        /\ facts.authorized
-        /\ not facts.name_empty
-        /\ (Int8.to_int facts.mechanism = 1 \/ Int8.to_int facts.mechanism = 2)
+        | MissingCredential -> alteration_mechanism_admitted facts
         /\ facts.kind = Delete /\ not facts.deletion_target_exists
-        | AcceptSha256 | AcceptSha512 -> facts.prior = Unseen
-        /\ facts.authorized
-        /\ not facts.name_empty
-        /\ (Int8.to_int facts.mechanism = 1 \/ Int8.to_int facts.mechanism = 2)
+        | AcceptSha256 | AcceptSha512 -> alteration_mechanism_admitted facts
         /\ match facts.kind with
           | Delete -> facts.deletion_target_exists
           | Upsert -> ge_log_Int (Int32.to_int facts.iterations) (Int32.to_int facts.min_iterations)

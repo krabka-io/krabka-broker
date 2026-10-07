@@ -45,13 +45,13 @@ impl<'a> LeaderDial<'a> {
     fn fetcher(fetcher: &'a FetcherConfig) -> Self {
         Self {
             label: "replicator",
-            client: &fetcher.inter_broker_client,
+            client: &fetcher.connection.inter_broker_client,
             host: &fetcher.leader_host,
             port: fetcher.leader_port,
-            protocol: fetcher.inter_broker_listener_protocol,
-            server_name: &fetcher.inter_broker_server_name,
+            protocol: fetcher.connection.inter_broker_listener_protocol,
+            server_name: &fetcher.connection.inter_broker_server_name,
             client_id: &fetcher.client_id,
-            replication: &fetcher.replication,
+            replication: &fetcher.connection.replication,
             shutdown: &fetcher.shutdown,
         }
     }
@@ -136,12 +136,12 @@ mod tests {
     #[test]
     fn configured_reconnect_delay_doubles_until_cap() {
         let (mut cfg, _log_dir) = test_config(image_with_leader(LEADER_ID));
-        cfg.replication.reconnect_initial_delay = millis(37);
-        cfg.replication.reconnect_delay_cap = millis(100);
+        cfg.connection.replication.reconnect_initial_delay = millis(37);
+        cfg.connection.replication.reconnect_delay_cap = millis(100);
 
-        let first = reconnect_delay(&cfg.replication, None);
-        let second = reconnect_delay(&cfg.replication, Some(first));
-        let capped = reconnect_delay(&cfg.replication, Some(second));
+        let first = reconnect_delay(&cfg.connection.replication, None);
+        let second = reconnect_delay(&cfg.connection.replication, Some(first));
+        let capped = reconnect_delay(&cfg.connection.replication, Some(second));
 
         assert!((first, second, capped) == (millis(37), millis(74), millis(100)));
     }

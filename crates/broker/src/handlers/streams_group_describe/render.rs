@@ -226,7 +226,6 @@ fn task_map_to_ids(map: &BTreeMap<String, Vec<i32>>) -> Vec<TaskIds> {
 #[cfg(test)]
 mod tests {
     use assert2::assert;
-    use krabka_protocol::UnknownTaggedFields;
 
     use super::*;
     use crate::{
@@ -251,7 +250,7 @@ mod tests {
             topology_description: None,
         });
 
-        let expected = DescribedGroup {
+        let expected = tagged_wire!(DescribedGroup {
             error_code: codes::NONE,
             error_message: None,
             group_id: "streams-app".into(),
@@ -259,7 +258,7 @@ mod tests {
             group_epoch: 11,
             assignment_epoch: 10,
             topology: Some(expected_rendered_topology()),
-            members: vec![Member {
+            members: vec![tagged_wire!(Member {
                 member_id: "member-1".into(),
                 member_epoch: 7,
                 instance_id: Some("instance-a".into()),
@@ -268,51 +267,43 @@ mod tests {
                 client_host: "/127.0.0.1".into(),
                 topology_epoch: 9,
                 process_id: "process-a".into(),
-                user_endpoint: Some(Endpoint {
+                user_endpoint: Some(tagged_wire!(Endpoint {
                     host: "host-a".into(),
                     port: 8080,
-                    unknown_tagged_fields: UnknownTaggedFields(Vec::new()),
-                }),
-                client_tags: vec![KeyValue {
+                })),
+                client_tags: vec![tagged_wire!(KeyValue {
                     key: "zone".into(),
                     value: "z1".into(),
-                    unknown_tagged_fields: UnknownTaggedFields(Vec::new()),
-                }],
-                task_offsets: vec![TaskOffset {
+                })],
+                task_offsets: vec![tagged_wire!(TaskOffset {
                     subtopology_id: "sub-a".into(),
                     partition: 0,
                     offset: 5,
-                    unknown_tagged_fields: UnknownTaggedFields(Vec::new()),
-                }],
-                task_end_offsets: vec![TaskOffset {
+                })],
+                task_end_offsets: vec![tagged_wire!(TaskOffset {
                     subtopology_id: "sub-a".into(),
                     partition: 0,
                     offset: 10,
-                    unknown_tagged_fields: UnknownTaggedFields(Vec::new()),
-                }],
-                assignment: Assignment {
+                })],
+                assignment: tagged_wire!(Assignment {
                     active_tasks: vec![expected_task_ids("sub-a", vec![0, 2])],
                     standby_tasks: vec![expected_task_ids("sub-a", vec![1])],
                     warmup_tasks: vec![expected_task_ids("sub-b", vec![3, 4])],
-                    unknown_tagged_fields: UnknownTaggedFields(Vec::new()),
-                },
-                target_assignment: Assignment {
+                }),
+                target_assignment: tagged_wire!(Assignment {
                     active_tasks: vec![expected_task_ids("sub-a", vec![0])],
                     standby_tasks: vec![expected_task_ids("sub-a", vec![1, 2])],
                     warmup_tasks: Vec::new(),
-                    unknown_tagged_fields: UnknownTaggedFields(Vec::new()),
-                },
+                }),
                 is_classic: false,
-                unknown_tagged_fields: UnknownTaggedFields(Vec::new()),
-            }],
+            })],
             // Filled by the handler on request; the wire default otherwise.
             authorized_operations: i32::MIN,
             // v1 fields, at their schema defaults: the handler serves v0.
             topology_description: None,
             topology_description_status: 0,
             assignor_name: Some("sticky".into()),
-            unknown_tagged_fields: UnknownTaggedFields(Vec::new()),
-        };
+        });
         assert!(rendered == expected);
     }
 

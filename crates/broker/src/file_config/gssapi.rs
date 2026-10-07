@@ -22,8 +22,7 @@ fn default_principal_to_local_rules() -> Vec<String> {
 /// [`crate::network::auth::GssapiConfig`]. `principal_to_local_rules`
 /// are parsed into `KerberosRule` at `apply_to` time.
 #[krabka_macros::human_units]
-#[derive(Debug, Clone, Default, Deserialize, JsonSchema, PartialEq)]
-#[serde(deny_unknown_fields)]
+#[krabka_macros::config_table(strict)]
 pub struct FileGssapiConfig {
     /// Keytab that holds this broker's Kerberos service key. The SASL/GSSAPI
     /// accept path reads it to answer a client's ticket.
@@ -92,9 +91,8 @@ realm = "EXAMPLE.COM"
 kdc = "tcp://kdc:88"
 max_time_skew = "17s"
 "#;
-        let file: FileConfig = toml::from_str(src).expect("parse [gssapi]");
-        let mut cfg = crate::config::BrokerConfig::default();
-        file.apply_to(&mut cfg).expect("apply [gssapi]");
+        let cfg = crate::file_config::test_support::configured(src, "parse [gssapi]")
+            .expect("apply [gssapi]");
         let g = cfg.gssapi.expect("gssapi config present");
         check!(g.keytab_path == std::path::PathBuf::from("/etc/krabka/gssapi-keytab/keytab"));
         check!(g.service_name.as_str() == "kafka");
@@ -116,9 +114,7 @@ max_time_skew = "17s"
 keytab_path = "/k/keytab"
 principal_to_local_rules = ["DEFAULT"]
 "#;
-        let file: FileConfig = toml::from_str(src).unwrap();
-        let mut cfg = crate::config::BrokerConfig::default();
-        file.apply_to(&mut cfg).unwrap();
+        let cfg = crate::file_config::test_support::configured_unwrap_parse(src).unwrap();
         let gssapi = cfg.gssapi.unwrap();
         assert!(gssapi.service_name == "kafka");
         assert!(gssapi.max_time_skew == krabka_security::gssapi::DEFAULT_GSSAPI_MAX_TIME_SKEW);
@@ -142,9 +138,7 @@ principal_to_local_rules = ["DEFAULT"]
         ];
         for (rules, expected) in cases {
             let src = format!("[gssapi]\nkeytab_path = \"/k/keytab\"\n{realm}{rules}");
-            let file: FileConfig = toml::from_str(&src).unwrap();
-            let mut cfg = crate::config::BrokerConfig::default();
-            file.apply_to(&mut cfg).unwrap();
+            let cfg = crate::file_config::test_support::configured_unwrap_parse(&src).unwrap();
             let kinds: Vec<&str> = cfg
                 .gssapi
                 .unwrap()
@@ -166,9 +160,7 @@ principal_to_local_rules = ["DEFAULT"]
 keytab_path = "/k/keytab"
 max_time_skew = "0s"
 "#;
-        let file: FileConfig = toml::from_str(src).unwrap();
-        let mut cfg = crate::config::BrokerConfig::default();
-        file.apply_to(&mut cfg).unwrap();
+        let cfg = crate::file_config::test_support::configured_unwrap_parse(src).unwrap();
         assert!(cfg.gssapi.unwrap().max_time_skew == secs(0));
     }
 
@@ -191,9 +183,7 @@ max_time_skew = "-1s"
 keytab_path = "/k/keytab"
 principal_to_local_rules = ["NOT_A_RULE:::"]
 "#;
-        let file: FileConfig = toml::from_str(src).unwrap();
-        let mut cfg = crate::config::BrokerConfig::default();
-        let err = file.apply_to(&mut cfg).unwrap_err();
+        let err = crate::file_config::test_support::configured_unwrap_parse(src).unwrap_err();
         assert!(matches!(err, FileConfigError::InvalidConfig(_)));
     }
     #[test]
@@ -206,9 +196,7 @@ client_principal = "kafka@EXAMPLE.COM"
 service_name = "kafka"
 kdc_url = "tcp://kdc:88"
 "#;
-        let file: FileConfig = toml::from_str(src).unwrap();
-        let mut cfg = crate::config::BrokerConfig::default();
-        file.apply_to(&mut cfg).unwrap();
+        let cfg = crate::file_config::test_support::configured_unwrap_parse(src).unwrap();
         let expected = crate::config::InterBrokerCredentials::Gssapi {
             keytab_path: std::path::PathBuf::from("/etc/krabka/gssapi-keytab/keytab"),
             client_principal: "kafka@EXAMPLE.COM".to_string(),
@@ -238,9 +226,7 @@ keytab_path = "/k/keytab"
 client_principal = "kafka@EXAMPLE.COM"
 kdc_url = "tcp://kdc:88"
 "#;
-        let file: FileConfig = toml::from_str(src).unwrap();
-        let mut cfg = crate::config::BrokerConfig::default();
-        file.apply_to(&mut cfg).unwrap();
+        let cfg = crate::file_config::test_support::configured_unwrap_parse(src).unwrap();
         match cfg.inter_broker_credentials.unwrap() {
             crate::config::InterBrokerCredentials::Gssapi { service_name, .. } => {
                 assert!(service_name == "kafka");
@@ -262,9 +248,7 @@ token_path = {}
 "#,
             toml::Value::String(token_path.to_string_lossy().into_owned())
         );
-        let file: FileConfig = toml::from_str(&src).unwrap();
-        let mut cfg = crate::config::BrokerConfig::default();
-        file.apply_to(&mut cfg).unwrap();
+        let cfg = crate::file_config::test_support::configured_unwrap_parse(&src).unwrap();
 
         let Some(crate::config::InterBrokerCredentials::OAuthBearer {
             token_path: actual_path,

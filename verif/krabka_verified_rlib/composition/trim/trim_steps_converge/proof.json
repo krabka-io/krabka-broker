@@ -4,13 +4,13 @@
     "Coma": {
       "vc_delete_records_trim_application": {
         "prover": "alt-ergo",
-        "time": 0.004
+        "time": 0.014
       },
-      "vc_elim_TrimLocal": { "prover": "alt-ergo", "time": 0.005 },
-      "vc_elim_TrimWal": { "prover": "alt-ergo", "time": 0.003 },
-      "vc_len_bool": { "prover": "alt-ergo", "time": 0.005 },
-      "vc_max_i64": { "prover": "alt-ergo", "time": 0.004 },
-      "vc_trim_steps_converge": { "prover": "z3", "time": 0.009 }
+      "vc_elim_TrimLocal": { "prover": "alt-ergo", "time": 0.01 },
+      "vc_elim_TrimWal": { "prover": "alt-ergo", "time": 0.013 },
+      "vc_len_bool": { "prover": "alt-ergo", "time": 0.01 },
+      "vc_max_i64": { "prover": "alt-ergo", "time": 0.01 },
+      "vc_trim_steps_converge": { "prover": "z3", "time": 0.021 }
     }
   }
 }

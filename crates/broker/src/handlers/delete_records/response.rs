@@ -60,37 +60,32 @@ mod tests {
     #[test]
     fn response_helpers_preserve_topic_and_partition_fields() {
         let denied = error_partition_result(7, codes::TOPIC_AUTHORIZATION_FAILED);
-        let expected_denied = DeleteRecordsPartitionResult {
+        let expected_denied = tagged_wire!(DeleteRecordsPartitionResult {
             partition_index: 7,
             low_watermark: -1,
             error_code: codes::TOPIC_AUTHORIZATION_FAILED,
-            unknown_tagged_fields: krabka_protocol::UnknownTaggedFields::default(),
-        };
+        });
         assert!(denied == expected_denied);
 
         let ok = partition_result(3, 44, codes::NONE);
-        let expected_ok = DeleteRecordsPartitionResult {
+        let expected_ok = tagged_wire!(DeleteRecordsPartitionResult {
             partition_index: 3,
             low_watermark: 44,
             error_code: codes::NONE,
-            unknown_tagged_fields: krabka_protocol::UnknownTaggedFields::default(),
-        };
+        });
         assert!(ok == expected_ok);
 
         let topic = topic_result("orders".into(), vec![denied]);
-        let expected_topic = DeleteRecordsTopicResult {
+        let expected_topic = tagged_wire!(DeleteRecordsTopicResult {
             name: "orders".into(),
             partitions: vec![expected_denied],
-            unknown_tagged_fields: krabka_protocol::UnknownTaggedFields::default(),
-        };
+        });
         assert!(topic == expected_topic);
 
         let resp = delete_records_response(vec![topic]);
-        let expected_resp = DeleteRecordsResponse {
-            throttle_time_ms: 0,
+        let expected_resp = unthrottled_wire!(DeleteRecordsResponse {
             topics: vec![expected_topic],
-            unknown_tagged_fields: krabka_protocol::UnknownTaggedFields::default(),
-        };
+        });
         assert!(resp == expected_resp);
     }
 }

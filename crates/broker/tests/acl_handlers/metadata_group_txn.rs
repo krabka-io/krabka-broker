@@ -9,7 +9,6 @@
 //! separately and drives the typed request.
 
 use assert2::assert;
-use krabka_protocol::owned::init_producer_id_request::InitProducerIdRequest;
 
 use crate::{
     ERR_GROUP_AUTHORIZATION_FAILED, ERR_MEMBER_ID_REQUIRED, ERR_TOPIC_AUTHORIZATION_FAILED,
@@ -17,20 +16,19 @@ use crate::{
     acl_admin::create_topic_as_admin,
     client_api::{drive_init_producer_id_as_plain, drive_join_group_as_plain, join_group_request},
     polling::{retry_join_group_until_allowed, retry_metadata_until_topic_visible},
+    support::transactions::init_producer_request,
 };
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn metadata_silent_filter_on_fetch_all() {
-    let (handle, _dir, _) = crate::sasl_cluster::start_admin_alice().await;
+/// Only t1 is visible to Alice, with a real ACL image disabling the compat shim.
+async fn alice_metadata_fixture() -> (
+    krabka_broker::BrokerHandle,
+    tempfile::TempDir,
+    std::net::SocketAddr,
+) {
+    let (handle, dir, _) = crate::sasl_cluster::start_admin_alice().await;
     let addr = handle.listen_addr();
-
     create_topic_as_admin(addr, "t1", 1).await;
     create_topic_as_admin(addr, "t2", 1).await;
-
-    // Seed Allow Describe Topic LITERAL "t1" User:alice. The presence of
-    // any ACL in the image also disables the compat shim, so the
-    // authorizer evaluates every request rather than short-circuiting to
-    // Allow.
     handle
         .submit_metadata_record_for_test(crate::support::acl::topic_acl_record(
             "t1",
@@ -39,6 +37,12 @@ async fn metadata_silent_filter_on_fetch_all() {
         ))
         .await
         .expect("seed Describe-on-t1 ACL for alice");
+    (handle, dir, addr)
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn metadata_silent_filter_on_fetch_all() {
+    let (handle, _dir, addr) = alice_metadata_fixture().await;
 
     // Wait for the ACL to propagate before issuing Metadata as alice —
     // until then alice sees no topics at all. Once t1 appears, the image
@@ -65,23 +69,7 @@ async fn metadata_silent_filter_on_fetch_all() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn metadata_explicit_deny_on_named_topic() {
-    let (handle, _dir, _) = crate::sasl_cluster::start_admin_alice().await;
-    let addr = handle.listen_addr();
-
-    create_topic_as_admin(addr, "t1", 1).await;
-    create_topic_as_admin(addr, "t2", 1).await;
-
-    // Seed Allow Describe on t1 for alice. This both turns the compat
-    // shim off and gives alice *something* she's authorized to see, so
-    // the Deny on t2 isn't merely "no ACLs anywhere".
-    handle
-        .submit_metadata_record_for_test(crate::support::acl::topic_acl_record(
-            "t1",
-            "User:alice",
-            krabka_metadata::AclOperation::Describe,
-        ))
-        .await
-        .expect("seed Describe-on-t1 ACL for alice");
+    let (handle, _dir, addr) = alice_metadata_fixture().await;
 
     // Ask Metadata for t2 *by name*. The named-topic path returns an
     // error row instead of silently filtering. Use the retry helper so
@@ -197,13 +185,7 @@ async fn init_producer_id_denied_without_txn_acl() {
         .await
         .expect("seed dummy ACL");
 
-    let req = InitProducerIdRequest {
-        transactional_id: Some("tx-1".to_string()),
-        transaction_timeout_ms: 60_000,
-        producer_id: -1,
-        producer_epoch: -1,
-        ..Default::default()
-    };
+    let req = init_producer_request(Some("tx-1".to_string()), 60_000, (-1, -1));
     let resp = drive_init_producer_id_as_plain(addr, "alice", b"wonderland", req)
         .await
         .expect("InitProducerId must round-trip");

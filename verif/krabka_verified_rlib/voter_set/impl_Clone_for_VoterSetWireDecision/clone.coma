@@ -1,4 +1,4 @@
-(* #"/workspace/crates/verified/src/voter_set.rs" 67 27 67 32 *)
+(* #"/workspace/crates/verified/src/voter_set.rs" 63 19 63 36 *)
 
 (* <voter_set::VoterSetWireDecision as std::clone::Clone> *)
 
@@ -10,7 +10,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let clone_VoterSetWireDecision [#"/workspace/crates/verified/src/voter_set.rs" 67 27 67 32]
+let clone_VoterSetWireDecision [#"/workspace/crates/verified/src/voter_set.rs" 63 19 63 36]
   (self: t_VoterSetWireDecision) (return (x: t_VoterSetWireDecision)) = (! bb0
   [ bb0 = s0 [ s0 = [ &_ret <- self ] s1 | s1 = return {_ret} ] ]
   [ & _ret: t_VoterSetWireDecision = Any.any_l () | & self: t_VoterSetWireDecision = self ])

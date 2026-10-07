@@ -10,8 +10,8 @@ use super::*;
 use crate::{
     io::FileIo,
     log::test_support::{
-        NO_LIMIT, commit_marker, rolling_test_log, sample_batch, sample_batch_with_epoch, test_log,
-        tiny_segments, transaction_fields, transactional_batch,
+        NO_LIMIT, append_transaction, commit_marker, rolling_test_log, sample_batch,
+        sample_batch_with_epoch, test_log, tiny_segments, transaction_fields, transactional_batch,
     },
 };
 
@@ -46,7 +46,7 @@ fn open_rejects_a_negative_segment_base() {
 fn open_recovers_partial_trailing_batch() {
     let dir = tempdir().unwrap();
     {
-        let mut log = Log::open(dir.path(), LogConfig::default()).unwrap();
+        let mut log = crate::test_support::open_log(dir.path());
         let mut b1 = sample_batch(3);
         let mut b2 = sample_batch(2);
         log.append(&mut b1).unwrap();
@@ -61,7 +61,7 @@ fn open_recovers_partial_trailing_batch() {
     std::io::Write::write_all(&mut f, &[0xAB; 10]).unwrap();
     f.sync_data().unwrap();
     drop(f);
-    let log = Log::open(dir.path(), LogConfig::default()).unwrap();
+    let log = crate::test_support::open_log(dir.path());
     assert2::assert!(log.log_end_offset() == 5);
 }
 
@@ -70,7 +70,7 @@ fn open_truncates_epoch_checkpoint_to_recovered_leo() {
     let dir = tempdir().unwrap();
     let log_path = dir.path().join("00000000000000000000.log");
     let first_batch_len = {
-        let mut log = Log::open(dir.path(), LogConfig::default()).unwrap();
+        let mut log = crate::test_support::open_log(dir.path());
         let mut first = sample_batch_with_epoch(1, 1);
         log.append(&mut first).unwrap();
         let first_batch_len = log.read_raw(Offset(0), Offset(1), NO_LIMIT).unwrap().total;
@@ -266,42 +266,31 @@ fn recovered_batch_offsets_require_checked_progress() {
 
 #[test]
 fn producer_sequence_rollover_survives_reopen() {
+    let check_sequence_rollover = |log: &Log| {
+        let entry = log.producer_state_snapshot().into_iter().next().unwrap();
+        assert2::assert!(entry.last_sequence == 0);
+        assert2::assert!(entry.last_offset == Offset(2));
+        assert2::assert!(entry.offset_delta == 2);
+    };
     let dir = tempfile::tempdir().unwrap();
     {
-        let mut log = Log::open(dir.path(), LogConfig::default()).unwrap();
+        let mut log = crate::test_support::open_log(dir.path());
         let mut batch = sample_batch(3);
         batch.producer_id = 1;
         batch.producer_epoch = 0;
         batch.base_sequence = i32::MAX - 1;
         log.append(&mut batch).unwrap();
 
-        let entry = log.producer_state_snapshot().into_iter().next().unwrap();
-        assert2::assert!(entry.last_sequence == 0);
-        assert2::assert!(entry.last_offset == Offset(2));
-        assert2::assert!(entry.offset_delta == 2);
+        check_sequence_rollover(&log);
     }
 
-    let reopened = Log::open(dir.path(), LogConfig::default()).unwrap();
-    let entry = reopened
-        .producer_state_snapshot()
-        .into_iter()
-        .next()
-        .unwrap();
-    assert2::assert!(entry.last_sequence == 0);
-    assert2::assert!(entry.last_offset == Offset(2));
-    assert2::assert!(entry.offset_delta == 2);
+    let reopened = crate::test_support::open_log(dir.path());
+    check_sequence_rollover(&reopened);
 }
 
 #[test]
 fn higher_epoch_control_marker_clears_data_batch_metadata() {
-    let dir = tempfile::tempdir().unwrap();
-    {
-        let mut log = Log::open(dir.path(), LogConfig::default()).unwrap();
-        let mut data = transactional_batch(88, 4, &["a", "b"]);
-        data.base_sequence = 10;
-        log.append(&mut data).unwrap();
-        log.append(&mut commit_marker(88, 5)).unwrap();
-
+    let check_cleared_metadata = |log: &Log| {
         let entry = log
             .producer_state_snapshot()
             .into_iter()
@@ -313,27 +302,33 @@ fn higher_epoch_control_marker_clears_data_batch_metadata() {
         check!(entry.offset_delta == 0);
         check!(entry.current_txn_first_offset == None);
         check!(entry.coordinator_epoch == 17);
+    };
+    let dir = tempfile::tempdir().unwrap();
+    {
+        let mut log = crate::test_support::open_log(dir.path());
+        let mut data = transactional_batch(88, 4, &["a", "b"]);
+        data.base_sequence = 10;
+        log.append(&mut data).unwrap();
+        log.append(&mut commit_marker(88, 5)).unwrap();
+
+        check_cleared_metadata(&log);
     }
 
-    let reopened = Log::open(dir.path(), LogConfig::default()).unwrap();
-    let entry = reopened
-        .producer_state_snapshot()
-        .into_iter()
-        .find(|entry| entry.producer_id == 88)
-        .unwrap();
-    check!(entry.producer_epoch == 5);
-    check!(entry.last_sequence == -1);
-    check!(entry.last_offset == Offset(-1));
-    check!(entry.offset_delta == 0);
-    check!(entry.current_txn_first_offset == None);
-    check!(entry.coordinator_epoch == 17);
+    let reopened = crate::test_support::open_log(dir.path());
+    check_cleared_metadata(&reopened);
 }
 
 #[test]
 fn zero_producer_id_and_only_transactional_ranges_survive_recovery() {
+    let check_zero_producer = |log: &Log| {
+        let state = log.producer_state_snapshot();
+        let zero = state.iter().find(|entry| entry.producer_id == 0).unwrap();
+        assert2::assert!(zero.last_sequence == 6);
+        assert2::assert!(zero.current_txn_first_offset == Some(Offset(0)));
+    };
     let dir = tempfile::tempdir().unwrap();
     {
-        let mut log = Log::open(dir.path(), LogConfig::default()).unwrap();
+        let mut log = crate::test_support::open_log(dir.path());
 
         let mut zero_pid = transactional_batch(0, 3, &["a", "b"]);
         zero_pid.base_sequence = 5;
@@ -349,17 +344,11 @@ fn zero_producer_id_and_only_transactional_ranges_survive_recovery() {
         negative_pid.base_sequence = 0;
         log.append(&mut negative_pid).unwrap();
 
-        let state = log.producer_state_snapshot();
-        let zero = state.iter().find(|entry| entry.producer_id == 0).unwrap();
-        assert2::assert!(zero.last_sequence == 6);
-        assert2::assert!(zero.current_txn_first_offset == Some(Offset(0)));
+        check_zero_producer(&log);
     }
 
-    let reopened = Log::open(dir.path(), LogConfig::default()).unwrap();
-    let state = reopened.producer_state_snapshot();
-    let zero = state.iter().find(|entry| entry.producer_id == 0).unwrap();
-    assert2::assert!(zero.last_sequence == 6);
-    assert2::assert!(zero.current_txn_first_offset == Some(Offset(0)));
+    let reopened = crate::test_support::open_log(dir.path());
+    check_zero_producer(&reopened);
     assert2::assert!(reopened.lso() == Offset(0));
     assert2::assert!(reopened.pending_stamp_ranges.len() == 1);
     assert2::assert!(
@@ -371,21 +360,16 @@ fn zero_producer_id_and_only_transactional_ranges_survive_recovery() {
 fn reopen_rebuilds_pending_transactions_and_lso() {
     let dir = tempfile::tempdir().unwrap();
     {
-        let mut log = Log::open(dir.path(), LogConfig::default()).unwrap();
-        log.append(&mut transactional_batch(1000, 4, &["a", "b"]))
-            .unwrap();
+        let mut log = crate::test_support::open_log(dir.path());
+        append_transaction(&mut log, (1000, 4), &["a", "b"]);
         assert2::assert!(log.pending_transaction_start(ProducerId(1000)) == Some(Offset(0)));
         assert2::assert!(log.lso() == Offset(0));
     }
 
-    let mut reopened = Log::open(dir.path(), LogConfig::default()).unwrap();
+    let mut reopened = crate::test_support::open_log(dir.path());
     assert2::assert!(reopened.pending_transaction_start(ProducerId(1000)) == Some(Offset(0)));
     assert2::assert!(reopened.lso() == Offset(0));
-    reopened
-        .set_stamp_source(std::sync::Arc::new(
-            crate::stamp_source::MonotonicStampSource::new(30, 1),
-        ))
-        .unwrap();
+    crate::log::test_support::install_stamps(&mut reopened, 30, 1);
 
     reopened.append(&mut commit_marker(1000, 4)).unwrap();
     check!(reopened.stamp_for_offset(Offset(0)) == Some(30));
@@ -400,13 +384,11 @@ fn reopen_rebuilds_pending_transactions_and_lso() {
     let log_end = reopened.log_end_offset();
     assert2::assert!(reopened.last_stable_offset(log_end) == log_end);
 
-    reopened
-        .append(&mut transactional_batch(1000, 4, &["next"]))
-        .unwrap();
+    append_transaction(&mut reopened, (1000, 4), &["next"]);
     assert2::assert!(transaction_fields(&reopened, ProducerId(1000)) == (17, Some(Offset(3))));
     drop(reopened);
 
-    let recovered_again = Log::open(dir.path(), LogConfig::default()).unwrap();
+    let recovered_again = crate::test_support::open_log(dir.path());
     assert2::assert!(
         transaction_fields(&recovered_again, ProducerId(1000)) == (17, Some(Offset(3)))
     );
@@ -416,13 +398,13 @@ fn reopen_rebuilds_pending_transactions_and_lso() {
 fn reopen_does_not_treat_non_transactional_producer_data_as_pending() {
     let dir = tempfile::tempdir().unwrap();
     {
-        let mut log = Log::open(dir.path(), LogConfig::default()).unwrap();
+        let mut log = crate::test_support::open_log(dir.path());
         let mut batch = sample_batch(1);
         batch.producer_id = 42;
         log.append(&mut batch).unwrap();
     }
 
-    let reopened = Log::open(dir.path(), LogConfig::default()).unwrap();
+    let reopened = crate::test_support::open_log(dir.path());
     check!(reopened.pending_transaction_start(ProducerId(42)) == None);
     check!(reopened.lso() == reopened.log_end_offset());
 }
@@ -443,26 +425,21 @@ fn reopen_seals_recovered_segments_at_next_base_minus_one() {
         let mut log = Log::open(dir.path(), cfg.clone()).unwrap();
         // Multi-record batches → segment bases are 0, 2, 4, ... (each
         // sealed segment spans two offsets), so next_base - base == 2.
-        for _ in 0..4 {
-            log.append(&mut sample_batch(2)).unwrap();
-        }
+        crate::log::test_support::append_samples(&mut log, 4, 2);
         assert2::assert!(log.segments.len() >= 2);
     }
     // Reopen: sealed segments recovered via no-scan open + seal_at(next-1).
     let reopened = Log::open(dir.path(), cfg).unwrap();
     let exports = reopened.tierable_segments();
     assert2::assert!(exports.len() >= 2);
-    for pair in exports.windows(2) {
-        // last_offset must be exactly one below the next segment's base.
-        assert2::assert!(pair[0].last_offset + 1 == pair[1].base_offset);
-    }
+    crate::log::test_support::check_contiguous_exports(&exports);
 }
 
 #[test]
 fn open_restores_a_log_start_trimmed_inside_the_active_segment() {
     let dir = tempdir().unwrap();
     {
-        let mut log = Log::open(dir.path(), LogConfig::default()).unwrap();
+        let mut log = crate::test_support::open_log(dir.path());
         log.append(&mut sample_batch(5)).unwrap();
         // One segment holds every record, so no segment name witnesses the
         // trim: only the checkpoint can carry it across the reopen.
@@ -470,7 +447,7 @@ fn open_restores_a_log_start_trimmed_inside_the_active_segment() {
         log.sync().unwrap();
     }
 
-    let log = Log::open(dir.path(), LogConfig::default()).unwrap();
+    let log = crate::test_support::open_log(dir.path());
 
     assert!(log.log_start_offset() == Offset(3));
     assert!(log.log_end_offset() == Offset(5));
@@ -483,21 +460,21 @@ fn open_rewrites_a_checkpoint_past_the_log_end_so_appends_cannot_revive_it() {
     // range on a later open and hides records appended after it was written.
     let dir = tempdir().unwrap();
     {
-        let mut log = Log::open(dir.path(), LogConfig::default()).unwrap();
+        let mut log = crate::test_support::open_log(dir.path());
         log.set_log_start_offset(Offset(7)).unwrap();
         log.sync().unwrap();
     }
 
     // Reopen empty: 7 is past the log end, so it resolves to the log end.
     {
-        let mut log = Log::open(dir.path(), LogConfig::default()).unwrap();
+        let mut log = crate::test_support::open_log(dir.path());
         assert!(log.log_start_offset() == Offset(0));
         // Records the stale checkpoint would have hidden.
         log.append(&mut sample_batch(9)).unwrap();
         log.sync().unwrap();
     }
 
-    let log = Log::open(dir.path(), LogConfig::default()).unwrap();
+    let log = crate::test_support::open_log(dir.path());
 
     assert!(log.log_start_offset() == Offset(0));
     assert!(log.log_end_offset() == Offset(9));
@@ -530,9 +507,7 @@ fn open_resolves_a_checkpoint_against_what_the_log_holds() {
         let dir = tempdir().unwrap();
         {
             let mut log = rolling_test_log(dir.path());
-            log.append(&mut sample_batch(1)).unwrap();
-            log.append(&mut sample_batch(1)).unwrap();
-            log.append(&mut sample_batch(1)).unwrap();
+            crate::log::test_support::append_samples(&mut log, 3, 1);
             // Drops the sealed segments below offset 2, so the derived start
             // is 2 and the log end is 3.
             log.trim_to_offset(Offset(2)).unwrap();
@@ -545,7 +520,7 @@ fn open_resolves_a_checkpoint_against_what_the_log_holds() {
         crate::log_start_offset_checkpoint::write(&crate::io::FileIo, dir.path(), checkpointed)
             .unwrap();
 
-        let log = Log::open(dir.path(), LogConfig::default()).unwrap();
+        let log = crate::test_support::open_log(dir.path());
 
         assert!(log.log_start_offset() == expected_start);
         assert!(log.local_log_start_offset() == expected_local_start);
@@ -562,7 +537,7 @@ fn open_resolves_a_checkpoint_against_what_the_log_holds() {
 fn reset_to_drops_the_checkpoint_so_a_reopen_starts_at_the_new_base() {
     let dir = tempdir().unwrap();
     {
-        let mut log = Log::open(dir.path(), LogConfig::default()).unwrap();
+        let mut log = crate::test_support::open_log(dir.path());
         log.append(&mut sample_batch(5)).unwrap();
         log.set_log_start_offset(Offset(3)).unwrap();
         log.reset_to(Offset(100)).unwrap();
@@ -570,7 +545,7 @@ fn reset_to_drops_the_checkpoint_so_a_reopen_starts_at_the_new_base() {
         assert!(!name::log_start_offset_checkpoint_path(dir.path()).exists());
     }
 
-    let log = Log::open(dir.path(), LogConfig::default()).unwrap();
+    let log = crate::test_support::open_log(dir.path());
 
     assert!(log.log_start_offset() == Offset(100));
     assert!(log.log_end_offset() == Offset(100));
@@ -682,7 +657,7 @@ fn a_reload_takes_a_snapshot_at_the_log_end() {
         }
         drop(log);
 
-        let reopened = Log::open(dir.path(), LogConfig::default()).unwrap();
+        let reopened = crate::test_support::open_log(dir.path());
         check!(snapshot_offsets(dir.path()) == expected, "{name}");
         drop(reopened);
     }

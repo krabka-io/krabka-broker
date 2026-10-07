@@ -6,10 +6,95 @@
 
 use std::sync::{Arc, Mutex};
 
+use krabka_compression::CompressionType;
 use krabka_log::{Log, Offset};
+use krabka_protocol::records::RecordBatch;
 
 use super::storage::{lock_log, storage_failure_error};
 use crate::partition::{AppendedBatch, ProduceData, ProducerAppendCheck};
+
+type CheckedBatches = (Vec<ProduceData>, Vec<Option<ProducerAppendCheck>>);
+type AppendOutcome = (
+    Vec<Result<AppendedBatch, crate::error::BrokerError>>,
+    Offset,
+    Vec<krabka_log::ProducerSnapshotEntry>,
+);
+
+/// Hold the group's log lock after releasing any replicated transactions.
+fn prepare_log(
+    log: &Mutex<Log>,
+    high_watermark: Option<Offset>,
+) -> (std::sync::MutexGuard<'_, Log>, Option<CompressionType>) {
+    let mut guard = lock_log(log);
+    if let Some(high_watermark) = high_watermark {
+        guard.release_replicated_transactions(high_watermark);
+    }
+    let target = guard.config_snapshot().compression_type;
+    (guard, target)
+}
+
+/// Append owned bytes at an assigned offset, or let the leader stamp them.
+fn append_owned(
+    log: &mut Log,
+    batch: &mut RecordBatch,
+    base: Option<Offset>,
+) -> Result<AppendedBatch, krabka_log::LogError> {
+    match base {
+        Some(base) => log.append_at(batch, base).map(|()| at_offset(base)),
+        None => log.append(batch).map(appended),
+    }
+}
+
+/// Dispatch one accepted job without changing control-batch compression or stamps.
+fn append_data(
+    log: &mut Log,
+    data: ProduceData,
+    target: Option<CompressionType>,
+    base: Option<Offset>,
+) -> Result<AppendedBatch, crate::error::BrokerError> {
+    let result = match data {
+        ProduceData::Verbatim(batch) => match base {
+            Some(base) => log.append_verbatim_at(&batch, base).map(at_offset),
+            None => log.append_verbatim(&batch).map(appended),
+        },
+        ProduceData::Owned(mut batch) => {
+            if let Some(target) = target
+                && batch.attributes.compression() != target
+            {
+                batch.attributes = batch.attributes.with_compression(target);
+            }
+            append_owned(log, &mut batch, base)
+        }
+        ProduceData::OwnedControl(mut batch) => append_owned(log, &mut batch, base),
+        ProduceData::OwnedCommitMarker {
+            mut batch,
+            commit_stamp,
+        } => match base {
+            Some(base) => log
+                .append_at_with_commit_stamp(&mut batch, base, commit_stamp)
+                .map(|()| at_offset(base)),
+            None => log
+                .append_with_commit_stamp(&mut batch, commit_stamp)
+                .map(at_offset),
+        },
+    };
+    result.map_err(crate::error::BrokerError::from)
+}
+
+/// Mirror successful control appends while the group's original log lock is held.
+fn capture_control_entry(
+    log: &Log,
+    appended: bool,
+    producer: Option<krabka_log::ProducerId>,
+    entries: &mut Vec<krabka_log::ProducerSnapshotEntry>,
+) {
+    if appended
+        && let Some(producer) = producer
+        && let Some(entry) = log.producer_state_entry(producer)
+    {
+        entries.push(entry);
+    }
+}
 
 /// The writer's answer for a batch the log both placed and, when the partition
 /// asks for it, stamped.
@@ -75,17 +160,9 @@ fn refuse_transactional_append(
 fn append_produce_batch(
     log: &Mutex<Log>,
     high_watermark: Option<Offset>,
-    (datas, checks): (Vec<ProduceData>, Vec<Option<ProducerAppendCheck>>),
-) -> (
-    Vec<Result<AppendedBatch, crate::error::BrokerError>>,
-    Offset,
-    Vec<krabka_log::ProducerSnapshotEntry>,
-) {
-    let mut guard = lock_log(log);
-    if let Some(high_watermark) = high_watermark {
-        guard.release_replicated_transactions(high_watermark);
-    }
-    let target = guard.config_snapshot().compression_type;
+    (datas, checks): CheckedBatches,
+) -> AppendOutcome {
+    let (mut guard, target) = prepare_log(log, high_watermark);
     let mut results = Vec::with_capacity(datas.len());
     let mut control_entries = Vec::new();
     for (index, data) in datas.into_iter().enumerate() {
@@ -94,43 +171,8 @@ fn append_produce_batch(
             results.push(Err(refused));
             continue;
         }
-        let r = match data {
-            ProduceData::Verbatim(batch) => guard
-                .append_verbatim(&batch)
-                .map(appended)
-                .map_err(crate::error::BrokerError::from),
-            ProduceData::Owned(mut batch) => {
-                if let Some(target) = target
-                    && batch.attributes.compression() != target
-                {
-                    batch.attributes = batch.attributes.with_compression(target);
-                }
-                guard
-                    .append(&mut batch)
-                    .map(appended)
-                    .map_err(crate::error::BrokerError::from)
-            }
-            ProduceData::OwnedControl(mut batch) => guard
-                .append(&mut batch)
-                .map(appended)
-                .map_err(crate::error::BrokerError::from),
-            ProduceData::OwnedCommitMarker {
-                mut batch,
-                commit_stamp,
-            } => guard
-                .append_with_commit_stamp(&mut batch, commit_stamp)
-                .map(|base_offset| AppendedBatch {
-                    base_offset,
-                    log_append_time_ms: None,
-                })
-                .map_err(crate::error::BrokerError::from),
-        };
-        if r.is_ok()
-            && let Some(producer_id) = control_producer
-            && let Some(entry) = guard.producer_state_entry(producer_id)
-        {
-            control_entries.push(entry);
-        }
+        let r = append_data(&mut guard, data, target, None);
+        capture_control_entry(&guard, r.is_ok(), control_producer, &mut control_entries);
         results.push(r);
     }
     // Read the post-append LEO once under the same lock so the HW recompute
@@ -143,17 +185,9 @@ fn append_produce_batch_at(
     log: &Mutex<Log>,
     base: Offset,
     high_watermark: Option<Offset>,
-    (datas, checks): (Vec<ProduceData>, Vec<Option<ProducerAppendCheck>>),
-) -> (
-    Vec<Result<AppendedBatch, crate::error::BrokerError>>,
-    Offset,
-    Vec<krabka_log::ProducerSnapshotEntry>,
-) {
-    let mut guard = lock_log(log);
-    if let Some(high_watermark) = high_watermark {
-        guard.release_replicated_transactions(high_watermark);
-    }
-    let target = guard.config_snapshot().compression_type;
+    (datas, checks): CheckedBatches,
+) -> AppendOutcome {
+    let (mut guard, target) = prepare_log(log, high_watermark);
     let mut next = base;
     let mut results = Vec::with_capacity(datas.len());
     let mut control_entries = Vec::new();
@@ -163,41 +197,14 @@ fn append_produce_batch_at(
         let result = if let Some(refused) = refuse_transactional_append(&guard, checks.get(index)) {
             Err(refused)
         } else {
-            match data {
-                ProduceData::Verbatim(batch) => guard
-                    .append_verbatim_at(&batch, next)
-                    .map(at_offset)
-                    .map_err(crate::error::BrokerError::from),
-                ProduceData::Owned(mut batch) => {
-                    if let Some(target) = target
-                        && batch.attributes.compression() != target
-                    {
-                        batch.attributes = batch.attributes.with_compression(target);
-                    }
-                    guard
-                        .append_at(&mut batch, next)
-                        .map(|()| at_offset(next))
-                        .map_err(crate::error::BrokerError::from)
-                }
-                ProduceData::OwnedControl(mut batch) => guard
-                    .append_at(&mut batch, next)
-                    .map(|()| at_offset(next))
-                    .map_err(crate::error::BrokerError::from),
-                ProduceData::OwnedCommitMarker {
-                    mut batch,
-                    commit_stamp,
-                } => guard
-                    .append_at_with_commit_stamp(&mut batch, next, commit_stamp)
-                    .map(|()| at_offset(next))
-                    .map_err(crate::error::BrokerError::from),
-            }
+            append_data(&mut guard, data, target, Some(next))
         };
-        if result.is_ok()
-            && let Some(producer_id) = control_producer
-            && let Some(entry) = guard.producer_state_entry(producer_id)
-        {
-            control_entries.push(entry);
-        }
+        capture_control_entry(
+            &guard,
+            result.is_ok(),
+            control_producer,
+            &mut control_entries,
+        );
         next = Offset(next.0 + count);
         guard.reconcile_next_offset(next);
         results.push(result);
@@ -218,15 +225,8 @@ fn append_produce_batch_at(
 pub(crate) async fn run_produce_append_batch(
     log: Arc<Mutex<Log>>,
     high_watermark: Option<Offset>,
-    datas: (Vec<ProduceData>, Vec<Option<ProducerAppendCheck>>),
-) -> Result<
-    (
-        Vec<Result<AppendedBatch, crate::error::BrokerError>>,
-        Offset,
-        Vec<krabka_log::ProducerSnapshotEntry>,
-    ),
-    crate::error::BrokerError,
-> {
+    datas: CheckedBatches,
+) -> Result<AppendOutcome, crate::error::BrokerError> {
     crate::blocking::run_blocking_catching(move || {
         append_produce_batch(&log, high_watermark, datas)
     })
@@ -238,15 +238,8 @@ pub(crate) async fn run_produce_append_batch_at(
     log: Arc<Mutex<Log>>,
     base: Offset,
     high_watermark: Option<Offset>,
-    datas: (Vec<ProduceData>, Vec<Option<ProducerAppendCheck>>),
-) -> Result<
-    (
-        Vec<Result<AppendedBatch, crate::error::BrokerError>>,
-        Offset,
-        Vec<krabka_log::ProducerSnapshotEntry>,
-    ),
-    crate::error::BrokerError,
-> {
+    datas: CheckedBatches,
+) -> Result<AppendOutcome, crate::error::BrokerError> {
     crate::blocking::run_blocking_catching(move || {
         append_produce_batch_at(&log, base, high_watermark, datas)
     })
@@ -257,7 +250,6 @@ pub(crate) async fn run_produce_append_batch_at(
 #[cfg(test)]
 mod tests {
     use assert2::{assert, check};
-    use krabka_compression::CompressionType;
     use krabka_log::{LogConfig, LogIo};
     use tempfile::tempdir;
 
@@ -281,6 +273,19 @@ mod tests {
                 (&*file).write(buf)
             }
         }
+    }
+
+    fn lz4_log(path: &std::path::Path) -> Mutex<Log> {
+        Mutex::new(
+            Log::open(
+                path,
+                LogConfig {
+                    compression_type: Some(CompressionType::Lz4),
+                    ..LogConfig::default()
+                },
+            )
+            .expect("open log"),
+        )
     }
 
     fn failing_log(path: &std::path::Path) -> Mutex<Log> {
@@ -360,16 +365,7 @@ mod tests {
     #[test]
     fn append_owned_batch_recompresses_to_configured_log_codec() {
         let dir = tempdir().expect("tempdir");
-        let log = Mutex::new(
-            Log::open(
-                dir.path(),
-                LogConfig {
-                    compression_type: Some(CompressionType::Lz4),
-                    ..LogConfig::default()
-                },
-            )
-            .expect("open log"),
-        );
+        let log = lz4_log(dir.path());
 
         let original = sample_batch(2);
         assert!(original.attributes.compression() == CompressionType::None);
@@ -398,16 +394,7 @@ mod tests {
     #[test]
     fn append_control_batch_keeps_its_own_compression() {
         let dir = tempdir().expect("tempdir");
-        let log = Mutex::new(
-            Log::open(
-                dir.path(),
-                LogConfig {
-                    compression_type: Some(CompressionType::Lz4),
-                    ..LogConfig::default()
-                },
-            )
-            .expect("open log"),
-        );
+        let log = lz4_log(dir.path());
 
         let mut marker = sample_batch(1);
         marker.attributes = marker.attributes.with_control(true);
@@ -504,16 +491,7 @@ mod tests {
     #[test]
     fn append_control_batch_at_offset_keeps_its_own_compression() {
         let dir = tempdir().expect("tempdir");
-        let log = Mutex::new(
-            Log::open(
-                dir.path(),
-                LogConfig {
-                    compression_type: Some(CompressionType::Lz4),
-                    ..LogConfig::default()
-                },
-            )
-            .expect("open log"),
-        );
+        let log = lz4_log(dir.path());
 
         let mut marker = sample_batch(1);
         marker.attributes = marker.attributes.with_control(true);

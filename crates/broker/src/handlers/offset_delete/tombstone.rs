@@ -40,13 +40,8 @@ pub(super) async fn append_tombstones(
 /// top-level code a failed coordinator write answers with.
 fn operation_error_code(code: i16) -> i16 {
     match code {
-        codes::NETWORK_EXCEPTION => codes::COORDINATOR_LOAD_IN_PROGRESS,
-        codes::UNKNOWN_TOPIC_OR_PARTITION
-        | codes::NOT_ENOUGH_REPLICAS
-        | codes::REQUEST_TIMED_OUT => codes::COORDINATOR_NOT_AVAILABLE,
-        codes::NOT_LEADER_OR_FOLLOWER | codes::KAFKA_STORAGE_ERROR => codes::NOT_COORDINATOR,
         codes::MESSAGE_TOO_LARGE | codes::RECORD_LIST_TOO_LARGE => codes::UNKNOWN_SERVER_ERROR,
-        other => other,
+        other => codes::coordinator_operation_code(other),
     }
 }
 

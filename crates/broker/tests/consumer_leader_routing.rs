@@ -19,20 +19,18 @@
 //! Windows-gated like the other multi-broker tests, because openraft's
 //! `debug_assert!` races on the hosted Windows scheduler.
 
-use std::{
-    collections::HashSet,
-    time::{Duration, Instant},
-};
+use std::{collections::HashSet, time::Duration};
 
 use assert2::assert;
 use bytes::Bytes;
-use krabka_client_consumer::{AutoOffsetReset, Consumer};
+use krabka_client_consumer::AutoOffsetReset;
 use krabka_client_core::Client;
-use krabka_protocol::{
-    owned::produce_request::{PartitionProduceData, ProduceRequest, TopicProduceData},
-    records::{Record, RecordBatch},
-};
+use krabka_protocol::records::RecordBatch;
 use support::cluster_lock;
+
+use crate::support::{
+    client::connect_client, produce::single_partition_produce, records::value_record,
+};
 
 mod support;
 
@@ -48,29 +46,19 @@ async fn produce_one(
     value: &str,
 ) {
     let mut batch = RecordBatch::default();
-    batch.records.push(Record {
-        offset_delta: 0,
-        value: Some(Bytes::from(value.to_string())),
-        ..Default::default()
-    });
+    batch
+        .records
+        .push(value_record(0, Some(Bytes::from(value.to_string()))));
     batch.last_offset_delta = 0;
     for attempt in 1..=10 {
         let resp = client
-            .send(ProduceRequest {
-                acks: -1,
-                timeout_ms: 5_000,
-                topic_data: vec![TopicProduceData {
-                    name: topic.into(),
-                    topic_id,
-                    partition_data: vec![PartitionProduceData {
-                        index: partition,
-                        records: Some(batch.clone().into()),
-                        ..Default::default()
-                    }],
-                    ..Default::default()
-                }],
-                ..Default::default()
-            })
+            .send(single_partition_produce(
+                topic,
+                topic_id,
+                partition,
+                Some(batch.clone().into()),
+                (-1, 5_000),
+            ))
             .await
             .expect("produce");
         let err = resp.responses[0].partition_responses[0].error_code;
@@ -105,8 +93,7 @@ async fn produce_one(
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn consumer_fetches_from_non_bootstrap_leaders() {
     let _g = cluster_lock().lock().await;
-    let cluster = support::start_n_node_with_retry(3).await;
-    support::wait_for_all_brokers_registered(&cluster, 3).await;
+    let cluster = crate::support::registered_cluster(3).await;
 
     // Bootstrap everything (admin, consumer) at node 1.
     let bootstrap = cluster[0].1.listen_addr.to_string();
@@ -117,11 +104,7 @@ async fn consumer_fetches_from_non_bootstrap_leaders() {
     // against degenerate scheduling.
     let n_partitions: i32 = 6;
 
-    let admin = Client::builder()
-        .bootstrap(bootstrap.clone())
-        .build()
-        .await
-        .unwrap();
+    let admin = connect_client(bootstrap.clone(), None).await;
 
     // Create the topic with replication_factor=1. Each partition lives on
     // exactly ONE broker; the bootstrap broker has NO replica for partitions
@@ -135,7 +118,6 @@ async fn consumer_fetches_from_non_bootstrap_leaders() {
     // `cluster[0].0`). `leader != 0` subsumes partition-presence, so a single
     // per-partition awaiter covers both the "materialized" and "leader-known"
     // phases the two old poll-loops handled separately.
-    let bootstrap_node = cluster[0].0.node_id();
     for p in 0..n_partitions {
         cluster[0]
             .0
@@ -148,22 +130,10 @@ async fn consumer_fetches_from_non_bootstrap_leaders() {
     // test would be vacuous (no cross-broker routing exercised). With 6
     // partitions on 3 brokers at rf=1 this is virtually impossible, but we
     // verify explicitly.
-    let non_bootstrap_partitions: Vec<i32> = (0..n_partitions)
-        .filter(|&p| {
-            cluster[0]
-                .0
-                .partition_leader_for_test(topic, p)
-                .is_some_and(|l| l != bootstrap_node)
-        })
-        .collect();
-    assert!(
-        !non_bootstrap_partitions.is_empty(),
-        "all {n_partitions} partitions are led by the bootstrap node — \
-         no cross-broker routing to exercise; test would be vacuous"
-    );
-    eprintln!(
-        "partitions led by non-bootstrap brokers: {non_bootstrap_partitions:?} \
-         (bootstrap = node {bootstrap_node})"
+    let non_bootstrap_partitions = crate::support::partitions::require_non_bootstrap_partitions(
+        &cluster[0].0,
+        topic,
+        n_partitions,
     );
 
     // Produce one record per partition, sending each Produce to that
@@ -176,13 +146,7 @@ async fn consumer_fetches_from_non_bootstrap_leaders() {
             .find(|(h, _, _)| h.node_id() == node)
             .map(|(_, c, _)| c.listen_addr.to_string())
             .expect("leader node is in the cluster");
-        async move {
-            Client::builder()
-                .bootstrap(addr)
-                .build()
-                .await
-                .expect("producer client")
-        }
+        async move { crate::support::client::connect_with_context(addr, None, "producer client").await }
     };
     let mut producers: std::collections::HashMap<u64, Client> = std::collections::HashMap::new();
     let mut expected: HashSet<String> = HashSet::new();
@@ -204,26 +168,21 @@ async fn consumer_fetches_from_non_bootstrap_leaders() {
     // consumer must route the Fetch to the actual leader — the bootstrap broker
     // has NO replica of those partitions (rf=1), so a bootstrap-only consumer
     // would return nothing for them.
-    let mut consumer = Consumer::builder()
-        .bootstrap(bootstrap.clone())
-        .client_id("routing-consumer-rf1")
-        .group_id("routing-grp-rf1")
-        .session_timeout(krabka_units::secs(30))
-        .max_poll_interval(krabka_units::secs(2))
-        .heartbeat_interval(krabka_units::secs(1))
-        .auto_offset_reset(AutoOffsetReset::Earliest)
-        .subscribe([topic.to_string()])
-        .build()
-        .await
-        .unwrap();
+    let mut consumer = crate::support::consumer_groups::routing_consumer(
+        &bootstrap,
+        "routing-consumer-rf1",
+        "routing-grp-rf1",
+        topic,
+        AutoOffsetReset::Earliest,
+    )
+    .await;
 
-    let mut seen: HashSet<String> = HashSet::new();
-    let deadline = Instant::now() + Duration::from_secs(30);
-    while seen.len() < expected.len() && Instant::now() < deadline {
-        for r in consumer.poll(krabka_units::millis(300)).await.unwrap() {
-            seen.insert(String::from_utf8_lossy(r.value.as_deref().unwrap_or(&[])).into_owned());
-        }
-    }
+    let seen = crate::support::consumer_groups::collect_routing_values(
+        &mut consumer,
+        expected.len(),
+        |_, _| {},
+    )
+    .await;
     assert!(
         seen == expected,
         "consumer must deliver every partition's record (incl. those on non-bootstrap leaders);\n\
@@ -233,7 +192,5 @@ async fn consumer_fetches_from_non_bootstrap_leaders() {
     );
 
     consumer.close().await.unwrap();
-    for (h, _, _) in cluster {
-        h.shutdown().await;
-    }
+    crate::support::shutdown_cluster(cluster).await;
 }

@@ -418,17 +418,23 @@ mod tests {
 
     /// A transactional batch without a producer id is refused before any
     /// transaction check.
+    macro_rules! single_leader_fixture {
+        (($directory:ident, $image:ident, $fixture:ident)) => {
+            let $directory = tempfile::tempdir().unwrap();
+            let $image = Arc::new(image_with_topic("orders", &[1]));
+            let $fixture = crate::handlers::produce::test_support::PipelineFixture::new(1);
+        };
+    }
+
     #[tokio::test]
     async fn transactional_produce_rejects_malformed_producers() {
         let directory = tempfile::tempdir().expect("tempdir");
-        let partition = crate::broker::spawn_partition(
-            "orders".to_string(),
-            krabka_ids::PartitionIndex(0),
-            directory.path().to_path_buf(),
+        let partition = crate::test_support::spawn_standalone_partition(
+            directory.path(),
+            "orders",
+            0,
             krabka_log::Log::open(directory.path(), krabka_log::LogConfig::default())
                 .expect("open log"),
-            crate::log_dir_status::LogDirRegistry::default(),
-            Arc::new(crate::producer_state::ProducerState::new()),
             false,
         );
 
@@ -465,9 +471,7 @@ mod tests {
             (12, false, false),
         ];
         for (version, verification_enabled, appends) in cases {
-            let dir = tempfile::tempdir().unwrap();
-            let image = Arc::new(image_with_topic("orders", &[1]));
-            let fixture = crate::handlers::produce::test_support::PipelineFixture::new(1);
+            single_leader_fixture!((dir, image, fixture));
             let part = fixture.partition(dir.path(), "orders", &image).await;
             fixture
                 .partitions
@@ -624,25 +628,13 @@ mod tests {
     async fn duplicate_acks_all_waits_for_last_offset_plus_one() {
         use krabka_protocol::owned::produce_response::PartitionProduceResponse;
 
-        let dir = tempfile::tempdir().unwrap();
-        let image = Arc::new(image_with_topic("orders", &[1]));
-        let fixture = crate::handlers::produce::test_support::PipelineFixture::new(1);
+        single_leader_fixture!((dir, image, fixture));
 
         // Materialize the local leader replica for "orders"-0.
         let part = fixture.partition(dir.path(), "orders", &image).await;
         // Push LEO to 3 so the HW can be clamped to 2 (one below the target).
         {
-            let mut batch = RecordBatch {
-                last_offset_delta: 2,
-                records: (0..3)
-                    .map(|i| Record {
-                        offset_delta: i,
-                        value: Some(Bytes::from_static(b"v")),
-                        ..Default::default()
-                    })
-                    .collect(),
-                ..Default::default()
-            };
+            let mut batch = crate::test_support::repeated_records_batch(3, 0);
             part.log
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -675,15 +667,7 @@ mod tests {
             producer_id: pid,
             producer_epoch: 0,
             base_sequence: 0,
-            last_offset_delta: 2,
-            records: (0..3)
-                .map(|i| Record {
-                    offset_delta: i,
-                    value: Some(Bytes::from_static(b"v")),
-                    ..Default::default()
-                })
-                .collect(),
-            ..Default::default()
+            ..crate::test_support::repeated_records_batch(3, 0)
         });
 
         let outcome = process_partition(
@@ -740,9 +724,7 @@ mod tests {
 
         const PRODUCER_ID: i64 = 4242;
 
-        let dir = tempfile::tempdir().unwrap();
-        let image = Arc::new(image_with_topic("orders", &[1]));
-        let fixture = crate::handlers::produce::test_support::PipelineFixture::new(1);
+        single_leader_fixture!((dir, image, fixture));
         let part_handle = fixture
             .register_partition(dir.path(), "orders", &image)
             .await;
@@ -771,18 +753,10 @@ mod tests {
             let image = &image;
             async move {
                 process_partition(
-                    PartitionInput {
-                        transaction: super::TransactionRequest {
-                            transactional_id: None,
-                            version: 9,
-                            producer_id_expiration_ms: 86_400_000,
-                            verification_enabled: true,
-                        },
-                        ..crate::handlers::produce::test_support::pipeline_input(
-                            "orders",
-                            PartitionPayload::Slice(payload),
-                        )
-                    },
+                    crate::handlers::produce::test_support::pipeline_input(
+                        "orders",
+                        PartitionPayload::Slice(payload),
+                    ),
                     fixture.services(image),
                 )
                 .await
@@ -913,9 +887,7 @@ mod tests {
             (History::EntryExpired, 0, Disabled, appended_at(1), 2),
         ];
         for (history, base_sequence, unstable, want, log_end) in cases {
-            let dir = tempfile::tempdir().unwrap();
-            let image = Arc::new(image_with_topic("orders", &[1]));
-            let fixture = crate::handlers::produce::test_support::PipelineFixture::new(1);
+            single_leader_fixture!((dir, image, fixture));
             let part_handle = fixture
                 .register_partition(dir.path(), "orders", &image)
                 .await;
@@ -925,28 +897,16 @@ mod tests {
                     producer_id: PRODUCER_ID,
                     producer_epoch: 0,
                     base_sequence,
-                    records: vec![Record {
-                        value: Some(Bytes::from_static(b"v")),
-                        ..Default::default()
-                    }],
-                    ..Default::default()
+                    ..crate::test_support::repeated_records_batch(1, 0)
                 });
                 let fixture = &fixture;
                 let image = &image;
                 async move {
                     process_partition(
-                        PartitionInput {
-                            transaction: super::TransactionRequest {
-                                transactional_id: None,
-                                version: 9,
-                                producer_id_expiration_ms: 86_400_000,
-                                verification_enabled: true,
-                            },
-                            ..crate::handlers::produce::test_support::pipeline_input(
-                                "orders",
-                                PartitionPayload::Slice(payload),
-                            )
-                        },
+                        crate::handlers::produce::test_support::pipeline_input(
+                            "orders",
+                            PartitionPayload::Slice(payload),
+                        ),
                         PartitionServices {
                             unstable_api_versions: unstable,
                             ..fixture.services(image)
@@ -961,17 +921,7 @@ mod tests {
             match history {
                 History::NeverAppended => {}
                 History::HasRecords => {
-                    let mut batch = RecordBatch {
-                        last_offset_delta: 2,
-                        records: (0..3)
-                            .map(|offset_delta| Record {
-                                offset_delta,
-                                value: Some(Bytes::from_static(b"v")),
-                                ..Default::default()
-                            })
-                            .collect(),
-                        ..Default::default()
-                    };
+                    let mut batch = crate::test_support::repeated_records_batch(3, 0);
                     part_handle
                         .log
                         .lock()

@@ -11,6 +11,32 @@ use assert2::check;
 use super::*;
 use crate::{format::output::ZERO_CHECKPOINT_NAME, meta_properties::META_PROPERTIES};
 
+type DirectoryCase<'a, Expected> = (
+    &'a str,
+    Option<&'a str>,
+    &'a [&'a str],
+    &'a [&'a str],
+    &'a [(&'a str, Expected)],
+);
+
+fn fresh_data_directory() -> (tempfile::TempDir, std::path::PathBuf) {
+    let directory = tempfile::tempdir().expect("tempdir");
+    let data = directory.path().join("data");
+    (directory, data)
+}
+
+fn format_argv(log_dir: &std::path::Path, node_id: &str, extra: &[&str]) -> Vec<String> {
+    let mut argv = vec![
+        "krabka-format".to_owned(),
+        "--log-dir".to_owned(),
+        log_dir.display().to_string(),
+        "--node-id".to_owned(),
+        node_id.to_owned(),
+    ];
+    argv.extend(extra.iter().map(|arg| (*arg).to_owned()));
+    argv
+}
+
 /// The node id of every run below that does not test the node id.
 const NODE_ID: &str = "1";
 
@@ -89,16 +115,7 @@ async fn exit_code_for_each_argv() {
     ];
 
     for (what, extra, want) in cases {
-        let tmp = tempfile::tempdir().expect("tempdir");
-        let log_dir = tmp.path().join("data");
-        let mut argv = vec![
-            "krabka-format".to_owned(),
-            "--log-dir".to_owned(),
-            log_dir.display().to_string(),
-            "--node-id".to_owned(),
-            NODE_ID.to_owned(),
-        ];
-        argv.extend(extra.iter().map(|a| (*a).to_owned()));
+        let (_tmp, argv) = fresh_argv(extra);
         let got = crate::run_from_args(argv).await;
         check!(got == *want, "{what}: exit {got}, want {want}");
     }
@@ -146,10 +163,7 @@ fn the_first_error_follows_kafkas_order() {
         ),
     ];
     for (what, extra, want) in cases {
-        let tmp = tempfile::tempdir().expect("tempdir");
-        let log_dir = tmp.path().join("data").display().to_string();
-        let mut argv = vec!["krabka-format", "--log-dir", &log_dir, "--node-id", NODE_ID];
-        argv.extend(extra.iter().copied());
+        let (_tmp, argv) = fresh_argv(extra);
         let cli = crate::Cli::try_parse_from(argv).expect("parse");
 
         let Err((code, message)) = plan(cli.args, Vec::new()) else {
@@ -169,14 +183,7 @@ async fn format_into(
     extra: &[&str],
 ) -> (i32, std::path::PathBuf) {
     let log_dir = tmp.join("data");
-    let mut argv = vec![
-        "krabka-format".to_owned(),
-        "--log-dir".to_owned(),
-        log_dir.display().to_string(),
-        "--node-id".to_owned(),
-        node_id.to_owned(),
-    ];
-    argv.extend(extra.iter().map(|a| (*a).to_owned()));
+    let argv = format_argv(&log_dir, node_id, extra);
     (crate::run_from_args(argv).await, log_dir)
 }
 
@@ -340,8 +347,7 @@ async fn scram_iterations_are_checked_against_an_inclusive_minimum() {
 /// A directory holding anything at all is refused rather than overwritten.
 #[tokio::test]
 async fn a_non_empty_log_dir_is_refused() {
-    let tmp = tempfile::tempdir().expect("tempdir");
-    let log_dir = tmp.path().join("data");
+    let (_tmp, log_dir) = fresh_data_directory();
     std::fs::create_dir_all(&log_dir).expect("mkdir");
     std::fs::write(log_dir.join("someone-elses.txt"), b"x").expect("write");
 
@@ -361,20 +367,9 @@ async fn a_non_empty_log_dir_is_refused() {
 /// directory. A boot needs all of these.
 #[tokio::test]
 async fn a_standalone_format_writes_what_a_boot_reads() {
-    let tmp = tempfile::tempdir().expect("tempdir");
-    let log_dir = tmp.path().join("data");
+    let (_tmp, log_dir) = fresh_data_directory();
 
-    let code = crate::run_from_args([
-        "krabka-format",
-        "--log-dir",
-        &log_dir.display().to_string(),
-        "--standalone",
-        "--node-id",
-        "1",
-        "--controller-listener",
-        "controller-1:9093",
-    ])
-    .await;
+    let code = crate::run_from_args(standalone_argv(&log_dir, &[])).await;
     check!(code == EXIT_OK);
 
     for name in [META_PROPERTIES, "bootstrap.records.bin", "bootstrap.json"] {
@@ -412,8 +407,7 @@ fn standalone_argv(log_dir: &std::path::Path, extra: &[&str]) -> Vec<String> {
 /// the flag is still refused.
 #[tokio::test]
 async fn ignore_formatted_makes_a_second_format_a_no_op() {
-    let tmp = tempfile::tempdir().expect("tempdir");
-    let log_dir = tmp.path().join("data");
+    let (_tmp, log_dir) = fresh_data_directory();
     let argv = |extra: &[&str]| standalone_argv(&log_dir, extra);
 
     check!(crate::run_from_args(argv(&[])).await == EXIT_OK);
@@ -433,21 +427,9 @@ async fn ignore_formatted_makes_a_second_format_a_no_op() {
 /// "ignore an existing format", not "skip formatting".
 #[tokio::test]
 async fn ignore_formatted_still_formats_a_fresh_directory() {
-    let tmp = tempfile::tempdir().expect("tempdir");
-    let log_dir = tmp.path().join("data");
+    let (_tmp, log_dir) = fresh_data_directory();
 
-    let code = crate::run_from_args([
-        "krabka-format",
-        "--log-dir",
-        &log_dir.display().to_string(),
-        "--standalone",
-        "--node-id",
-        "1",
-        "--controller-listener",
-        "controller-1:9093",
-        "--ignore-formatted",
-    ])
-    .await;
+    let code = crate::run_from_args(standalone_argv(&log_dir, &["--ignore-formatted"])).await;
     check!(code == EXIT_OK);
     check!(log_dir.join(META_PROPERTIES).is_file());
 }
@@ -465,8 +447,7 @@ async fn ignore_formatted_still_formats_a_fresh_directory() {
 /// no offset-zero checkpoint and no voter set.
 #[tokio::test]
 async fn a_failed_format_is_not_mistaken_for_a_finished_one() {
-    let tmp = tempfile::tempdir().expect("tempdir");
-    let log_dir = tmp.path().join("data");
+    let (_tmp, log_dir) = fresh_data_directory();
     let argv = |extra: &[&str]| standalone_argv(&log_dir, extra);
 
     let weak = "SCRAM-SHA-256=[name=alice,password=hunter2,iterations=1]";
@@ -486,8 +467,7 @@ async fn a_failed_format_is_not_mistaken_for_a_finished_one() {
 /// directory, which Kafka refuses to continue without.
 #[tokio::test]
 async fn an_unreadable_marker_is_skipped_unless_it_is_the_metadata_directory() {
-    let tmp = tempfile::tempdir().expect("tempdir");
-    let (meta_dir, data_dir) = (tmp.path().join("meta"), tmp.path().join("data"));
+    let (tmp, meta_dir, data_dir) = metadata_and_data_directories();
     let unreadable = |dir: &std::path::Path| {
         std::fs::create_dir_all(dir).expect("mkdir");
         std::fs::write(dir.join(META_PROPERTIES), UNREADABLE).expect("write");
@@ -561,15 +541,8 @@ fn plan_of(argv: Vec<String>) -> Result<Plan, Failure> {
 fn the_metadata_log_directory_leads_the_directory_set() {
     use DirectoryKind::{Data, DynamicMetadata, DynamicMetadataVoter, StaticMetadata};
 
-    type Case<'a> = (
-        &'a str,
-        Option<&'a str>,
-        &'a [&'a str],
-        &'a [&'a str],
-        &'a [(&'a str, DirectoryKind)],
-    );
     // (what, --metadata-log-dir, --log-dir entries, quorum flags, the targets)
-    let cases: &[Case] = &[
+    let cases: &[DirectoryCase<DirectoryKind>] = &[
         (
             "the first --log-dir by default",
             None,
@@ -690,28 +663,20 @@ fn the_directory_id_belongs_to_the_metadata_log_directory() {
     }
 }
 
-/// Every file under `dir`, as a sorted list of `/`-separated relative paths.
-fn files_under(dir: &Path) -> Vec<String> {
-    let mut files = Vec::new();
-    let mut pending = vec![dir.to_path_buf()];
-    while let Some(next) = pending.pop() {
-        for entry in std::fs::read_dir(&next).expect("list") {
-            let path = entry.expect("entry").path();
-            if path.is_dir() {
-                pending.push(path);
-            } else {
+krabka_macros::directory_tree_fixture!(
+    files_under,
+    String,
+    { /// Every file under `dir`, as a sorted list of `/`-separated relative paths.
+    },
+    (|dir: &Path, path: &Path| {
                 let relative = path.strip_prefix(dir).expect("under dir");
                 let parts: Vec<String> = relative
                     .components()
                     .map(|part| part.as_os_str().to_string_lossy().into_owned())
                     .collect();
-                files.push(parts.join("/"));
-            }
-        }
-    }
-    files.sort();
-    files
-}
+                parts.join("/")
+    })
+);
 
 /// Only the metadata log directory gets the bootstrap files, and with a
 /// dynamic format the offset-zero checkpoint in `__cluster_metadata-0`, as
@@ -728,16 +693,10 @@ async fn only_the_metadata_log_directory_gets_the_bootstrap_files() {
         "bootstrap.records.bin",
         META_PROPERTIES,
     ];
-    type Case<'a> = (
-        &'a str,
-        Option<&'a str>,
-        &'a [&'a str],
-        &'a [&'a str],
-        &'a [(&'a str, &'a [&'a str])],
-    );
+
     // (what, --metadata-log-dir, --log-dir entries, quorum flags, the files
     // in each directory)
-    let cases: &[Case] = &[
+    let cases: &[DirectoryCase<&[&str]>] = &[
         (
             "static, a separate metadata log directory",
             Some("m"),
@@ -901,3 +860,11 @@ async fn a_directory_of_another_node_is_refused() {
     }
     check!(!b.exists(), "a refused run writes nothing");
 }
+
+fn fresh_argv(extra: &[&str]) -> (tempfile::TempDir, Vec<String>) {
+    let (dir, log_dir) = fresh_data_directory();
+    let argv = format_argv(&log_dir, NODE_ID, extra);
+    (dir, argv)
+}
+
+krabka_macros::format_directories_fixture!(metadata_and_data_directories);

@@ -19,6 +19,7 @@ use std::collections::BTreeSet;
 use krabka_metadata::MetadataImage;
 use twox_hash::XxHash3_64;
 
+use super::configured::input_topics;
 use crate::coordinator::unified::streams::persistence::StreamsGroupTopologyValue;
 
 /// `Utils.TOPIC_HASH_MAGIC_BYTE`: the version of the topic hash layout.
@@ -33,22 +34,12 @@ pub fn required_topics(topology: &StreamsGroupTopologyValue) -> BTreeSet<&str> {
         .subtopologies
         .iter()
         .flat_map(|subtopology| {
-            subtopology
-                .source_topics
-                .iter()
-                .map(String::as_str)
-                .chain(
-                    subtopology
-                        .repartition_source_topics
-                        .iter()
-                        .map(|topic| topic.name.as_str()),
-                )
-                .chain(
-                    subtopology
-                        .state_changelog_topics
-                        .iter()
-                        .map(|topic| topic.name.as_str()),
-                )
+            input_topics(subtopology).chain(
+                subtopology
+                    .state_changelog_topics
+                    .iter()
+                    .map(|topic| topic.name.as_str()),
+            )
         })
         .collect()
 }

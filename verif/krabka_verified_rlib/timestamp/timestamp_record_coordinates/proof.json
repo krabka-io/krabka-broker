@@ -2,18 +2,18 @@
   "profile": [],
   "proofs": {
     "Coma": {
-      "vc_branch_Option_i64": { "prover": "alt-ergo", "time": 0.028 },
-      "vc_checked_add": { "prover": "alt-ergo", "time": 0.026 },
-      "vc_elim_Break": { "prover": "alt-ergo", "time": 0.024 },
-      "vc_elim_Continue": { "prover": "alt-ergo", "time": 0.025 },
-      "vc_from_i64": { "prover": "alt-ergo", "time": 0.013 },
+      "vc_branch_Option_i64": { "prover": "alt-ergo", "time": 0.012 },
+      "vc_checked_add": { "prover": "alt-ergo", "time": 0.017 },
+      "vc_elim_Break": { "prover": "alt-ergo", "time": 0.015 },
+      "vc_elim_Continue": { "prover": "alt-ergo", "time": 0.017 },
+      "vc_from_i64": { "prover": "alt-ergo", "time": 0.015 },
       "vc_from_residual_Option_tup2_i64_i64": {
         "prover": "alt-ergo",
-        "time": 0.028
+        "time": 0.02
       },
       "vc_timestamp_record_coordinates": {
         "prover": "alt-ergo",
-        "time": 0.087
+        "time": 0.07
       }
     }
   }

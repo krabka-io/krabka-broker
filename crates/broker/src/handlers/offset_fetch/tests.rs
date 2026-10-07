@@ -11,7 +11,6 @@ use assert2::assert;
 use krabka_log::Offset;
 use krabka_protocol::{
     owned::{
-        create_topics_request::{CreatableTopic, CreateTopicsRequest},
         offset_fetch_request::{OffsetFetchRequestGroup, OffsetFetchRequestTopics},
         offset_fetch_response::{
             OffsetFetchResponse, OffsetFetchResponseGroup, OffsetFetchResponsePartition,
@@ -24,6 +23,7 @@ use tokio::sync::oneshot;
 
 use super::*;
 use crate::{
+    broker::Broker,
     codes,
     coordinator::unified::{
         actor::{GroupActorMessage, GroupKindTag},
@@ -71,6 +71,20 @@ async fn seed_committed_offset(
     rx.await.expect("UpdateCommitted ack");
 }
 
+fn named_topic_request(group: &str, topic: &str, partitions: Vec<i32>) -> OffsetFetchRequest {
+    OffsetFetchRequest {
+        group_id: group.into(),
+        topics: Some(vec![
+            krabka_protocol::owned::offset_fetch_request::OffsetFetchRequestTopic {
+                name: topic.into(),
+                partition_indexes: partitions,
+                ..Default::default()
+            },
+        ]),
+        ..Default::default()
+    }
+}
+
 // A named-topic OffsetFetch (v0–v7 path) returns the group's committed
 // offset for the requested partition. A non-zero committed offset pins
 // the committed_offset field against the struct-field-deletion mutant,
@@ -78,27 +92,11 @@ async fn seed_committed_offset(
 #[tokio::test]
 async fn named_topic_fetch_returns_committed_offset() {
     const VERSION: i16 = 7; // legacy single-group path (< 8)
-    let (broker_handle, _dir) = crate::test_support::start_group_broker_no_audit(Arc::new(
-        crate::authorizer::AllowAllAuthorizer,
-    ))
-    .await;
-    let broker = broker_handle.broker_arc_for_test();
+    broker_fixture!((broker_handle, _dir, broker), group_allow_all);
     seed_committed_offset(&broker, "grp", "orders", 0, 42).await;
 
-    let p = principal("admin");
-    let peer = peer();
-    let ctx = crate::test_support::request_context(&p, &peer, "consumer");
-    let req = OffsetFetchRequest {
-        group_id: "grp".into(),
-        topics: Some(vec![
-            krabka_protocol::owned::offset_fetch_request::OffsetFetchRequestTopic {
-                name: "orders".into(),
-                partition_indexes: vec![0],
-                ..Default::default()
-            },
-        ]),
-        ..Default::default()
-    };
+    request_identity!((p, peer, ctx), principal("admin"), client_id = "consumer");
+    let req = named_topic_request("grp", "orders", vec![0]);
 
     let resp = handle(&broker, req, VERSION, &ctx).await.expect("handle");
 
@@ -179,9 +177,7 @@ async fn fetch(
     version: i16,
     req: &OffsetFetchRequest,
 ) -> krabka_protocol::owned::offset_fetch_response::OffsetFetchResponse {
-    let p = principal("admin");
-    let peer = peer();
-    let ctx = crate::test_support::request_context(&p, &peer, "consumer");
+    request_identity!((p, peer, ctx), principal("admin"), client_id = "consumer");
     // The response shape changes with the version (KIP-516 moves it into
     // `groups[]` at v8), so this reads it back off the wire.
     crate::test_support::dispatch_wire(
@@ -312,24 +308,12 @@ async fn require_stable_reports_unstable_offsets_on_the_groups_shape() {
 async fn a_mark_for_records_below_an_applied_marker_does_not_strand_the_partition() {
     const VERSION: i16 = 7;
     const PRODUCER_ID: i64 = 91;
-    let (broker_handle, _dir) = crate::test_support::start_group_broker_no_audit(Arc::new(
-        crate::authorizer::AllowAllAuthorizer,
-    ))
-    .await;
-    let broker = broker_handle.broker_arc_for_test();
+    broker_fixture!((broker_handle, _dir, broker), group_allow_all);
     seed_committed_offset(&broker, "grp", "orders", 0, 42).await;
 
     let request = OffsetFetchRequest {
-        group_id: "grp".into(),
-        topics: Some(vec![
-            krabka_protocol::owned::offset_fetch_request::OffsetFetchRequestTopic {
-                name: "orders".into(),
-                partition_indexes: vec![0],
-                ..Default::default()
-            },
-        ]),
         require_stable: true,
-        ..Default::default()
+        ..named_topic_request("grp", "orders", vec![0])
     };
     let expect = |partition| OffsetFetchResponse {
         throttle_time_ms: 0,
@@ -402,63 +386,18 @@ const UNKNOWN_NAME: &str = "no-such-topic";
 /// An id that no topic in the topic-reference tables has.
 const UNKNOWN_ID: WireUuid = WireUuid([0x0b; 16]);
 
-/// Allows every group operation and denies every topic operation.
-#[derive(Debug)]
-struct DenyTopics;
-
-impl crate::authorizer::Authorizer for DenyTopics {
-    fn authorize(
-        &self,
-        _source: &dyn krabka_authz::AclSource,
-        req: &crate::authorizer::AuthorizationRequest<'_>,
-    ) -> crate::authorizer::AuthorizationResult {
-        if req.resource_type == krabka_metadata::ResourceType::Topic {
-            crate::authorizer::AuthorizationResult::Deny
-        } else {
-            crate::authorizer::AuthorizationResult::Allow
-        }
-    }
-}
-
-/// The topic reference that one request row carries.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum TopicRef {
-    /// The name of the topic that exists (v8 and v9).
-    KnownName,
-    /// A name that no topic has (v8 and v9).
-    UnknownName,
-    /// The id of the topic that exists (v10).
-    KnownId,
-    /// A non-zero id that no topic has (v10).
-    UnknownId,
-    /// The zero id (v10).
-    ZeroId,
-}
+use crate::handlers::test_support::{DenyTopics, TopicRef};
 
 /// Create the known topic and return its id. Seed a committed offset for
 /// `(KNOWN_NAME, 0)`, and one for the empty topic name, which a zero-id row
 /// must not read.
 async fn seed_topic_reference_group(broker_handle: &crate::broker::BrokerHandle) -> WireUuid {
-    let client = krabka_client_core::Client::builder()
-        .bootstrap(broker_handle.listen_addr().to_string())
-        .client_id("offset-fetch-resolution-test")
-        .build()
-        .await
-        .expect("client build");
-    let response = client
-        .send(CreateTopicsRequest {
-            topics: vec![CreatableTopic {
-                name: KNOWN_NAME.to_string(),
-                num_partitions: 1,
-                replication_factor: 1,
-                ..Default::default()
-            }],
-            timeout_ms: 5_000,
-            ..Default::default()
-        })
-        .await
-        .expect("CreateTopics");
-    assert!(response.topics[0].error_code == codes::NONE, "{response:?}");
+    created_topic_fixture!(
+        (client, response),
+        broker_handle,
+        "offset-fetch-resolution-test",
+        crate::handlers::test_support::configured_topic_request(KNOWN_NAME, &[], 1, 1, 5_000,)
+    );
     broker_handle
         .wait_until_partition_present(KNOWN_NAME, 0)
         .await;
@@ -478,13 +417,7 @@ fn topic_reference_rows(
     known_id: WireUuid,
     partition: OffsetFetchResponsePartitions,
 ) -> (OffsetFetchRequestTopics, OffsetFetchResponseTopics) {
-    let (name, topic_id) = match topic {
-        TopicRef::KnownName => (KNOWN_NAME, WireUuid::ZERO),
-        TopicRef::UnknownName => (UNKNOWN_NAME, WireUuid::ZERO),
-        TopicRef::KnownId => ("", known_id),
-        TopicRef::UnknownId => ("", UNKNOWN_ID),
-        TopicRef::ZeroId => ("", WireUuid::ZERO),
-    };
+    let (name, topic_id) = topic.wire_reference((KNOWN_NAME, known_id), (UNKNOWN_NAME, UNKNOWN_ID));
     let request = OffsetFetchRequestTopics {
         name: name.to_string(),
         topic_id,
@@ -664,22 +597,16 @@ async fn refused_topics_follow_the_answered_topics() {
 #[derive(Debug)]
 struct DescribeKnownTopic;
 
-impl crate::authorizer::Authorizer for DescribeKnownTopic {
-    fn authorize(
-        &self,
-        _source: &dyn krabka_authz::AclSource,
-        req: &crate::authorizer::AuthorizationRequest<'_>,
-    ) -> crate::authorizer::AuthorizationResult {
-        let allowed = req.resource_type != krabka_metadata::ResourceType::Topic
-            || (req.operation == krabka_metadata::AclOperation::Describe
-                && req.resource_name == KNOWN_NAME);
-        if allowed {
-            crate::authorizer::AuthorizationResult::Allow
-        } else {
-            crate::authorizer::AuthorizationResult::Deny
-        }
+test_authorizer!(DescribeKnownTopic, (self, _source, req), {
+    let allowed = req.resource_type != krabka_metadata::ResourceType::Topic
+        || (req.operation == krabka_metadata::AclOperation::Describe
+            && req.resource_name == KNOWN_NAME);
+    if allowed {
+        crate::authorizer::AuthorizationResult::Allow
+    } else {
+        crate::authorizer::AuthorizationResult::Deny
     }
-}
+});
 
 /// The legacy (v0 to v7) partition row of the seeded offset of the known
 /// topic.
@@ -1021,11 +948,7 @@ async fn offset_fetch_creates_no_group_and_checks_the_member_epoch() {
     ];
 
     for row in rows {
-        let (broker_handle, _dir) = crate::test_support::start_group_broker_no_audit(Arc::new(
-            crate::authorizer::AllowAllAuthorizer,
-        ))
-        .await;
-        let broker = broker_handle.broker_arc_for_test();
+        broker_fixture!((broker_handle, _dir, broker), group_allow_all);
         let epoch = join_consumer_group(&broker, "grp", "m1").await;
         seed_committed_offset(&broker, "grp", "orders", 0, 42).await;
 
@@ -1066,22 +989,8 @@ async fn offset_fetch_creates_no_group_and_checks_the_member_epoch() {
 /// The legacy single-group shape (v0-v7) creates no group for an unknown id.
 #[tokio::test]
 async fn legacy_offset_fetch_creates_no_group() {
-    let (broker_handle, _dir) = crate::test_support::start_group_broker_no_audit(Arc::new(
-        crate::authorizer::AllowAllAuthorizer,
-    ))
-    .await;
-    let broker = broker_handle.broker_arc_for_test();
-    let request = OffsetFetchRequest {
-        group_id: "typo".into(),
-        topics: Some(vec![
-            krabka_protocol::owned::offset_fetch_request::OffsetFetchRequestTopic {
-                name: "orders".into(),
-                partition_indexes: vec![0],
-                ..Default::default()
-            },
-        ]),
-        ..Default::default()
-    };
+    broker_fixture!((broker_handle, _dir, broker), group_allow_all);
+    let request = named_topic_request("typo", "orders", vec![0]);
     let response = fetch(&broker, 7, &request).await;
     assert!(response.topics[0].partitions[0].committed_offset == -1);
     assert!(broker.group_coordinator.find("typo").is_none());
@@ -1096,11 +1005,7 @@ async fn require_stable<R>(
     expect: impl Fn(Vec<R>) -> OffsetFetchResponse,
 ) {
     const PRODUCER_ID: i64 = 91;
-    let (broker_handle, _dir) = crate::test_support::start_group_broker_no_audit(Arc::new(
-        crate::authorizer::AllowAllAuthorizer,
-    ))
-    .await;
-    let broker = broker_handle.broker_arc_for_test();
+    broker_fixture!((broker_handle, _dir, broker), group_allow_all);
     seed_committed_offset(&broker, "grp", "orders", 0, 42).await;
     seed_committed_offset(&broker, "grp", "orders", 1, 11).await;
     seed_pending_txn_offsets(

@@ -535,8 +535,36 @@ mod tests {
         Arc::new(ProduceResponse::default())
     }
 
-    fn healthy() -> FakeBroker {
-        FakeBroker::answering(|_, _| Ok(ProduceResponse::default()))
+    fn healthy() -> (FakeBroker, Coalescer<FakeBroker>) {
+        let broker = FakeBroker::answering(|_, _| Ok(ProduceResponse::default()));
+        let coalescer = Coalescer::new(broker.clone());
+        (broker, coalescer)
+    }
+
+    /// Releases the transport and joins these rounds in their original order.
+    async fn release_and_join(
+        broker: &FakeBroker,
+        [first, second, third]: [tokio::task::JoinHandle<Answer>; 3],
+    ) -> [Answer; 3] {
+        broker.release();
+        [
+            first.await.unwrap(),
+            second.await.unwrap(),
+            third.await.unwrap(),
+        ]
+    }
+
+    fn spawn_round(
+        coalescer: &Arc<Coalescer<FakeBroker>>,
+        partition: i32,
+        value: &'static str,
+    ) -> tokio::task::JoinHandle<Answer> {
+        let coalescer = Arc::clone(coalescer);
+        tokio::spawn(async move {
+            coalescer
+                .produce(NodeId(1), round(1, partition, 1_000, &[value], ROOMY))
+                .await
+        })
     }
 
     /// Lets every task that can run, run.
@@ -553,8 +581,7 @@ mod tests {
     /// starts a request again.
     #[tokio::test(start_paused = true)]
     async fn the_rounds_for_one_broker_go_in_one_request() {
-        let broker = healthy();
-        let coalescer = Coalescer::new(broker.clone());
+        let (broker, coalescer) = healthy();
 
         let answers = join_all([
             coalescer.produce(NodeId(1), round(1, 0, 1_000, &["a0", "a1"], ROOMY)),
@@ -614,14 +641,7 @@ mod tests {
     async fn rounds_that_arrive_during_a_request_share_the_next() {
         let broker = FakeBroker::held();
         let coalescer = Arc::new(Coalescer::new(broker.clone()));
-        let send = |partition: i32, value: &'static str| {
-            let coalescer = Arc::clone(&coalescer);
-            tokio::spawn(async move {
-                coalescer
-                    .produce(NodeId(1), round(1, partition, 1_000, &[value], ROOMY))
-                    .await
-            })
-        };
+        let send = |partition, value| spawn_round(&coalescer, partition, value);
 
         let first = send(0, "a0");
         settle().await;
@@ -629,12 +649,7 @@ mod tests {
         let third = send(2, "c0");
         settle().await;
         let in_flight = broker.sent().len();
-        broker.release();
-        let answers = [
-            first.await.unwrap(),
-            second.await.unwrap(),
-            third.await.unwrap(),
-        ];
+        let answers = release_and_join(&broker, [first, second, third]).await;
 
         assert!(in_flight == 1);
         assert!(answers.to_vec() == vec![Ok(reached()); 3]);
@@ -679,8 +694,7 @@ mod tests {
         let cases = [(fit, vec![merged]), (fit - 1, split.clone()), (1, split)];
 
         for (limit, expected) in cases {
-            let broker = healthy();
-            let coalescer = Coalescer::new(broker.clone());
+            let (broker, coalescer) = healthy();
 
             let answers = join_all([
                 coalescer.produce(NodeId(1), round(1, 0, 1_000, &["a0"], limit)),
@@ -706,8 +720,7 @@ mod tests {
     /// timestamp delta, and each record keeps the time its round was built.
     #[tokio::test(start_paused = true)]
     async fn the_oldest_round_sets_the_base_timestamp_of_the_batch() {
-        let broker = healthy();
-        let coalescer = Coalescer::new(broker.clone());
+        let (broker, coalescer) = healthy();
 
         join_all([
             coalescer.produce(NodeId(1), round(1, 0, 2_000, &["new"], ROOMY)),
@@ -766,14 +779,7 @@ mod tests {
             _ => Ok(ProduceResponse::default()),
         });
         let coalescer = Arc::new(Coalescer::new(broker.clone()));
-        let send = |partition: i32, value: &'static str| {
-            let coalescer = Arc::clone(&coalescer);
-            tokio::spawn(async move {
-                coalescer
-                    .produce(NodeId(1), round(1, partition, 1_000, &[value], ROOMY))
-                    .await
-            })
-        };
+        let send = |partition, value| spawn_round(&coalescer, partition, value);
         let limit = std::time::Duration::from_secs(60);
 
         let in_flight = send(0, "a0");
@@ -839,12 +845,7 @@ mod tests {
         let (second, third) = (send(second), send(third));
         settle().await;
         let waiting = read(&counts);
-        broker.release();
-        let answers = [
-            first.await.unwrap(),
-            second.await.unwrap(),
-            third.await.unwrap(),
-        ];
+        let answers = release_and_join(&broker, [first, second, third]).await;
 
         assert!(in_flight == vec![1, 0, 0]);
         assert!(waiting == vec![1, 0, 0]);

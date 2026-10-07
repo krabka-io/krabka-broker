@@ -2,7 +2,7 @@
 
 use moxy::{
     ast::ParseError,
-    token::{Span, TokenStream, TokenTree},
+    token::{TokenStream, TokenTree},
 };
 
 /// Splits `tokens` at its first top-level comma into the crate path and the
@@ -20,13 +20,10 @@ fn split(tokens: &[TokenTree]) -> (&[TokenTree], &[TokenTree]) {
 pub(crate) fn expand(tokens: TokenStream) -> Result<TokenStream, ParseError> {
     let tokens = Vec::from(tokens);
     let (path, runtime) = split(&tokens);
-    if path.is_empty() {
-        return Err(ParseError::new(
-            Span::call_site(),
-            "`cli_main!` needs the path of the crate whose `run_from_args` it calls",
-        ));
-    }
-    let path = TokenStream::from(path);
+    let path = crate::meta::required_tokens(
+        TokenStream::from(path),
+        "`cli_main!` needs the path of the crate whose `run_from_args` it calls",
+    )?;
     let runtime = TokenStream::from(runtime);
     Ok(moxy::template! {
         @if runtime.is_empty() {

@@ -6,21 +6,18 @@ use super::{
 };
 use crate::broker::FetchVisibility;
 #[cfg(creusot)]
+use crate::broker::{clamped_fetch_watermarks, committed_fetch_response};
+#[cfg(creusot)]
 use crate::leader_epoch::kafka_end_offset_for;
 
-// cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
-#[cfg(creusot)]
-#[cfg_attr(test, mutants::skip)]
-#[logic(open)]
-pub(super) fn epoch_window_valid(base: Int, start: Int, end: Int) -> bool {
+open_logic! {
+pub fn epoch_window_valid(base: Int, start: Int, end: Int) -> bool {
     pearlite! { 0 <= base && base <= end && 0 <= start && start <= end }
 }
+}
 
-// cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
-#[cfg(creusot)]
-#[cfg_attr(test, mutants::skip)]
-#[logic(open)]
-pub(super) fn epoch_archive_valid(entries: Seq<EpochEntry>, base: Int, end: Int) -> bool {
+open_logic! {
+pub fn epoch_archive_valid(entries: Seq<EpochEntry>, base: Int, end: Int) -> bool {
     pearlite! {
         (forall<i: Int> 0 <= i && i < entries.len() ==> entries[i].epoch.0@ >= 0
             && base <= entries[i].start_offset.0@ && entries[i].start_offset.0@ <= end)
@@ -28,6 +25,7 @@ pub(super) fn epoch_archive_valid(entries: Seq<EpochEntry>, base: Int, end: Int)
             ==> entries[i].epoch.0@ < entries[j].epoch.0@
                 && entries[i].start_offset.0@ < entries[j].start_offset.0@)
     }
+}
 }
 
 type EpochTruncation = Result<Option<(i32, FetchWatermarks, FetchVisibility)>, ()>;
@@ -42,17 +40,11 @@ type EpochTruncation = Result<Option<(i32, FetchWatermarks, FetchVisibility)>, (
     Ok(None) => epoch_window_valid(segment_base@, w.log_start@, w.log_end@)
         && epoch_archive_valid(entries@, segment_base@, w.log_end@)
         && kafka_end_offset_for(entries@, requested@, w.log_end@, -1, -1),
-    Ok(Some((found, bounded, visibility))) => epoch_window_valid(segment_base@, w.log_start@, w.log_end@)
-        && epoch_archive_valid(entries@, segment_base@, w.log_end@)
-        && kafka_end_offset_for(entries@, requested@, w.log_end@, found@, bounded.log_end@)
+    Ok(Some((found, bounded, visibility))) => resolved_epoch_cut(entries@, segment_base@, w, requested@, found@, bounded.log_end@)
         && segment_base@ <= bounded.log_end@ && bounded.log_end@ <= w.log_end@ && found@ <= requested@
-        && bounded.log_start == w.log_start && bounded.hw@ == w.hw@.min(bounded.log_end@)
-        && bounded.lso@ == w.lso@.min(bounded.log_end@)
-        && bounded.deliverable@ == w.deliverable@.min(bounded.log_end@)
+        && clamped_fetch_watermarks(w, bounded)
         && visibility.limit_offset@ == bounded.hw@.min(bounded.lso@).min(bounded.deliverable@)
-        && visibility.response_hw == bounded.hw && visibility.response_lso@ == bounded.hw@.min(bounded.lso@)
-        && visibility.effective_lso@ == bounded.hw@.min(bounded.lso@) && visibility.read_committed_aborts
-        && !visibility.out_of_range && visibility.empty == (w.log_start@ >= bounded.hw@.min(bounded.deliverable@)),
+        && committed_fetch_response(visibility, bounded.hw, bounded.lso, bounded.deliverable, w.log_start@),
 })]
 pub(super) fn validated_epochs_bound_truncated_fetch(
     entries: &[EpochEntry],
@@ -100,4 +92,20 @@ pub(super) fn validated_epochs_bound_truncated_fetch(
     };
     let visibility = fetch_visibility(false, true, bounded, w.log_start);
     Ok(Some((found.0, bounded, visibility)))
+}
+
+open_logic! {
+/// The validated epoch history resolves this exact bounded cut.
+pub(super) fn resolved_epoch_cut(
+    entries: Seq<EpochEntry>,
+    base: Int,
+    window: FetchWatermarks,
+    requested: Int,
+    found: Int,
+    cut: Int,
+) -> bool {
+    pearlite! { epoch_window_valid(base, window.log_start@, window.log_end@)
+    && epoch_archive_valid(entries, base, window.log_end@)
+    && kafka_end_offset_for(entries, requested, window.log_end@, found, cut) }
+}
 }

@@ -5,6 +5,41 @@
 //! See `docs/verification.md` and `docs/proof-contract-audit.md`.
 #![doc(html_root_url = "https://docs.rs/krabka-verified/0.7.0")]
 
+/// Declare an open proof model with the crate's mutation-testing policy.
+macro_rules! open_logic {
+    ($item:item) => {
+        // cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
+        #[cfg(creusot)]
+        #[cfg_attr(test, mutants::skip)]
+        #[logic(open)]
+        $item
+    };
+}
+
+/// Declare model types with the crate's proof and runtime derive policy.
+/// A custom pair preserves types whose proof model or runtime traits differ.
+macro_rules! model_types {
+    (@derives ($proof:meta) ($runtime:meta); $($item:item)*) => {
+        $(
+            #[cfg_attr(creusot, $proof)]
+            #[cfg_attr(not(creusot), $runtime)]
+            $item
+        )*
+    };
+    (@copy_only $($item:item)*) => {
+        model_types! {
+            @derives (derive(std::clone::Clone, Copy)) (derive(Clone, Copy, Debug, PartialEq, Eq));
+            $($item)*
+        }
+    };
+    (@proof ($proof:meta); $($item:item)*) => {
+        model_types! {
+            @derives ($proof) (derive(Clone, Copy, Debug, PartialEq, Eq));
+            $($item)*
+        }
+    };
+}
+
 pub mod audit;
 pub mod authz;
 pub mod barrier;
@@ -53,6 +88,8 @@ pub mod restore_sidecar;
 pub mod retention;
 pub mod schema;
 pub mod scram;
+#[cfg(creusot)]
+mod sequence;
 pub mod share;
 pub mod snapshot;
 pub mod stamp;

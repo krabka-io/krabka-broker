@@ -67,8 +67,8 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let quota_whole_request [#"/workspace/crates/verified/src/quota/request.rs" 18 0 18 83]
-  (requested: UInt64.t) (total: UInt64.t) (units_per_token: UInt64.t) (return (x: UInt64.t)) =
+let quota_whole_request [#"/workspace/crates/verified/src/quota/request.rs" 18 0 18 83] (requested: UInt64.t)
+  (total: UInt64.t) (units_per_token: UInt64.t) (return (x: UInt64.t)) =
 {[@stop_split] [@expl:quota_whole_request requires] [%#srequest'3] gt_log_Int (UInt64.t'int units_per_token) 0}
   (! bb0
   [ bb0 = s0

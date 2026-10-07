@@ -100,22 +100,34 @@ pub(super) fn alter_replica_log_dirs_adapter<'a>(
     })
 }
 
-pub(super) fn create_delegation_token_adapter<'a>(
-    broker: &'a Broker,
-    version: ApiVersion,
-    _correlation_id: CorrelationId,
-    body: &'a [u8],
-    auth: &'a crate::network::auth::ConnectionAuth,
-    peer: &'a std::net::SocketAddr,
-) -> BoxFuture<'a, Result<Bytes, BrokerError>> {
-    Box::pin(async move {
-        use krabka_protocol::Decode;
+/// Token adapters all decode first and encode the resulting response at the
+/// negotiated version. The supplied body retains each operation's auth and audit order.
+macro_rules! token_adapter {
+    ($name:ident, $request_ty:path, ($broker:ident, $request:ident, $auth:ident, $peer:ident), $body:block) => {
+        pub(super) fn $name<'a>(
+            $broker: &'a Broker,
+            version: ApiVersion,
+            _correlation_id: CorrelationId,
+            body: &'a [u8],
+            $auth: &'a crate::network::auth::ConnectionAuth,
+            $peer: &'a std::net::SocketAddr,
+        ) -> BoxFuture<'a, Result<Bytes, BrokerError>> {
+            Box::pin(async move {
+                use krabka_protocol::Decode;
+                let mut cursor = body;
+                let $request = <$request_ty>::decode(&mut cursor, version)?;
+                let response = $body;
+                crate::handlers::encode_response(&response, version)
+            })
+        }
+    };
+}
 
-        let mut cur = body;
-        let req = krabka_protocol::owned::create_delegation_token_request::CreateDelegationTokenRequest::decode(
-            &mut cur,
-            version,
-        )?;
+token_adapter!(
+    create_delegation_token_adapter,
+    krabka_protocol::owned::create_delegation_token_request::CreateDelegationTokenRequest,
+    (broker, req, auth, peer),
+    {
         let resp = crate::handlers::create_delegation_token::handle(
             &req,
             auth,
@@ -135,26 +147,15 @@ pub(super) fn create_delegation_token_adapter<'a>(
         if resp.error_code == crate::codes::NONE {
             audit_token_operation(broker, auth, peer, "CreateDelegationToken", &resp.token_id);
         }
-        crate::handlers::encode_response(&resp, version)
-    })
-}
+        resp
+    }
+);
 
-pub(super) fn renew_delegation_token_adapter<'a>(
-    broker: &'a Broker,
-    version: ApiVersion,
-    _correlation_id: CorrelationId,
-    body: &'a [u8],
-    auth: &'a crate::network::auth::ConnectionAuth,
-    peer: &'a std::net::SocketAddr,
-) -> BoxFuture<'a, Result<Bytes, BrokerError>> {
-    Box::pin(async move {
-        use krabka_protocol::Decode;
-
-        let mut cur = body;
-        let req = krabka_protocol::owned::renew_delegation_token_request::RenewDelegationTokenRequest::decode(
-            &mut cur,
-            version,
-        )?;
+token_adapter!(
+    renew_delegation_token_adapter,
+    krabka_protocol::owned::renew_delegation_token_request::RenewDelegationTokenRequest,
+    (broker, req, auth, peer),
+    {
         // Resolve the token id before the mutation: the response carries only
         // the new expiry, and a delete leaves nothing to look up afterwards.
         let token_id = token_id_for_hmac(broker, req.hmac.as_ref());
@@ -169,31 +170,23 @@ pub(super) fn renew_delegation_token_adapter<'a>(
             &*broker.controller,
         )
         .await;
-        if resp.error_code == crate::codes::NONE
-            && let Some(token_id) = token_id.as_deref()
-        {
-            audit_token_operation(broker, auth, peer, "RenewDelegationToken", token_id);
-        }
-        crate::handlers::encode_response(&resp, version)
-    })
-}
+        audit_token_mutation(
+            broker,
+            auth,
+            peer,
+            "RenewDelegationToken",
+            token_id.as_deref(),
+            resp.error_code,
+        );
+        resp
+    }
+);
 
-pub(super) fn expire_delegation_token_adapter<'a>(
-    broker: &'a Broker,
-    version: ApiVersion,
-    _correlation_id: CorrelationId,
-    body: &'a [u8],
-    auth: &'a crate::network::auth::ConnectionAuth,
-    peer: &'a std::net::SocketAddr,
-) -> BoxFuture<'a, Result<Bytes, BrokerError>> {
-    Box::pin(async move {
-        use krabka_protocol::Decode;
-
-        let mut cur = body;
-        let req = krabka_protocol::owned::expire_delegation_token_request::ExpireDelegationTokenRequest::decode(
-            &mut cur,
-            version,
-        )?;
+token_adapter!(
+    expire_delegation_token_adapter,
+    krabka_protocol::owned::expire_delegation_token_request::ExpireDelegationTokenRequest,
+    (broker, req, auth, peer),
+    {
         let token_id = token_id_for_hmac(broker, req.hmac.as_ref());
         let resp = crate::handlers::expire_delegation_token::handle(
             &req,
@@ -202,41 +195,47 @@ pub(super) fn expire_delegation_token_adapter<'a>(
             &*broker.controller,
         )
         .await;
-        if resp.error_code == crate::codes::NONE
-            && let Some(token_id) = token_id.as_deref()
-        {
-            audit_token_operation(broker, auth, peer, "ExpireDelegationToken", token_id);
-        }
-        crate::handlers::encode_response(&resp, version)
-    })
-}
+        audit_token_mutation(
+            broker,
+            auth,
+            peer,
+            "ExpireDelegationToken",
+            token_id.as_deref(),
+            resp.error_code,
+        );
+        resp
+    }
+);
 
-pub(super) fn describe_delegation_token_adapter<'a>(
-    broker: &'a Broker,
-    version: ApiVersion,
-    _correlation_id: CorrelationId,
-    body: &'a [u8],
-    auth: &'a crate::network::auth::ConnectionAuth,
-    peer: &'a std::net::SocketAddr,
-) -> BoxFuture<'a, Result<Bytes, BrokerError>> {
-    Box::pin(async move {
-        use krabka_protocol::Decode;
-
-        let mut cur = body;
-        let req = krabka_protocol::owned::describe_delegation_token_request::DescribeDelegationTokenRequest::decode(
-            &mut cur,
-            version,
-        )?;
-        let resp = crate::handlers::describe_delegation_token::handle(
+token_adapter!(
+    describe_delegation_token_adapter,
+    krabka_protocol::owned::describe_delegation_token_request::DescribeDelegationTokenRequest,
+    (broker, req, auth, peer),
+    {
+        crate::handlers::describe_delegation_token::handle(
             &req,
             auth,
             broker.config.delegation_token_secret_key.as_ref(),
             &*broker.controller,
             peer,
             broker.config.authorizer.as_ref(),
-        );
-        crate::handlers::encode_response(&resp, version)
-    })
+        )
+    }
+);
+
+fn audit_token_mutation(
+    broker: &Broker,
+    auth: &crate::network::auth::ConnectionAuth,
+    peer: &std::net::SocketAddr,
+    operation: &str,
+    token_id: Option<&str>,
+    error_code: i16,
+) {
+    if error_code == crate::codes::NONE
+        && let Some(token_id) = token_id
+    {
+        audit_token_operation(broker, auth, peer, operation, token_id);
+    }
 }
 
 /// The token id behind an `hmac`, read from the current metadata image.
@@ -394,8 +393,10 @@ mod tests {
                 vec![topic_result("widgets", &[0]), topic_result("orders", &[0])],
             ),
         ] {
-            let (broker_handle, _dir) = start_broker_with_authorizer(Arc::new(DenyAll)).await;
-            let broker = broker_handle.broker_arc_for_test();
+            broker_fixture!(
+                (broker_handle, _dir, broker),
+                start_broker_with_authorizer(Arc::new(DenyAll))
+            );
             let auth = authed("alice");
             let peer = peer();
             let req = AlterReplicaLogDirsRequest {

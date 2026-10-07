@@ -1,9 +1,9 @@
-(* #"/workspace/crates/verified/src/worm.rs" 26 0 30 26 *)
+(* #"/workspace/crates/verified/src/worm.rs" 28 0 32 26 *)
 
-let%span sworm = "/workspace/crates/verified/src/worm.rs" 19 10 19 64
-let%span sworm'0 = "/workspace/crates/verified/src/worm.rs" 20 10 20 76
-let%span sworm'1 = "/workspace/crates/verified/src/worm.rs" 21 10 22 48
-let%span sworm'2 = "/workspace/crates/verified/src/worm.rs" 23 10 24 46
+let%span sworm = "/workspace/crates/verified/src/worm.rs" 21 10 21 64
+let%span sworm'0 = "/workspace/crates/verified/src/worm.rs" 22 10 22 76
+let%span sworm'1 = "/workspace/crates/verified/src/worm.rs" 23 10 24 48
+let%span sworm'2 = "/workspace/crates/verified/src/worm.rs" 25 10 26 46
 
 use creusot.prelude.Any
 
@@ -13,7 +13,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let worm_signature_decision [#"/workspace/crates/verified/src/worm.rs" 26 0 30 26] (present: bool) (trusted: bool)
+let worm_signature_decision [#"/workspace/crates/verified/src/worm.rs" 28 0 32 26] (present: bool) (trusted: bool)
   (canonical_valid: bool) (return (x: t_WormSignatureDecision)) = (! bb0
   [ bb0 = any [ br0 -> {present = false} (! bb1) | br1 -> {present} (! bb2) ]
   | bb2 = any [ br0 -> {trusted = false} (! bb3) | br1 -> {trusted} (! bb4) ]

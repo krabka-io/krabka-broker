@@ -24,18 +24,14 @@ use std::{
 use assert2::assert;
 use krabka_broker::{
     BootstrapMode, Broker, BrokerConfig, BrokerHandle, KafkaRlmmConfig, NodeId,
-    RemoteStorageBackend, RlmmKind,
-    config::{InterBrokerCredentials, ListenerSpec},
+    RemoteStorageBackend, RlmmKind, config::ListenerSpec,
 };
-use krabka_client_core::Client;
 use krabka_metadata::MetadataRecord;
-use krabka_protocol::owned::create_topics_request::{
-    CreatableTopic, CreatableTopicConfig, CreateTopicsRequest,
-};
+use krabka_protocol::owned::create_topics_request::{CreatableTopicConfig, CreateTopicsRequest};
 use krabka_security::{ListenerProtocol, SaslMechanism};
 use tempfile::TempDir;
 
-use crate::{PASSWORD, TOPIC, VOTERS, broker_principal, support};
+use crate::{PASSWORD, TOPIC, VOTERS, broker_principal, support, support::client::connect_owned};
 
 /// The listener every client in this suite and every JVM container speaks to.
 const CLIENT_LISTENER: &str = "PLAINTEXT";
@@ -221,42 +217,27 @@ fn broker_config(
             sasl_mechanisms: None,
             principal_mapper: krabka_broker::SslPrincipalMapper::default(),
         },
-        ListenerSpec {
-            name: INTER_BROKER_LISTENER.to_owned(),
-            bind_addr: addrs.inter,
-            advertised: addrs.inter.to_string(),
-            protocol: ListenerProtocol::SaslPlaintext,
-            tls_config: None,
-            sasl_mechanisms: None,
-            principal_mapper: krabka_broker::SslPrincipalMapper::default(),
-        },
+        crate::support::listeners::listener(
+            INTER_BROKER_LISTENER,
+            addrs.inter,
+            ListenerProtocol::SaslPlaintext,
+        ),
     ];
     INTER_BROKER_LISTENER.clone_into(&mut config.inter_broker_listener_name);
     config.enabled_sasl_mechanisms = vec![SaslMechanism::Plain];
     // Every broker holds every peer's credential, because any of them can end
     // up leading the shard and having to authenticate the other two.
-    config.plain_credentials = (0..VOTERS)
-        .map(|peer| {
-            (
-                broker_principal(u64::try_from(peer + 1).expect("small cluster")),
-                PASSWORD.to_owned(),
-            )
-        })
-        .collect();
-    config.inter_broker_credentials = Some(InterBrokerCredentials::Plain {
-        username: broker_principal(node),
-        password: PASSWORD.to_owned(),
-    });
-
-    // Distinct racks. `select_voters` returns the local node plus one broker
-    // per *unused* rack, so two brokers sharing a rack would yield a two-voter
-    // placement and the reconcile loop would refuse to run a three-voter
-    // quorum on it.
-    config.rack = Some(format!(
-        "rack-{}",
-        char::from(b'a' + u8::try_from(index).expect("small cluster"))
-    ));
-    config.diskless_wal_local_replica_count = VOTERS;
+    config.plain_credentials =
+        support::diskless::peer_credentials(VOTERS, PASSWORD, broker_principal).collect();
+    // Distinct racks preserve the three-voter WAL placement's AZ-loss budget.
+    support::diskless::configure_identity(
+        &mut config,
+        index,
+        node,
+        VOTERS,
+        PASSWORD,
+        broker_principal,
+    );
     config.diskless_wal_flush_interval = krabka_units::millis(100);
     config.diskless_wal_index_projection_timeout = krabka_units::secs(10);
     config.diskless_wal_trim_safety_lag = 1_024;
@@ -297,25 +278,19 @@ pub(crate) async fn await_brokers_registered(cluster: &[TestNode]) {
 /// `validate_topic_config_map`, reach `V1TopicConfig` in the metadata log, and
 /// come back out of the image on every broker's reconcile pass.
 pub(crate) async fn create_diskless_topic(bootstrap: &str) {
-    let client = Client::builder()
-        .bootstrap(bootstrap)
-        .client_id("diskless-jepsen-admin")
-        .build()
-        .await
-        .expect("admin client");
+    let client = connect_owned(bootstrap, "diskless-jepsen-admin", "admin client").await;
     let response = client
         .send(CreateTopicsRequest {
-            topics: vec![CreatableTopic {
-                name: TOPIC.into(),
-                num_partitions: 1,
-                replication_factor: 1,
-                configs: vec![CreatableTopicConfig {
+            topics: vec![crate::support::topics::creatable_topic_with_configs(
+                TOPIC.into(),
+                1,
+                1,
+                vec![CreatableTopicConfig {
                     name: "krabka.diskless".into(),
                     value: Some("true".into()),
                     ..Default::default()
                 }],
-                ..Default::default()
-            }],
+            )],
             timeout_ms: 10_000,
             ..Default::default()
         })

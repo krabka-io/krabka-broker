@@ -62,23 +62,24 @@
 use std::collections::BTreeSet;
 
 use krabka_log::ProducerId;
-use krabka_verified::transaction::TransactionReaperCompletionDecision;
-use stateright::{Checker, Model, Property};
+use stateright::Model;
 
 use super::{
-    coordinator::completion::{apply_completion, completion_decision, completion_for},
     decision::decide_phase1_transition,
     handlers::end_txn::{
-        completion_producer_identity, prepare_completion_identities_with_fresh,
-        prepare_server_abort_identities_with_fresh,
+        prepare_completion_identities_with_fresh, prepare_server_abort_identities_with_fresh,
     },
     state::{TxnEntry, TxnState},
     two_pc::{resolve_txn_timeout, should_abort_idle_txn},
     version::TxnVersion,
 };
 use crate::{
-    model_check::run_bfs,
-    txn::decision_model_support::{fenced_as_kafka, initialize},
+    coordinator::unified::actor::reconciliation_model_support::{
+        model_properties, pinned_model_runner,
+    },
+    txn::decision_model_support::{
+        begin_transaction, complete_prepared, fenced_as_kafka, initialize,
+    },
 };
 
 const MAX_STATES: usize = 1_000_000;
@@ -261,16 +262,7 @@ impl TwoPcModel {
     }
 
     fn begin(s: &mut TwoPcProj) -> Option<()> {
-        let prior = st(s.state);
-        if !prior.can_transition_to(TxnState::Ongoing) {
-            return None;
-        }
-        if prior != TxnState::Ongoing {
-            s.start_ms = CLOCK[s.clock];
-            s.generation = s.epoch;
-        }
-        s.state = TxnState::Ongoing.to_kafka_status();
-        Some(())
+        begin_transaction! { s; s.start_ms = CLOCK[s.clock]; }
     }
 
     fn end_txn(s: &mut TwoPcProj, committed: bool) -> Option<()> {
@@ -283,18 +275,7 @@ impl TwoPcModel {
     }
 
     fn complete(s: &mut TwoPcProj) -> Option<()> {
-        let entry = rebuild(s);
-        let (_, complete) = completion_for(entry.state)?;
-        match completion_decision(&entry, &entry, (entry.state, complete)) {
-            TransactionReaperCompletionDecision::Proceed => {}
-            TransactionReaperCompletionDecision::AlreadyComplete
-            | TransactionReaperCompletionDecision::RejectMalformed
-            | TransactionReaperCompletionDecision::RejectStaleIdentity
-            | TransactionReaperCompletionDecision::RejectChangedPreparedState => return None,
-        }
-        let mut completed = entry.clone();
-        let identity = completion_producer_identity(&completed);
-        apply_completion(&mut completed, complete, identity, CLOCK[s.clock]);
+        let (completed, complete) = complete_prepared(&rebuild(s), CLOCK[s.clock])?;
         if s.last_finalized.is_some_and(|last| s.generation <= last) {
             s.violations.insert(Violation::FinalizedOutOfOrder);
         }
@@ -399,8 +380,7 @@ impl Model for TwoPcModel {
         ]);
     }
 
-    fn next_state(&self, last: &Self::State, action: Self::Action) -> Option<Self::State> {
-        let mut s = last.clone();
+    krabka_macros::model_transition! { last, action, s; {
         match action {
             TwoPcAction::Init(enable_2pc, requested) => self.init(&mut s, enable_2pc, requested)?,
             TwoPcAction::BeginTxn => Self::begin(&mut s)?,
@@ -418,56 +398,55 @@ impl Model for TwoPcModel {
             s.violations.insert(Violation::EpochRegressed);
         }
         Some(s)
-    }
+    }}
 
-    fn properties(&self) -> Vec<Property<Self>> {
-        vec![
-            // HEADLINE (KIP-939): the timeout reaper never aborts a 2PC txn.
-            Property::always("two_pc_never_reaped", |_, s: &TwoPcProj| {
-                !s.violations.contains(&Violation::ReapedTwoPc)
-            }),
-            // The reaper aborts exactly when Kafka's rule times out.
-            Property::always("reaper_never_early", |_, s: &TwoPcProj| {
-                !s.violations.contains(&Violation::ReapedEarly)
-            }),
-            Property::always("reaper_never_misses", |_, s: &TwoPcProj| {
-                !s.violations.contains(&Violation::MissedReap)
-            }),
-            // Generations finalize once each, in order.
-            Property::always("finalized_at_most_once", |_, s: &TwoPcProj| {
-                !s.violations.contains(&Violation::FinalizedOutOfOrder)
-            }),
-            Property::always("epoch_never_regresses", |_, s: &TwoPcProj| {
-                !s.violations.contains(&Violation::EpochRegressed)
-            }),
-            // The abort the coordinator runs on an `Ongoing` transaction raises
-            // the epoch once and stamps what Kafka does at the cluster's
-            // version.
-            Property::always("fence_matches_kafka", |_, s: &TwoPcProj| {
-                !s.violations.contains(&Violation::FenceDiverged)
-            }),
-            // Non-vacuity: the reaper aborts classic transactions, and does so
-            // one millisecond past the timeout but not at it.
-            Property::sometimes("reaper_aborts_classic", |_, s: &TwoPcProj| {
-                s.witnesses.contains(&Witness::ReapedClassic)
-            }),
-            Property::sometimes("reaped_one_past_timeout", |_, s: &TwoPcProj| {
-                s.witnesses.contains(&Witness::ReapedOnePastTimeout)
-            }),
-            Property::sometimes("spared_at_timeout", |_, s: &TwoPcProj| {
-                s.witnesses.contains(&Witness::SparedAtTimeout)
-            }),
-            // Non-vacuity: a 2PC transaction stays open past the instant its
-            // sentinel timeout would have expired.
-            Property::sometimes("two_pc_open_past_timeout", |_, s: &TwoPcProj| {
-                s.enable_2pc
-                    && st(s.state) == TxnState::Ongoing
-                    && i128::from(s.start_ms) + i128::from(i32::MAX) < i128::from(CLOCK[s.clock])
-            }),
-            Property::sometimes("can_commit", |_, s: &TwoPcProj| {
-                s.witnesses.contains(&Witness::Committed)
-            }),
-        ]
+    model_properties! {
+        @method TwoPcProj;
+        // HEADLINE (KIP-939): the timeout reaper never aborts a 2PC txn.
+        always "two_pc_never_reaped" => |s| {
+            !s.violations.contains(&Violation::ReapedTwoPc)
+        },
+        // The reaper aborts exactly when Kafka's rule times out.
+        always "reaper_never_early" => |s| {
+            !s.violations.contains(&Violation::ReapedEarly)
+        },
+        always "reaper_never_misses" => |s| {
+            !s.violations.contains(&Violation::MissedReap)
+        },
+        // Generations finalize once each, in order.
+        always "finalized_at_most_once" => |s| {
+            !s.violations.contains(&Violation::FinalizedOutOfOrder)
+        },
+        always "epoch_never_regresses" => |s| {
+            !s.violations.contains(&Violation::EpochRegressed)
+        },
+        // The abort the coordinator runs on an `Ongoing` transaction raises
+        // the epoch once and stamps what Kafka does at the cluster's
+        // version.
+        always "fence_matches_kafka" => |s| {
+            !s.violations.contains(&Violation::FenceDiverged)
+        },
+        // Non-vacuity: the reaper aborts classic transactions, and does so
+        // one millisecond past the timeout but not at it.
+        sometimes "reaper_aborts_classic" => |s| {
+            s.witnesses.contains(&Witness::ReapedClassic)
+        },
+        sometimes "reaped_one_past_timeout" => |s| {
+            s.witnesses.contains(&Witness::ReapedOnePastTimeout)
+        },
+        sometimes "spared_at_timeout" => |s| {
+            s.witnesses.contains(&Witness::SparedAtTimeout)
+        },
+        // Non-vacuity: a 2PC transaction stays open past the instant its
+        // sentinel timeout would have expired.
+        sometimes "two_pc_open_past_timeout" => |s| {
+            s.enable_2pc
+            && st(s.state) == TxnState::Ongoing
+            && i128::from(s.start_ms) + i128::from(i32::MAX) < i128::from(CLOCK[s.clock])
+        },
+        sometimes "can_commit" => |s| {
+            s.witnesses.contains(&Witness::Committed)
+        },
     }
 
     fn within_boundary(&self, state: &Self::State) -> bool {
@@ -475,14 +454,8 @@ impl Model for TwoPcModel {
     }
 }
 
-fn run(model: TwoPcModel, label: &str, pinned_unique_states: usize) {
-    let checker = run_bfs(model, label, MAX_DEPTH, MAX_STATES);
-    checker.assert_properties();
-    // Pin: a changed count is a changed model, not a retuning knob.
-    assert2::assert!(
-        checker.unique_state_count() == pinned_unique_states,
-        "[{label}] unique-state count moved: the reachable set of this model changed"
-    );
+pinned_model_runner! {
+    fn run(TwoPcModel); MAX_DEPTH, MAX_STATES; properties_first
 }
 
 #[test]

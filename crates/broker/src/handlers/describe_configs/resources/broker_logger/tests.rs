@@ -1,7 +1,6 @@
 //! What a `BROKER_LOGGER` describe answers, and what it refuses.
 
 use assert2::{assert, check};
-use krabka_protocol::UnknownTaggedFields;
 use krabka_telemetry::{LogLevel, LogLevelController};
 
 use super::{logger_configs, validate_resource_name};
@@ -40,19 +39,20 @@ fn every_logger_reports_its_level_at_the_broker_logger_source() {
             .clone()
     };
     let expected = |name: &str, value: &str| {
-        krabka_protocol::owned::describe_configs_response::DescribeConfigsResourceResult {
-            name: name.to_owned(),
-            value: Some(value.to_owned()),
-            read_only: false,
-            config_source: CONFIG_SOURCE_DYNAMIC_BROKER_LOGGER,
-            is_sensitive: false,
-            synonyms: Vec::new(),
-            config_type: 0,
-            // Kafka never sets it for a logger, so the JVM broker sends the
-            // generated default, the empty string.
-            documentation: Some(String::new()),
-            unknown_tagged_fields: UnknownTaggedFields::default(),
-        }
+        tagged_wire!(
+            krabka_protocol::owned::describe_configs_response::DescribeConfigsResourceResult {
+                name: name.to_owned(),
+                value: Some(value.to_owned()),
+                read_only: false,
+                config_source: CONFIG_SOURCE_DYNAMIC_BROKER_LOGGER,
+                is_sensitive: false,
+                synonyms: Vec::new(),
+                config_type: 0,
+                // Kafka never sets it for a logger, so the JVM broker sends the
+                // generated default, the empty string.
+                documentation: Some(String::new()),
+            }
+        )
     };
     assert!(entry("root") == expected("root", "INFO"));
     assert!(entry("krabka_broker") == expected("krabka_broker", "DEBUG"));

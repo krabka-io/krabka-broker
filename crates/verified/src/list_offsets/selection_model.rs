@@ -140,6 +140,7 @@ pub const fn list_offsets_earliest(facts: ListOffsetsEarliestFacts) -> Option<i6
     Some(offset)
 }
 
+open_logic! {
 /// The Kafka rule for one partition row's final `ListOffsets` value.
 ///
 /// A malformed input fails closed, and a lookup that found nothing (`-1`) is
@@ -150,10 +151,6 @@ pub const fn list_offsets_earliest(facts: ListOffsetsEarliestFacts) -> Option<i6
 /// record-derived and, as in `Partition.fetchOffsetForTimestamp`, resolves
 /// only when its offset is strictly below `last_fetchable`; otherwise it is
 /// unknown. A resolved row carries the candidate's timestamp and leader epoch.
-// cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
-#[cfg(creusot)]
-#[cfg_attr(test, mutants::skip)]
-#[logic(open)]
 pub fn list_offsets_selection_model(
     facts: ListOffsetsSelectionFacts,
 ) -> ListOffsetsSelectionDecision {
@@ -194,4 +191,5 @@ pub fn list_offsets_selection_model(
             ListOffsetsSelectionDecision::Unknown
         }
     }
+}
 }

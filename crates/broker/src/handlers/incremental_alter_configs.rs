@@ -26,14 +26,15 @@
 //! resource type has its own submodule that owns the key whitelist, the value
 //! validation, and the metadata record that it stages.
 
-use krabka_metadata::{AclOperation, MetadataImage, MetadataRecord, ResourceType};
+use krabka_metadata::{MetadataImage, MetadataRecord};
 use krabka_protocol::owned::{
     incremental_alter_configs_request::{AlterConfigsResource, IncrementalAlterConfigsRequest},
     incremental_alter_configs_response::{
         AlterConfigsResourceResponse, IncrementalAlterConfigsResponse,
     },
 };
-use krabka_raft::RaftError;
+
+use crate::handlers::response_encoding::ErrorRow as _;
 
 mod broker_logger_scope;
 mod broker_scope;
@@ -48,11 +49,9 @@ use self::{
     client_metrics_scope::handle_client_metrics_scoped, group_scope::handle_group_scoped,
     topic_scope::topic_config_record,
 };
-use super::alter_configs::duplicate_resource_flags;
 use crate::{
     broker::Broker,
     codes,
-    error::BrokerError,
     handlers::describe_configs::{
         RESOURCE_TYPE_BROKER, RESOURCE_TYPE_BROKER_LOGGER, RESOURCE_TYPE_CLIENT_METRICS,
         RESOURCE_TYPE_GROUP, RESOURCE_TYPE_TOPIC,
@@ -63,59 +62,34 @@ const OP_DELETE: i8 = 1;
 const OP_APPEND: i8 = 2;
 const OP_SUBTRACT: i8 = 3;
 
-pub(crate) async fn handle(
-    broker: &Broker,
-    req: IncrementalAlterConfigsRequest,
-    _version: i16,
-    ctx: &crate::handlers::RequestContext<'_>,
-) -> Result<IncrementalAlterConfigsResponse, BrokerError> {
-    let image = broker.controller.current_image();
-    let mut responses: Vec<AlterConfigsResourceResponse> = Vec::with_capacity(req.resources.len());
-    let validate_only = req.validate_only;
-    let mut audited: Vec<krabka_audit::AuditResource> = Vec::new();
-    let duplicate_flags = resource_duplicate_flags(&req.resources);
+super::alter_configs::config_alter_handler!(
+    IncrementalAlterConfigsRequest => IncrementalAlterConfigsResponse,
+    "IncrementalAlterConfigs", audit_resources_for, process_resource
+);
 
-    for (resource, is_duplicate) in req.resources.into_iter().zip(duplicate_flags) {
-        // The keys, never the values: a config value can be a password or a
-        // key store path, and the record only has to say who changed what.
-        let named: Vec<krabka_audit::AuditResource> =
-            std::iter::once(crate::handlers::audit_resource(
-                super::alter_configs::config_resource_type(resource.resource_type),
-                resource.resource_name.clone(),
-            ))
-            .chain(
-                resource.configs.iter().map(|config| {
-                    crate::handlers::audit_resource("ConfigKey", config.name.clone())
-                }),
-            )
-            .collect();
-        let response =
-            process_resource(broker, &image, ctx, resource, validate_only, is_duplicate).await;
-        // A `--dry-run` request stores nothing, so it changed no resource.
-        if response.error_code == codes::NONE && !validate_only {
-            audited.extend(named);
-        }
-        responses.push(response);
-    }
-    crate::handlers::audit_admin_success(
-        broker.audit_log.as_ref(),
-        ctx,
-        "IncrementalAlterConfigs",
-        audited,
-    );
-
-    let resp = IncrementalAlterConfigsResponse {
-        responses,
-        throttle_time_ms: 0,
-        ..Default::default()
-    };
-    Ok(resp)
+/// Audit names include the resource and keys, never sensitive config values.
+fn audit_resources_for(
+    resource: &AlterConfigsResource,
+    _image: &MetadataImage,
+) -> Vec<krabka_audit::AuditResource> {
+    std::iter::once(crate::handlers::audit_resource(
+        super::alter_configs::config_resource_type(resource.resource_type),
+        resource.resource_name.clone(),
+    ))
+    .chain(
+        resource
+            .configs
+            .iter()
+            .map(|config| crate::handlers::audit_resource("ConfigKey", config.name.clone())),
+    )
+    .collect()
 }
 
 /// Flags each resource named more than once in the request. See
-/// [`duplicate_resource_flags`].
+/// [`super::alter_configs::duplicate_resource_flags`].
+#[cfg(test)]
 fn resource_duplicate_flags(resources: &[AlterConfigsResource]) -> Vec<bool> {
-    duplicate_resource_flags(
+    super::alter_configs::duplicate_resource_flags(
         resources
             .iter()
             .map(|resource| (resource.resource_type, resource.resource_name.as_str())),
@@ -148,63 +122,12 @@ async fn process_resource(
     validate_only: bool,
     is_duplicate: bool,
 ) -> AlterConfigsResourceResponse {
-    let mut out = AlterConfigsResourceResponse {
-        resource_type: resource.resource_type,
-        resource_name: resource.resource_name.clone(),
-        error_code: codes::NONE,
-        error_message: None,
-        ..Default::default()
-    };
-
-    // ── Kafka validates the request shape before it authorizes ──
-    if let Err((code, message)) = validate_resource_shape(&resource, is_duplicate) {
-        out.error_code = code;
-        out.error_message = Some(message);
-        return out;
-    }
-
-    // ── ACL preamble ────────────────────────────────────────
-    // `ControllerApis.authorizeAlterResource`, and `preprocess` for the
-    // broker types: Topic → AlterConfigs on Topic(name), Group → on
-    // Group(name), Broker, BrokerLogger and ClientMetrics → on the cluster.
-    // `preprocess` refuses any other resource type before it authorizes.
-    let (acl_type, acl_name, denied_code, denied_message) = match resource.resource_type {
-        RESOURCE_TYPE_TOPIC => (
-            ResourceType::Topic,
-            resource.resource_name.as_str(),
-            codes::TOPIC_AUTHORIZATION_FAILED,
-            "Topic authorization failed.",
-        ),
-        RESOURCE_TYPE_GROUP => (
-            ResourceType::Group,
-            resource.resource_name.as_str(),
-            codes::GROUP_AUTHORIZATION_FAILED,
-            "Group authorization failed.",
-        ),
-        RESOURCE_TYPE_BROKER | RESOURCE_TYPE_BROKER_LOGGER | RESOURCE_TYPE_CLIENT_METRICS => (
-            ResourceType::Cluster,
-            crate::handlers::acl_wire::CLUSTER_RESOURCE_NAME,
-            codes::CLUSTER_AUTHORIZATION_FAILED,
-            "Cluster authorization failed.",
-        ),
-        other => {
-            out.error_code = codes::INVALID_REQUEST;
-            out.error_message = Some(format!("Unknown resource type {other}"));
-            return out;
-        }
-    };
-    if crate::handlers::acl_denied(
-        broker.config.authorizer.as_ref(),
-        image,
-        ctx,
-        acl_type,
-        acl_name,
-        AclOperation::AlterConfigs,
-    ) {
-        out.error_code = denied_code;
-        out.error_message = Some(denied_message.into());
-        return out;
-    }
+    super::alter_configs::config_resource_preamble!(
+        (out, broker, image, ctx, resource),
+        AlterConfigsResourceResponse,
+        true,
+        validate_resource_shape(&resource, is_duplicate)
+    );
 
     // After ACL pass: dispatch by resource type.
     let mut to_submit: Vec<MetadataRecord> = Vec::new();
@@ -220,9 +143,7 @@ async fn process_resource(
             ) {
                 Ok(record) => to_submit.push(record),
                 Err((code, message)) => {
-                    out.error_code = code;
-                    out.error_message = Some(message);
-                    return out;
+                    return out.with_error(code, message);
                 }
             }
         }
@@ -277,33 +198,16 @@ async fn process_resource(
     }
 
     if let Some((code, message)) = super::alter_configs::config_value_size_error(&to_submit) {
-        out.error_code = code;
-        out.error_message = Some(message);
-        return out;
+        return out.with_error(code, message);
     }
 
-    if to_submit.iter().any(|record| match record {
-        MetadataRecord::V1TopicConfig(config) => {
-            resource
+    if to_submit.iter().any(|record| {
+        let include_topic = !matches!(record, MetadataRecord::V1TopicConfig(_))
+            || resource
                 .configs
                 .iter()
-                .any(|item| item.name == crate::config_keys::MIN_INSYNC_REPLICAS)
-                && image
-                    .topic_config(&config.topic)
-                    .and_then(|current| current.get(crate::config_keys::MIN_INSYNC_REPLICAS))
-                    != config
-                        .overrides
-                        .get(crate::config_keys::MIN_INSYNC_REPLICAS)
-        }
-        MetadataRecord::V1BrokerConfig(config) => {
-            config.node_id == krabka_metadata::DEFAULT_BROKER_CONFIG_NODE_ID
-                && config.config_name == crate::config_keys::MIN_INSYNC_REPLICAS
-                && image
-                    .broker_config(config.node_id)
-                    .and_then(|current| current.get(&config.config_name))
-                    != config.config_value.as_ref()
-        }
-        _ => false,
+                .any(|item| item.name == crate::config_keys::MIN_INSYNC_REPLICAS);
+        super::alter_configs::changes_min_isr(image, record, include_topic)
     }) {
         let topic = (resource.resource_type == RESOURCE_TYPE_TOPIC)
             .then_some(resource.resource_name.as_str());
@@ -317,16 +221,10 @@ async fn process_resource(
         // rejection). This matches Apache Kafka's --dry-run behavior.
         return out;
     }
-    match broker.controller.submit_change(to_submit).await {
-        Ok(_) => {}
-        Err(RaftError::NotLeader { .. } | RaftError::LeaderUnknown) => {
-            out.error_code = codes::NOT_CONTROLLER;
-        }
-        Err(e) => {
-            tracing::error!(error = %e, "IncrementalAlterConfigs submit_change failed");
-            out.error_code = codes::UNKNOWN_SERVER_ERROR;
-        }
-    }
+    out.error_code = super::alter_configs::submission_code(
+        broker.controller.submit_change(to_submit).await,
+        |e| tracing::error!(error = %e, "IncrementalAlterConfigs submit_change failed"),
+    );
     out
 }
 

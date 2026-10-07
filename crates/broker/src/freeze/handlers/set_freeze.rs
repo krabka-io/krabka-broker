@@ -34,8 +34,7 @@
 //! broker's clock is the honest stamp, and a client then cannot park an entry
 //! in the far future where no later record replaces it.
 
-use bytes::Bytes;
-use krabka_protocol::{Decode, krabka::freeze::SetTopicFreezeRequest};
+use krabka_protocol::krabka::freeze::SetTopicFreezeRequest;
 use uuid::Uuid;
 
 use self::{
@@ -45,14 +44,12 @@ use self::{
     response::{FREEZE_ACTION, THAW_ACTION, respond},
 };
 use crate::{
-    broker::Broker,
     codes,
-    error::BrokerError,
     freeze::{
         freeze_target,
         handlers::{FreezeAudit, pattern_type_concrete, require_freeze},
     },
-    handlers::{RequestContext, encode_response},
+    handlers::encode_response,
 };
 
 mod checks;
@@ -63,65 +60,56 @@ mod response;
 #[cfg(test)]
 mod tests;
 
-#[tracing::instrument(
-    name = "handle_set_topic_freeze",
-    level = "info",
-    skip_all,
-    fields(api = "SetTopicFreeze"),
-    err
-)]
-pub(crate) async fn handle(
-    broker: &Broker,
-    version: i16,
-    _correlation_id: i32,
-    req_bytes: &[u8],
-    ctx: &RequestContext<'_>,
-) -> Result<Bytes, BrokerError> {
-    let mut cur = req_bytes;
-    let req = SetTopicFreezeRequest::decode(&mut cur, version)?;
-
-    let image = broker.controller.current_image();
-    let env = FreezeEnv {
-        config: &broker.config,
-        image: &image,
-        ctx,
-    };
-    let outcome = match prepare(&env, &req) {
-        Err(refusal) => Err(refusal),
-        Ok(accepted) => {
-            let target = pattern_type_concrete(req.pattern_type)
-                .map_or_else(|| req.scope.clone(), |kind| freeze_target(kind, &req.scope));
-            let audit = FreezeAudit {
-                action: if req.frozen {
-                    FREEZE_ACTION
-                } else {
-                    THAW_ACTION
-                },
-                target,
-                proposal_id: Uuid::from_bytes(req.proposal_id.0),
-                key_id: &req.key_id,
-                signature: &req.signature,
-                signature_verified: accepted.signature_verified,
-                set_at_ms: accepted.record.set_at_ms,
-                reason: req.reason.clone(),
-            };
-            match require_freeze(
-                broker.audit_log.as_ref(),
-                ctx,
-                &audit,
-                &broker.config.break_glass.approvers,
-            )
-            .await
-            {
-                Ok(()) => submit(broker, accepted).await,
-                Err(error) => Err(Refusal {
-                    code: codes::POLICY_VIOLATION,
-                    message: format!("privileged action refused: {error}"),
+wire_handler!(
+    handle,
+    "handle_set_topic_freeze",
+    "SetTopicFreeze",
+    "info",
+    SetTopicFreezeRequest,
+    |broker, version, req, ctx| {
+        let image = broker.controller.current_image();
+        let env = FreezeEnv {
+            config: &broker.config,
+            image: &image,
+            ctx,
+        };
+        let outcome = match prepare(&env, &req) {
+            Err(refusal) => Err(refusal),
+            Ok(accepted) => {
+                let target = pattern_type_concrete(req.pattern_type)
+                    .map_or_else(|| req.scope.clone(), |kind| freeze_target(kind, &req.scope));
+                let audit = FreezeAudit {
+                    action: if req.frozen {
+                        FREEZE_ACTION
+                    } else {
+                        THAW_ACTION
+                    },
+                    target,
+                    proposal_id: Uuid::from_bytes(req.proposal_id.0),
+                    key_id: &req.key_id,
+                    signature: &req.signature,
                     signature_verified: accepted.signature_verified,
-                }),
+                    set_at_ms: accepted.record.set_at_ms,
+                    reason: req.reason.clone(),
+                };
+                match require_freeze(
+                    broker.audit_log.as_ref(),
+                    ctx,
+                    &audit,
+                    &broker.config.break_glass.approvers,
+                )
+                .await
+                {
+                    Ok(()) => submit(broker, accepted).await,
+                    Err(error) => Err(Refusal {
+                        code: codes::POLICY_VIOLATION,
+                        message: format!("privileged action refused: {error}"),
+                        signature_verified: accepted.signature_verified,
+                    }),
+                }
             }
-        }
-    };
-    let response = respond(broker, ctx, &req, &outcome);
-    encode_response(&response, version)
-}
+        };
+        let response = respond(broker, ctx, &req, &outcome);
+        encode_response(&response, version)
+    }
+);

@@ -124,9 +124,7 @@ mod tests {
     use crate::coordinator::unified::{
         actor::{
             GroupKindTag,
-            test_support::{
-                make_coordinator, make_coordinator_with_topic_policy, rpc, seed_classic_member,
-            },
+            test_support::{bidirectional_coordinator, make_coordinator, rpc, seed_classic_member},
         },
         classic_state::OffsetEntry,
     };
@@ -139,88 +137,61 @@ mod tests {
         let handle = coord.get_or_create_classic("g");
 
         // UpdateCommitted then FetchOffsets round-trips on the kind-agnostic Group.
-        let (tx, rx) = tokio::sync::oneshot::channel();
-        handle
-            .tx
-            .send(GroupActorMessage::UpdateCommitted {
-                entries: vec![(
-                    ("t".to_string(), 0),
-                    OffsetEntry {
-                        offset: Offset(42),
-                        leader_epoch: 1,
-                        metadata: String::new(),
-                        commit_timestamp_ms: 0,
-                        expire_timestamp_ms: None,
-                        topic_id: None,
-                    },
-                )],
-                reply: tx,
-            })
-            .await
-            .unwrap();
+        let rx = rpc::begin(&handle, |tx| GroupActorMessage::UpdateCommitted {
+            entries: vec![(
+                ("t".to_string(), 0),
+                OffsetEntry {
+                    offset: Offset(42),
+                    leader_epoch: 1,
+                    metadata: String::new(),
+                    commit_timestamp_ms: 0,
+                    expire_timestamp_ms: None,
+                    topic_id: None,
+                },
+            )],
+            reply: tx,
+        })
+        .await;
         rx.await.unwrap();
-        let (tx, rx) = tokio::sync::oneshot::channel();
-        handle
-            .tx
-            .send(GroupActorMessage::FetchOffsets { reply: tx })
-            .await
-            .unwrap();
-        let committed = rx.await.unwrap().committed;
+        let committed = rpc::fetch_offsets(&handle).await.committed;
         assert!(committed.get(&("t".to_string(), 0)).unwrap().offset == 42);
 
         // Classic offset-commit validate: a simple consumer (no member/instance)
         // is allowed. `ValidateCommit` dispatches on the live (classic) kind.
-        let (tx, rx) = tokio::sync::oneshot::channel();
-        handle
-            .tx
-            .send(GroupActorMessage::ValidateCommit {
-                commit: CommitRequest {
-                    member_id: String::new(),
-                    group_instance_id: None,
-                    generation_or_epoch: -1,
-                    fence: CommitFence::Offset { api_version: 9 },
-                    partitions: Vec::new(),
-                },
-                reply: tx,
-            })
-            .await
-            .unwrap();
+        let rx = rpc::begin(&handle, |tx| GroupActorMessage::ValidateCommit {
+            commit: CommitRequest {
+                member_id: String::new(),
+                group_instance_id: None,
+                generation_or_epoch: -1,
+                fence: CommitFence::Offset { api_version: 9 },
+                partitions: Vec::new(),
+            },
+            reply: tx,
+        })
+        .await;
         assert!(rx.await.unwrap() == Ok(()));
 
         // Classic Heartbeat for an unknown member on an empty group.
-        let (tx, rx) = tokio::sync::oneshot::channel();
-        handle
-            .tx
-            .send(GroupActorMessage::ClassicHeartbeat {
-                req: HeartbeatRequest {
-                    group_id: "g".into(),
-                    member_id: "ghost".into(),
-                    generation_id: 0,
-                    ..Default::default()
-                },
-                reply: tx,
-            })
-            .await
-            .unwrap();
+        let rx = rpc::begin(&handle, |tx| GroupActorMessage::ClassicHeartbeat {
+            req: HeartbeatRequest {
+                group_id: "g".into(),
+                member_id: "ghost".into(),
+                generation_id: 0,
+                ..Default::default()
+            },
+            reply: tx,
+        })
+        .await;
         assert!(rx.await.unwrap() == codes::UNKNOWN_MEMBER_ID);
 
         // RemoveCommitted clears the entry.
-        let (tx, rx) = tokio::sync::oneshot::channel();
-        handle
-            .tx
-            .send(GroupActorMessage::RemoveCommitted {
-                keys: vec![("t".to_string(), 0)],
-                reply: tx,
-            })
-            .await
-            .unwrap();
+        let rx = rpc::begin(&handle, |tx| GroupActorMessage::RemoveCommitted {
+            keys: vec![("t".to_string(), 0)],
+            reply: tx,
+        })
+        .await;
         rx.await.unwrap();
-        let (tx, rx) = tokio::sync::oneshot::channel();
-        handle
-            .tx
-            .send(GroupActorMessage::FetchOffsets { reply: tx })
-            .await
-            .unwrap();
+        let rx = rpc::begin(&handle, |tx| GroupActorMessage::FetchOffsets { reply: tx }).await;
         assert!(rx.await.unwrap().committed.is_empty());
     }
 
@@ -241,9 +212,7 @@ mod tests {
     /// member and accepts the commit (`Ok(())`).
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn spawned_consumer_group_downgrade_allows_classic_offset_commit() {
-        use crate::coordinator::unified::config::ConsumerGroupMigrationPolicy;
-        let (coord, _log) =
-            make_coordinator_with_topic_policy("t", 2, ConsumerGroupMigrationPolicy::Bidirectional);
+        let (coord, _log) = bidirectional_coordinator();
 
         let (handle, view) =
             crate::coordinator::unified::actor::test_support::spawn_and_downgrade(&coord).await;
@@ -293,9 +262,7 @@ mod tests {
     /// handler maps the code by version.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn upgraded_group_fences_stale_native_consumer_commit() {
-        use crate::coordinator::unified::config::ConsumerGroupMigrationPolicy;
-        let (coord, _log) =
-            make_coordinator_with_topic_policy("t", 2, ConsumerGroupMigrationPolicy::Bidirectional);
+        let (coord, _log) = bidirectional_coordinator();
 
         // SPAWN classic-kind via a seeded classic member, then UPGRADE by having
         // a native consumer heartbeat in. The handle's spawn-time `kind` stays
@@ -351,10 +318,8 @@ mod tests {
     /// from then, and refused for the one it no longer holds.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn an_older_epoch_commits_a_partition_held_since_that_epoch() {
-        use crate::coordinator::unified::config::ConsumerGroupMigrationPolicy;
         const TOPIC: Uuid = Uuid([7; 16]);
-        let (coord, _log) =
-            make_coordinator_with_topic_policy("t", 2, ConsumerGroupMigrationPolicy::Bidirectional);
+        let (coord, _log) = bidirectional_coordinator();
         let handle = coord.get_or_create_consumer("g");
 
         let first = rpc::consumer_heartbeat(&handle, "", 0, Some("t")).await;

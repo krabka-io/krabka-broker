@@ -4,35 +4,27 @@
 //! kernels compare and add them; that the clock never steps backwards is a
 //! host responsibility, discharged by reading a `MonotonicClock`.
 
-#[cfg(creusot)]
-use std::clone::Clone;
+use creusot_std::prelude::*;
 
-#[cfg(creusot)]
-use creusot_std::prelude::DeepModel;
-use creusot_std::prelude::ensures;
+model_types! {
+    @proof (derive(std::clone::Clone, Copy, DeepModel));
+    /// Binary authorization result used at the OPA proof boundary.
+    pub enum OpaAuthorizationDecision {
+        Allow,
+        Deny,
+    }
 
-/// Binary authorization result used at the OPA proof boundary.
-#[cfg_attr(creusot, derive(Clone, Copy, DeepModel))]
-#[cfg_attr(not(creusot), derive(Clone, Copy, Debug, PartialEq, Eq))]
-pub enum OpaAuthorizationDecision {
-    Allow,
-    Deny,
-}
+    /// Result of checking one exact-key cache entry.
+    pub enum OpaCacheAdmission {
+        Miss,
+        Hit(OpaAuthorizationDecision),
+    }
 
-/// Result of checking one exact-key cache entry.
-#[cfg_attr(creusot, derive(Clone, Copy, DeepModel))]
-#[cfg_attr(not(creusot), derive(Clone, Copy, Debug, PartialEq, Eq))]
-pub enum OpaCacheAdmission {
-    Miss,
-    Hit(OpaAuthorizationDecision),
-}
-
-/// Result of computing a monotonic cache deadline.
-#[cfg_attr(creusot, derive(Clone, Copy, DeepModel))]
-#[cfg_attr(not(creusot), derive(Clone, Copy, Debug, PartialEq, Eq))]
-pub enum OpaCacheExpiry {
-    DoNotCache,
-    CacheUntil { expires_at_ms: i128 },
+    /// Result of computing a monotonic cache deadline.
+    pub enum OpaCacheExpiry {
+        DoNotCache,
+        CacheUntil { expires_at_ms: i128 },
+    }
 }
 
 /// Reuse an entry's decision only while its deadline is strictly in the

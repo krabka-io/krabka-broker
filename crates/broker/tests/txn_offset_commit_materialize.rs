@@ -25,28 +25,26 @@ use std::time::{Duration, Instant};
 
 use assert2::assert;
 
+use crate::support::{
+    offsets::{offset_commit_topic, offset_fetch_group, offset_fetch_request, offset_fetch_topic},
+    topics::{creatable_topic, create_topic_request},
+    transactions::{
+        end_transaction_request, init_producer_request, txn_offset_partition, txn_offset_topic,
+    },
+};
+
 mod support;
 
 use krabka_protocol::{
     owned::{
         add_offsets_to_txn_request::AddOffsetsToTxnRequest,
-        create_topics_request::{CreatableTopic, CreateTopicsRequest},
-        end_txn_request::EndTxnRequest,
-        init_producer_id_request::InitProducerIdRequest,
-        offset_commit_request::{
-            OffsetCommitRequest, OffsetCommitRequestPartition, OffsetCommitRequestTopic,
-        },
-        offset_fetch_request::{
-            OffsetFetchRequest, OffsetFetchRequestGroup, OffsetFetchRequestTopic,
-            OffsetFetchRequestTopics,
-        },
+        offset_commit_request::{OffsetCommitRequest, OffsetCommitRequestPartition},
+        offset_fetch_request::{OffsetFetchRequest, OffsetFetchRequestTopic},
         offset_fetch_response::{
             OffsetFetchResponse, OffsetFetchResponseGroup, OffsetFetchResponsePartitions,
             OffsetFetchResponseTopics,
         },
-        txn_offset_commit_request::{
-            TxnOffsetCommitRequest, TxnOffsetCommitRequestPartition, TxnOffsetCommitRequestTopic,
-        },
+        txn_offset_commit_request::TxnOffsetCommitRequest,
     },
     primitives::uuid::Uuid as WireUuid,
 };
@@ -74,16 +72,7 @@ const TOPIC: &str = "src";
 /// by name.
 async fn create_topic(client: &krabka_client_core::Client) {
     let resp = client
-        .send(CreateTopicsRequest {
-            topics: vec![CreatableTopic {
-                name: TOPIC.into(),
-                num_partitions: 1,
-                replication_factor: 1,
-                ..Default::default()
-            }],
-            timeout_ms: 5_000,
-            ..Default::default()
-        })
+        .send(create_topic_request(creatable_topic(TOPIC, 1, 1), 5_000))
         .await
         .expect("create topic");
     assert!(resp.topics[0].error_code == 0, "create topic: {resp:?}");
@@ -109,16 +98,10 @@ async fn fetch_offset(
                 ..Default::default()
             }]),
             // v8+ groups[] shape; topic_id is required at v10 (name dropped).
-            groups: vec![OffsetFetchRequestGroup {
-                group_id: group_id.into(),
-                topics: Some(vec![OffsetFetchRequestTopics {
-                    name: TOPIC.into(),
-                    topic_id,
-                    partition_indexes: vec![0],
-                    ..Default::default()
-                }]),
-                ..Default::default()
-            }],
+            groups: vec![offset_fetch_group(
+                group_id,
+                Some(vec![offset_fetch_topic(TOPIC, topic_id, vec![0])]),
+            )],
             ..Default::default()
         })
         .await
@@ -156,13 +139,7 @@ async fn begin_and_commit_offsets(
     let deadline = Instant::now() + Duration::from_secs(30);
     let (pid, epoch) = loop {
         let init = client
-            .send(InitProducerIdRequest {
-                transactional_id: Some(tid.into()),
-                transaction_timeout_ms: 60_000,
-                producer_id: -1,
-                producer_epoch: -1,
-                ..Default::default()
-            })
+            .send(init_producer_request(Some(tid.into()), 60_000, (-1, -1)))
             .await
             .expect("init producer id");
         if init.error_code == 0 {
@@ -204,16 +181,11 @@ async fn begin_and_commit_offsets(
             producer_epoch: epoch,
             generation_id_or_member_epoch: -1,
             member_id: String::new(),
-            topics: vec![TxnOffsetCommitRequestTopic {
-                name: TOPIC.into(),
+            topics: vec![txn_offset_topic(
+                TOPIC,
                 topic_id,
-                partitions: vec![TxnOffsetCommitRequestPartition {
-                    partition_index: 0,
-                    committed_offset: offset,
-                    ..Default::default()
-                }],
-                ..Default::default()
-            }],
+                vec![txn_offset_partition(0, offset)],
+            )],
             ..Default::default()
         })
         .await
@@ -250,13 +222,7 @@ async fn txn_offset_commit_visible_via_offset_fetch_after_commit_marker() {
     // EndTxn(commit) writes the COMMIT marker → materializes the buffer.
     let end = p
         .client
-        .send(EndTxnRequest {
-            transactional_id: tid.into(),
-            producer_id: pid,
-            producer_epoch: epoch,
-            committed: true,
-            ..Default::default()
-        })
+        .send(end_transaction_request(tid, (pid, epoch), true))
         .await
         .expect("end txn commit");
     assert!(end.error_code == 0, "EndTxn(commit): {end:?}");
@@ -286,13 +252,7 @@ async fn txn_offset_commit_dropped_on_abort_marker() {
     // EndTxn(abort): the buffer is dropped without applying.
     let end = p
         .client
-        .send(EndTxnRequest {
-            transactional_id: tid.into(),
-            producer_id: pid,
-            producer_epoch: epoch,
-            committed: false,
-            ..Default::default()
-        })
+        .send(end_transaction_request(tid, (pid, epoch), false))
         .await
         .expect("end txn abort");
     assert!(end.error_code == 0, "EndTxn(abort): {end:?}");
@@ -321,16 +281,15 @@ async fn commit_stable_offset(client: &krabka_client_core::Client, group_id: &st
             group_id: group_id.into(),
             generation_id_or_member_epoch: -1,
             member_id: String::new(),
-            topics: vec![OffsetCommitRequestTopic {
-                name: TOPIC.into(),
-                topic_id: topic_id_for(client, TOPIC).await,
-                partitions: vec![OffsetCommitRequestPartition {
+            topics: vec![offset_commit_topic(
+                TOPIC,
+                topic_id_for(client, TOPIC).await,
+                vec![OffsetCommitRequestPartition {
                     partition_index: 0,
                     committed_offset: offset,
                     ..Default::default()
                 }],
-                ..Default::default()
-            }],
+            )],
             ..Default::default()
         })
         .await
@@ -353,18 +312,11 @@ async fn fetch_at_v10(
     client
         .send_at_least(
             OffsetFetchRequest {
-                groups: vec![OffsetFetchRequestGroup {
-                    group_id: group_id.into(),
-                    topics: Some(vec![OffsetFetchRequestTopics {
-                        name: TOPIC.into(),
-                        topic_id,
-                        partition_indexes: vec![0],
-                        ..Default::default()
-                    }]),
-                    ..Default::default()
-                }],
                 require_stable,
-                ..Default::default()
+                ..offset_fetch_request(offset_fetch_group(
+                    group_id,
+                    Some(vec![offset_fetch_topic(TOPIC, topic_id, vec![0])]),
+                ))
             },
             OFFSET_FETCH_V10,
         )
@@ -454,13 +406,7 @@ async fn require_stable_offset_fetch_is_unstable_until_the_commit_marker() {
 
     let end = p
         .client
-        .send(EndTxnRequest {
-            transactional_id: tid.into(),
-            producer_id: pid,
-            producer_epoch: epoch,
-            committed: true,
-            ..Default::default()
-        })
+        .send(end_transaction_request(tid, (pid, epoch), true))
         .await
         .expect("end txn commit");
     assert!(end.error_code == 0, "EndTxn(commit): {end:?}");
@@ -491,13 +437,7 @@ async fn require_stable_offset_fetch_becomes_stable_again_after_an_abort_marker(
 
     let end = p
         .client
-        .send(EndTxnRequest {
-            transactional_id: tid.into(),
-            producer_id: pid,
-            producer_epoch: epoch,
-            committed: false,
-            ..Default::default()
-        })
+        .send(end_transaction_request(tid, (pid, epoch), false))
         .await
         .expect("end txn abort");
     assert!(end.error_code == 0, "EndTxn(abort): {end:?}");

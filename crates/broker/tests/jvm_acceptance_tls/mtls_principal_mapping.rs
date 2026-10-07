@@ -27,7 +27,7 @@ use krabka_broker::{Broker, BrokerConfig, SslPrincipalMapper, config::ListenerSp
 use krabka_security::{ClientAuthMode, ListenerProtocol, TlsConfig};
 
 use crate::jvm_acceptance::{
-    KAFKA_IMAGE_TXN, broker0_advertised, broker0_listen, controller_addr_0,
+    KAFKA_IMAGE_TXN, broker0_advertised, broker0_listen,
     docker_run_kafka_tool_with_image_and_mounts, nc_check_connectivity, prepare_jks_truststore,
     write_client_props,
 };
@@ -109,8 +109,6 @@ async fn start_mtls_broker() -> (krabka_broker::BrokerHandle, tempfile::TempDir)
     crate::support::init_jvm_tracing("krabka_broker=debug,info");
     let dir = tempfile::tempdir().expect("tempdir");
     let listen_addr: std::net::SocketAddr = broker0_listen().parse().expect("allocated addr");
-    let controller_addr: std::net::SocketAddr =
-        controller_addr_0().parse().expect("allocated addr");
     let tls = TlsConfig {
         cert_chain_path: fixture("dev_cert.pem"),
         private_key_path: fixture("dev_key.pem"),
@@ -133,14 +131,7 @@ async fn start_mtls_broker() -> (krabka_broker::BrokerHandle, tempfile::TempDir)
         inter_broker_listener_name: "SSL".to_string(),
         tls_config: Some(tls),
         super_users: maplit::hashset! {MAPPED_PRINCIPAL.to_string()},
-        ..crate::support::jvm_broker_config(
-            1,
-            listen_addr,
-            controller_addr,
-            broker0_advertised(),
-            dir.path().to_path_buf(),
-            &[(1, controller_addr)],
-        )
+        ..crate::jvm_acceptance::host_broker_config(dir.path(), "allocated addr")
     };
     // The PLAINTEXT controller listener carries `ANONYMOUS`, and the node's own
     // heartbeats reach it. Every data listener here authenticates, so this

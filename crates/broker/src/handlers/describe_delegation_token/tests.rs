@@ -129,9 +129,7 @@ async fn returns_auth_disabled_when_no_secret_key() {
 
 #[tokio::test]
 async fn anonymous_caller_is_rejected_without_exposing_token_hmacs() {
-    let dir = TempDir::new().unwrap();
-    let controller = test_controller(dir.path().into()).await;
-    let secret = SecretBytes::new(b"k".to_vec());
+    token_fixture!(dir, controller, secret);
     seed_token(&controller, "t-a", kp("alice"), vec![]).await;
 
     let resp = handle(
@@ -155,9 +153,7 @@ async fn anonymous_caller_is_rejected_without_exposing_token_hmacs() {
 /// `DescribeDelegationToken`.
 #[tokio::test]
 async fn token_authed_caller_is_refused_entirely() {
-    let dir = TempDir::new().unwrap();
-    let controller = test_controller(dir.path().into()).await;
-    let secret = SecretBytes::new(b"k".to_vec());
+    token_fixture!(dir, controller, secret);
     // alice owns both t-a and t-b: a token-authed session must not be able
     // to read either one, including its own token's sibling.
     seed_token(&controller, "t-a", kp("alice"), vec![]).await;
@@ -206,9 +202,7 @@ async fn token_authed_caller_gets_request_not_allowed_before_auth_disabled() {
 /// with `error_code = NONE`, distinct from a missing (null) list.
 #[tokio::test]
 async fn empty_owners_list_returns_no_tokens_without_error() {
-    let dir = TempDir::new().unwrap();
-    let controller = test_controller(dir.path().into()).await;
-    let secret = SecretBytes::new(b"k".to_vec());
+    token_fixture!(dir, controller, secret);
     seed_token(&controller, "t-a", kp("alice"), vec![]).await;
 
     let req = DescribeDelegationTokenRequest {
@@ -263,9 +257,7 @@ async fn filter_token_matches_owner_renewer_or_token_id_acl() {
         expected,
     } in cases
     {
-        let dir = TempDir::new().unwrap();
-        let controller = test_controller(dir.path().into()).await;
-        let secret = SecretBytes::new(b"k".to_vec());
+        token_fixture!(dir, controller, secret);
         seed_token(&controller, "t-owner", kp("alice"), vec![]).await;
         seed_token(&controller, "t-renewer", kp("bob"), vec![kp("carol")]).await;
         seed_token(&controller, "t-other", kp("bob"), vec![]).await;
@@ -293,9 +285,7 @@ async fn filter_token_matches_owner_renewer_or_token_id_acl() {
 /// the owner filter matches on owner-OR-renewer, not owner alone.
 #[tokio::test]
 async fn renewer_sees_the_token_and_owner_filter_matches_renewer_too() {
-    let dir = TempDir::new().unwrap();
-    let controller = test_controller(dir.path().into()).await;
-    let secret = SecretBytes::new(b"k".to_vec());
+    token_fixture!(dir, controller, secret);
     // bob's token: carol is a listed renewer.
     seed_token(&controller, "t-b", kp("bob"), vec![kp("carol")]).await;
     // dave's token: carol has no relationship.
@@ -340,9 +330,7 @@ async fn renewer_sees_the_token_and_owner_filter_matches_renewer_too() {
 /// principal — the resource-name fix this issue is about.
 #[tokio::test]
 async fn describe_acl_on_token_id_grants_exactly_that_token() {
-    let dir = TempDir::new().unwrap();
-    let controller = test_controller(dir.path().into()).await;
-    let secret = SecretBytes::new(b"k".to_vec());
+    token_fixture!(dir, controller, secret);
     // alice owns two tokens; bob has no owner/renewer relationship to
     // either.
     seed_token(&controller, "t-a", kp("alice"), vec![]).await;
@@ -393,9 +381,7 @@ async fn describe_tokens_acl_on_the_owner_grants_all_of_their_tokens() {
         (&[(DescribeTokens, Allow)], "mallory", true, &["t-c"]),
     ];
     for &(operations, principal, default_allow, expected) in cases {
-        let dir = TempDir::new().unwrap();
-        let controller = test_controller(dir.path().into()).await;
-        let secret = SecretBytes::new(b"k".to_vec());
+        token_fixture!(dir, controller, secret);
         seed_token(&controller, "t-a1", kp("alice"), vec![]).await;
         seed_token(&controller, "t-a2", kp("alice"), vec![]).await;
         seed_token(&controller, "t-c", kp("carol"), vec![]).await;
@@ -445,9 +431,7 @@ async fn describe_tokens_acl_on_the_owner_grants_all_of_their_tokens() {
 /// handler never inspects HMACs) grants no visibility on its own.
 #[tokio::test]
 async fn unrelated_caller_sees_nothing() {
-    let dir = TempDir::new().unwrap();
-    let controller = test_controller(dir.path().into()).await;
-    let secret = SecretBytes::new(b"k".to_vec());
+    token_fixture!(dir, controller, secret);
     seed_token(&controller, "t-a", kp("alice"), vec![]).await;
 
     let resp = handle(
@@ -482,9 +466,7 @@ async fn requester_of_a_token_minted_for_another_owner_finds_and_sees_it() {
         ("eve", Some(&["admin"]), &[]),
     ];
 
-    let dir = TempDir::new().unwrap();
-    let controller = test_controller(dir.path().into()).await;
-    let secret = SecretBytes::new(b"k".to_vec());
+    token_fixture!(dir, controller, secret);
     seed_token_requested_by(
         &controller,
         "t-minted",
@@ -536,9 +518,7 @@ async fn describe_response_reports_the_requester_that_created_the_token() {
         DescribedDelegationToken, DescribedDelegationTokenRenewer,
     };
 
-    let dir = TempDir::new().unwrap();
-    let controller = test_controller(dir.path().into()).await;
-    let secret = SecretBytes::new(b"k".to_vec());
+    token_fixture!(dir, controller, secret);
     seed_token_requested_by(
         &controller,
         "t-minted",

@@ -6,7 +6,7 @@ use std::net::SocketAddr;
 
 use krabka_units::prelude::{ByteSize, ByteSizeExt as _};
 
-use super::ControllerHandle;
+use super::{ControllerHandle, connection_options};
 use crate::{error::RaftError, types::NodeId};
 
 impl ControllerHandle {
@@ -55,12 +55,11 @@ impl ControllerHandle {
         let mut body = Vec::with_capacity(32);
         req.encode_v0(&mut body);
 
-        let opts = krabka_client_core::ConnectionOptions {
-            client_id: self.client_id.clone(),
-            dispatch_queue_capacity: self.client_dispatch_queue_capacity,
-            frame_max: self.client_frame_max,
-            ..krabka_client_core::ConnectionOptions::default()
-        };
+        let opts = connection_options(
+            &self.client_id,
+            self.client_dispatch_queue_capacity,
+            self.client_frame_max,
+        );
         let conn = self
             .dialer
             .dial(NodeId(1), &addr.to_string(), opts)
@@ -85,13 +84,14 @@ impl ControllerHandle {
 mod tests {
     use std::sync::Arc;
 
+    use krabka_metadata::{MetadataImage, MetadataRecord, from_kraft_value};
+    use krabka_protocol::records::RecordBatch;
     use krabka_units::prelude::{TimeExt as _, mebibytes};
     use tempfile::TempDir;
-    use uuid::Uuid;
 
     use super::*;
     use crate::{
-        config::{BootstrapMode, ControllerConfig},
+        config::ControllerConfig,
         controller::{
             Controller,
             test_support::{
@@ -101,47 +101,9 @@ mod tests {
         },
     };
 
-    async fn committed_topic(name: &str, label: &str) -> (TempDir, ControllerHandle) {
-        let dir = TempDir::new().unwrap();
-        let cfg = ControllerConfig {
-            bootstrap_mode: BootstrapMode::Bootstrap,
-            ..ControllerConfig::for_tests(NodeId(1), dir.path().to_path_buf())
-        };
-        let ctrl = Controller::start(cfg).await.expect("bootstrap");
-        wait_for_leader(&ctrl).await;
-        submit_change_with_timeout(
-            &ctrl,
-            vec![krabka_metadata::MetadataRecord::V1Topic(
-                krabka_metadata::TopicRecord {
-                    name: name.into(),
-                    topic_id: Uuid::new_v4(),
-                    partitions: 1,
-                    replication_factor: 1,
-                },
-            )],
-            label,
-        )
-        .await
-        .expect("submit");
-        (dir, ctrl)
-    }
-
-    #[tokio::test]
-    async fn metadata_records_serves_committed_topic() {
-        use krabka_metadata::{MetadataImage, MetadataRecord, from_kraft_value};
-        use krabka_protocol::records::RecordBatch;
-
-        let (_dir, ctrl) = committed_topic("t", "metadata_records seed").await;
-
-        let slice = tokio::time::timeout(
-            TEST_OP_TIMEOUT.to_std(),
-            ctrl.metadata_records(0, UNBOUNDED_FETCH),
-        )
-        .await
-        .expect("metadata_records timed out");
-        assert2::assert!(slice.high_watermark >= 1);
-        let image = MetadataImage::new(Uuid::nil());
-        let mut buf: &[u8] = &slice.records;
+    fn contains_topic(records: &[u8], name: &str) -> bool {
+        let image = MetadataImage::new(uuid::Uuid::nil());
+        let mut buf = records;
         let mut found = false;
         while !buf.is_empty() {
             let batch = RecordBatch::decode(&mut buf).expect("decode");
@@ -153,21 +115,41 @@ mod tests {
                     continue;
                 };
                 if let Ok(MetadataRecord::V1Topic(t)) = from_kraft_value(value, &image)
-                    && t.name == "t"
+                    && t.name == name
                 {
                     found = true;
                 }
             }
         }
-        assert2::assert!(found);
+        found
+    }
+
+    async fn committed_topic(name: &str, label: &str) -> (TempDir, ControllerHandle) {
+        let (dir, ctrl) = crate::controller::test_support::bootstrap_controller("bootstrap").await;
+        wait_for_leader(&ctrl).await;
+        submit_change_with_timeout(&ctrl, vec![committable_topic_record(name)], label)
+            .await
+            .expect("submit");
+        (dir, ctrl)
+    }
+
+    #[tokio::test]
+    async fn metadata_records_serves_committed_topic() {
+        let (_dir, ctrl) = committed_topic("t", "metadata_records seed").await;
+
+        let slice = tokio::time::timeout(
+            TEST_OP_TIMEOUT.to_std(),
+            ctrl.metadata_records(0, UNBOUNDED_FETCH),
+        )
+        .await
+        .expect("metadata_records timed out");
+        assert2::assert!(slice.high_watermark >= 1);
+        assert2::assert!(contains_topic(&slice.records, "t"));
         ctrl.shutdown().await;
     }
 
     #[tokio::test]
     async fn fetch_metadata_from_returns_committed_records() {
-        use krabka_metadata::{MetadataImage, MetadataRecord, from_kraft_value};
-        use krabka_protocol::records::RecordBatch;
-
         let (_dir, ctrl) = committed_topic("fetched", "fetch_metadata seed").await;
 
         let addr = ctrl.controller_bound_addr();
@@ -181,26 +163,7 @@ mod tests {
         assert2::assert!(resp.error_code == 0);
         assert2::assert!(resp.high_watermark >= 1);
 
-        let image = MetadataImage::new(Uuid::nil());
-        let mut buf: &[u8] = &resp.records;
-        let mut found = false;
-        while !buf.is_empty() {
-            let batch = RecordBatch::decode(&mut buf).expect("decode");
-            if batch.attributes.is_control_batch() {
-                continue;
-            }
-            for r in &batch.records {
-                let Some(value) = r.value.as_ref() else {
-                    continue;
-                };
-                if let Ok(MetadataRecord::V1Topic(t)) = from_kraft_value(value, &image)
-                    && t.name == "fetched"
-                {
-                    found = true;
-                }
-            }
-        }
-        assert2::assert!(found);
+        assert2::assert!(contains_topic(&resp.records, "fetched"));
         ctrl.shutdown().await;
     }
 

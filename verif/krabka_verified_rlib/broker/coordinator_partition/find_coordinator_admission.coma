@@ -1,6 +1,6 @@
 (* #"/workspace/crates/verified/src/broker/coordinator_partition.rs" 32 0 37 29 *)
 
-let%span sord = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
 let%span scoordinator_partition = "/workspace/crates/verified/src/broker/coordinator_partition.rs" 43 27 43 28
 let%span scoordinator_partition'0 = "/workspace/crates/verified/src/broker/coordinator_partition.rs" 12 10 16 1
 let%span scoordinator_partition'1 = "/workspace/crates/verified/src/broker/coordinator_partition.rs" 17 10 21 1

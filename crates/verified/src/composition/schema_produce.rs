@@ -10,25 +10,21 @@ use crate::{
 
 type PreparedSchemaAppend = Option<(Vec<(SchemaFieldAction, Option<u32>, bool)>, i64)>;
 
+open_logic! {
 /// A coherent decoded walk has one key/value pair per record, in that order.
-// cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
-#[cfg(creusot)]
-#[cfg_attr(test, mutants::skip)]
-#[logic(open)]
 fn record_pairs(fields: Seq<SchemaWalkField>) -> bool {
     pearlite! { fields.len() % 2 == 0 && fields.len() / 2 <= i32::MAX@
     && forall<i: Int> 0 <= i && i < fields.len() ==> fields[i].role
         == if i % 2 == 0 { SchemaFieldRole::Key } else { SchemaFieldRole::Value } }
 }
+}
 
+open_logic! {
 /// Header admission uses the actual pair count, rather than a supplied tally.
-// cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
-#[cfg(creusot)]
-#[cfg_attr(test, mutants::skip)]
-#[logic(open)]
 fn header_admits(count: Int, delta: i32, flags: (bool, bool), producer: (i64, i32)) -> bool {
     pearlite! { 0 <= delta@ && delta@ < i32::MAX@ && count == delta@ + 1
     && count > 0 && !flags.0 && flags.1 && (producer.0@ < 0 || producer.1@ >= 0) }
+}
 }
 
 /// Connect per-position schema validation to real Produce header admission and
@@ -37,7 +33,7 @@ fn header_admits(count: Int, delta: i32, flags: (bool, bool), producer: (i64, i3
 /// Decoded fields/header facts and actual registry/body validation must be
 /// faithful. This proves neither byte decoding nor durable append completion.
 #[requires(fields@.len() <= u64::MAX@)]
-#[ensures((match result { None => false, Some(_) => true }) == (record_pairs(fields@)
+#[ensures((result != None) == (record_pairs(fields@)
     && header_admits(fields@.len() / 2, delta, flags, producer) && policy.1
     && (forall<i: Int> 0 <= i && i < fields@.len()
         ==> field_admitted(fields@[i], enabled.0, enabled.1, policy.0))

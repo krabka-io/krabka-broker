@@ -8,7 +8,8 @@
 use assert2::{assert, check};
 
 use crate::support::{
-    BAD_SIGNATURE, KEY_ID, NO_APPROVAL, PRINCIPAL, TOPIC, cli, cluster, mint_key, signed_as,
+    BAD_SIGNATURE, KEY_ID, NO_APPROVAL, PRINCIPAL, TOPIC, cli, cluster, set_signed_freeze,
+    signed_as,
 };
 
 /// A thaw is the dangerous direction. A signed one that names no approved
@@ -19,9 +20,7 @@ async fn a_thaw_with_no_approval_reports_that_an_approval_is_missing() {
     let (_broker, _dir, bootstrap, key) = cluster().await;
     let signing = signed_as(&key, PRINCIPAL);
 
-    let mut set = vec!["freeze", "set", "--topic", TOPIC, "--reason", "DR cutover"];
-    set.extend_from_slice(&signing);
-    assert!(cli(&bootstrap, &set).await == 0);
+    assert!(set_signed_freeze(&bootstrap, &signing).await == 0);
 
     let nobody_approved = uuid::Uuid::new_v4().to_string();
     let mut clear = vec![
@@ -44,13 +43,8 @@ async fn a_thaw_with_no_approval_reports_that_an_approval_is_missing() {
 /// refusal, so a runbook sends them to their key material.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_signature_the_broker_refuses_reports_a_signature_failure() {
-    let (_broker, dir, bootstrap, key) = cluster().await;
-    let stranger = mint_key(dir.path(), "mallory-yubi", "User:mallory");
-    let signing = signed_as(&key, PRINCIPAL);
-
-    let mut set = vec!["freeze", "set", "--topic", TOPIC, "--reason", "DR cutover"];
-    set.extend_from_slice(&signing);
-    assert!(cli(&bootstrap, &set).await == 0);
+    let (_broker, _dir, bootstrap, key, stranger) =
+        crate::support::frozen_cluster_with_stranger().await;
 
     let proposal = uuid::Uuid::new_v4().to_string();
     let clear = vec!["freeze", "clear", "--topic", TOPIC, "--proposal", &proposal];

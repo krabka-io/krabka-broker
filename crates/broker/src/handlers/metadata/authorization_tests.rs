@@ -15,7 +15,6 @@ use assert2::assert;
 use krabka_metadata::{AclOperation, ResourceType};
 use krabka_protocol::{
     owned::{
-        create_topics_request::{CreatableTopic, CreateTopicsRequest},
         metadata_request::{MetadataRequest, MetadataRequestTopic},
         metadata_response::{MetadataResponse, MetadataResponseTopic},
     },
@@ -23,11 +22,11 @@ use krabka_protocol::{
 };
 
 use crate::{
-    authorizer::{AclSource, AuthorizationRequest, AuthorizationResult, Authorizer},
+    authorizer::{AuthorizationResult, Authorizer},
     broker::BrokerHandle,
     codes,
     handlers::acl_wire::CLUSTER_RESOURCE_NAME,
-    test_support::{peer, principal, request_context, start_broker_no_audit_with},
+    test_support::{peer, principal, start_broker_no_audit_with},
 };
 
 /// The principal whose grants each case sets.
@@ -55,25 +54,19 @@ impl Grants {
     }
 }
 
-impl Authorizer for Grants {
-    fn authorize(
-        &self,
-        _source: &dyn AclSource,
-        request: &AuthorizationRequest<'_>,
-    ) -> AuthorizationResult {
-        if request.principal.name != TESTER
-            || self.0.lock().expect("grants").contains(&(
-                request.resource_type,
-                request.resource_name.to_owned(),
-                request.operation,
-            ))
-        {
-            AuthorizationResult::Allow
-        } else {
-            AuthorizationResult::Deny
-        }
+test_authorizer!(Grants, (self, _source, request), {
+    if request.principal.name != TESTER
+        || self.0.lock().expect("grants").contains(&(
+            request.resource_type,
+            request.resource_name.to_owned(),
+            request.operation,
+        ))
+    {
+        AuthorizationResult::Allow
+    } else {
+        AuthorizationResult::Deny
     }
-}
+});
 
 fn topic(name: &str, operation: AclOperation) -> Grant {
     (ResourceType::Topic, name.to_owned(), operation)
@@ -110,16 +103,13 @@ async fn start(auto_create_topics_enable: bool) -> Fixture {
         .await
         .expect("client build");
     let response = client
-        .send(CreateTopicsRequest {
-            topics: vec![CreatableTopic {
-                name: EXISTING.to_owned(),
-                num_partitions: 1,
-                replication_factor: 1,
-                ..Default::default()
-            }],
-            timeout_ms: 5_000,
-            ..Default::default()
-        })
+        .send(crate::handlers::test_support::configured_topic_request(
+            EXISTING,
+            &[],
+            1,
+            1,
+            5_000,
+        ))
         .await
         .expect("CreateTopics");
     assert!(
@@ -140,9 +130,11 @@ async fn start(auto_create_topics_enable: bool) -> Fixture {
 impl Fixture {
     async fn metadata(&self, version: i16, request: &MetadataRequest) -> MetadataResponse {
         let shared = self.broker.broker_arc_for_test();
-        let user = principal(TESTER);
-        let address = peer();
-        let ctx = request_context(&user, &address, "metadata-client");
+        request_identity!(
+            (user, address, ctx),
+            principal(TESTER),
+            client_id = "metadata-client"
+        );
         crate::test_support::dispatch_wire(
             &shared,
             krabka_protocol::api_key::ApiKey::Metadata as i16,

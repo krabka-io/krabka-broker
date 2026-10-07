@@ -4,15 +4,17 @@
 use std::collections::HashMap;
 
 use assert2::check;
-use krabka_log::Offset;
-use krabka_metadata::{DeleteTopicRecord, MetadataImage, MetadataRecord, TopicRecord};
+use krabka_metadata::{DeleteTopicRecord, MetadataRecord, TopicRecord};
 use uuid::Uuid;
 
 use super::{deleted_topics, on_topics_deleted};
-use crate::coordinator::unified::{
-    classic_state::{ClassicGroup, OffsetEntry},
-    group::{CoordinatorGroup, GroupKind},
-    test_support::make_coord_with_log,
+use crate::coordinator::{
+    test_support::{metadata_delta_image as image, offset_entry as entry},
+    unified::{
+        classic_state::ClassicGroup,
+        group::{CoordinatorGroup, GroupKind},
+        test_support::make_coord_with_log,
+    },
 };
 
 fn topic(name: &str, id: u128) -> MetadataRecord {
@@ -26,14 +28,6 @@ fn topic(name: &str, id: u128) -> MetadataRecord {
 
 fn delete(name: &str) -> MetadataRecord {
     MetadataRecord::V1DeleteTopic(DeleteTopicRecord { name: name.into() })
-}
-
-fn image(records: &[MetadataRecord]) -> MetadataImage {
-    let mut image = MetadataImage::new(Uuid::from_u128(1));
-    for record in records {
-        image.apply(record);
-    }
-    image
 }
 
 #[test]
@@ -81,17 +75,6 @@ async fn a_loaded_partition_applies_the_remembered_deletions() {
         let changed = super::after_partition_load(&coordinator, &image(&current), |_| true).await;
 
         check!(changed.len() == expected_groups, "{name}");
-    }
-}
-
-fn entry(offset: i64) -> OffsetEntry {
-    OffsetEntry {
-        offset: Offset(offset),
-        leader_epoch: -1,
-        metadata: String::new(),
-        commit_timestamp_ms: 0,
-        expire_timestamp_ms: None,
-        topic_id: None,
     }
 }
 

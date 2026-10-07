@@ -5,11 +5,10 @@ use super::{
     rebuilt_data_window_bounds_retry,
 };
 use crate::producer::producer_completion_window;
-
-// cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
 #[cfg(creusot)]
-#[cfg_attr(test, mutants::skip)]
-#[logic(open)]
+use crate::producer_snapshot::{retained_producer_row, snapshot_sequence_matches};
+
+open_logic! {
 pub fn completed_row(
     rows: Seq<ProducerSnapshotEntryFacts>,
     incoming: ProducerSnapshotEntryFacts,
@@ -17,11 +16,9 @@ pub fn completed_row(
 ) -> ProducerSnapshotEntryFacts {
     pearlite! { if index == rows.len() { incoming } else { rows[index] } }
 }
+}
 
-// cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
-#[cfg(creusot)]
-#[cfg_attr(test, mutants::skip)]
-#[logic(open)]
+open_logic! {
 pub fn matches_retry(
     rows: Seq<ProducerSnapshotEntryFacts>,
     incoming: ProducerSnapshotEntryFacts,
@@ -30,8 +27,8 @@ pub fn matches_retry(
 ) -> bool {
     pearlite! { let row = completed_row(rows, incoming, index);
     request.0 == row.producer_epoch
-    && request.1@ == crate::producer::sequence_modulo_2_31(row.last_sequence@ - row.offset_delta@)
-    && row.last_sequence@ == crate::producer::sequence_modulo_2_31(request.1@ + request.2@) }
+    && snapshot_sequence_matches(row, request.1@, request.2@) }
+}
 }
 
 type CompletedRetry = (
@@ -50,11 +47,10 @@ type CompletedRetry = (
 #[requires(crate::producer_snapshot::snapshot_entry_valid_model(end@, incoming) && incoming.last_offset@ >= 0)]
 #[requires(match current { None => rows@.len() == 0, Some(epoch) => epoch@ >= 0 })]
 #[requires(forall<i: Int> 0 <= i && i < rows@.len() ==>
-    crate::producer_snapshot::snapshot_entry_valid_model(end@, rows@[i]) && rows@[i].last_offset@ >= 0
-    && rows@[i].producer_id == incoming.producer_id && current == Some(rows@[i].producer_epoch))]
-#[requires(forall<i: Int, j: Int> 0 <= i && i < j && j < rows@.len() ==> rows@[i].last_offset@ < rows@[j].last_offset@)]
-#[ensures(result.0 == (match current { None => true, Some(epoch) => epoch@ <= incoming.producer_epoch@ }))]
-#[ensures(result.1@.len() <= 5 && (result.0 ==> result.1@.len() > 0))]
+    retained_producer_row(end@, rows@[i], incoming.producer_id) && current == Some(rows@[i].producer_epoch))]
+#[requires(crate::producer_snapshot::producer_offsets_ordered(rows@))]
+#[ensures(result.0 == (crate::producer::completion_epoch_accepts(current, incoming.producer_epoch)))]
+#[ensures(crate::producer::completion_window_bounded(result.1@, result.0))]
 #[ensures(forall<j: Int> 0 <= j && j < result.1@.len() ==> result.1@[j]@ <= rows@.len()
     && completed_row(rows@, incoming, result.1@[j]@).producer_epoch ==
         (match current { Some(epoch) => if epoch@ > incoming.producer_epoch@ { epoch } else { incoming.producer_epoch }, None => incoming.producer_epoch }))]

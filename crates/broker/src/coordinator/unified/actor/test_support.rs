@@ -10,7 +10,7 @@ use krabka_protocol::{
     owned::consumer_group_heartbeat_request::ConsumerGroupHeartbeatRequest, primitives::uuid::Uuid,
 };
 
-pub(super) mod rpc;
+pub(crate) mod rpc;
 
 use super::{GroupActorHandle, MetadataProvider};
 use crate::{
@@ -18,6 +18,7 @@ use crate::{
     coordinator::unified::{
         GroupCoordinator,
         config::NextGenConfig,
+        consumer_state::GroupState,
         group::{CoordinatorGroup, GroupKind},
         offsets_log::fake::InMemoryOffsetsLog,
         reconciler::ReconcileInput,
@@ -34,10 +35,37 @@ impl MetadataProvider for StaticMetadata {
     }
 }
 
-pub(super) fn empty_metadata() -> Arc<dyn MetadataProvider> {
+/// A reconciler image containing one named topic with the supplied wire id.
+pub(crate) fn topic_reconcile_input(
+    topic: &str,
+    topic_id: Uuid,
+    partitions: i32,
+) -> ReconcileInput {
+    ReconcileInput {
+        topic_id_by_name: [(topic.to_string(), topic_id)].into(),
+        partitions_per_topic: [(topic_id, partitions)].into(),
+        ..ReconcileInput::default()
+    }
+}
+
+pub(crate) fn empty_metadata() -> Arc<dyn MetadataProvider> {
     Arc::new(StaticMetadata {
         input: ReconcileInput::default(),
     })
+}
+
+pub(super) fn coordinator_with_log(
+    config: NextGenConfig,
+    metadata: Arc<dyn MetadataProvider>,
+    log: Arc<InMemoryOffsetsLog>,
+) -> Arc<GroupCoordinator> {
+    Arc::new(GroupCoordinator::new(
+        config,
+        crate::coordinator::unified::share::config::ShareGroupConfig::assigning_at_once(),
+        metadata,
+        log,
+        crate::coordinator::unified::streams::config::StreamsGroupConfig::default(),
+    ))
 }
 
 pub(super) fn make_coordinator() -> (Arc<GroupCoordinator>, Arc<InMemoryOffsetsLog>) {
@@ -49,14 +77,48 @@ pub(super) fn make_coordinator_with_config(
     config: NextGenConfig,
 ) -> (Arc<GroupCoordinator>, Arc<InMemoryOffsetsLog>) {
     let log = Arc::new(InMemoryOffsetsLog::default());
-    let coord = Arc::new(GroupCoordinator::new(
-        config,
-        crate::coordinator::unified::share::config::ShareGroupConfig::assigning_at_once(),
-        empty_metadata(),
-        log.clone(),
-        crate::coordinator::unified::streams::config::StreamsGroupConfig::default(),
-    ));
+    let coord = coordinator_with_log(config, empty_metadata(), log.clone());
     (coord, log)
+}
+
+/// Consumer members with the actor tests' ordinary subscription and client metadata.
+pub(super) fn subscribed_consumer_group(
+    group_id: &str,
+    member_ids: &[&str],
+    topics: &[&str],
+) -> GroupState {
+    let mut state = GroupState::new(group_id);
+    for member_id in member_ids {
+        state.add_or_update_member(subscribed_member(
+            member_id,
+            topics,
+            crate::coordinator::unified::ClientIdentity {
+                id: "client",
+                host: "host",
+            },
+            std::time::Instant::now(),
+        ));
+    }
+    state
+}
+
+/// A subscribing consumer with the actor fixtures' ordinary rebalance timeout.
+pub(super) fn subscribed_member(
+    member_id: &str,
+    topics: &[&str],
+    client: crate::coordinator::unified::ClientIdentity<'_>,
+    now: std::time::Instant,
+) -> crate::coordinator::unified::consumer_state::MemberState {
+    super::member_state::build_member(
+        member_id,
+        &ConsumerGroupHeartbeatRequest {
+            subscribed_topic_names: Some(topics.iter().map(|topic| (*topic).into()).collect()),
+            rebalance_timeout_ms: 60_000,
+            ..Default::default()
+        },
+        client,
+        now,
+    )
 }
 
 pub(super) fn completing_classic_group(member_ids: &[&str]) -> CoordinatorGroup {
@@ -77,6 +139,35 @@ pub(super) fn completing_classic_group(member_ids: &[&str]) -> CoordinatorGroup 
     state.resolve_selected_protocol_metadata("range");
     state.complete_rebalance("range");
     CoordinatorGroup::seeded("g", GroupKind::Classic(state), HashMap::new())
+}
+
+/// Borrow the services exactly as a live actor turn does.
+pub(super) fn actor_services<'a>(
+    coordinator: &'a Arc<GroupCoordinator>,
+    offsets_log: &'a InMemoryOffsetsLog,
+) -> super::ActorServices<'a> {
+    super::ActorServices {
+        config: &coordinator.config,
+        metadata: coordinator.metadata.as_ref(),
+        offsets_log,
+        coordinator,
+    }
+}
+
+pub(super) fn seed_classic_group(
+    coordinator: &Arc<GroupCoordinator>,
+    group: CoordinatorGroup,
+) -> (Arc<GroupActorHandle>, i32) {
+    let generation = group.as_classic().unwrap().generation_id;
+    coordinator.seed_classic("g", Box::new(group));
+    (coordinator.find("g").unwrap(), generation)
+}
+
+pub(super) fn seed_completing_classic(
+    coordinator: &Arc<GroupCoordinator>,
+    members: &[&str],
+) -> (Arc<GroupActorHandle>, i32) {
+    seed_classic_group(coordinator, completing_classic_group(members))
 }
 
 pub(super) async fn last_classic_metadata(
@@ -116,6 +207,42 @@ pub(super) fn make_coordinator_with_topic(
     )
 }
 
+/// A two-partition topic `t` whose classic and consumer groups can migrate both ways.
+pub(super) fn bidirectional_coordinator() -> (Arc<GroupCoordinator>, Arc<InMemoryOffsetsLog>) {
+    make_coordinator_with_topic_policy(
+        "t",
+        2,
+        crate::coordinator::unified::config::ConsumerGroupMigrationPolicy::Bidirectional,
+    )
+}
+
+/// One classic member using the common retention/dispatch test identity.
+pub(crate) fn classic_member(
+    member_id: &str,
+) -> crate::coordinator::unified::classic_state::Member {
+    crate::coordinator::unified::classic_state::Member::new(
+        member_id,
+        "client",
+        "127.0.0.1",
+        Duration::from_secs(30),
+        Duration::from_mins(1),
+        vec![("range".into(), bytes::Bytes::new())],
+    )
+}
+
+/// One follower already parked for a classic sync reply.
+pub(super) fn parked_follower(
+    member_id: &str,
+) -> (
+    super::ParkedWaiters,
+    tokio::sync::oneshot::Receiver<super::SyncResult>,
+) {
+    let (reply, response) = tokio::sync::oneshot::channel();
+    let mut parked = super::ParkedWaiters::default();
+    parked.followers.insert(member_id.into(), reply);
+    (parked, response)
+}
+
 /// As [`make_coordinator_with_topic`], but with an explicit migration
 /// policy. Hosted-classic tests pin `Upgrade` so that the native member's
 /// leave in `seed_and_upgrade` does NOT trigger a downgrade back to
@@ -135,16 +262,14 @@ pub(super) fn make_coordinator_with_topic_policy(
     };
     let metadata: Arc<dyn MetadataProvider> = Arc::new(StaticMetadata { input });
     let log = Arc::new(InMemoryOffsetsLog::default());
-    let coord = Arc::new(GroupCoordinator::new(
+    let coord = coordinator_with_log(
         NextGenConfig {
             migration_policy: policy,
             ..NextGenConfig::assigning_at_once()
         },
-        crate::coordinator::unified::share::config::ShareGroupConfig::assigning_at_once(),
         metadata,
         log.clone(),
-        crate::coordinator::unified::streams::config::StreamsGroupConfig::default(),
-    ));
+    );
     (coord, log)
 }
 
@@ -153,7 +278,12 @@ pub(super) fn make_coordinator_with_topic_policy(
 /// A real classic consumer client's `JoinGroup` protocol metadata: a
 /// `ConsumerProtocolSubscription` with the leading version-negotiation
 /// prefix.
-pub(super) fn subscription_blob(topics: &[&str]) -> Bytes {
+pub(crate) fn subscription_blob(topics: &[&str]) -> Bytes {
+    subscription_blob_at(0, topics)
+}
+
+/// Classic subscription metadata with its negotiated version prefix and body.
+pub(crate) fn subscription_blob_at(version: i16, topics: &[&str]) -> Bytes {
     use bytes::{BufMut, BytesMut};
     use krabka_protocol::{
         Encode, owned::consumer_protocol_subscription::ConsumerProtocolSubscription,
@@ -163,8 +293,8 @@ pub(super) fn subscription_blob(topics: &[&str]) -> Bytes {
         ..Default::default()
     };
     let mut out = BytesMut::new();
-    out.put_i16(0);
-    sub.encode(&mut out, 0).unwrap();
+    out.put_i16(version);
+    sub.encode(&mut out, version).unwrap();
     out.freeze()
 }
 
@@ -192,9 +322,33 @@ pub(super) async fn seed_and_upgrade(
 ) -> Arc<GroupActorHandle> {
     let handle = seed_classic_member(coord, "m-classic", topic, None);
 
+    upgrade_with_transient_native(&handle, topic).await;
+    handle
+}
+
+/// The two-partition topic fixture with classic-to-consumer upgrades enabled.
+pub(super) fn upgrade_coordinator() -> (Arc<GroupCoordinator>, Arc<InMemoryOffsetsLog>) {
+    make_coordinator_with_topic_policy(
+        "t",
+        2,
+        crate::coordinator::unified::config::ConsumerGroupMigrationPolicy::Upgrade,
+    )
+}
+
+/// Upgrade the fixture's hosted member, then rejoin it on the classic facade.
+pub(super) async fn upgrade_and_rejoin_classic(
+    coordinator: &Arc<GroupCoordinator>,
+) -> (Arc<GroupActorHandle>, super::JoinResult) {
+    let handle = seed_and_upgrade(coordinator, "t").await;
+    let joined = rpc::classic_join(&handle, "m-classic", "t").await;
+    (handle, joined)
+}
+
+/// Drive an in-place upgrade with a native join, then have that member leave.
+pub(super) async fn upgrade_with_transient_native(handle: &Arc<GroupActorHandle>, topic: &str) {
     // Native consumer heartbeat triggers the in-place upgrade and the
     // reconcile that gives m-classic a target.
-    let resp = rpc::consumer_heartbeat(&handle, "", 0, Some(topic)).await;
+    let resp = rpc::consumer_heartbeat(handle, "", 0, Some(topic)).await;
     assert!(resp.error_code == codes::NONE);
 
     // The native heartbeat minted a transient consumer member to drive the
@@ -203,7 +357,7 @@ pub(super) async fn seed_and_upgrade(
     let native_id = resp.member_id.expect("native member id");
     assert!(
         rpc::consumer_request(
-            &handle,
+            handle,
             ConsumerGroupHeartbeatRequest {
                 group_id: "g".into(),
                 member_id: native_id,
@@ -215,7 +369,6 @@ pub(super) async fn seed_and_upgrade(
         .error_code
             == codes::NONE
     );
-    handle
 }
 
 /// `true` if and only if some appended record WRITES a classic k2
@@ -285,9 +438,7 @@ pub(super) fn seed_stable_classic(
 ) -> (Arc<GroupActorHandle>, i32) {
     let mut group = completing_classic_group(members);
     group.as_classic_mut().unwrap().state = super::super::classic_state::GroupState::Stable;
-    let generation = group.as_classic().unwrap().generation_id;
-    coordinator.seed_classic("g", Box::new(group));
-    (coordinator.find("g").unwrap(), generation)
+    seed_classic_group(coordinator, group)
 }
 
 /// Spawn consumer-kind, host a classic member, then downgrade. The inspect

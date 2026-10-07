@@ -9,10 +9,7 @@ use std::sync::Arc;
 
 use assert2::assert;
 use krabka_ids::LeaderEpoch;
-use krabka_remote_storage::{
-    CustomMetadata, RemoteLogMetadataManager, RemoteLogSegmentId, RemoteLogSegmentMetadata,
-    RemoteLogSegmentMetadataUpdate, RemoteLogSegmentState, TopicIdPartition,
-};
+use krabka_remote_storage::{RemoteLogMetadataManager, RemoteStorageError, TopicIdPartition};
 use tokio::runtime::Handle;
 use uuid::Uuid;
 
@@ -20,6 +17,7 @@ use super::TopicBasedRemoteLogMetadataManager;
 use crate::{
     error::MetadataLogError,
     log::{InProcessMetadataEventLog, MetadataEventLog},
+    partitioning::metadata_partition_for,
 };
 
 /// Test double that delegates to an inner [`InProcessMetadataEventLog`]
@@ -69,32 +67,7 @@ pub fn tp() -> TopicIdPartition {
     TopicIdPartition::new(Uuid::from_u128(1), "orders", 0)
 }
 
-pub fn started(id: u128, start: i64, end: i64) -> RemoteLogSegmentMetadata {
-    RemoteLogSegmentMetadata::new(
-        RemoteLogSegmentId::new(tp(), Uuid::from_u128(id)),
-        start,
-        end,
-        end + 1,
-        1,
-        100,
-        krabka_remote_storage::RemoteLogSegmentDetails::new(
-            2048,
-            RemoteLogSegmentState::CopySegmentStarted,
-            maplit::btreemap! {LeaderEpoch(0) => start},
-        ),
-    )
-    .unwrap()
-}
-
-pub fn finish(id: u128) -> RemoteLogSegmentMetadataUpdate {
-    RemoteLogSegmentMetadataUpdate {
-        remote_log_segment_id: RemoteLogSegmentId::new(tp(), Uuid::from_u128(id)),
-        event_timestamp_ms: 200,
-        custom_metadata: Some(CustomMetadata(vec![7])),
-        state: RemoteLogSegmentState::CopySegmentFinished,
-        broker_id: 1,
-    }
-}
+krabka_macros::remote_segment_fixtures!(started, finish, krabka_remote_storage, next_offset);
 
 /// Run the sync RLMM trait method on the blocking pool, exactly
 /// like the broker does.
@@ -127,17 +100,60 @@ pub async fn wait_ready(m: &Arc<TopicBasedRemoteLogMetadataManager>, tp: &TopicI
     }
 }
 
+pub async fn seeded_manager(
+    log: Arc<dyn MetadataEventLog>,
+) -> (Arc<TopicBasedRemoteLogMetadataManager>, i32) {
+    seed_log(log.clone()).await;
+    let partition = metadata_partition_for(&tp(), log.partition_count());
+    (start_manager(log), partition)
+}
+
+pub async fn wait_finished_metadata(
+    manager: &TopicBasedRemoteLogMetadataManager,
+    metadata_partition: i32,
+    timeout_note: &str,
+    unexpected_note: &str,
+    gate_note: Option<&str>,
+) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+    loop {
+        match manager.remote_log_segment_metadata(&tp(), LeaderEpoch(0), 42) {
+            Ok(Some(metadata)) => {
+                assert!(metadata.remote_log_segment_id().id == Uuid::from_u128(10));
+                break;
+            }
+            Err(RemoteStorageError::NotReady { partition }) => {
+                if let Some(note) = gate_note {
+                    assert!(partition == metadata_partition, "{note}");
+                } else {
+                    assert!(partition == metadata_partition);
+                }
+                assert!(std::time::Instant::now() < deadline, "{timeout_note}");
+                tokio::task::yield_now().await;
+            }
+            other => panic!("{unexpected_note}: {other:?}"),
+        }
+    }
+}
+
+/// The periodic snapshot is an hour away, so tests can drive explicit flushes.
+pub fn start_manager_in(
+    log: Arc<dyn MetadataEventLog>,
+    dir: std::path::PathBuf,
+) -> Result<Arc<TopicBasedRemoteLogMetadataManager>, RemoteStorageError> {
+    TopicBasedRemoteLogMetadataManager::start(
+        log,
+        Handle::current(),
+        dir,
+        std::time::Duration::from_hours(1),
+    )
+}
+
 /// Start a manager that consumes NOTHING until the caller drives
 /// `reconcile_assignment`. The assignment and readiness tests use this,
 /// and they assert that pre-assignment reads are a genuine miss.
 pub fn start_manager(log: Arc<dyn MetadataEventLog>) -> Arc<TopicBasedRemoteLogMetadataManager> {
-    TopicBasedRemoteLogMetadataManager::start(
-        log,
-        Handle::current(),
-        snapshot_test_dir("test"),
-        std::time::Duration::from_hours(1),
-    )
-    .unwrap()
+    start_manager_in(log, snapshot_test_dir("test")).unwrap()
 }
 
 /// Start a manager and assign EVERY metadata partition, which is the

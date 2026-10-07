@@ -4,7 +4,7 @@
     "Coma": {
       "vc_quorum_state_write_decision": {
         "prover": "alt-ergo",
-        "time": 0.043
+        "time": 0.015
       }
     }
   }

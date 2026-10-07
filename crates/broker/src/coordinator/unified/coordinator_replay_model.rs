@@ -143,8 +143,7 @@ impl Model for ReplayModel {
         ]);
     }
 
-    fn next_state(&self, last: &Self::State, action: Self::Action) -> Option<Self::State> {
-        let mut state = last.clone();
+    krabka_macros::model_transition! { last, action, state; {
         match action {
             Action::WriteGroup(epoch) => {
                 let current = state.group_epoch.unwrap_or(0);
@@ -287,7 +286,7 @@ impl Model for ReplayModel {
         }
         assert2::assert!(coherent(&state), "incoherent after {action:?}: {state:?}");
         (state != *last).then_some(state)
-    }
+    }}
 
     fn properties(&self) -> Vec<Property<Self>> {
         vec![

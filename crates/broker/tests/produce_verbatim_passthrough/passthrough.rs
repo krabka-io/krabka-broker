@@ -7,9 +7,12 @@ use assert2::{assert, check};
 use krabka_compression::CompressionType;
 use krabka_protocol::{owned::create_topics_request::CreatableTopicConfig, records::HEADER_LEN};
 
-use crate::harness::{
-    batch, boot, create_topic, create_topic_with_configs, encode_batch, fetch_first_batch,
-    produce_one, topic_id_for, wait_for_compression,
+use crate::{
+    harness::{
+        batch, boot, create_topic, create_topic_with_configs, encode_batch, fetch_first_batch,
+        produce_one, topic_id_for, wait_for_compression,
+    },
+    support::client::connect_client,
 };
 
 /// A producer-LZ4-compressed v2 batch whose DECOMPRESSED form is large
@@ -20,11 +23,7 @@ async fn lz4_batch_passes_through_and_roundtrips() {
     let (broker, bootstrap, _dir) = boot().await;
     create_topic(&broker, &bootstrap, "lz4t").await;
 
-    let client = krabka_client_core::Client::builder()
-        .bootstrap(bootstrap.clone())
-        .build()
-        .await
-        .unwrap();
+    let client = connect_client(bootstrap.clone(), None).await;
     let topic_id = topic_id_for(&client, "lz4t").await;
 
     // 200 records of a highly-compressible 512-byte value → ~100 KiB raw,
@@ -72,11 +71,7 @@ async fn uncompressed_batch_roundtrips_byte_identically() {
     let (broker, bootstrap, _dir) = boot().await;
     create_topic(&broker, &bootstrap, "raw").await;
 
-    let client = krabka_client_core::Client::builder()
-        .bootstrap(bootstrap.clone())
-        .build()
-        .await
-        .unwrap();
+    let client = connect_client(bootstrap.clone(), None).await;
     let topic_id = topic_id_for(&client, "raw").await;
 
     let b = batch(CompressionType::None, 3, b"payload");
@@ -127,11 +122,7 @@ async fn recompression_config_takes_owned_path() {
     .await;
     wait_for_compression(&broker, "recmp", Some(CompressionType::Zstd)).await;
 
-    let client = krabka_client_core::Client::builder()
-        .bootstrap(bootstrap.clone())
-        .build()
-        .await
-        .unwrap();
+    let client = connect_client(bootstrap.clone(), None).await;
     let topic_id = topic_id_for(&client, "recmp").await;
 
     let value = vec![b'Q'; 256];

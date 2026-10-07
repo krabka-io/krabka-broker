@@ -1,7 +1,6 @@
 //! The legacy `ListOffsets` v0 wire shape and segment-boundary lookup.
 
 use bytes::{Bytes, BytesMut};
-use krabka_metadata::{AclOperation, ResourceType};
 use krabka_protocol::primitives::{
     array::{get_array_len, put_array_len},
     fixed::{get_i32, get_i64, put_i16, put_i32, put_i64},
@@ -10,7 +9,7 @@ use krabka_protocol::primitives::{
 
 use super::{
     bound::{fetch_bound, last_fetchable_offset},
-    leadership::resolve_leadership,
+    leadership::resolve_for_broker,
     local::latest_offset,
     remote::concurrently,
 };
@@ -91,30 +90,6 @@ fn encode(topics: &[TopicResponse]) -> Bytes {
     buf.freeze()
 }
 
-/// The `(topic_index, partition)` rows whose `(name, partition)` key appears
-/// more than once in `topics`. Mirrors `super::duplicate_partitions`: keyed
-/// by `topic_index` rather than a cloned topic name so a request with a
-/// large name and many partition rows can't multiply that name into an
-/// unbounded amount of retained memory.
-fn duplicate_partitions(topics: &[TopicRequest]) -> std::collections::HashSet<(usize, i32)> {
-    let mut counts: std::collections::HashMap<(&str, i32), usize> =
-        std::collections::HashMap::new();
-    for topic in topics {
-        for part in &topic.partitions {
-            *counts.entry((topic.name.as_str(), part.index)).or_insert(0) += 1;
-        }
-    }
-    let mut duplicates = std::collections::HashSet::new();
-    for (topic_index, topic) in topics.iter().enumerate() {
-        for part in &topic.partitions {
-            if counts[&(topic.name.as_str(), part.index)] > 1 {
-                duplicates.insert((topic_index, part.index));
-            }
-        }
-    }
-    duplicates
-}
-
 async fn resolve_partition(
     broker: &Broker,
     topic: &str,
@@ -129,19 +104,7 @@ async fn resolve_partition(
     let Ok(max_num_offsets) = usize::try_from(request.max_num_offsets) else {
         return error_response(request.index, codes::INVALID_REQUEST);
     };
-    let partition = match resolve_leadership(
-        topic,
-        request.index,
-        replica_id,
-        // v0 predates KIP-320 and carries no leader-epoch field to assert.
-        -1,
-        super::leadership::LeadershipContext {
-            partitions: &broker.partitions,
-            log_dir_status: &broker.log_dir_status,
-            image: &broker.controller.current_image(),
-            node_id: broker.config.node_id,
-        },
-    ) {
+    let partition = match resolve_for_broker(broker, topic, request.index, replica_id, -1) {
         Ok(partition) => partition,
         Err(error_code) => return error_response(request.index, error_code),
     };
@@ -184,22 +147,20 @@ pub(super) async fn handle(
 ) -> Result<Bytes, BrokerError> {
     let request = decode(req_bytes)?;
     let acl_image = broker.controller.current_image();
-    let duplicates = duplicate_partitions(&request.topics);
+    let duplicates = super::duplicate_partition_keys(request.topics.iter().map(|topic| {
+        (
+            topic.name.as_str(),
+            topic.partitions.iter().map(|part| part.index),
+        )
+    }));
 
-    let (authorized_topics, denied_topics): (Vec<_>, Vec<_>) = request
-        .topics
-        .into_iter()
-        .enumerate()
-        .partition(|(_, topic)| {
-            !crate::handlers::acl_denied(
-                broker.config.authorizer.as_ref(),
-                &acl_image,
-                ctx,
-                ResourceType::Topic,
-                &topic.name,
-                AclOperation::Describe,
-            )
-        });
+    let (authorized_topics, denied_topics) = super::partition_topics_by_describe(
+        request.topics,
+        |topic| &topic.name,
+        broker,
+        &acl_image,
+        ctx,
+    );
 
     let mut topics = concurrently(authorized_topics.into_iter().map(|(topic_index, topic)| {
         let duplicates = &duplicates;
@@ -255,6 +216,14 @@ mod tests {
         test_support::{peer, principal, start_broker_with_authorizer_no_audit},
     };
 
+    macro_rules! topic_header {
+        ($response:ident, $topic:expr, $partitions:expr) => {
+            assert!(get_array_len(&mut $response, false).unwrap() == 1);
+            assert!(get_string_owned(&mut $response).unwrap() == $topic);
+            assert!(get_array_len(&mut $response, false).unwrap() == $partitions);
+        };
+    }
+
     #[tokio::test]
     async fn max_num_offsets_caps_legacy_segment_boundaries() {
         const TOPIC: &str = "list-offsets-v0-max";
@@ -304,9 +273,7 @@ mod tests {
 
         let response = answer(&broker_handle, &request).await;
         let mut response: &[u8] = &response;
-        assert!(get_array_len(&mut response, false).unwrap() == 1);
-        assert!(get_string_owned(&mut response).unwrap() == TOPIC);
-        assert!(get_array_len(&mut response, false).unwrap() == 1);
+        topic_header!(response, TOPIC, 1);
         assert!(get_i32(&mut response).unwrap() == 0);
         assert!(get_i16(&mut response).unwrap() == codes::NONE);
         let count = get_array_len(&mut response, false).unwrap();
@@ -327,13 +294,13 @@ mod tests {
 
     #[tokio::test]
     async fn denied_topic_row_is_appended_last_regardless_of_request_order() {
-        let (broker_handle, _dir) = start_broker_with_authorizer_no_audit(Arc::new(DenyNamed(
-            std::collections::HashSet::from(["denied"]),
-        )))
-        .await;
-        let broker = broker_handle.broker_arc_for_test();
-        let admin = principal("admin");
-        let socket = peer();
+        broker_fixture!(
+            (broker_handle, _dir, broker),
+            start_broker_with_authorizer_no_audit(Arc::new(DenyNamed(
+                std::collections::HashSet::from(["denied"]),
+            )))
+        );
+        request_identity!((admin, socket), principal("admin"));
 
         let mut request = BytesMut::new();
         put_i32(&mut request, -1);
@@ -398,9 +365,7 @@ mod tests {
 
         let response = answer(&broker_handle, &request).await;
         let mut response: &[u8] = &response;
-        assert!(get_array_len(&mut response, false).unwrap() == 1);
-        assert!(get_string_owned(&mut response).unwrap() == TOPIC);
-        assert!(get_array_len(&mut response, false).unwrap() == 2);
+        topic_header!(response, TOPIC, 2);
         for _ in 0..2 {
             assert!(get_i32(&mut response).unwrap() == 0);
             assert!(get_i16(&mut response).unwrap() == codes::INVALID_REQUEST);
@@ -412,8 +377,7 @@ mod tests {
     }
     async fn answer(broker: &crate::broker::BrokerHandle, request: &[u8]) -> Bytes {
         let shared = broker.broker_arc_for_test();
-        let admin = principal("admin");
-        let socket = peer();
+        request_identity!((admin, socket), principal("admin"));
         handle(&shared, request, &test_context(&admin, &socket))
             .await
             .expect("ListOffsets v0")

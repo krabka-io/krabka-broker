@@ -64,27 +64,26 @@ mod tests {
 
         let resp = build_topic_error_response(&topic, crate::codes::UNKNOWN_TOPIC_ID);
 
-        let error_partition = |index: i32| PartitionProduceResponse {
-            index,
-            error_code: crate::codes::UNKNOWN_TOPIC_ID,
-            base_offset: -1,
-            log_append_time_ms: -1,
-            log_start_offset: -1,
-            record_errors: vec![],
-            error_message: None,
-            current_leader: LeaderIdAndEpoch {
-                leader_id: -1,
-                leader_epoch: -1,
-                unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(Vec::new()),
-            },
-            unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(Vec::new()),
+        let error_partition = |index: i32| {
+            tagged_wire!(PartitionProduceResponse {
+                index,
+                error_code: crate::codes::UNKNOWN_TOPIC_ID,
+                base_offset: -1,
+                log_append_time_ms: -1,
+                log_start_offset: -1,
+                record_errors: vec![],
+                error_message: None,
+                current_leader: tagged_wire!(LeaderIdAndEpoch {
+                    leader_id: -1,
+                    leader_epoch: -1,
+                }),
+            })
         };
-        let expected = TopicProduceResponse {
+        let expected = tagged_wire!(TopicProduceResponse {
             name: "orders".to_string(),
             topic_id,
             partition_responses: vec![error_partition(0), error_partition(4)],
-            unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(Vec::new()),
-        };
+        });
         assert!(resp == expected);
     }
 }

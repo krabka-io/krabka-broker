@@ -3,6 +3,8 @@ use creusot_std::prelude::*;
 #[cfg(creusot)]
 use super::completed_producer::completed_row;
 use super::{ProducerSnapshotEntryFacts, completed_batches_preserve_first_retry};
+#[cfg(creusot)]
+use crate::producer_snapshot::retained_producer_row;
 use crate::{
     produce::produce_durability_frontier, producer::decrement_sequence, raft::frontier_reaches,
 };
@@ -19,9 +21,8 @@ type EvictionWaiters = (bool, i64, bool, Vec<(usize, i64, bool)>);
 #[requires(crate::producer_snapshot::snapshot_entry_valid_model(end@, incoming) && incoming.last_offset@ >= 0)]
 #[requires(incoming.producer_epoch@ <= epoch@)]
 #[requires(forall<i: Int> 0 <= i && i < rows@.len() ==>
-    crate::producer_snapshot::snapshot_entry_valid_model(end@, rows@[i]) && rows@[i].last_offset@ >= 0
-    && rows@[i].producer_id == incoming.producer_id && rows@[i].producer_epoch == epoch)]
-#[requires(forall<i: Int, j: Int> 0 <= i && i < j && j < rows@.len() ==> rows@[i].last_offset@ < rows@[j].last_offset@)]
+    retained_producer_row(end@, rows@[i], incoming.producer_id) && rows@[i].producer_epoch == epoch)]
+#[requires(crate::producer_snapshot::producer_offsets_ordered(rows@))]
 #[ensures(result.1@ == rows@[origin@].last_offset@ + 1 && 0 < result.1@ && result.1@ <= end@)]
 #[ensures(result.2 == (hwm@ >= result.1@))]
 #[ensures(0 < result.3@.len() && result.3@.len() <= 5)]

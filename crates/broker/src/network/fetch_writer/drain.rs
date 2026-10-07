@@ -66,24 +66,15 @@ where
     // goes to the same stream and so takes the same arm.
     let mut path: Option<FetchDrainPath> = None;
     for op in std::iter::once(first).chain(ops) {
-        match op {
+        krabka_macros::sendfile_match! { match op {
             WriteOp::Inline(b) => {
                 stream.write_all(&b).await.map_err(BrokerError::Io)?;
                 path.get_or_insert(FetchDrainPath::Vectored);
             }
-            #[cfg(any(
-                target_os = "linux",
-                target_os = "macos",
-                target_os = "ios",
-                target_os = "tvos",
-                target_os = "watchos",
-                target_os = "freebsd",
-                target_os = "dragonfly",
-            ))]
             WriteOp::File(region) => {
                 path = Some(drain_file_region(stream, &region).await?);
             }
-        }
+        }}
     }
     stream.flush().await.map_err(BrokerError::Io)?;
     // The empty plan is rejected above, so the plan named a path; `vectored`
@@ -231,261 +222,232 @@ mod tests {
     // DragonFly). The loopback-TCP roundtrip exercises the real readiness +
     // partial-write loop. The kTLS roundtrip below stays Linux-only (kTLS is a
     // Linux-only dependency).
-    #[cfg(any(
-        target_os = "linux",
-        target_os = "macos",
-        target_os = "ios",
-        target_os = "tvos",
-        target_os = "watchos",
-        target_os = "freebsd",
-        target_os = "dragonfly",
-    ))]
-    mod sendfile_tests {
-        use bytes::Bytes;
+    crate::sendfile_cfg! {
+        mod sendfile_tests {
+            use bytes::Bytes;
 
-        use super::*;
-        use crate::network::fetch_writer::{resolve_records_sendfile, test_support::file_payload};
+            use super::*;
+            use crate::network::fetch_writer::{resolve_records_sendfile, test_support::file_payload};
 
-        fn sequence_records(count: u32) -> Bytes {
-            Bytes::from((0..count).flat_map(u32::to_le_bytes).collect::<Vec<_>>())
-        }
-
-        async fn receive_records(
-            len: usize,
-        ) -> (tokio::net::TcpStream, tokio::task::JoinHandle<Vec<u8>>) {
-            use tokio::io::AsyncReadExt;
-            let (server, mut client) = crate::network::test_support::tcp_pair().await;
-            let reader = tokio::spawn(async move {
-                let mut got = vec![0u8; len];
-                client.read_exact(&mut got).await.unwrap();
-                got
-            });
-            (server, reader)
-        }
-
-        /// End-to-end `sendfile` over a real loopback TCP socket: the bytes
-        /// the client reads must equal the file region. The test drives the
-        /// real readiness and partial-write loop in `write_fetch_plan`.
-        #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-        async fn sendfile_roundtrip_over_tcp_is_byte_exact() {
-            // Larger than the deliberately small send buffer to exercise partial writes.
-            let records = sequence_records(4000);
-            let (_tf, payload) = file_payload(&records);
-            let (mut server, client) = receive_records(records.len()).await;
-            // Shrink the send buffer to force partial sendfile writes.
-            {
-                use socket2::SockRef;
-                let sr = SockRef::from(&server);
-                let _ = sr.set_send_buffer_size(8 * 1024);
+            fn sequence_records(count: u32) -> Bytes {
+                Bytes::from((0..count).flat_map(u32::to_le_bytes).collect::<Vec<_>>())
             }
-            let ops = resolve_records_sendfile(&payload).unwrap();
-            assert2::assert!(ops.iter().any(|o| matches!(o, WriteOp::File(_))));
-            let metrics = BrokerMetrics::new();
-            write_fetch_plan(&mut server, ops, &metrics).await.unwrap();
-            drop(server); // EOF for the client's read_exact tail
-            assert2::assert!(
-                (client.await.unwrap()) == (&records[..]),
-                "sendfile'd bytes must match file"
-            );
 
-            // Byte equality alone cannot tell the kernel drain apart from the
-            // copy that produces the same bytes. The counter can, and it is
-            // the only thing here that would notice the plaintext fetch path
-            // falling back.
-            assert2::assert!((drain_counts(&metrics)) == ([1, 0, 0]));
-        }
-
-        /// The drain's own fallback arm: a stream that calls itself
-        /// sendfile-capable but hands out no socket has its file region
-        /// `pread` into a buffer. The bytes stay identical, so the counter is
-        /// the only thing that separates this from the zero-copy drain — which
-        /// is exactly why it is a separate label.
-        #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-        async fn pread_fallback_is_byte_exact_and_counts_as_its_own_path() {
-            // Larger than the deliberately small send buffer to exercise partial writes.
-            let records = sequence_records(2000);
-            let (_tf, payload) = file_payload(&records);
-            let (server, client) = receive_records(records.len()).await;
-            let mut server = NoSendfileStream(server);
-            let ops = resolve_records_sendfile(&payload).unwrap();
-            assert2::assert!(ops.iter().any(|o| matches!(o, WriteOp::File(_))));
-            let metrics = BrokerMetrics::new();
-            write_fetch_plan(&mut server, ops, &metrics).await.unwrap();
-            drop(server); // EOF for the client's read_exact tail
-
-            assert2::assert!((client.await.unwrap()) == (records.to_vec()));
-            assert2::assert!((drain_counts(&metrics)) == ([0, 0, 1]));
-        }
-
-        /// A TCP stream that reports itself sendfile-capable but refuses to
-        /// lend its socket, which is the shape of a stream that encrypts in
-        /// userspace. It drives the drain's `pread` arm without standing up a
-        /// TLS session, whose handshake is not what that arm is about.
-        struct NoSendfileStream(tokio::net::TcpStream);
-
-        impl SendfileSink for NoSendfileStream {
-            fn is_sendfile_capable(&self) -> bool {
-                true
+            async fn receive_records(
+                len: usize,
+            ) -> (tokio::net::TcpStream, tokio::task::JoinHandle<Vec<u8>>) {
+                use tokio::io::AsyncReadExt;
+                let (server, mut client) = crate::network::test_support::tcp_pair().await;
+                let reader = tokio::spawn(async move {
+                    let mut got = vec![0u8; len];
+                    client.read_exact(&mut got).await.unwrap();
+                    got
+                });
+                (server, reader)
             }
-            fn tcp_for_sendfile(&self) -> Option<&tokio::net::TcpStream> {
-                None
+
+            fn file_operations(payload: &krabka_protocol::records::RecordsPayload) -> Vec<WriteOp> {
+                let ops = resolve_records_sendfile(payload).unwrap();
+                assert2::assert!(ops.iter().any(|o| matches!(o, WriteOp::File(_))));
+                ops
             }
-        }
 
-        impl tokio::io::AsyncWrite for NoSendfileStream {
-            fn poll_write(
-                mut self: std::pin::Pin<&mut Self>,
-                cx: &mut std::task::Context<'_>,
-                buf: &[u8],
-            ) -> std::task::Poll<std::io::Result<usize>> {
-                std::pin::Pin::new(&mut self.0).poll_write(cx, buf)
+            async fn drain_file_and_close<S: AsyncWrite + SendfileSink + Unpin>(
+                mut server: S,
+                payload: &krabka_protocol::records::RecordsPayload,
+            ) -> BrokerMetrics {
+                let ops = file_operations(payload);
+                let metrics = BrokerMetrics::new();
+                write_fetch_plan(&mut server, ops, &metrics).await.unwrap();
+                drop(server);
+                metrics
             }
-            fn poll_flush(
-                mut self: std::pin::Pin<&mut Self>,
-                cx: &mut std::task::Context<'_>,
-            ) -> std::task::Poll<std::io::Result<()>> {
-                std::pin::Pin::new(&mut self.0).poll_flush(cx)
-            }
-            fn poll_shutdown(
-                mut self: std::pin::Pin<&mut Self>,
-                cx: &mut std::task::Context<'_>,
-            ) -> std::task::Poll<std::io::Result<()>> {
-                std::pin::Pin::new(&mut self.0).poll_shutdown(cx)
-            }
-        }
 
-        /// Increment F end-to-end: `sendfile(2)` a `FileRegions` payload onto a
-        /// `ktls::KtlsStream` (kernel-offloaded TLS) and assert the bytes a
-        /// rustls TLS *client* decrypts are byte-identical to the file region.
-        /// This proves that the kTLS path is wire-compatible: the kernel
-        /// encrypts the same plaintext the userspace rustls path would have,
-        /// so the client sees the same plaintext after decryption.
-        ///
-        /// The test skips, and does not fail, when the host kernel has no
-        /// kTLS support, that is, when the `tls` module is not loaded or
-        /// `CONFIG_TLS` is absent. The startup probe gates this exact
-        /// condition in production, so a skip here mirrors a run of the
-        /// fallback path.
-        ///
-        /// Linux-only: `ktls` is a Linux-only dependency, so this test is not
-        /// compiled on the Apple/BSD members of the SENDFILE alias.
-        #[cfg(target_os = "linux")]
-        #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-        async fn ktls_sendfile_over_tls_is_byte_exact() {
-            use std::sync::Arc;
-
-            use tokio::{
-                io::{AsyncReadExt, AsyncWriteExt},
-                net::{TcpListener, TcpStream},
-            };
-
-            // The request the client sends before reading the response —
-            // mirrors the real broker flow (client sends ApiVersions/Fetch, the
-            // broker reads it via `Framed`, then writes the fetch response). It
-            // also exercises the kTLS RX path on the server side.
-            const REQ: &[u8] = b"fetch-request";
-
-            let _ = rustls::crypto::ring::default_provider().install_default();
-
-            // Records large enough to span several TLS records + partial writes.
-            let mut records = Vec::new();
-            for i in 0..8000u32 {
-                records.extend_from_slice(&i.to_le_bytes());
-            }
-            let records = Bytes::from(records);
-            let (_tf, payload) = file_payload(&records);
-
-            // Throwaway self-signed cert (localhost SAN).
-            let key = rcgen::KeyPair::generate_for(&rcgen::PKCS_ECDSA_P256_SHA256).unwrap();
-            let params = rcgen::CertificateParams::new(vec!["localhost".to_string()]).unwrap();
-            let cert = params.self_signed(&key).unwrap();
-            let cert_der = rustls::pki_types::CertificateDer::from(cert.der().to_vec());
-            let key_der = rustls::pki_types::PrivateKeyDer::try_from(key.serialize_der()).unwrap();
-
-            let mut server_cfg =
-                rustls::ServerConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
-                    .with_no_client_auth()
-                    .with_single_cert(vec![cert_der.clone()], key_der)
-                    .unwrap();
-            server_cfg.enable_secret_extraction = true;
-            let acceptor = tokio_rustls::TlsAcceptor::from(Arc::new(server_cfg));
-
-            let mut roots = rustls::RootCertStore::empty();
-            roots.add(cert_der).unwrap();
-            let client_cfg =
-                rustls::ClientConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
-                    .with_root_certificates(roots)
-                    .with_no_client_auth();
-            let connector = tokio_rustls::TlsConnector::from(Arc::new(client_cfg));
-
-            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-            let addr = listener.local_addr().unwrap();
-
-            let expected = records.clone();
-            let client = tokio::spawn(async move {
-                let tcp = TcpStream::connect(addr).await.unwrap();
-                let name = rustls::pki_types::ServerName::try_from("localhost").unwrap();
-                let mut tls = connector.connect(name, tcp).await.unwrap();
-                tls.write_all(REQ).await.unwrap();
-                tls.flush().await.unwrap();
-                let mut got = vec![0u8; expected.len()];
-                tls.read_exact(&mut got).await.unwrap();
-                got
-            });
-
-            let (tcp, _) = listener.accept().await.unwrap();
-            {
-                use socket2::SockRef;
-                let sr = SockRef::from(&tcp);
-                let _ = sr.set_send_buffer_size(16 * 1024);
-            }
-            let tls = acceptor.accept(ktls::CorkStream::new(tcp)).await.unwrap();
-            let mut ktls_stream = match ktls::config_ktls_server(tls).await {
-                Ok(s) => s,
-                Err(e) => {
-                    // Kernel lacks kTLS support — the production startup probe
-                    // would have returned false and the fallback path runs.
-                    eprintln!(
-                        "skipping ktls_sendfile_over_tls_is_byte_exact: kTLS unsupported on this host: {e}"
-                    );
-                    client.abort();
-                    return;
+            /// End-to-end `sendfile` over a real loopback TCP socket: the bytes
+            /// the client reads must equal the file region. The test drives the
+            /// real readiness and partial-write loop in `write_fetch_plan`.
+            #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+            async fn sendfile_roundtrip_over_tcp_is_byte_exact() {
+                // Larger than the deliberately small send buffer to exercise partial writes.
+                let records = sequence_records(4000);
+                let (_tf, payload) = file_payload(&records);
+                let (server, client) = receive_records(records.len()).await;
+                // Shrink the send buffer to force partial sendfile writes.
+                {
+                    use socket2::SockRef;
+                    let sr = SockRef::from(&server);
+                    let _ = sr.set_send_buffer_size(8 * 1024);
                 }
-            };
+                let metrics = drain_file_and_close(server, &payload).await; // EOF for the client's read_exact tail
+                assert2::assert!(
+                    (client.await.unwrap()) == (&records[..]),
+                    "sendfile'd bytes must match file"
+                );
 
-            // Read the client's request through the KtlsStream first (kTLS RX
-            // + the ktls crate's drained-bytes replay). The real broker always
-            // reads the Fetch request before writing the response.
-            let mut req = vec![0u8; REQ.len()];
-            ktls_stream.read_exact(&mut req).await.unwrap();
-            assert2::assert!(
-                (req) == (REQ),
-                "kTLS RX must deliver the request bytes intact"
-            );
+                // Byte equality alone cannot tell the kernel drain apart from the
+                // copy that produces the same bytes. The counter can, and it is
+                // the only thing here that would notice the plaintext fetch path
+                // falling back.
+                assert2::assert!((drain_counts(&metrics)) == ([1, 0, 0]));
+            }
 
-            // The KtlsStream must report itself sendfile-capable, and the
-            // resolver must emit a File op (true zero-copy over TLS).
-            assert2::assert!(SendfileSink::is_sendfile_capable(&ktls_stream));
-            let ops = resolve_records_sendfile(&payload).unwrap();
-            assert2::assert!(ops.iter().any(|o| matches!(o, WriteOp::File(_))));
+            /// The drain's own fallback arm: a stream that calls itself
+            /// sendfile-capable but hands out no socket has its file region
+            /// `pread` into a buffer. The bytes stay identical, so the counter is
+            /// the only thing that separates this from the zero-copy drain — which
+            /// is exactly why it is a separate label.
+            #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+            async fn pread_fallback_is_byte_exact_and_counts_as_its_own_path() {
+                // Larger than the deliberately small send buffer to exercise partial writes.
+                let records = sequence_records(2000);
+                let (_tf, payload) = file_payload(&records);
+                let (server, client) = receive_records(records.len()).await;
+                let server = NoSendfileStream(server);
+                let metrics = drain_file_and_close(server, &payload).await; // EOF for the client's read_exact tail
 
-            // sendfile the file region onto the kTLS socket — the kernel
-            // encrypts it into TLS records on the way out.
-            let metrics = BrokerMetrics::new();
-            write_fetch_plan(&mut ktls_stream, ops, &metrics)
-                .await
-                .unwrap();
-            ktls_stream.flush().await.unwrap();
-            drop(ktls_stream); // sends close_notify; EOF for the client tail
+                assert2::assert!((client.await.unwrap()) == (records.to_vec()));
+                assert2::assert!((drain_counts(&metrics)) == ([0, 0, 1]));
+            }
 
-            let got = client.await.unwrap();
-            assert2::assert!(
-                (got) == (&records[..]),
-                "client-decrypted kTLS bytes must equal the file region (wire byte-exact)"
-            );
-            // kTLS is the one encrypted path that still reaches the kernel
-            // drain; a fallback to userspace rustls would land on `pread`.
-            assert2::assert!((drain_counts(&metrics)) == ([1, 0, 0]));
+            /// A TCP stream that reports itself sendfile-capable but refuses to
+            /// lend its socket, which is the shape of a stream that encrypts in
+            /// userspace. It drives the drain's `pread` arm without standing up a
+            /// TLS session, whose handshake is not what that arm is about.
+            struct NoSendfileStream(tokio::net::TcpStream);
+
+            impl SendfileSink for NoSendfileStream {
+                fn is_sendfile_capable(&self) -> bool {
+                    true
+                }
+                fn tcp_for_sendfile(&self) -> Option<&tokio::net::TcpStream> {
+                    None
+                }
+            }
+
+            impl tokio::io::AsyncWrite for NoSendfileStream {
+                fn poll_write(
+                    mut self: std::pin::Pin<&mut Self>,
+                    cx: &mut std::task::Context<'_>,
+                    buf: &[u8],
+                ) -> std::task::Poll<std::io::Result<usize>> {
+                    std::pin::Pin::new(&mut self.0).poll_write(cx, buf)
+                }
+                krabka_macros::async_write_delegate!(tuple);
+            }
+
+            /// Increment F end-to-end: `sendfile(2)` a `FileRegions` payload onto a
+            /// `ktls::KtlsStream` (kernel-offloaded TLS) and assert the bytes a
+            /// rustls TLS *client* decrypts are byte-identical to the file region.
+            /// This proves that the kTLS path is wire-compatible: the kernel
+            /// encrypts the same plaintext the userspace rustls path would have,
+            /// so the client sees the same plaintext after decryption.
+            ///
+            /// The test skips, and does not fail, when the host kernel has no
+            /// kTLS support, that is, when the `tls` module is not loaded or
+            /// `CONFIG_TLS` is absent. The startup probe gates this exact
+            /// condition in production, so a skip here mirrors a run of the
+            /// fallback path.
+            ///
+            /// Linux-only: `ktls` is a Linux-only dependency, so this test is not
+            /// compiled on the Apple/BSD members of the SENDFILE alias.
+            #[cfg(target_os = "linux")]
+            #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+            async fn ktls_sendfile_over_tls_is_byte_exact() {
+                use tokio::{
+                    io::{AsyncReadExt, AsyncWriteExt},
+                    net::{TcpListener, TcpStream},
+                };
+
+                // The request the client sends before reading the response —
+                // mirrors the real broker flow (client sends ApiVersions/Fetch, the
+                // broker reads it via `Framed`, then writes the fetch response). It
+                // also exercises the kTLS RX path on the server side.
+                const REQ: &[u8] = b"fetch-request";
+
+                let _ = rustls::crypto::ring::default_provider().install_default();
+
+                // Records large enough to span several TLS records + partial writes.
+                let mut records = Vec::new();
+                for i in 0..8000u32 {
+                    records.extend_from_slice(&i.to_le_bytes());
+                }
+                let records = Bytes::from(records);
+                let (_tf, payload) = file_payload(&records);
+
+                // Throwaway self-signed cert (localhost SAN).
+                let (cert, key) = crate::test_support::localhost_ecdsa_pair();
+                let key_der = rustls::pki_types::PrivateKeyDer::try_from(key.serialize_der()).unwrap();
+
+                let (acceptor, connector) = crate::network::ktls_probe::tls13_pair(&cert, key_der).unwrap();
+
+                let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+                let addr = listener.local_addr().unwrap();
+
+                let expected = records.clone();
+                let client = tokio::spawn(async move {
+                    let tcp = TcpStream::connect(addr).await.unwrap();
+                    let name = rustls::pki_types::ServerName::try_from("localhost").unwrap();
+                    let mut tls = connector.connect(name, tcp).await.unwrap();
+                    tls.write_all(REQ).await.unwrap();
+                    tls.flush().await.unwrap();
+                    let mut got = vec![0u8; expected.len()];
+                    tls.read_exact(&mut got).await.unwrap();
+                    got
+                });
+
+                let (tcp, _) = listener.accept().await.unwrap();
+                {
+                    use socket2::SockRef;
+                    let sr = SockRef::from(&tcp);
+                    let _ = sr.set_send_buffer_size(16 * 1024);
+                }
+                let tls = acceptor.accept(ktls::CorkStream::new(tcp)).await.unwrap();
+                let mut ktls_stream = match ktls::config_ktls_server(tls).await {
+                    Ok(s) => s,
+                    Err(e) => {
+                        // Kernel lacks kTLS support — the production startup probe
+                        // would have returned false and the fallback path runs.
+                        eprintln!(
+                            "skipping ktls_sendfile_over_tls_is_byte_exact: kTLS unsupported on this host: {e}"
+                        );
+                        client.abort();
+                        return;
+                    }
+                };
+
+                // Read the client's request through the KtlsStream first (kTLS RX
+                // + the ktls crate's drained-bytes replay). The real broker always
+                // reads the Fetch request before writing the response.
+                let mut req = vec![0u8; REQ.len()];
+                ktls_stream.read_exact(&mut req).await.unwrap();
+                assert2::assert!(
+                    (req) == (REQ),
+                    "kTLS RX must deliver the request bytes intact"
+                );
+
+                // The KtlsStream must report itself sendfile-capable, and the
+                // resolver must emit a File op (true zero-copy over TLS).
+                assert2::assert!(SendfileSink::is_sendfile_capable(&ktls_stream));
+                let ops = file_operations(&payload);
+
+                // sendfile the file region onto the kTLS socket — the kernel
+                // encrypts it into TLS records on the way out.
+                let metrics = BrokerMetrics::new();
+                write_fetch_plan(&mut ktls_stream, ops, &metrics)
+                    .await
+                    .unwrap();
+                ktls_stream.flush().await.unwrap();
+                drop(ktls_stream); // sends close_notify; EOF for the client tail
+
+                let got = client.await.unwrap();
+                assert2::assert!(
+                    (got) == (&records[..]),
+                    "client-decrypted kTLS bytes must equal the file region (wire byte-exact)"
+                );
+                // kTLS is the one encrypted path that still reaches the kernel
+                // drain; a fallback to userspace rustls would land on `pread`.
+                assert2::assert!((drain_counts(&metrics)) == ([1, 0, 0]));
+            }
         }
     }
 }

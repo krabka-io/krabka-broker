@@ -17,17 +17,14 @@
 //! compact array of `{TopicName string, TopicId uuid, NumPartitions int32}`,
 //! each entry and the message ending with a tagged-field count.
 
-use bytes::{BufMut, Bytes, BytesMut};
+use bytes::BufMut;
 
-use crate::{
-    coordinator::unified::persistence::{
-        flex::{
-            get_compact_array, get_compact_string, get_uuid, put_compact_array, put_compact_string,
-            put_empty_tagged_fields, put_uuid, skip_tagged_fields,
-        },
-        get_i16, get_i32,
+use crate::coordinator::unified::persistence::{
+    flex::{
+        get_compact_array, get_compact_string, get_uuid, put_compact_array, put_compact_string,
+        put_empty_tagged_fields, put_uuid, skip_tagged_fields, value_codec,
     },
-    error::BrokerError,
+    get_i32,
 };
 
 /// A topic that the group consumes or produces, with its uuid and its
@@ -46,25 +43,18 @@ pub struct StreamsGroupPartitionMetadataValue {
     pub topics: Vec<StreamsTopicMeta>,
 }
 
-impl StreamsGroupPartitionMetadataValue {
-    #[must_use]
-    pub fn encode(&self) -> Bytes {
-        let mut buf = BytesMut::new();
-        buf.put_i16(0);
-        put_compact_array(&mut buf, self.topics.iter(), |buf, t| {
+value_codec! {
+    StreamsGroupPartitionMetadataValue,
+    encode(&self) -> buf {
+        put_compact_array(buf, self.topics.iter(), |buf, t| {
             put_compact_string(buf, &t.topic_name);
             put_uuid(buf, *t.topic_id.as_bytes());
             buf.put_i32(t.num_partitions);
             put_empty_tagged_fields(buf);
         });
-        put_empty_tagged_fields(&mut buf);
-        buf.freeze()
     }
-    /// # Errors
-    /// Returns an error when log I/O fails, a record or index is corrupt, or the requested offset violates the segment state.
-    pub fn decode(mut buf: &[u8]) -> Result<Self, BrokerError> {
-        let _v = get_i16(&mut buf)?;
-        let topics = get_compact_array(&mut buf, |buf| {
+    decode(buf) {
+        let topics = get_compact_array(buf, |buf| {
             let topic_name = get_compact_string(buf)?;
             let topic_id = uuid::Uuid::from_bytes(get_uuid(buf)?);
             let num_partitions = get_i32(buf)?;
@@ -75,7 +65,6 @@ impl StreamsGroupPartitionMetadataValue {
                 num_partitions,
             })
         })?;
-        skip_tagged_fields(&mut buf)?;
         Ok(Self { topics })
     }
 }
@@ -85,9 +74,12 @@ mod tests {
     use assert2::assert;
 
     use super::*;
-    use crate::coordinator::unified::streams::persistence::{
-        KEY_STREAMS_PARTITION_METADATA, StreamsGroupKey, encode_partition_metadata_key,
-        parse_streams_key, test_support::peek_version,
+    use crate::coordinator::unified::{
+        streams::persistence::{
+            KEY_STREAMS_PARTITION_METADATA, StreamsGroupKey, encode_partition_metadata_key,
+            parse_streams_key,
+        },
+        test_support::{peek_version, wire_bytes},
     };
 
     #[test]
@@ -128,12 +120,14 @@ mod tests {
                 num_partitions: 6,
             }],
         };
-        let mut want: Vec<u8> = vec![0x00, 0x00, 0x02];
-        want.extend_from_slice(b"\x02t");
-        want.extend_from_slice(&[1u8; 16]);
-        want.extend_from_slice(&6i32.to_be_bytes());
-        want.push(0x00); // entry tagged fields
-        want.push(0x00); // message tagged fields
+        let want = wire_bytes(&[
+            "000002",
+            "0274",
+            "01010101010101010101010101010101",
+            "00000006",
+            "00", // entry tagged fields
+            "00", // message tagged fields
+        ]);
         assert!(&v.encode()[..] == &want[..]);
     }
 

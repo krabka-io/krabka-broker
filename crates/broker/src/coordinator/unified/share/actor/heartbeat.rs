@@ -123,20 +123,13 @@ fn update_member_state(
     let mut member_metadata_changed = false;
     if let Some(m) = state.members.get_mut(&req.member_id) {
         m.last_seen = now;
-        if m.client_id != client.id {
-            m.client_id = client.id.to_string();
-            member_metadata_changed = true;
-        }
-        if m.client_host != client.host {
-            m.client_host = client.host.to_string();
-            member_metadata_changed = true;
-        }
+        member_metadata_changed |= client.update_metadata(&mut m.client_id, &mut m.client_host);
         // Kafka's `ShareGroupMember.Builder.maybeUpdateRackId`: a heartbeat that
         // carries a rack id replaces the stored one, a rejoin included.
-        if req.rack_id.is_some() && m.rack_id != req.rack_id {
-            m.rack_id.clone_from(&req.rack_id);
-            member_metadata_changed = true;
-        }
+        member_metadata_changed |= crate::coordinator::unified::member_helpers::update_present(
+            &mut m.rack_id,
+            req.rack_id.as_ref(),
+        );
         if let Some(ref names) = req.subscribed_topic_names {
             let set: HashSet<String> = names.iter().cloned().collect();
             if set != m.subscribed_topic_names {
@@ -185,13 +178,7 @@ async fn handle_leave(
         return Ok(error_resp(codes::INVALID_REQUEST, config));
     }
     let mut pending = PendingShareRecords::default();
-    pending.member_metadata.push((req.member_id.clone(), None));
-    pending
-        .target_per_member
-        .push((req.member_id.clone(), None));
-    pending
-        .current_per_member
-        .push((req.member_id.clone(), None));
+    crate::coordinator::unified::persistence::tombstone_members!(pending, [&req.member_id]);
     state.remove_member(&req.member_id);
     if !state.bump_epoch() {
         return Ok(error_resp(codes::INVALID_REQUEST, config));
@@ -245,7 +232,7 @@ mod tests {
         config::NextGenConfig,
         offsets_log::fake::InMemoryOffsetsLog,
         share::actor::test_support::{
-            heartbeat, make_coordinator, metadata_with_topic, seed_initialized,
+            heartbeat, make_coordinator, metadata_with_topic, seed_initialized, subscribed_request,
         },
     };
 
@@ -340,22 +327,11 @@ mod tests {
             crate::coordinator::unified::streams::config::StreamsGroupConfig::default(),
         ));
         let handle = coord.get_or_create_share("g");
-        let request = |member_id: &str, member_epoch| ShareGroupHeartbeatRequest {
-            group_id: "g".into(),
-            member_id: member_id.into(),
-            member_epoch,
-            subscribed_topic_names: Some(vec!["t".into()]),
-            ..Default::default()
-        };
-
-        crate::coordinator::unified::test_support::assert_single_member_limit(|id, epoch| {
-            let request = request(id, epoch);
-            let handle = Arc::clone(&handle);
-            async move {
-                let response = heartbeat(&handle, request).await;
-                (response.error_code, response.member_epoch)
-            }
-        })
+        crate::coordinator::unified::test_support::assert_single_member_limit(
+            &handle,
+            subscribed_request,
+            heartbeat,
+        )
         .await;
     }
 
@@ -393,17 +369,7 @@ mod tests {
             let (metadata, _id) = metadata_with_topic("t", 4);
             let (coord, log) = make_coordinator(metadata);
             let handle = coord.get_or_create_share("g");
-            let joined = heartbeat(
-                &handle,
-                ShareGroupHeartbeatRequest {
-                    group_id: "g".into(),
-                    member_id: "m1".into(),
-                    member_epoch: 0,
-                    subscribed_topic_names: Some(vec!["t".into()]),
-                    ..Default::default()
-                },
-            )
-            .await;
+            let joined = heartbeat(&handle, subscribed_request("m1", 0)).await;
             check!(joined.error_code == codes::NONE);
             let pre_leave = log.batches().await.len();
 
@@ -440,30 +406,10 @@ mod tests {
         let (metadata, _id) = metadata_with_topic("t", 4);
         let (coord, _log) = make_coordinator(metadata);
         let handle = coord.get_or_create_share("g");
-        let joined = heartbeat(
-            &handle,
-            ShareGroupHeartbeatRequest {
-                group_id: "g".into(),
-                member_id: "m1".into(),
-                member_epoch: 0,
-                subscribed_topic_names: Some(vec!["t".into()]),
-                ..Default::default()
-            },
-        )
-        .await;
+        let joined = heartbeat(&handle, subscribed_request("m1", 0)).await;
         assert!(joined.member_epoch == 1);
         // Re-send with an epoch ahead of the server → fenced.
-        let resp = heartbeat(
-            &handle,
-            ShareGroupHeartbeatRequest {
-                group_id: "g".into(),
-                member_id: "m1".into(),
-                member_epoch: 99,
-                subscribed_topic_names: Some(vec!["t".into()]),
-                ..Default::default()
-            },
-        )
-        .await;
+        let resp = heartbeat(&handle, subscribed_request("m1", 99)).await;
         assert!(resp.error_code == codes::FENCED_MEMBER_EPOCH);
     }
 
@@ -474,13 +420,7 @@ mod tests {
     /// whole response.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn member_epoch_rule_matches_kafka() {
-        let request = |member_id: &str, member_epoch| ShareGroupHeartbeatRequest {
-            group_id: "g".into(),
-            member_id: member_id.into(),
-            member_epoch,
-            subscribed_topic_names: Some(vec!["t".into()]),
-            ..Default::default()
-        };
+        let request = subscribed_request;
         // (member id, request epoch, accepted)
         let rows = [
             ("m1", 0, true),
@@ -564,27 +504,9 @@ mod tests {
     /// does not know.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn a_failed_write_answers_its_code_and_writes_no_partial_batch() {
-        let uncommitted = |code| {
-            Some(crate::error::BrokerError::CoordinatorWriteUncommitted { partition: 0, code })
-        };
-        let cases = [
-            (
-                "the partition writer is gone",
-                None,
-                codes::COORDINATOR_LOAD_IN_PROGRESS,
-            ),
-            (
-                "the leadership moved before the write committed",
-                uncommitted(codes::NOT_COORDINATOR),
-                codes::NOT_COORDINATOR,
-            ),
-            (
-                "the write did not commit in time",
-                uncommitted(codes::COORDINATOR_NOT_AVAILABLE),
-                codes::COORDINATOR_NOT_AVAILABLE,
-            ),
-        ];
-        for (what, failure, expected) in cases {
+        for (what, failure, expected) in
+            crate::coordinator::unified::test_support::heartbeat_write_failures()
+        {
             let (metadata, _id) = metadata_with_topic("t", 1);
             let (coord, log) = make_coordinator(metadata);
             let handle = coord.get_or_create_share("g");
@@ -595,17 +517,7 @@ mod tests {
                 None => log.fail_next.store(true, Ordering::SeqCst),
             }
 
-            let response = heartbeat(
-                &handle,
-                ShareGroupHeartbeatRequest {
-                    group_id: "g".into(),
-                    member_id: "m1".into(),
-                    member_epoch: 0,
-                    subscribed_topic_names: Some(vec!["t".into()]),
-                    ..Default::default()
-                },
-            )
-            .await;
+            let response = heartbeat(&handle, subscribed_request("m1", 0)).await;
 
             check!(
                 response

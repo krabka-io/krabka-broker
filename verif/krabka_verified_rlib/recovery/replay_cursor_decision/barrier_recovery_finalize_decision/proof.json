@@ -4,9 +4,9 @@
     "Coma": {
       "vc_barrier_recovery_finalize_decision": {
         "prover": "alt-ergo",
-        "time": 0.023
+        "time": 0.027
       },
-      "vc_elim_Some": { "prover": "alt-ergo", "time": 0.005 }
+      "vc_elim_Some": { "prover": "alt-ergo", "time": 0.013 }
     }
   }
 }

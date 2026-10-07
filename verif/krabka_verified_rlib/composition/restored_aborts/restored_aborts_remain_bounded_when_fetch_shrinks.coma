@@ -1,63 +1,67 @@
-(* #"/workspace/crates/verified/src/composition/restored_aborts.rs" 55 0 61 23 *)
+(* #"/workspace/crates/verified/src/composition/restored_aborts.rs" 83 0 89 23 *)
 
-let%span sord = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
-let%span sord'0 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
-let%span soption = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/option.rs" 127 19 127 23
-let%span soption'0 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/option.rs" 128 34 128 38
-let%span swell_founded = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/well_founded.rs" 43 8 43 33
-let%span sslice = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 331 18 331 22
-let%span sfetch = "/workspace/crates/verified/src/broker/fetch.rs" 177 10 177 63
-let%span sfetch'0 = "/workspace/crates/verified/src/broker/fetch.rs" 178 10 179 97
-let%span sfetch'1 = "/workspace/crates/verified/src/broker/fetch.rs" 180 10 180 83
-let%span sfetch'2 = "/workspace/crates/verified/src/broker/fetch.rs" 181 10 183 58
-let%span sfetch'3 = "/workspace/crates/verified/src/broker/fetch.rs" 184 10 184 74
-let%span sfetch'4 = "/workspace/crates/verified/src/broker/fetch.rs" 185 10 189 1
-let%span sfetch'5 = "/workspace/crates/verified/src/broker/fetch.rs" 190 10 190 36
-let%span sfetch'6 = "/workspace/crates/verified/src/broker/fetch.rs" 191 10 191 59
-let%span sfetch'7 = "/workspace/crates/verified/src/broker/fetch.rs" 127 16 127 42
-let%span sfetch'8 = "/workspace/crates/verified/src/broker/fetch.rs" 142 8 148 9
-let%span snext_producer_identity = "/workspace/crates/verified/src/transaction/next_producer_identity.rs" 53 10 61 1
-let%span snext_producer_identity'0 = "/workspace/crates/verified/src/transaction/next_producer_identity.rs" 80 10 83 35
-let%span svec = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 104 18 104 36
-let%span svec'0 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 18 14 18 41
-let%span svec'1 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 118 18 118 48
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span soption = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/option.rs" 127 19 127 23
+let%span soption'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/option.rs" 128 34 128 38
+let%span swell_founded = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/well_founded.rs" 43 8 43 33
+let%span sslice = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 331 18 331 22
+let%span sfetch = "/workspace/crates/verified/src/broker/fetch.rs" 169 10 169 63
+let%span sfetch'0 = "/workspace/crates/verified/src/broker/fetch.rs" 170 10 171 97
+let%span sfetch'1 = "/workspace/crates/verified/src/broker/fetch.rs" 172 10 172 83
+let%span sfetch'2 = "/workspace/crates/verified/src/broker/fetch.rs" 173 10 175 58
+let%span sfetch'3 = "/workspace/crates/verified/src/broker/fetch.rs" 176 10 176 74
+let%span sfetch'4 = "/workspace/crates/verified/src/broker/fetch.rs" 177 10 181 1
+let%span sfetch'5 = "/workspace/crates/verified/src/broker/fetch.rs" 182 10 182 36
+let%span sfetch'6 = "/workspace/crates/verified/src/broker/fetch.rs" 183 10 183 59
+let%span sfetch'7 = "/workspace/crates/verified/src/broker/fetch.rs" 120 16 120 42
+let%span sfetch'8 = "/workspace/crates/verified/src/broker/fetch.rs" 133 8 139 9
+let%span snext_producer_identity = "/workspace/crates/verified/src/transaction/next_producer_identity.rs" 50 10 58 1
+let%span snext_producer_identity'0 = "/workspace/crates/verified/src/transaction/next_producer_identity.rs" 77 10 80 35
+let%span ssequence = "/workspace/crates/verified/src/sequence.rs" 29 16 29 84
+let%span ssequence'0 = "/workspace/crates/verified/src/sequence.rs" 14 16 14 72
+let%span ssequence'1 = "/workspace/crates/verified/src/sequence.rs" 21 16 22 44
+let%span svec = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 104 18 104 36
+let%span svec'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 18 14 18 41
+let%span svec'1 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 118 18 118 48
 let%span sfuture_log_swap_admission = "/workspace/crates/verified/src/storage/future_log_swap_admission.rs" 108 10 108 30
 let%span sfuture_log_swap_admission'0 = "/workspace/crates/verified/src/storage/future_log_swap_admission.rs" 109 10 109 29
 let%span sfuture_log_swap_admission'1 = "/workspace/crates/verified/src/storage/future_log_swap_admission.rs" 110 10 110 53
 let%span srestore_producer_ids_strict = "/workspace/crates/verified/src/restore_sidecar/restore_producer_ids_strict.rs" 105 10 114 6
-let%span srestored_aborts = "/workspace/crates/verified/src/composition/restored_aborts.rs" 62 38 62 43
-let%span srestored_aborts'0 = "/workspace/crates/verified/src/composition/restored_aborts.rs" 62 45 62 49
-let%span srestored_aborts'1 = "/workspace/crates/verified/src/composition/restored_aborts.rs" 62 21 62 66
-let%span srestored_aborts'2 = "/workspace/crates/verified/src/composition/restored_aborts.rs" 63 19 63 68
-let%span srestored_aborts'3 = "/workspace/crates/verified/src/composition/restored_aborts.rs" 64 35 64 45
-let%span srestored_aborts'4 = "/workspace/crates/verified/src/composition/restored_aborts.rs" 65 16 65 22
-let%span srestored_aborts'5 = "/workspace/crates/verified/src/composition/restored_aborts.rs" 74 14 74 33
-let%span srestored_aborts'6 = "/workspace/crates/verified/src/composition/restored_aborts.rs" 75 14 75 27
-let%span srestored_aborts'7 = "/workspace/crates/verified/src/composition/restored_aborts.rs" 71 16 73 75
-let%span srestored_aborts'8 = "/workspace/crates/verified/src/composition/restored_aborts.rs" 70 16 70 48
-let%span srestored_aborts'9 = "/workspace/crates/verified/src/composition/restored_aborts.rs" 69 16 69 80
-let%span srestored_aborts'10 = "/workspace/crates/verified/src/composition/restored_aborts.rs" 68 16 68 96
-let%span srestored_aborts'11 = "/workspace/crates/verified/src/composition/restored_aborts.rs" 67 16 67 61
-let%span srestored_aborts'12 = "/workspace/crates/verified/src/composition/restored_aborts.rs" 76 20 76 30
-let%span srestored_aborts'13 = "/workspace/crates/verified/src/composition/restored_aborts.rs" 77 12 77 72
-let%span srestored_aborts'14 = "/workspace/crates/verified/src/composition/restored_aborts.rs" 80 28 84 9
-let%span srestored_aborts'15 = "/workspace/crates/verified/src/composition/restored_aborts.rs" 85 16 85 35
-let%span srestored_aborts'16 = "/workspace/crates/verified/src/composition/restored_aborts.rs" 80 28 85 36
-let%span srestored_aborts'17 = "/workspace/crates/verified/src/composition/restored_aborts.rs" 86 11 86 75
-let%span srestored_aborts'18 = "/workspace/crates/verified/src/composition/restored_aborts.rs" 87 12 87 28
-let%span srestored_aborts'19 = "/workspace/crates/verified/src/composition/restored_aborts.rs" 90 13 90 14
-let%span srestored_aborts'20 = "/workspace/crates/verified/src/composition/restored_aborts.rs" 90 8 90 14
-let%span srestored_aborts'21 = "/workspace/crates/verified/src/composition/restored_aborts.rs" 93 18 93 38
-let%span srestored_aborts'22 = "/workspace/crates/verified/src/composition/restored_aborts.rs" 94 18 94 57
-let%span srestored_aborts'23 = "/workspace/crates/verified/src/composition/restored_aborts.rs" 37 10 54 1
-let%span srestored_aborts'24 = "/workspace/crates/verified/src/composition/restored_aborts.rs" 31 16 31 85
-let%span srestored_aborts'25 = "/workspace/crates/verified/src/composition/restored_aborts.rs" 19 16 23 76
-let%span srestore_selection = "/workspace/crates/verified/src/composition/restore_selection.rs" 46 8 47 105
+let%span srestored_aborts = "/workspace/crates/verified/src/composition/restored_aborts.rs" 90 38 90 43
+let%span srestored_aborts'0 = "/workspace/crates/verified/src/composition/restored_aborts.rs" 90 45 90 49
+let%span srestored_aborts'1 = "/workspace/crates/verified/src/composition/restored_aborts.rs" 90 21 90 66
+let%span srestored_aborts'2 = "/workspace/crates/verified/src/composition/restored_aborts.rs" 91 19 91 68
+let%span srestored_aborts'3 = "/workspace/crates/verified/src/composition/restored_aborts.rs" 92 35 92 45
+let%span srestored_aborts'4 = "/workspace/crates/verified/src/composition/restored_aborts.rs" 93 16 93 22
+let%span srestored_aborts'5 = "/workspace/crates/verified/src/composition/restored_aborts.rs" 102 14 102 33
+let%span srestored_aborts'6 = "/workspace/crates/verified/src/composition/restored_aborts.rs" 103 14 103 27
+let%span srestored_aborts'7 = "/workspace/crates/verified/src/composition/restored_aborts.rs" 99 16 101 75
+let%span srestored_aborts'8 = "/workspace/crates/verified/src/composition/restored_aborts.rs" 98 16 98 48
+let%span srestored_aborts'9 = "/workspace/crates/verified/src/composition/restored_aborts.rs" 97 16 97 80
+let%span srestored_aborts'10 = "/workspace/crates/verified/src/composition/restored_aborts.rs" 96 16 96 96
+let%span srestored_aborts'11 = "/workspace/crates/verified/src/composition/restored_aborts.rs" 95 16 95 61
+let%span srestored_aborts'12 = "/workspace/crates/verified/src/composition/restored_aborts.rs" 104 20 104 30
+let%span srestored_aborts'13 = "/workspace/crates/verified/src/composition/restored_aborts.rs" 105 12 105 72
+let%span srestored_aborts'14 = "/workspace/crates/verified/src/composition/restored_aborts.rs" 108 28 112 9
+let%span srestored_aborts'15 = "/workspace/crates/verified/src/composition/restored_aborts.rs" 113 16 113 35
+let%span srestored_aborts'16 = "/workspace/crates/verified/src/composition/restored_aborts.rs" 108 28 113 36
+let%span srestored_aborts'17 = "/workspace/crates/verified/src/composition/restored_aborts.rs" 114 11 114 75
+let%span srestored_aborts'18 = "/workspace/crates/verified/src/composition/restored_aborts.rs" 115 12 115 28
+let%span srestored_aborts'19 = "/workspace/crates/verified/src/composition/restored_aborts.rs" 118 13 118 14
+let%span srestored_aborts'20 = "/workspace/crates/verified/src/composition/restored_aborts.rs" 118 8 118 14
+let%span srestored_aborts'21 = "/workspace/crates/verified/src/composition/restored_aborts.rs" 121 18 121 38
+let%span srestored_aborts'22 = "/workspace/crates/verified/src/composition/restored_aborts.rs" 122 18 122 57
+let%span srestored_aborts'23 = "/workspace/crates/verified/src/composition/restored_aborts.rs" 66 10 82 1
+let%span srestored_aborts'24 = "/workspace/crates/verified/src/composition/restored_aborts.rs" 26 16 26 85
+let%span srestored_aborts'25 = "/workspace/crates/verified/src/composition/restored_aborts.rs" 16 16 20 76
+let%span srestore_selection = "/workspace/crates/verified/src/composition/restore_selection.rs" 39 8 40 59
 
 use creusot.int.Int64
 use seq.Seq
 use creusot.int.UInt64
 use creusot.slice.Slice64
+use map.Map
 use creusot.prelude.MutBorrow
 use creusot.prelude.Any
 use int.MinMax
@@ -78,10 +82,10 @@ predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other
 
 meta "rewrite_def" predicate ge_log_Int
 
-function offset_min [#"/workspace/crates/verified/src/broker/fetch.rs" 126 0 126 40] (a: int) (b: int) : int =
+function offset_min [#"/workspace/crates/verified/src/broker/fetch.rs" 119 0 119 40] (a: int) (b: int) : int =
   [%#sfetch'7] if a <= b then a else b
 
-function fetch_limit_model [#"/workspace/crates/verified/src/broker/fetch.rs" 140 0 140 92] (is_follower: bool) (read_committed: bool) (w: t_FetchWatermarks) : int
+function fetch_limit_model [#"/workspace/crates/verified/src/broker/fetch.rs" 131 0 131 92] (is_follower: bool) (read_committed: bool) (w: t_FetchWatermarks) : int
  = [%#sfetch'8] if is_follower then
     Int64.to_int w.log_end
   else
@@ -167,18 +171,30 @@ let len_RestoreAbortedTxn (self_: Slice64.slice t_RestoreAbortedTxn) (return (x:
     = UInt64.t'int result}
     (! return {result}) ]
 
-predicate abort_intersects_fetch [#"/workspace/crates/verified/src/composition/restored_aborts.rs" 30 0 30 91] (entry: t_RestoreAbortedTxn) (from: int) (end': int) =
+predicate contains_source_index [#"/workspace/crates/verified/src/sequence.rs" 28 0 28 77] (selected: Seq.seq UInt64.t) (index: int) =
+  [%#ssequence] exists j: int. 0 <= j /\ j < Seq.length selected /\ UInt64.t'int (Seq.get selected j) = index
+
+predicate abort_intersects_fetch [#"/workspace/crates/verified/src/composition/restored_aborts.rs" 25 0 25 84] (entry: t_RestoreAbortedTxn) (from: int) (end': int) =
   [%#srestored_aborts'24] from < end'
   /\ Int64.to_int entry.start_offset < end' /\ ge_log_Int (Int64.to_int entry.last_offset) from
 
-predicate selection_ordered [#"/workspace/crates/verified/src/composition/restore_selection.rs" 44 0 44 73] (selected: Seq.seq UInt64.t) (count: int) =
+type tup2_usize_usize = { f0: UInt64.t; f1: UInt64.t }
+
+predicate pairwise_usize [#"/workspace/crates/verified/src/sequence.rs" 20 0 20 95] (values: Seq.seq UInt64.t) (relation: Map.map tup2_usize_usize bool) =
+  [%#ssequence'1] forall i: int, j: int. 0 <= i /\ i < j /\ j < Seq.length values
+    -> Map.get relation { f0 = Seq.get values i; f1 = Seq.get values j }
+
+predicate strictly_increasing_usize [#"/workspace/crates/verified/src/sequence.rs" 13 0 13 73] (values: Seq.seq UInt64.t) =
+  [%#ssequence'0] pairwise_usize values (fun (__0: tup2_usize_usize) -> let {f0 = left; f1 = right} = __0 in UInt64.t'int left
+  < UInt64.t'int right)
+
+predicate selection_ordered [#"/workspace/crates/verified/src/composition/restore_selection.rs" 37 0 37 73] (selected: Seq.seq UInt64.t) (count: int) =
   [%#srestore_selection] (forall j: int. 0 <= j /\ j < Seq.length selected -> UInt64.t'int (Seq.get selected j) < count)
-  /\ (forall j: int, k: int. 0 <= j /\ j < k /\ k < Seq.length selected
-    -> UInt64.t'int (Seq.get selected j) < UInt64.t'int (Seq.get selected k))
+  /\ strictly_increasing_usize selected
 
 type t_RestoreSegmentExtent = { base_offset'0: Int64.t; last_offset'0: Int64.t }
 
-predicate restored_abort_index_valid [#"/workspace/crates/verified/src/composition/restored_aborts.rs" 15 0 18 9] (entries: Seq.seq t_RestoreAbortedTxn) (owner: t_RestoreSegmentExtent) =
+predicate restored_abort_index_valid [#"/workspace/crates/verified/src/composition/restored_aborts.rs" 12 0 15 9] (entries: Seq.seq t_RestoreAbortedTxn) (owner: t_RestoreSegmentExtent) =
   [%#srestored_aborts'25] forall i: int. 0 <= i /\ i < Seq.length entries
     -> ge_log_Int (Int64.to_int (Seq.get entries i).producer_id) 0
     /\ ge_log_Int (Int64.to_int owner.base_offset'0) 0
@@ -205,7 +221,7 @@ let restore_txn_index_entry_valid (previous_last: t_Option_i64) (entry: t_Restor
       end)}
     (! return {result}) ]
 
-type tup2_i64_i64 = { f0: Int64.t; f1: Int64.t }
+type tup2_i64_i64 = { f0'0: Int64.t; f1'0: Int64.t }
 
 type t_Option_tup2_i64_i64 = None'0 | Some'0 tup2_i64_i64
 
@@ -213,7 +229,7 @@ let aborted_transaction_interval (pending_start: t_Option_i64) (marker_last: Int
   (return (x: t_Option_tup2_i64_i64)) = any
   [ return (result: t_Option_tup2_i64_i64) ->
   {[@stop_split] [@expl:aborted_transaction_interval ensures] [%#snext_producer_identity] match result with
-      | Some'0 {f0 = start; f1 = last} -> ge_log_Int (Int64.to_int producer_id'0) 0
+      | Some'0 {f0'0 = start; f1'0 = last} -> ge_log_Int (Int64.to_int producer_id'0) 0
       /\ pending_start = Some start
       /\ Int64.to_int last = Int64.to_int marker_last /\ Int64.to_int start <= Int64.to_int last
       | None'0 -> Int64.to_int producer_id'0 < 0
@@ -252,7 +268,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let restored_aborts_remain_bounded_when_fetch_shrinks [#"/workspace/crates/verified/src/composition/restored_aborts.rs" 55 0 61 23]
+let restored_aborts_remain_bounded_when_fetch_shrinks [#"/workspace/crates/verified/src/composition/restored_aborts.rs" 83 0 89 23]
   (entries: Slice64.slice t_RestoreAbortedTxn) (segment: t_RestoreSegmentExtent) (w: t_FetchWatermarks)
   (fetch_start: Int64.t) (cut: Int64.t) (return (x: t_Option_Vec_usize_Global)) = (! bb0
   [ bb0 = s0
@@ -277,9 +293,7 @@ let restored_aborts_remain_bounded_when_fetch_shrinks [#"/workspace/crates/verif
       {[@expl:loop invariant #2] [%#srestored_aborts'9] restored_abort_index_valid (Seq.([..]) (Slice64.view entries) 0 (UInt64.t'int i)) segment}
       {[@expl:loop invariant #3] [%#srestored_aborts'8] selection_ordered (view_Vec_usize_Global selected) (UInt64.t'int i)}
       {[@expl:loop invariant #4] [%#srestored_aborts'7] forall j: int. 0 <= j /\ j < UInt64.t'int i
-        -> (exists k: int. 0 <= k
-            /\ k < Seq.length (view_Vec_usize_Global selected)
-            /\ UInt64.t'int (Seq.get (view_Vec_usize_Global selected) k) = j)
+        -> contains_source_index (view_Vec_usize_Global selected) j
         = abort_intersects_fetch (Seq.get (Slice64.view entries) j) (Int64.to_int fetch_start) (Int64.to_int narrowed)}
       (! [ &variant_old_bb4 <- [%#srestored_aborts'5] Seq.length (Slice64.view entries) - UInt64.t'int i ] s0)
       [ s0 = len_RestoreAbortedTxn [%#srestored_aborts'6] {entries} (fun (_x: UInt64.t) -> [ &_52 <- _x ] s1)
@@ -301,8 +315,8 @@ let restored_aborts_remain_bounded_when_fetch_shrinks [#"/workspace/crates/verif
             (fun (_x: t_Option_tup2_i64_i64) -> [ &_67 <- _x ] s2)
         | s2 = [ &_73 <- [%#srestored_aborts'15] "admitted interval" ] s3
         | s3 = expect_tup2_i64_i64 [%#srestored_aborts'16] {_67} {_73} (fun (_x: tup2_i64_i64) -> [ &_66 <- _x ] s4)
-        | s4 = [ &start <- _66.f0 ] s5
-        | s5 = [ &last <- _66.f1 ] s6
+        | s4 = [ &start <- _66.f0'0 ] s5
+        | s5 = [ &last <- _66.f1'0 ] s6
         | s6 = aborted_transaction_overlaps [%#srestored_aborts'17] {start} {last} {fetch_start} {narrowed}
             (fun (_x: bool) -> [ &_75 <- _x ] s7)
         | s7 = any [ br0 -> {_75 = false} (! bb18) | br1 -> {_75} (! bb15) ] ]
@@ -361,13 +375,9 @@ let restored_aborts_remain_bounded_when_fetch_shrinks [#"/workspace/crates/verif
       /\ Seq.length (view_Vec_usize_Global selected) <= Seq.length (Slice64.view entries)
       /\ (forall i: int. 0 <= i /\ i < Seq.length (view_Vec_usize_Global selected)
           -> UInt64.t'int (Seq.get (view_Vec_usize_Global selected) i) < Seq.length (Slice64.view entries))
-      /\ (forall i: int, j: int. 0 <= i /\ i < j /\ j < Seq.length (view_Vec_usize_Global selected)
-          -> UInt64.t'int (Seq.get (view_Vec_usize_Global selected) i)
-          < UInt64.t'int (Seq.get (view_Vec_usize_Global selected) j))
+      /\ strictly_increasing_usize (view_Vec_usize_Global selected)
       /\ (forall i: int. 0 <= i /\ i < Seq.length (Slice64.view entries)
-          -> (exists j: int. 0 <= j
-              /\ j < Seq.length (view_Vec_usize_Global selected)
-              /\ UInt64.t'int (Seq.get (view_Vec_usize_Global selected) j) = i)
+          -> contains_source_index (view_Vec_usize_Global selected) i
           = abort_intersects_fetch (Seq.get (Slice64.view entries) i) (Int64.to_int fetch_start) (MinMax.min (MinMax.min (MinMax.min (Int64.to_int w.hw) (Int64.to_int w.lso)) (Int64.to_int w.deliverable)) (Int64.to_int cut)))
       /\ (forall i: int. 0 <= i /\ i < Seq.length (view_Vec_usize_Global selected)
         -> abort_intersects_fetch (Seq.get (Slice64.view entries) (UInt64.t'int (Seq.get (view_Vec_usize_Global selected) i))) (Int64.to_int fetch_start) (MinMax.min (MinMax.min (MinMax.min (Int64.to_int w.hw) (Int64.to_int w.lso)) (Int64.to_int w.deliverable)) (Int64.to_int cut))

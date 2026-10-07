@@ -9,8 +9,9 @@
 use assert2::{assert, check};
 
 use crate::jvm_acceptance::{
-    KAFKA_IMAGE_TXN, broker0_advertised, docker_run_kafka_tool_with_image_and_mount,
-    nc_check_connectivity, plain_jaas, start_sasl_plaintext_broker_with_super_user,
+    ADMIN, ADMIN_PASS, KAFKA_IMAGE_TXN, broker0_advertised,
+    docker_run_kafka_tool_with_image_and_mount, nc_check_connectivity,
+    start_sasl_plaintext_broker_with_super_user,
 };
 
 /// JVM acceptance: `kafka-acls.sh` end-to-end provision flow.
@@ -28,9 +29,6 @@ use crate::jvm_acceptance::{
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "requires Docker"]
 async fn jvm_kafka_acls_provision_via_cli() {
-    const ADMIN: &str = "admin";
-    const ADMIN_PASS: &str = "admin-secret";
-
     let (broker, _dir) =
         start_sasl_plaintext_broker_with_super_user(ADMIN, &[(ADMIN, ADMIN_PASS)]).await;
     nc_check_connectivity();
@@ -348,9 +346,6 @@ fn expected_bindings(case: &ShorthandCase) -> BTreeSet<AclBinding> {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "requires Docker"]
 async fn acl_shorthands_expand_as_apache_kafka_expands_them() {
-    const ADMIN: &str = "admin";
-    const ADMIN_PASS: &str = "admin-secret";
-
     // Kafka first. Every expectation below is a claim about somebody else's
     // client, and this is where a wrong one is reported as such.
     let oracle = tokio::task::spawn_blocking(|| {
@@ -378,19 +373,12 @@ async fn acl_shorthands_expand_as_apache_kafka_expands_them() {
     let krabka_side = Side::Krabka {
         bootstrap: &advertised,
     };
-    let admin_props = format!(
-        "security.protocol=SASL_PLAINTEXT\n\
-         sasl.mechanism=PLAIN\n\
-         sasl.jaas.config={}\n",
-        plain_jaas(ADMIN, ADMIN_PASS),
-    );
+    let admin_props = crate::jvm_acceptance::plain_client_properties(ADMIN, ADMIN_PASS);
 
     for case in SHORTHAND_CASES {
         let mut listings: Vec<BTreeSet<AclBinding>> = Vec::new();
-        for (side, props) in [
-            (&oracle_side, None),
-            (&krabka_side, Some(admin_props.as_str())),
-        ] {
+        for (side, props) in crate::oracle::secured_sides(&oracle_side, &krabka_side, &admin_props)
+        {
             let added = acls(side, props, case.add);
             assert!(
                 added.succeeded(),
@@ -441,10 +429,7 @@ async fn acl_shorthands_expand_as_apache_kafka_expands_them() {
         .find(|case| case.label == "--consumer")
         .expect("the --consumer case");
     let mut remaining: Vec<BTreeSet<AclBinding>> = Vec::new();
-    for (side, props) in [
-        (&oracle_side, None),
-        (&krabka_side, Some(admin_props.as_str())),
-    ] {
+    for (side, props) in crate::oracle::secured_sides(&oracle_side, &krabka_side, &admin_props) {
         let mut remove: Vec<&str> = vec!["--remove", "--force"];
         remove.extend(removing.add.iter().skip(1).copied());
         acls(side, props, &remove).expect_success();

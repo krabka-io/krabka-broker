@@ -74,10 +74,8 @@ impl LinkedCluster {
 
         let mut starts = Vec::with_capacity(3);
         let mut metas: Vec<(BrokerConfig, TempDir)> = Vec::with_capacity(3);
-        for (index, (data, controller)) in client_listeners
-            .into_iter()
-            .zip(controller_listeners)
-            .enumerate()
+        for (index, (data, controller)) in
+            support::listener_pairs(client_listeners, controller_listeners)
         {
             let dir = TempDir::new().unwrap();
             let mut cfg = support::broker_config(
@@ -106,9 +104,7 @@ impl LinkedCluster {
         let mut configs = Vec::with_capacity(3);
         let mut dirs = Vec::with_capacity(3);
         for (start, (cfg, dir)) in starts.into_iter().zip(metas) {
-            let handle = start
-                .await
-                .map_err(|e| BrokerError::Startup(format!("broker start task panicked: {e}")))??;
+            let handle = support::await_broker_start(start).await?;
             handles.push(Some(handle));
             configs.push(cfg);
             dirs.push(dir);

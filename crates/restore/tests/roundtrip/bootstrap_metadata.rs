@@ -11,10 +11,9 @@ use std::path::Path;
 
 use assert2::{assert, check};
 use krabka_broker::BrokerConfig;
-use krabka_ids::LeaderEpoch;
 use krabka_metadata::{
-    AclEntry, AclOperation, MetadataImage, MetadataRecord, NodeId, PartitionRecord, PatternType,
-    PermissionType, ResourceType, TopicConfigRecord, TopicRecord,
+    AclEntry, AclOperation, MetadataImage, MetadataRecord, NodeId, PatternType, PermissionType,
+    ResourceType, TopicConfigRecord, TopicRecord,
 };
 use krabka_protocol::owned::{
     describe_acls_request::DescribeAclsRequest,
@@ -27,6 +26,8 @@ use crate::{
     args::{ControllerListener, restore_args},
     fixture::{Fixture, build_fixture},
 };
+
+krabka_macros::single_replica_partition_fixture!(single_replica_partition);
 
 /// 3. Read back the restored metadata: `meta.properties` names the cluster id
 /// `format_target` chose and the target node, and `bootstrap.records.bin` carries the
@@ -138,18 +139,11 @@ async fn restored_snapshot_reaches_describe_configs_and_describe_acls() {
         replication_factor: 1,
     }));
     for partition in 0..2 {
-        image.apply(&MetadataRecord::V1Partition(PartitionRecord {
-            topic: ORDERS.to_owned(),
+        image.apply(&MetadataRecord::V1Partition(single_replica_partition(
+            ORDERS,
             partition,
-            leader: NodeId(1),
-            replicas: vec![NodeId(1)],
-            isr: vec![NodeId(1)],
-            leader_epoch: LeaderEpoch(0),
-            adding_replicas: vec![],
-            removing_replicas: vec![],
-            directories: vec![],
-            partition_epoch: 0,
-        }));
+            NodeId(1),
+        )));
     }
     image.apply(&MetadataRecord::V1TopicConfig(TopicConfigRecord {
         topic: ORDERS.to_owned(),

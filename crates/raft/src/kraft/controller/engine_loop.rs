@@ -499,13 +499,8 @@ impl Engine {
                 let _ = w.reply.send(Err(RaftError::NotLeader { current_leader }));
             }
         }
-        if lost_leadership
-            && let Some(mut pending) = self.pending_reconfig.take()
-            && let Some(reply) = pending.reply.take()
-        {
-            let _ = reply.send(Err(RaftError::NotLeader {
-                current_leader: self.core.quorum_state().leader_id,
-            }));
+        if lost_leadership {
+            self.fail_pending_reconfiguration();
         }
         self.was_leader = is_leader;
         self.held_epoch = epoch;

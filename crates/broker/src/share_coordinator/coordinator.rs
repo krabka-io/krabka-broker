@@ -239,21 +239,15 @@ pub(super) struct Active<'a> {
     pub(super) term: Term,
 }
 
-/// The load tasks that one [`ShareCoordinator::refresh_leader_partitions`]
-/// call started.
-///
-/// A caller that does not wait drops this value. The tasks run on.
-#[derive(Debug, Default)]
-pub(crate) struct ScheduledLoads(Vec<tokio::task::JoinHandle<()>>);
-
-impl ScheduledLoads {
+crate::task_util::scheduled_tasks_type! {
+    /// The load tasks that one [`ShareCoordinator::refresh_leader_partitions`]
+    /// call started.
+    ///
+    /// A caller that does not wait drops this value. The tasks run on.
+    pub(crate) struct ScheduledLoads;
     /// Waits until every load task of this refresh has ended.
-    pub(crate) async fn finished(self) {
-        for handle in self.0 {
-            if let Err(error) = handle.await {
-                tracing::warn!(%error, "__share_group_state load task failed");
-            }
-        }
+    |error| {
+        tracing::warn!(%error, "__share_group_state load task failed");
     }
 }
 

@@ -328,19 +328,21 @@ impl AutoTopicCreation {
             .iter()
             .map(|topic| row(codes::UNKNOWN_TOPIC_OR_PARTITION, &topic.name));
         uncreatable.extend(rows);
-        self.send_create_topic_request(broker, creatable, identity);
+        self.send_create_topic_request(broker, creatable, identity, None);
         uncreatable
     }
 
     /// Kafka's `sendCreateTopicRequest`: sends `topics` in the background.
     /// When the answer arrives, the in-flight marks clear and each failure is
     /// logged. The send stops when the broker shuts down, as Kafka's channel
-    /// manager stops with the broker.
+    /// manager stops with the broker. A streams request caches its failures
+    /// for `cache_ttl_ms` instead of logging the ordinary completion.
     fn send_create_topic_request(
         self: &Arc<Self>,
         broker: &Broker,
         topics: Vec<CreatableTopic>,
         identity: Option<ForwardedIdentity>,
+        cache_ttl_ms: Option<i64>,
     ) {
         let names: Vec<String> = topics.iter().map(|topic| topic.name.clone()).collect();
         let request = create_topics_request(topics);
@@ -348,10 +350,12 @@ impl AutoTopicCreation {
         let shutdown = broker.supervisor_shutdown.clone();
         let this = Arc::clone(self);
         self.started.fetch_add(1, Ordering::Relaxed);
-        tracing::info!(
-            topics = ?names,
-            "Sent auto-creation request for {names:?} to the active controller."
-        );
+        if cache_ttl_ms.is_none() {
+            tracing::info!(
+                topics = ?names,
+                "Sent auto-creation request for {names:?} to the active controller."
+            );
+        }
         tokio::spawn(async move {
             let send = async {
                 match identity {
@@ -364,11 +368,15 @@ impl AutoTopicCreation {
                 }
             };
             let result = shutdown.run_until_cancelled(send).await;
-            this.end(&names);
-            match result {
-                Some(Ok(response)) => log_failed_rows(&response),
-                Some(Err(error)) => log_error(&names, &error),
-                None => {}
+            if let (Some(ttl_ms), Some(result)) = (cache_ttl_ms, &result) {
+                this.finish_streams_creation(&names, result, ttl_ms, crate::time_util::now_ms());
+            } else {
+                this.end(&names);
+                match result {
+                    Some(Ok(response)) => log_failed_rows(&response),
+                    Some(Err(error)) => log_error(&names, &error),
+                    None => {}
+                }
             }
         });
     }
@@ -394,26 +402,7 @@ impl AutoTopicCreation {
         if topics.is_empty() {
             return;
         }
-        let names: Vec<String> = topics.iter().map(|topic| topic.name.clone()).collect();
-        let request = create_topics_request(topics);
-        let creator = TopicCreator::new(broker);
-        let shutdown = broker.supervisor_shutdown.clone();
-        let this = Arc::clone(self);
-        self.started.fetch_add(1, Ordering::Relaxed);
-        tokio::spawn(async move {
-            let send = creator.create_topic_with_principal(&identity, request);
-            match shutdown.run_until_cancelled(send).await {
-                Some(result) => {
-                    this.finish_streams_creation(
-                        &names,
-                        &result,
-                        ttl_ms,
-                        crate::time_util::now_ms(),
-                    );
-                }
-                None => this.end(&names),
-            }
-        });
+        self.send_create_topic_request(broker, topics, Some(identity), Some(ttl_ms));
     }
 
     /// The completion of `sendCreateTopicRequestWithErrorCaching`: clears the

@@ -39,15 +39,11 @@
 
 use std::sync::atomic::Ordering;
 
-use bytes::Bytes;
 use krabka_ids::{NodeId, PartitionIndex};
 use krabka_metadata::MetadataImage;
-use krabka_protocol::{
-    Decode,
-    krabka::barrier::{
-        WritableBarrierTopic, WriteBarrierMarkersRequest, WriteBarrierMarkersResponse,
-        WrittenBarrierPartition, WrittenBarrierTopic,
-    },
+use krabka_protocol::krabka::barrier::{
+    WritableBarrierTopic, WriteBarrierMarkersRequest, WriteBarrierMarkersResponse,
+    WrittenBarrierPartition, WrittenBarrierTopic,
 };
 use krabka_verified::{
     BarrierMarkerFenceDecision, BarrierMarkerFenceFacts, barrier_marker_fence_decision,
@@ -60,11 +56,9 @@ use crate::{
         injection::{MarkerAppendError, append_marker},
         marker::BarrierMarker,
     },
-    broker::Broker,
     codes,
     coordinator::unified::persistence::MAX_STRING_BYTES,
-    error::BrokerError,
-    handlers::{RequestContext, encode_response},
+    handlers::encode_response,
     partition::Partition,
     partition_registry::PartitionRegistry,
 };
@@ -72,66 +66,57 @@ use crate::{
 /// The `offset` of a partition row that placed no marker.
 const NO_OFFSET: i64 = -1;
 
-#[tracing::instrument(
-    name = "handle_write_barrier_markers",
-    level = "debug",
-    skip_all,
-    fields(api = "WriteBarrierMarkers"),
-    err
-)]
-pub(crate) async fn handle(
-    broker: &Broker,
-    version: i16,
-    _correlation_id: i32,
-    req_bytes: &[u8],
-    ctx: &RequestContext<'_>,
-) -> Result<Bytes, BrokerError> {
-    let mut cur = req_bytes;
-    let req = WriteBarrierMarkersRequest::decode(&mut cur, version)?;
-
-    let image = broker.controller.current_image();
-    let denied = cluster_action_denied(broker.config.authorizer.as_ref(), &image, ctx);
-    if let Some(code) = request_refusal(denied, &req.group) {
-        let topics = req
-            .topics
-            .iter()
-            .map(|topic| refused_topic(topic, code))
-            .collect();
-        return encode_response(&response(topics), version);
-    }
-
-    let marker = BarrierMarker {
-        group: req.group.clone(),
-        epoch: req.epoch,
-        triggered_at: req.triggered_at,
-    };
-
-    let mut topics = Vec::with_capacity(req.topics.len());
-    for topic in &req.topics {
-        let mut partitions = Vec::with_capacity(topic.partitions.len());
-        for requested in &topic.partitions {
-            partitions.push(
-                mark(
-                    &broker.partitions,
-                    &image,
-                    broker.config.node_id,
-                    &marker,
-                    &topic.topic,
-                    PartitionIndex(requested.partition),
-                    requested.expected_leader_epoch,
-                )
-                .await,
-            );
+wire_handler!(
+    handle,
+    "handle_write_barrier_markers",
+    "WriteBarrierMarkers",
+    "debug",
+    WriteBarrierMarkersRequest,
+    |broker, version, req, ctx| {
+        let image = broker.controller.current_image();
+        let denied = cluster_action_denied(broker.config.authorizer.as_ref(), &image, ctx);
+        if let Some(code) = request_refusal(denied, &req.group) {
+            let topics = req
+                .topics
+                .iter()
+                .map(|topic| refused_topic(topic, code))
+                .collect();
+            return encode_response(&response(topics), version);
         }
-        topics.push(WrittenBarrierTopic {
-            topic: topic.topic.clone(),
-            partitions,
-            ..WrittenBarrierTopic::default()
-        });
-    }
 
-    encode_response(&response(topics), version)
-}
+        let marker = BarrierMarker {
+            group: req.group.clone(),
+            epoch: req.epoch,
+            triggered_at: req.triggered_at,
+        };
+
+        let mut topics = Vec::with_capacity(req.topics.len());
+        for topic in &req.topics {
+            let mut partitions = Vec::with_capacity(topic.partitions.len());
+            for requested in &topic.partitions {
+                partitions.push(
+                    mark(
+                        &broker.partitions,
+                        &image,
+                        broker.config.node_id,
+                        &marker,
+                        &topic.topic,
+                        PartitionIndex(requested.partition),
+                        requested.expected_leader_epoch,
+                    )
+                    .await,
+                );
+            }
+            topics.push(WrittenBarrierTopic {
+                topic: topic.topic.clone(),
+                partitions,
+                ..WrittenBarrierTopic::default()
+            });
+        }
+
+        encode_response(&response(topics), version)
+    }
+);
 
 /// The code that refuses the whole request, or `None` when it may go on.
 ///

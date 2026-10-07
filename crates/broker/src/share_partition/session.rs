@@ -190,13 +190,7 @@ impl ShareSessionCache {
             });
         }
 
-        let session = inner
-            .sessions
-            .get_mut(&key)
-            .ok_or(codes::SHARE_SESSION_NOT_FOUND)?;
-        if session.epoch != epoch {
-            return Err(codes::INVALID_SHARE_SESSION_EPOCH);
-        }
+        let session = session_at_epoch(&mut inner, &key, epoch)?;
         for requested in partitions.requested {
             if !session.partitions.iter().any(|p| p.key == *requested) {
                 session.partitions.push(CachedPartition {
@@ -271,13 +265,7 @@ impl ShareSessionCache {
                 .map(|session| session.partitions.iter().map(|p| p.key).collect())
                 .ok_or(codes::SHARE_SESSION_NOT_FOUND);
         }
-        let session = inner
-            .sessions
-            .get_mut(&key)
-            .ok_or(codes::SHARE_SESSION_NOT_FOUND)?;
-        if session.epoch != epoch {
-            return Err(codes::INVALID_SHARE_SESSION_EPOCH);
-        }
+        let session = session_at_epoch(&mut inner, &key, epoch)?;
         session.epoch = next_epoch(session.epoch);
         Ok(HashSet::new())
     }
@@ -312,6 +300,22 @@ fn remove_session(inner: &mut Inner, key: &(String, String)) -> Option<ShareSess
         inner.connections.remove(&session.connection_id);
     }
     Some(session)
+}
+
+/// Find a session and validate its epoch while the caller holds the cache lock.
+fn session_at_epoch<'a>(
+    inner: &'a mut Inner,
+    key: &(String, String),
+    epoch: i32,
+) -> Result<&'a mut ShareSession, i16> {
+    let session = inner
+        .sessions
+        .get_mut(key)
+        .ok_or(codes::SHARE_SESSION_NOT_FOUND)?;
+    if session.epoch != epoch {
+        return Err(codes::INVALID_SHARE_SESSION_EPOCH);
+    }
+    Ok(session)
 }
 
 fn next_epoch(epoch: i32) -> i32 {

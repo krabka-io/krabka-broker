@@ -655,8 +655,7 @@ impl Model for BucketModel {
         }
     }
 
-    fn next_state(&self, last: &Self::State, action: Self::Action) -> Option<Self::State> {
-        let mut s = last.clone();
+    krabka_macros::model_transition!(last, action, s; {
         match action {
             Act::Tick => s.now += 1,
             Act::StartConsume { consumer, req } => {
@@ -674,7 +673,7 @@ impl Model for BucketModel {
             Act::StepResetter => Self::step_resetter(&mut s)?,
         }
         Some(s)
-    }
+    });
 
     fn properties(&self) -> Vec<Property<Self>> {
         let mut properties = vec![
@@ -731,16 +730,10 @@ fn run(model: BucketModel) -> impl Checker<BucketModel> {
         .join()
 }
 
+krabka_macros::bounded_bfs!(bounded_bfs);
+
 fn green_run(model: BucketModel, label: &str, pinned_unique_states: usize) {
-    let checker = run(model);
-    eprintln!(
-        "[{label}] unique_states={} generated={} max_depth={}",
-        checker.unique_state_count(),
-        checker.state_count(),
-        checker.max_depth()
-    );
-    assert2::assert!(checker.max_depth() < MAX_DEPTH);
-    assert2::assert!(checker.state_count() < TARGET_STATE_COUNT);
+    let checker = bounded_bfs(model, label, MAX_DEPTH, TARGET_STATE_COUNT);
     // Pin: a changed count is a changed model, not a retuning knob.
     assert2::assert!(
         checker.unique_state_count() == pinned_unique_states,
@@ -968,19 +961,10 @@ fn straddled_reset_schedule() {
 /// the bucket ends at 1.
 #[test]
 fn dropped_refill_schedule() {
-    let model = |algorithm| BucketModel {
-        algorithm,
-        units_per_token: 1,
-        consumers: 2,
-        configs: vec![Config { rate: 1, burst: 3 }],
-        max_resets: 0,
-        max_time: 1,
-        max_req: 1,
-    };
     let tick = vec![Act::Tick];
 
     let last = replay(
-        &model(Algorithm::SeqlockCas),
+        &contention_config(Algorithm::SeqlockCas),
         &[
             consume(0, 1, 9),
             tick.clone(),
@@ -998,7 +982,7 @@ fn dropped_refill_schedule() {
         ) == (0, 3, false)
     );
 
-    let locked = model(Algorithm::Locked);
+    let locked = contention_config(Algorithm::Locked);
     let contention = [
         consume(0, 1, 6),
         tick.clone(),

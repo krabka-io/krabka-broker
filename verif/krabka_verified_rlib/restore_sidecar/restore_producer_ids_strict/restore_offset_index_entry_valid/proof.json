@@ -2,12 +2,12 @@
   "profile": [],
   "proofs": {
     "Coma": {
-      "vc_elim_Some": { "prover": "alt-ergo", "time": 0.008 },
+      "vc_elim_Some": { "prover": "alt-ergo", "time": 0.017 },
       "vc_from_i64": { "prover": "alt-ergo", "time": 0.008 },
-      "vc_from_u64": { "prover": "alt-ergo", "time": 0.009 },
+      "vc_from_u64": { "prover": "alt-ergo", "time": 0.018 },
       "vc_restore_offset_index_entry_valid": {
         "prover": "alt-ergo",
-        "time": 0.022
+        "time": 0.039
       }
     }
   }

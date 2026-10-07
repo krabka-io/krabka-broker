@@ -76,12 +76,9 @@ pub async fn serve_connection_on_listener(
             // transition consumes the stream by value. `get_ref()` reaches the
             // rustls `ServerConnection` through the `CorkStream` wrapper
             // exactly as for a plain `TlsStream`.
-            let Some(tls_stream) =
-                handshake_within_idle_window(handshake, idle, peer, &broker.metrics).await
+            let Some((tls_stream, mtls_principal)) =
+                authenticated_tls(handshake, idle, peer, &broker.metrics, &spec).await
             else {
-                return;
-            };
-            let Ok(mtls_principal) = peer_cert_principal(&tls_stream, &spec, peer) else {
                 return;
             };
             // `config_ktls_server` consumes `tls_stream` by value; on error
@@ -111,17 +108,11 @@ pub async fn serve_connection_on_listener(
         }
 
         let handshake = acceptor.accept(stream);
-        let Some(tls_stream) =
-            handshake_within_idle_window(handshake, idle, peer, &broker.metrics).await
+        // A required certificate was checked by rustls; optional/disabled certificates may be absent.
+        // A presented DN with no configured mapping still closes the connection.
+        let Some((tls_stream, mtls_principal)) =
+            authenticated_tls(handshake, idle, peer, &broker.metrics, &spec).await
         else {
-            return;
-        };
-        // Derive a Principal from the peer cert (mTLS). If the listener has
-        // client_auth=Required, the handshake itself fails when no cert is
-        // presented, so we always have one here. Optional or Disabled may
-        // produce `None`.
-        // A cert whose DN no mapping rule matches closes the connection.
-        let Ok(mtls_principal) = peer_cert_principal(&tls_stream, &spec, peer) else {
             return;
         };
         serve_connection_stream(broker, tls_stream, spec, peer, mtls_principal).await;
@@ -174,6 +165,24 @@ where
             None
         }
     }
+}
+
+async fn authenticated_tls<F, S>(
+    handshake: F,
+    idle: Option<std::time::Duration>,
+    peer: SocketAddr,
+    metrics: &crate::metrics::BrokerMetrics,
+    spec: &crate::config::ListenerSpec,
+) -> Option<(
+    tokio_rustls::server::TlsStream<S>,
+    Option<krabka_security::Principal>,
+)>
+where
+    F: Future<Output = std::io::Result<tokio_rustls::server::TlsStream<S>>>,
+{
+    let stream = handshake_within_idle_window(handshake, idle, peer, metrics).await?;
+    let principal = peer_cert_principal(&stream, spec, peer).ok()?;
+    Some((stream, principal))
 }
 
 /// Inspects the post-handshake TLS stream for a peer certificate. If one is

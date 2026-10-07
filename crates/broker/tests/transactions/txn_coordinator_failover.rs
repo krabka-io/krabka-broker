@@ -13,24 +13,20 @@ use std::time::{Duration, Instant};
 use assert2::assert;
 use krabka_broker::{BrokerConfig, BrokerHandle, NodeId};
 use krabka_client_core::Client;
-use krabka_protocol::owned::{
-    create_topics_request::CreateTopicsRequest,
-    end_txn_request::EndTxnRequest,
-    end_txn_response::EndTxnResponse,
-    find_coordinator_request::FindCoordinatorRequest,
-    metadata_request::{MetadataRequest, MetadataRequestTopic},
-};
+use krabka_protocol::owned::end_txn_response::EndTxnResponse;
 use tempfile::TempDir;
 
-use crate::support;
+use crate::support::{
+    client::connect_owned,
+    discovery::{coordinator_lookup_request, topic_metadata_request},
+    topics::metadata_topic,
+    transactions::end_transaction_request,
+};
 
 const TID: &str = "txn-coordinator-failover";
 const TOPIC: &str = "txn-coordinator-failover";
 const STATE_TOPIC: &str = "__transaction_state";
 
-const COORDINATOR_LOAD_IN_PROGRESS: i16 = 14;
-const COORDINATOR_NOT_AVAILABLE: i16 = 15;
-const NOT_COORDINATOR: i16 = 16;
 const CONCURRENT_TRANSACTIONS: i16 = 51;
 
 /// The time a retried request may take to see the cluster settle.
@@ -39,19 +35,11 @@ const SETTLE: Duration = Duration::from_secs(60);
 type Cluster = Vec<(BrokerHandle, BrokerConfig, TempDir)>;
 
 fn retriable(code: i16) -> bool {
-    matches!(
-        code,
-        COORDINATOR_LOAD_IN_PROGRESS | COORDINATOR_NOT_AVAILABLE | NOT_COORDINATOR
-    )
+    crate::support::transaction_wire::coordinator_loading(code)
 }
 
 async fn client(address: &str) -> Client {
-    Client::builder()
-        .bootstrap(address)
-        .client_id("txn-coordinator-failover")
-        .build()
-        .await
-        .expect("client")
+    connect_owned(address, "txn-coordinator-failover", "client").await
 }
 
 fn address_of(cluster: &Cluster, node: u64) -> String {
@@ -64,15 +52,7 @@ fn address_of(cluster: &Cluster, node: u64) -> String {
 
 /// The leader of `topic-0` in the image of `handle`.
 async fn leader_of(handle: &BrokerHandle, topic: &str) -> u64 {
-    let deadline = Instant::now() + SETTLE;
-    loop {
-        if let Some(leader) = handle.partition_leader_for_test(topic, 0) {
-            return leader;
-        }
-        assert!(Instant::now() < deadline, "{topic}-0 has no leader");
-        // intentional: the image watch has no awaiter for "any leader".
-        tokio::time::sleep(Duration::from_millis(100)).await;
-    }
+    crate::support::transaction_wire::partition_leader(handle, topic, SETTLE).await
 }
 
 /// Metadata leadership can precede installation of the Produce readiness gate.
@@ -96,18 +76,13 @@ async fn create_topic(client: &Client, leader: u64) {
     let leader = i32::try_from(leader).expect("node id fits an i32");
     let mut replicas = vec![leader];
     replicas.extend((1..=3).filter(|node| *node != leader));
-    let created = client
-        .send(CreateTopicsRequest {
-            topics: vec![support::topic_on(TOPIC, &[&replicas])],
-            timeout_ms: 5_000,
-            ..Default::default()
-        })
-        .await
-        .expect("CreateTopics");
-    assert!(
-        created.topics[0].error_code == 0,
-        "CreateTopics: {created:?}"
-    );
+    crate::support::transaction_wire::create_assigned_topic(
+        client,
+        TOPIC,
+        &replicas,
+        Some("CreateTopics"),
+    )
+    .await;
 }
 
 /// Create `__transaction_state` with `FindCoordinator`.
@@ -115,12 +90,7 @@ async fn find_coordinator(client: &Client) {
     let deadline = Instant::now() + SETTLE;
     loop {
         let found = client
-            .send(FindCoordinatorRequest {
-                key: TID.into(),
-                key_type: 1,
-                coordinator_keys: vec![TID.into()],
-                ..Default::default()
-            })
+            .send(coordinator_lookup_request(TID, 1, vec![TID.into()]))
             .await
             .expect("FindCoordinator");
         if found
@@ -137,41 +107,32 @@ async fn find_coordinator(client: &Client) {
 }
 
 async fn init_producer(client: &Client) -> (i64, i16) {
-    let deadline = Instant::now() + SETTLE;
-    loop {
-        let response = client
-            .send(crate::txn_fixture::init_producer_request(TID))
-            .await
-            .expect("InitProducerId");
-        if retriable(response.error_code) && Instant::now() < deadline {
-            // intentional: the coordinator load has no awaiter; the answer is the signal.
-            tokio::time::sleep(Duration::from_millis(100)).await;
-            continue;
-        }
-        assert!(response.error_code == 0, "InitProducerId: {response:?}");
-        return (response.producer_id, response.producer_epoch);
-    }
+    crate::support::transaction_wire::initialized_identity(
+        || async {
+            client
+                .send(crate::support::transaction_wire::init_producer_request(TID))
+                .await
+                .expect("InitProducerId")
+        },
+        retriable,
+        SETTLE,
+    )
+    .await
 }
 
 async fn add_partition(client: &Client, producer: (i64, i16)) {
-    let response = client
-        .send(crate::txn_fixture::add_partition_request(
-            TID, TOPIC, producer,
-        ))
-        .await
-        .expect("AddPartitionsToTxn");
-    crate::txn_fixture::assert_partition_added(&response);
+    crate::support::transaction_wire::partition_added(client.send(
+        crate::support::transaction_wire::add_partition_request(TID, TOPIC, producer),
+    ))
+    .await;
 }
 
 async fn produce(client: &Client, producer: Option<(i64, i16)>, values: &[&'static str]) {
     let topic_id = client
-        .send(MetadataRequest {
-            topics: Some(vec![MetadataRequestTopic {
-                name: Some(TOPIC.into()),
-                ..Default::default()
-            }]),
-            ..Default::default()
-        })
+        .send(topic_metadata_request(Some(vec![metadata_topic(
+            Some(TOPIC.into()),
+            krabka_protocol::primitives::uuid::Uuid::default(),
+        )])))
         .await
         .expect("Metadata")
         .topics
@@ -179,60 +140,38 @@ async fn produce(client: &Client, producer: Option<(i64, i16)>, values: &[&'stat
         .find(|row| row.name.as_deref() == Some(TOPIC))
         .map(|row| row.topic_id)
         .expect("topic in metadata");
-    let response = client
-        .send(crate::txn_fixture::produce_request(
-            TID, TOPIC, topic_id, producer, values,
-        ))
-        .await
-        .expect("Produce");
-    let code = response.responses[0].partition_responses[0].error_code;
-    assert!(code == 0, "Produce: {response:?}");
+    crate::support::transaction_wire::produce_succeeds(client.send(
+        crate::support::transaction_wire::produce_request(TID, TOPIC, topic_id, producer, values),
+    ))
+    .await;
 }
 
 async fn end_txn(client: &Client, (producer_id, epoch): (i64, i16)) -> EndTxnResponse {
-    let deadline = Instant::now() + SETTLE;
-    loop {
-        let response = client
-            .send(EndTxnRequest {
-                transactional_id: TID.into(),
-                producer_id,
-                producer_epoch: epoch,
-                committed: true,
-                ..Default::default()
-            })
-            .await
-            .expect("EndTxn");
-        let again =
-            retriable(response.error_code) || response.error_code == CONCURRENT_TRANSACTIONS;
-        if again && Instant::now() < deadline {
-            // intentional: the coordinator load has no awaiter; the answer is the signal.
-            tokio::time::sleep(Duration::from_millis(100)).await;
-            continue;
-        }
-        return response;
-    }
+    crate::support::transaction_wire::retry_coordinator(
+        || async {
+            client
+                .send(end_transaction_request(TID, (producer_id, epoch), true))
+                .await
+                .expect("EndTxn")
+        },
+        |response| response.error_code,
+        |code| retriable(code) || code == CONCURRENT_TRANSACTIONS,
+        SETTLE,
+    )
+    .await
 }
 
 async fn read_committed(bootstrap: &str, last: &str) -> Vec<String> {
-    crate::txn_consumer_fixture::read_committed_through(bootstrap, TOPIC, last, SETTLE).await
+    crate::support::transaction_wire::read_committed_through(bootstrap, TOPIC, last, SETTLE).await
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_transaction_commits_through_the_next_coordinator() {
-    let mut cluster = support::start_n_node_with(3, |_, config| {
+    let mut cluster = crate::txn_harness::registered_transaction_cluster(|_, config| {
         config.transaction_state_num_partitions = 1;
         config.transaction_state_replication_factor = 3;
     })
-    .await
-    .expect("start the cluster");
-    support::wait_for_all_brokers_registered(&cluster, 3).await;
-    // `__consumer_offsets` needs three brokers for its replication factor.
-    // Create it now, while all three run, as Kafka's `createOffsetsTopic`
-    // does. The consumer at the end looks its group up after one broker stops.
-    for (handle, _, _) in &cluster {
-        handle.wait_until_group_coordinator_ready().await;
-    }
-
+    .await;
     let admin = client(&cluster[0].0.listen_addr().to_string()).await;
     find_coordinator(&admin).await;
     let coordinator = leader_of(&cluster[0].0, STATE_TOPIC).await;
@@ -289,8 +228,6 @@ async fn a_transaction_commits_through_the_next_coordinator() {
     let seen = read_committed(&bootstrap, "z").await;
     assert!(seen == ["a", "b", "c", "z"]);
 
-    for (handle, _, _) in cluster {
-        handle.shutdown().await;
-    }
+    crate::support::shutdown_cluster(cluster).await;
     drop(stopped_dir);
 }

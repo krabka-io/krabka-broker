@@ -246,19 +246,29 @@ mod tests {
         (addr, shutdown, cert_path, observed)
     }
 
+    /// A trusted HTTPS introspection client without a user-info endpoint.
+    fn https_client(
+        addr: SocketAddr,
+        (client_id, secret): (&str, &str),
+        ca: &std::path::Path,
+        timeout: krabka_units::Time,
+    ) -> Arc<dyn IntrospectionClient> {
+        ReqwestIntrospectionClient::build(
+            format!("https://127.0.0.1:{}/introspect", addr.port()),
+            None,
+            client_id.into(),
+            secret.into(),
+            Some(ca),
+            timeout,
+        )
+        .unwrap()
+    }
+
     #[tokio::test]
     async fn introspection_fetches_active_token_over_https_with_custom_trust() {
         let body = r#"{"active":true,"sub":"alice"}"#;
         let (addr, srv_shutdown, ca, _observed) = serve_https(body, 200, None).await;
-        let client = ReqwestIntrospectionClient::build(
-            format!("https://127.0.0.1:{}/introspect", addr.port()),
-            None,
-            "kafka-broker".into(),
-            "secret".into(),
-            Some(&ca),
-            secs(5),
-        )
-        .unwrap();
+        let client = https_client(addr, ("kafka-broker", "secret"), &ca, secs(5));
         let resp = client.introspect("tok").await.unwrap();
         assert!(resp.get("active").and_then(serde_json::Value::as_bool) == Some(true));
         assert!(resp.get("sub").and_then(|v| v.as_str()) == Some("alice"));
@@ -268,15 +278,7 @@ mod tests {
     #[tokio::test]
     async fn introspection_returns_inactive_when_idp_says_inactive() {
         let (addr, srv_shutdown, ca, _) = serve_https(r#"{"active":false}"#, 200, None).await;
-        let client = ReqwestIntrospectionClient::build(
-            format!("https://127.0.0.1:{}/introspect", addr.port()),
-            None,
-            "id".into(),
-            "s".into(),
-            Some(&ca),
-            secs(5),
-        )
-        .unwrap();
+        let client = https_client(addr, ("id", "s"), &ca, secs(5));
         let resp = client.introspect("tok").await.unwrap();
         assert!(resp.get("active").and_then(serde_json::Value::as_bool) == Some(false));
         srv_shutdown.cancel();
@@ -285,15 +287,7 @@ mod tests {
     #[tokio::test]
     async fn introspection_returns_transport_error_on_non_2xx() {
         let (addr, srv_shutdown, ca, _) = serve_https(r#"{"error":"x"}"#, 500, None).await;
-        let client = ReqwestIntrospectionClient::build(
-            format!("https://127.0.0.1:{}/introspect", addr.port()),
-            None,
-            "id".into(),
-            "s".into(),
-            Some(&ca),
-            secs(5),
-        )
-        .unwrap();
+        let client = https_client(addr, ("id", "s"), &ca, secs(5));
         let err = client.introspect("tok").await.unwrap_err();
         assert!(
             matches!(err, IntrospectionError::Status(500)),
@@ -330,15 +324,7 @@ mod tests {
     async fn introspection_userinfo_endpoint_is_not_called_when_endpoint_unset() {
         let (addr, srv_shutdown, ca, _) =
             serve_https(r#"{"active":true,"sub":"a"}"#, 200, None).await;
-        let client = ReqwestIntrospectionClient::build(
-            format!("https://127.0.0.1:{}/introspect", addr.port()),
-            None,
-            "id".into(),
-            "s".into(),
-            Some(&ca),
-            secs(5),
-        )
-        .unwrap();
+        let client = https_client(addr, ("id", "s"), &ca, secs(5));
         let ui = client.userinfo("tok").await.unwrap();
         assert!(ui.is_none());
         srv_shutdown.cancel();
@@ -348,15 +334,7 @@ mod tests {
     async fn introspection_handles_keycloak_response_shape() {
         let body = r#"{"active":true,"sub":"svc-account-kafka-client","client_id":"kafka-client","scope":"kafka.write profile","exp":9999999999}"#;
         let (addr, srv_shutdown, ca, _) = serve_https(body, 200, None).await;
-        let client = ReqwestIntrospectionClient::build(
-            format!("https://127.0.0.1:{}/introspect", addr.port()),
-            None,
-            "id".into(),
-            "s".into(),
-            Some(&ca),
-            secs(5),
-        )
-        .unwrap();
+        let client = https_client(addr, ("id", "s"), &ca, secs(5));
         let resp = client.introspect("tok").await.unwrap();
         assert!(resp.get("client_id").and_then(|v| v.as_str()) == Some("kafka-client"));
         assert!(resp.get("scope").and_then(|v| v.as_str()) == Some("kafka.write profile"));
@@ -367,15 +345,7 @@ mod tests {
     async fn introspection_basic_auth_sent_with_configured_client_id_and_secret() {
         let (addr, srv_shutdown, ca, observed) =
             serve_https(r#"{"active":true,"sub":"a"}"#, 200, None).await;
-        let client = ReqwestIntrospectionClient::build(
-            format!("https://127.0.0.1:{}/introspect", addr.port()),
-            None,
-            "kafka-broker".into(),
-            "shh".into(),
-            Some(&ca),
-            secs(5),
-        )
-        .unwrap();
+        let client = https_client(addr, ("kafka-broker", "shh"), &ca, secs(5));
         client.introspect("tok").await.unwrap();
         let auths = observed.introspect_auths.lock().unwrap();
         assert!(auths.len() == 1);
@@ -388,15 +358,7 @@ mod tests {
     async fn introspection_form_body_token_field() {
         let (addr, srv_shutdown, ca, observed) =
             serve_https(r#"{"active":true,"sub":"a"}"#, 200, None).await;
-        let client = ReqwestIntrospectionClient::build(
-            format!("https://127.0.0.1:{}/introspect", addr.port()),
-            None,
-            "id".into(),
-            "s".into(),
-            Some(&ca),
-            secs(5),
-        )
-        .unwrap();
+        let client = https_client(addr, ("id", "s"), &ca, secs(5));
         client.introspect("opaque-abc").await.unwrap();
         let bodies = observed.introspect_bodies.lock().unwrap();
         assert!(bodies.len() == 1);
@@ -418,15 +380,7 @@ mod tests {
         let ca_path = dir.path().join("ca.pem");
         std::fs::write(&ca_path, cert.pem()).unwrap();
         drop(listener);
-        let client = ReqwestIntrospectionClient::build(
-            format!("https://127.0.0.1:{}/introspect", addr.port()),
-            None,
-            "id".into(),
-            "s".into(),
-            Some(&ca_path),
-            millis(200),
-        )
-        .unwrap();
+        let client = https_client(addr, ("id", "s"), &ca_path, millis(200));
         let err = client.introspect("tok").await.unwrap_err();
         assert!(
             matches!(err, IntrospectionError::Transport(_)),

@@ -2,15 +2,10 @@ use assert2::check;
 
 use super::*;
 use crate::{
-    core::test_support::{FakeLog, TEST_ELECTION_TIMEOUT, machine, voters},
+    core::test_support::{FakeLog, TEST_ELECTION_TIMEOUT, machine, three_voter_machine, voters},
     event::{Event, SuccessorRank},
     types::{NodeId, QuorumState},
 };
-
-/// Voter 1 in the standard three-voter quorum, fresh for each case.
-fn three_voter_machine() -> QuorumStateMachine {
-    machine(NodeId(1), &[NodeId(1), NodeId(2), NodeId(3)])
-}
 
 fn dynamic_machine() -> (QuorumStateMachine, uuid::Uuid, uuid::Uuid, uuid::Uuid) {
     let cluster_id = uuid::Uuid::from_u128(1);
@@ -77,10 +72,7 @@ fn an_observer_denies_a_vote_request() {
 #[test]
 fn a_candidate_at_our_own_epoch_is_not_fenced() {
     let mut m = three_voter_machine();
-    let log = FakeLog {
-        end: 5,
-        last_epoch: 0,
-    };
+    let log = FakeLog::new(5, 0);
     // Both sides at epoch 0, the bootstrap epoch.
     check!(m.quorum_state().leader_epoch == 0);
     let actions = m.on_event(vote_event(NodeId(2), 0, false, 0, 5), &log, SimInstant(0));
@@ -110,23 +102,15 @@ fn a_vote_or_pre_vote_from_a_higher_epoch_advances_our_epoch() {
 fn grants_standard_vote_when_log_up_to_date_and_not_voted() {
     let mut m = three_voter_machine();
     let actions = receive_vote(&mut m, vote_event(NodeId(2), 1, false, 1, 5));
-    assert2::assert!(has_vote_reply(&actions, NodeId(2), true));
-    assert2::assert!(m.quorum_state().voted_key.map(|k| k.id) == Some(NodeId(2))); // binding
+    assert_binding_vote(&m, &actions, NodeId(2)); // binding
 }
 
 #[test]
 fn denies_standard_vote_when_candidate_log_behind() {
     let mut m = three_voter_machine();
-    let log = FakeLog {
-        end: 10,
-        last_epoch: 2,
-    };
+    let log = FakeLog::new(10, 2);
     let actions = m.on_event(vote_event(NodeId(2), 2, false, 1, 3), &log, SimInstant(0));
-    assert2::assert!(
-        actions
-            .iter()
-            .any(|a| matches!(a, Action::ReplyVote { granted: false, .. }))
-    );
+    assert_vote_decision(&actions, false);
 }
 
 #[test]
@@ -140,6 +124,30 @@ fn pre_vote_grant_is_non_binding() {
 /// Deliver a vote against voter 1's canonical log at time zero.
 fn receive_vote(m: &mut QuorumStateMachine, event: Event) -> Vec<Action> {
     m.on_event(event, &OUR_LOG, SimInstant(0))
+}
+
+fn assert_binding_vote(machine: &QuorumStateMachine, actions: &[Action], candidate: NodeId) {
+    assert2::assert!(has_vote_reply(actions, candidate, true));
+    assert2::assert!(machine.quorum_state().voted_key.map(|key| key.id) == Some(candidate));
+}
+
+fn assert_vote_decision(actions: &[Action], granted: bool) {
+    assert2::assert!(actions.iter().any(|action| matches!(
+        action, Action::ReplyVote { granted: reply, .. } if *reply == granted
+    )));
+}
+
+fn assert_initial_vote_state(machine: &QuorumStateMachine) {
+    assert2::assert!(
+        (
+            machine.quorum_state().leader_epoch,
+            machine.quorum_state().voted_key
+        ) == (0, None)
+    );
+}
+
+fn assert_vote_ignored(machine: &QuorumStateMachine, actions: &[Action]) {
+    assert2::assert!((actions.is_empty(), machine.quorum_state().voted_key) == (true, None));
 }
 
 fn has_vote_reply(actions: &[Action], to: NodeId, granted: bool) -> bool {
@@ -220,10 +228,7 @@ fn vote_event(
 
 /// Voter 1's log ends at offset 5 in epoch 1: node 2's log is up to date at
 /// `(1, 5)` and behind at `(1, 4)`.
-const OUR_LOG: FakeLog = FakeLog {
-    end: 5,
-    last_epoch: 1,
-};
+const OUR_LOG: FakeLog = FakeLog::new(5, 1);
 
 /// What `m` answers a Vote or pre-vote of `epoch` from node 2, as (granted,
 /// epoch in the reply).
@@ -567,16 +572,9 @@ fn denies_standard_vote_when_already_voted_for_other() {
 fn fenced_when_candidate_epoch_below_current() {
     let mut m = three_voter_machine();
     m.force_epoch(5); // test helper
-    let log = FakeLog {
-        end: 5,
-        last_epoch: 5,
-    };
+    let log = FakeLog::new(5, 5);
     let actions = m.on_event(vote_event(NodeId(2), 3, false, 5, 5), &log, SimInstant(0));
-    assert2::assert!(
-        actions
-            .iter()
-            .any(|a| matches!(a, Action::ReplyVote { granted: false, .. }))
-    );
+    assert_vote_decision(&actions, false);
 }
 
 #[test]
@@ -591,11 +589,7 @@ fn vote_from_adjacent_voter_view_is_granted_when_up_to_date() {
             .voted_key
             .is_some_and(|key| key.id == NodeId(99))
     );
-    assert2::assert!(
-        actions
-            .iter()
-            .any(|action| matches!(action, Action::ReplyVote { granted: true, .. }))
-    );
+    assert_vote_decision(&actions, true);
 }
 
 #[test]
@@ -611,7 +605,7 @@ fn vote_addressed_to_other_voter_rejected() {
         }
         .event(),
     );
-    assert2::assert!((actions.is_empty(), m.quorum_state().voted_key) == (true, None));
+    assert_vote_ignored(&m, &actions);
 }
 
 #[test]
@@ -620,8 +614,7 @@ fn vote_from_voter_addressed_to_us_still_granted() {
     // us is still granted.
     let mut m = three_voter_machine();
     let actions = receive_vote(&mut m, vote_event(NodeId(2), 1, false, 1, 5));
-    assert2::assert!(has_vote_reply(&actions, NodeId(2), true));
-    assert2::assert!(m.quorum_state().voted_key.map(|k| k.id) == Some(NodeId(2)));
+    assert_binding_vote(&m, &actions, NodeId(2));
 }
 
 #[test]
@@ -635,7 +628,7 @@ fn zero_target_is_not_a_wildcard_for_a_nonzero_voter() {
         }
         .event(),
     );
-    assert2::assert!((actions.is_empty(), m.quorum_state().voted_key) == (true, None));
+    assert_vote_ignored(&m, &actions);
 }
 
 #[test]
@@ -649,11 +642,7 @@ fn zero_target_is_valid_for_voter_zero() {
         }
         .event(),
     );
-    assert2::assert!(
-        actions
-            .iter()
-            .any(|action| matches!(action, Action::ReplyVote { granted: true, .. }))
-    );
+    assert_vote_decision(&actions, true);
     assert2::assert!(m.quorum_state().voted_key.map(|key| key.id) == Some(NodeId(2)));
 }
 
@@ -672,7 +661,7 @@ fn stale_target_directory_is_ignored_before_epoch_mutation() {
         .event(),
     );
     assert2::assert!(actions.is_empty());
-    assert2::assert!((m.quorum_state().leader_epoch, m.quorum_state().voted_key) == (0, None));
+    assert_initial_vote_state(&m);
 }
 
 #[test]
@@ -689,12 +678,8 @@ fn stale_candidate_directory_is_denied_before_epoch_mutation() {
         }
         .event(),
     );
-    assert2::assert!(
-        actions
-            .iter()
-            .any(|action| matches!(action, Action::ReplyVote { granted: false, .. }))
-    );
-    assert2::assert!((m.quorum_state().leader_epoch, m.quorum_state().voted_key) == (0, None));
+    assert_vote_decision(&actions, false);
+    assert_initial_vote_state(&m);
 }
 
 #[test]
@@ -711,25 +696,14 @@ fn foreign_cluster_is_denied_before_epoch_mutation() {
         }
         .event(),
     );
-    assert2::assert!(
-        actions
-            .iter()
-            .any(|action| matches!(action, Action::ReplyVote { granted: false, .. }))
-    );
-    assert2::assert!((m.quorum_state().leader_epoch, m.quorum_state().voted_key) == (0, None));
+    assert_vote_decision(&actions, false);
+    assert_initial_vote_state(&m);
 }
 
 #[test]
 fn prevote_rejected_when_candidate_log_is_not_up_to_date() {
     let mut m = three_voter_machine();
-    let log = FakeLog {
-        end: 10,
-        last_epoch: 2,
-    };
+    let log = FakeLog::new(10, 2);
     let actions = m.on_event(vote_event(NodeId(2), 2, true, 1, 5), &log, SimInstant(0));
-    assert2::assert!(
-        actions
-            .iter()
-            .any(|action| matches!(action, Action::ReplyVote { granted: false, .. }))
-    );
+    assert_vote_decision(&actions, false);
 }

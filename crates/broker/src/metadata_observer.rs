@@ -185,36 +185,14 @@ mod tests {
     use std::time::Duration;
 
     use assert2::assert;
-    use krabka_metadata::{MetadataRecord, TopicRecord};
+    use krabka_metadata::MetadataRecord;
     use krabka_raft::{BootstrapMode, Controller, ControllerConfig};
     use krabka_units::millis;
     use tempfile::TempDir;
     use uuid::Uuid;
 
     use super::{test_support::observer_config, *};
-
-    #[derive(Clone)]
-    struct RecordingDialer {
-        client_ids: Arc<std::sync::Mutex<Vec<String>>>,
-    }
-
-    #[async_trait::async_trait]
-    impl OutboundDialer for RecordingDialer {
-        async fn dial(
-            &self,
-            target: NodeId,
-            addr: &str,
-            options: krabka_client_core::ConnectionOptions,
-        ) -> Result<krabka_client_core::Connection, krabka_client_core::ClientError> {
-            self.client_ids
-                .lock()
-                .unwrap()
-                .push(options.client_id.clone());
-            krabka_raft::PlaintextDialer
-                .dial(target, addr, options)
-                .await
-        }
-    }
+    use crate::test_support::RecordingDialer;
 
     #[tokio::test]
     async fn cancel_drains_background_task() {
@@ -244,12 +222,9 @@ mod tests {
             leader_rx.changed().await.unwrap();
         }
         let ctrl_addr = ctrl.controller_bound_addr();
-        ctrl.submit_change(vec![MetadataRecord::V1Topic(TopicRecord {
-            name: "observed".into(),
-            topic_id: Uuid::new_v4(),
-            partitions: 1,
-            replication_factor: 1,
-        })])
+        ctrl.submit_change(vec![MetadataRecord::V1Topic(
+            crate::test_support::single_partition_topic("observed", Uuid::new_v4()),
+        )])
         .await
         .expect("submit");
         let client_ids = Arc::new(std::sync::Mutex::new(Vec::new()));

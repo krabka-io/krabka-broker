@@ -9,8 +9,7 @@ use assert2::check;
 use krabka_protocol::krabka::freeze::PATTERN_TYPE_LITERAL;
 
 use crate::{
-    control_plane::{create_topics, freeze, plain_client},
-    host_broker::start_jvm_broker,
+    control_plane::freeze,
     jvm_tool::{jvm_describe_configs, run_tool},
     vocabulary::{
         CONFIGS_REASON, CONFIGS_TOPIC, INVALID_CONFIG_EXCEPTION, WRITE_FREEZE_ALTER_REFUSAL,
@@ -40,9 +39,7 @@ use crate::{
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "requires docker"]
 async fn kafka_configs_reads_the_freeze_and_cannot_write_it() {
-    let broker = start_jvm_broker(|_| {}).await;
-    let client = plain_client(&broker.host).await;
-    create_topics(&broker.host, None, &[CONFIGS_TOPIC]).await;
+    let (broker, client) = crate::control_plane::plain_topic_fixture(&[CONFIGS_TOPIC]).await;
     freeze(&client, CONFIGS_TOPIC, PATTERN_TYPE_LITERAL, CONFIGS_REASON).await;
 
     let frozen = write_freeze_value(CONFIGS_TOPIC);

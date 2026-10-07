@@ -32,96 +32,65 @@ use krabka_protocol::owned::{
 use crate::{
     broker::Broker,
     codes,
-    error::BrokerError,
     handlers::{
-        ErrorResponse as _, group_read_denied,
+        ErrorResponse as _,
         share_fetch::{
             AckApplication, Renewal, acknowledgement_batches_are_valid, apply_acknowledgements,
-            current_leader, member_id_is_valid, names_the_leader,
+            current_leader, names_the_leader, share_request_identity,
         },
     },
     share_partition::group_settings::GroupShareSettings,
 };
 
-pub(crate) async fn handle(
-    broker: &Broker,
-    req: ShareAcknowledgeRequest,
-    version: i16,
-    ctx: &crate::handlers::RequestContext<'_>,
-) -> Result<ShareAcknowledgeResponse, BrokerError> {
-    let cfg = broker.config.share_group.clone();
+context_handler! {
+    ShareAcknowledgeRequest => ShareAcknowledgeResponse,
+    (broker, req, version, ctx),
+    {
+        share_request_identity!(
+            (cfg, image, group, settings, lock_timeout_ms, member),
+            ShareAcknowledgeResponse,
+            broker,
+            req,
+            ctx
+        );
 
-    // Kafka's `isShareGroupProtocolEnabled`: a finalized `share.version` of 1.
-    let image = broker.controller.current_image();
-    if !crate::features::share_groups_enabled(&image) {
-        return Ok(ShareAcknowledgeResponse::error(
-            codes::UNSUPPORTED_VERSION,
-            None,
-        ));
-    }
+        let released = match broker.share_partition_leaders.update_acknowledge_session(
+            &group,
+            &member,
+            req.share_session_epoch,
+        ) {
+            Ok(released) => released,
+            Err(code) => return Ok(ShareAcknowledgeResponse::error(code, None)),
+        };
 
-    // Kafka's `KafkaApis.handleShareAcknowledgeRequest` refuses a null group
-    // id after the feature gate, then checks `Read` on the group, then the
-    // member id format, all before the share session and the topic checks.
-    let Some(group) = req.group_id.clone() else {
-        return Ok(ShareAcknowledgeResponse::error(
-            codes::INVALID_REQUEST,
-            None,
-        ));
-    };
-    if group_read_denied(broker.config.authorizer.as_ref(), &image, ctx, &group) {
-        return Ok(ShareAcknowledgeResponse::error(
-            codes::GROUP_AUTHORIZATION_FAILED,
-            None,
-        ));
-    }
-    // Kafka's `ShareGroupConfigProvider`: each `share.*` group override, with
-    // the broker setting as the default.
-    let settings = GroupShareSettings::resolve(&image, &group, &cfg);
-    let lock_timeout_ms = settings.record_lock_duration_ms();
-    let Some(member) = req.member_id.clone().filter(|id| member_id_is_valid(id)) else {
-        return Ok(ShareAcknowledgeResponse::error(
-            codes::INVALID_REQUEST,
-            None,
-        ));
-    };
-
-    let released = match broker.share_partition_leaders.update_acknowledge_session(
-        &group,
-        &member,
-        req.share_session_epoch,
-    ) {
-        Ok(released) => released,
-        Err(code) => return Ok(ShareAcknowledgeResponse::error(code, None)),
-    };
-
-    let now = Instant::now();
-    let mut responses = process_topics(&AcknowledgeContext {
-        broker,
-        version,
-        req: &req,
-        ctx,
-        settings,
-        group: &group,
-        member: &member,
-        now,
-    })
-    .await;
-    broker
-        .share_partition_leaders
-        .release_session_partitions(&group, &member, &released)
+        let now = Instant::now();
+        let mut responses = process_topics(&AcknowledgeContext {
+            broker,
+            version,
+            req: &req,
+            ctx,
+            settings,
+            group: &group,
+            member: &member,
+            now,
+        })
         .await;
+        broker
+            .share_partition_leaders
+            .release_session_partitions(&group, &member, &released)
+            .await;
 
-    let node_endpoints = hint_current_leaders(broker, ctx, &mut responses);
-    Ok(ShareAcknowledgeResponse {
-        throttle_time_ms: 0,
-        error_code: codes::NONE,
-        error_message: None,
-        acquisition_lock_timeout_ms: lock_timeout_ms,
-        responses,
-        node_endpoints,
-        ..Default::default()
-    })
+        let node_endpoints = hint_current_leaders(broker, ctx, &mut responses);
+        Ok(ShareAcknowledgeResponse {
+            throttle_time_ms: 0,
+            error_code: codes::NONE,
+            error_message: None,
+            acquisition_lock_timeout_ms: lock_timeout_ms,
+            responses,
+            node_endpoints,
+            ..Default::default()
+        })
+    }
 }
 
 /// Kafka's `processShareAcknowledgeResponse`: sets the current leader on
@@ -316,7 +285,6 @@ mod tests {
 
     use assert2::assert;
     use krabka_protocol::{
-        UnknownTaggedFields,
         owned::{
             share_acknowledge_request::{AcknowledgePartition, AcknowledgeTopic},
             share_acknowledge_response,
@@ -325,10 +293,7 @@ mod tests {
     };
 
     use super::*;
-    use crate::{
-        authorizer::{AuthorizationRequest, AuthorizationResult},
-        test_support::{peer, principal, test_ctx},
-    };
+    use crate::test_support::{peer, principal, test_ctx};
 
     crate::test_support::context_helper!(client_id = "client-a");
 
@@ -367,50 +332,18 @@ mod tests {
             .await
             .expect("handle");
 
-        let expected = ShareAcknowledgeResponse {
-            throttle_time_ms: 0,
+        let expected = unthrottled_wire!(ShareAcknowledgeResponse {
             error_code: codes::UNSUPPORTED_VERSION,
             error_message: None,
             acquisition_lock_timeout_ms: 0,
             responses: Vec::new(),
             node_endpoints: Vec::new(),
-            unknown_tagged_fields: UnknownTaggedFields(Vec::new()),
-        };
+        });
         assert!(resp == expected);
         broker_handle.shutdown().await;
     }
 
-    /// Denies `Read` on every topic and allows everything else, so that topic
-    /// creation still works and only the per-topic gate refuses.
-    #[derive(Debug)]
-    struct DenyTopicRead;
-
-    impl crate::authorizer::Authorizer for DenyTopicRead {
-        fn authorize(
-            &self,
-            _source: &dyn crate::authorizer::AclSource,
-            request: &AuthorizationRequest<'_>,
-        ) -> AuthorizationResult {
-            if request.resource_type == ResourceType::Topic
-                && request.operation == AclOperation::Read
-            {
-                AuthorizationResult::Deny
-            } else {
-                AuthorizationResult::Allow
-            }
-        }
-    }
-
-    /// The topic id that one request row carries.
-    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-    enum TopicRef {
-        /// The id of a topic that exists.
-        Known,
-        /// A non-zero id that no topic has.
-        Unknown,
-        /// The zero id.
-        Zero,
-    }
+    use crate::handlers::test_support::{DenyTopicRead, TopicIdRef as TopicRef};
 
     async fn create_topic(broker: &crate::broker::BrokerHandle, name: &str) -> ProtoUuid {
         crate::handlers::test_support::create_topic(
@@ -433,9 +366,11 @@ mod tests {
         topic_id: ProtoUuid,
     ) -> ShareAcknowledgeResponse {
         let shared = broker.broker_arc_for_test();
-        let principal = principal("alice");
-        let peer = peer();
-        let ctx = crate::test_support::request_context(&principal, &peer, "client-a");
+        request_identity!(
+            (principal, peer, ctx),
+            principal("alice"),
+            client_id = "client-a"
+        );
         let id = uuid::Uuid::from_bytes(topic_id.0);
         shared
             .share_partition_leaders
@@ -519,19 +454,15 @@ mod tests {
 
     #[tokio::test]
     async fn partition_row_error_follows_topic_id() {
-        let (broker_handle, _dir) = crate::test_support::start_share_broker(
-            std::sync::Arc::new(crate::authorizer::AllowAllAuthorizer),
-            true,
-        )
-        .await;
-        let known = create_topic(&broker_handle, "ack-resolution").await;
-        crate::test_support::initialize_share_state(
-            &broker_handle,
-            "g1",
-            uuid::Uuid::from_bytes(known.0),
-            0,
-        )
-        .await;
+        initialized_share_topic!(
+            (broker_handle, _dir, known),
+            crate::test_support::start_share_broker(
+                std::sync::Arc::new(crate::authorizer::AllowAllAuthorizer),
+                true,
+            ),
+            "ack-resolution",
+            "g1"
+        );
 
         let (actual, expected) = drive(&broker_handle, known, codes::NONE).await;
 
@@ -544,18 +475,14 @@ mod tests {
     /// 100 for an id that does not resolve.
     #[tokio::test]
     async fn unresolved_id_answers_before_topic_authorization() {
-        let (broker_handle, _dir) = crate::test_support::start_broker_with(|cfg| {
-            cfg.authorizer = std::sync::Arc::new(DenyTopicRead);
-        })
-        .await;
-        let known = create_topic(&broker_handle, "ack-resolution").await;
-        crate::test_support::initialize_share_state(
-            &broker_handle,
-            "g1",
-            uuid::Uuid::from_bytes(known.0),
-            0,
-        )
-        .await;
+        initialized_share_topic!(
+            (broker_handle, _dir, known),
+            crate::test_support::start_broker_with(|cfg| {
+                cfg.authorizer = std::sync::Arc::new(DenyTopicRead);
+            }),
+            "ack-resolution",
+            "g1"
+        );
 
         let (actual, expected) =
             drive(&broker_handle, known, codes::TOPIC_AUTHORIZATION_FAILED).await;

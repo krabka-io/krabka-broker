@@ -314,28 +314,7 @@ mod tests {
         out
     }
 
-    #[derive(Clone)]
-    struct RecordingDialer {
-        client_ids: Arc<Mutex<Vec<String>>>,
-    }
-
-    #[async_trait::async_trait]
-    impl OutboundDialer for RecordingDialer {
-        async fn dial(
-            &self,
-            target: NodeId,
-            addr: &str,
-            options: krabka_client_core::ConnectionOptions,
-        ) -> Result<krabka_client_core::Connection, krabka_client_core::ClientError> {
-            self.client_ids
-                .lock()
-                .unwrap()
-                .push(options.client_id.clone());
-            krabka_raft::PlaintextDialer
-                .dial(target, addr, options)
-                .await
-        }
-    }
+    use crate::test_support::RecordingDialer;
 
     fn forwarder(
         addr: SocketAddr,
@@ -362,17 +341,12 @@ mod tests {
     /// voter set.
     #[tokio::test]
     async fn quorum_forwarder_reaches_the_quorum_through_a_bootstrap_server() {
-        let mock =
-            krabka_client_core::MockBroker::start(move |api_key, _version, _corr_id, _body| {
-                if api_key == api_versions_request::API_KEY {
-                    return Some(api_versions_response_v0());
-                }
-                if api_key == krabka_raft::API_KEY_SUBMIT_CHANGE {
-                    return Some(submit_change_response_body(0, -1));
-                }
-                None
-            })
-            .await;
+        let mock = crate::test_support::mock_request_broker(
+            krabka_raft::API_KEY_SUBMIT_CHANGE,
+            move || submit_change_response_body(0, -1),
+            api_versions_response_v0,
+        )
+        .await;
         let forwarder = QuorumForwarder {
             voters: vec![],
             bootstrap_servers: vec![mock.addr.to_string()],
@@ -431,18 +405,15 @@ mod tests {
     async fn quorum_forwarder_applied_response_returns_ok_and_sends_client_id() {
         let submit_requests = Arc::new(AtomicUsize::new(0));
         let submit_requests_for_mock = submit_requests.clone();
-        let mock =
-            krabka_client_core::MockBroker::start(move |api_key, _version, _corr_id, _body| {
-                if api_key == api_versions_request::API_KEY {
-                    return Some(api_versions_response_v0());
-                }
-                if api_key == krabka_raft::API_KEY_SUBMIT_CHANGE {
-                    submit_requests_for_mock.fetch_add(1, Ordering::SeqCst);
-                    return Some(submit_change_response_body(0, -1));
-                }
-                None
-            })
-            .await;
+        let mock = crate::test_support::mock_request_broker(
+            krabka_raft::API_KEY_SUBMIT_CHANGE,
+            move || {
+                submit_requests_for_mock.fetch_add(1, Ordering::SeqCst);
+                submit_change_response_body(0, -1)
+            },
+            api_versions_response_v0,
+        )
+        .await;
         let client_ids = Arc::new(Mutex::new(Vec::new()));
         let forwarder = forwarder(mock.addr, client_ids.clone(), Some(NodeId(1)));
 
@@ -464,17 +435,12 @@ mod tests {
 
     #[tokio::test]
     async fn quorum_forwarder_error_code_two_maps_to_topic_exists() {
-        let mock =
-            krabka_client_core::MockBroker::start(move |api_key, _version, _corr_id, _body| {
-                if api_key == api_versions_request::API_KEY {
-                    return Some(api_versions_response_v0());
-                }
-                if api_key == krabka_raft::API_KEY_SUBMIT_CHANGE {
-                    return Some(submit_change_response_body(2, -1));
-                }
-                None
-            })
-            .await;
+        let mock = crate::test_support::mock_request_broker(
+            krabka_raft::API_KEY_SUBMIT_CHANGE,
+            move || submit_change_response_body(2, -1),
+            api_versions_response_v0,
+        )
+        .await;
         let forwarder = forwarder(mock.addr, Arc::new(Mutex::new(Vec::new())), Some(NodeId(1)));
 
         let err = forwarder
@@ -491,17 +457,12 @@ mod tests {
 
     #[tokio::test]
     async fn quorum_forwarder_not_leader_response_preserves_positive_hint() {
-        let mock =
-            krabka_client_core::MockBroker::start(move |api_key, _version, _corr_id, _body| {
-                if api_key == api_versions_request::API_KEY {
-                    return Some(api_versions_response_v0());
-                }
-                if api_key == krabka_raft::API_KEY_SUBMIT_CHANGE {
-                    return Some(submit_change_response_body(1, 7));
-                }
-                None
-            })
-            .await;
+        let mock = crate::test_support::mock_request_broker(
+            krabka_raft::API_KEY_SUBMIT_CHANGE,
+            move || submit_change_response_body(1, 7),
+            api_versions_response_v0,
+        )
+        .await;
         let forwarder = forwarder(mock.addr, Arc::new(Mutex::new(Vec::new())), Some(NodeId(1)));
 
         let err = forwarder
@@ -520,17 +481,12 @@ mod tests {
 
     #[tokio::test]
     async fn quorum_forwarder_negative_leader_hint_is_unknown() {
-        let mock =
-            krabka_client_core::MockBroker::start(move |api_key, _version, _corr_id, _body| {
-                if api_key == api_versions_request::API_KEY {
-                    return Some(api_versions_response_v0());
-                }
-                if api_key == krabka_raft::API_KEY_SUBMIT_CHANGE {
-                    return Some(submit_change_response_body(3, -1));
-                }
-                None
-            })
-            .await;
+        let mock = crate::test_support::mock_request_broker(
+            krabka_raft::API_KEY_SUBMIT_CHANGE,
+            move || submit_change_response_body(3, -1),
+            api_versions_response_v0,
+        )
+        .await;
         let forwarder = forwarder(mock.addr, Arc::new(Mutex::new(Vec::new())), Some(NodeId(1)));
 
         let err = forwarder

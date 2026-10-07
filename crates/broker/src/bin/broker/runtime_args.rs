@@ -42,16 +42,6 @@ pub struct RuntimeArgs {
     )]
     #[overlay(skip)]
     pub client_frame_max: ByteSize,
-    pub client_metrics_eviction_tick: Option<Time>,
-    pub client_metrics_stale_floor: Option<Time>,
-    pub client_metrics_default_interval: Option<Time>,
-    pub client_metrics_telemetry_max: Option<ByteSize>,
-    pub client_metrics_prom_snapshot_ttl: Option<Time>,
-    pub rlmm_reconcile_tick: Option<Time>,
-    pub rlmm_bootstrap_backoff_initial: Option<Time>,
-    pub rlmm_bootstrap_backoff_max: Option<Time>,
-    pub connection_creation_throttle_max: Option<Time>,
-    pub opa_http_timeout: Option<Time>,
     pub oauth_jwks_http_timeout: Option<Time>,
     pub auto_join_retry_backoff: Option<Time>,
     pub auto_join_voter_request_timeout: Option<Time>,
@@ -63,15 +53,6 @@ pub struct RuntimeArgs {
     pub classic_group_max_session_timeout: Option<Time>,
     #[overlay(refined)]
     pub classic_group_max_size: Option<PositiveCount>,
-    pub sync_group_follower_wait: Option<Time>,
-    pub unclean_recovery_aggressive_deadline: Option<Time>,
-    pub unclean_recovery_balanced_deadline: Option<Time>,
-    pub operator_recovery_deadline: Option<Time>,
-    pub quota_throttle_max: Option<Time>,
-    pub quota_window: Option<Time>,
-    pub controller_mutation_quota_window: Option<Time>,
-    pub self_registration_max_attempts: Option<u32>,
-    pub observer_fetch_max: Option<ByteSize>,
     #[overlay(refined)]
     pub audit_event_queue_capacity: Option<PositiveCount>,
     #[overlay(refined)]
@@ -179,22 +160,6 @@ pub struct RuntimeArgs {
     pub share_group_max_heartbeat_interval: Option<Time>,
     #[overlay(refined)]
     pub share_group_max_size: Option<PositiveCount>,
-    pub share_group_record_lock_duration: Option<Time>,
-    pub share_group_min_record_lock_duration: Option<Time>,
-    pub share_group_max_record_lock_duration: Option<Time>,
-    pub share_group_delivery_count_limit: Option<i16>,
-    pub share_group_min_delivery_count_limit: Option<i16>,
-    pub share_group_max_delivery_count_limit: Option<i16>,
-    pub share_group_partition_max_record_locks: Option<i32>,
-    pub share_group_min_partition_max_record_locks: Option<i32>,
-    pub share_group_max_partition_max_record_locks: Option<i32>,
-    pub streams_group_enable: Option<bool>,
-    pub streams_group_session_timeout: Option<Time>,
-    pub streams_group_heartbeat_interval: Option<Time>,
-    pub streams_group_min_session_timeout: Option<Time>,
-    pub streams_group_max_session_timeout: Option<Time>,
-    pub streams_group_min_heartbeat_interval: Option<Time>,
-    pub streams_group_max_heartbeat_interval: Option<Time>,
     #[overlay(refined)]
     pub streams_group_max_size: Option<PositiveCount>,
     #[arg(long, env = "KRABKA_STREAMS_GROUP_NUM_STANDBY_REPLICAS", value_parser = clap::value_parser!(i32).range(0..))]

@@ -1,6 +1,9 @@
 (* #"/workspace/crates/verified/src/transaction/producer_identity.rs" 60 0 67 35 *)
 
-let%span sord = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span stransaction = "/workspace/crates/verified/src/transaction.rs" 212 53 212 54
+let%span stransaction'0 = "/workspace/crates/verified/src/transaction.rs" 212 42 212 50
+let%span stransaction'1 = "/workspace/crates/verified/src/transaction.rs" 212 42 212 54
 let%span sproducer_identity = "/workspace/crates/verified/src/transaction/producer_identity.rs" 68 22 68 24
 let%span sproducer_identity'0 = "/workspace/crates/verified/src/transaction/producer_identity.rs" 71 19 72 81
 let%span sproducer_identity'1 = "/workspace/crates/verified/src/transaction/producer_identity.rs" 72 56 72 80
@@ -9,9 +12,6 @@ let%span sproducer_identity'3 = "/workspace/crates/verified/src/transaction/prod
 let%span sproducer_identity'4 = "/workspace/crates/verified/src/transaction/producer_identity.rs" 41 10 44 42
 let%span sproducer_identity'5 = "/workspace/crates/verified/src/transaction/producer_identity.rs" 45 10 51 41
 let%span sproducer_identity'6 = "/workspace/crates/verified/src/transaction/producer_identity.rs" 52 10 58 51
-let%span stransaction = "/workspace/crates/verified/src/transaction.rs" 226 53 226 54
-let%span stransaction'0 = "/workspace/crates/verified/src/transaction.rs" 226 42 226 50
-let%span stransaction'1 = "/workspace/crates/verified/src/transaction.rs" 226 42 226 54
 
 use creusot.int.Int64
 use creusot.int.Int16
@@ -24,7 +24,7 @@ constant const_MAX: Int16.t = (32767: Int16.t)
 
 type tup2_i16_bool = { f0: Int16.t; f1: bool }
 
-constant const_EXHAUSTED_PRODUCER_EPOCH [#"/workspace/crates/verified/src/transaction.rs" 226 0 226 39] : Int16.t
+constant const_EXHAUSTED_PRODUCER_EPOCH [#"/workspace/crates/verified/src/transaction.rs" 212 0 212 39] : Int16.t
 
 let set_EXHAUSTED_PRODUCER_EPOCH (return) = bb0
   [ bb0 = s0

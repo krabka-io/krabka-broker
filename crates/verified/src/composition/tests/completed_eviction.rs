@@ -7,7 +7,7 @@ use super::{
 
 #[test]
 fn an_evicted_source_can_still_have_a_later_unready_sequence_alias() {
-    let old: Vec<_> = (0..5).map(|i| recovered_window_row(4 * i, 2, 0)).collect();
+    let old = super::epoch_rows(5, 7, 0);
     let incoming = recovered_window_row(20, 2, 0);
     let (evicted, frontier, ready, retained) =
         completed_eviction_bounds_waiters(23, 3, 7, &old, incoming, 0);
@@ -26,7 +26,7 @@ fn an_evicted_source_can_still_have_a_later_unready_sequence_alias() {
 
 #[test]
 fn a_newer_waiter_cannot_ack_before_an_evicted_batch() {
-    let old: Vec<_> = (0..5).map(|i| recovered_window_row(4 * i, 2, 0)).collect();
+    let old = super::epoch_rows(5, 7, 0);
     let incoming = recovered_window_row(20, 2, 0);
     for hwm in [0, 2, 3, 6, 7, 22, 23] {
         let (evicted, frontier, ready, retained) =

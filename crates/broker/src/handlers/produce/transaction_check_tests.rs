@@ -12,7 +12,7 @@ use bytes::Bytes;
 use krabka_ids::PartitionIndex;
 use krabka_protocol::{
     owned::{
-        create_topics_request::{self, CreatableTopic, CreateTopicsRequest},
+        create_topics_request::{self},
         init_producer_id_request::InitProducerIdRequest,
         produce_request::{PartitionProduceData, ProduceRequest, TopicProduceData},
         produce_response::{PartitionProduceResponse, ProduceResponse},
@@ -24,7 +24,7 @@ use super::handle;
 use crate::{
     codes,
     test_support::{
-        decode_response, dispatch_context, encode_request, peer, principal, request_context,
+        decode_response, dispatch_context, encode_request, peer, principal,
         start_broker_no_audit_with,
     },
     txn::state::TopicPartition,
@@ -46,19 +46,13 @@ async fn a_produce_that_starts_a_transaction_on_many_partitions_makes_one_coordi
     let broker = handle_.broker_arc_for_test();
     handle_.wait_until_transaction_coordinator_ready().await;
 
-    let user = principal("client");
-    let address = peer();
-    let ctx = request_context(&user, &address, "one-check");
-    let create = CreateTopicsRequest {
-        topics: vec![CreatableTopic {
-            name: TOPIC.to_string(),
-            num_partitions: PARTITIONS,
-            replication_factor: 1,
-            ..Default::default()
-        }],
-        timeout_ms: 5_000,
-        ..Default::default()
-    };
+    request_identity!(
+        (user, address, ctx),
+        principal("client"),
+        client_id = "one-check"
+    );
+    let create =
+        crate::handlers::test_support::configured_topic_request(TOPIC, &[], PARTITIONS, 1, 5_000);
     dispatch_context(
         &broker,
         create_topics_request::API_KEY,

@@ -1,30 +1,4 @@
-use creusot_std::prelude::*;
-
-use super::super::{constructed_voter_reconfiguration, reconfigured_majorities_overlap};
-#[cfg(creusot)]
-use super::spec::{control_inputs_coherent, control_request_admitted};
-#[cfg(creusot)]
-use super::{
-    super::spec::{expected_member, has_node},
-    spec::{control_record_count, next_size, prefix_count, prefix_grants_agree},
-};
-#[cfg(creusot)]
-use crate::reconfiguration::admitted_plan;
-use crate::{
-    raft::metadata_record_offset_deltas,
-    reconfiguration::{
-        CurrentVoterSet, ReconfigurationLeadership, TargetVoter, VoterChangeRequest,
-        VoterReconfigurationPlan,
-    },
-    storage::local_append_coordinates,
-};
-
-type SupportedControl = Option<(
-    VoterReconfigurationPlan,
-    Vec<u64>,
-    Vec<i32>,
-    Option<(i64, (usize, usize), u64)>,
-)>;
+use super::*;
 
 /// Construct real control-record deltas from the admitted plan and derive
 /// old/new support from each node's reported prefix, never a supplied grant
@@ -32,21 +6,16 @@ type SupportedControl = Option<(
 /// prefixes, common log identity, directory/epoch facts and actual control
 /// encoding remain host obligations. `KRaft` Fetch positions do not prove fsync.
 #[requires(control_inputs_coherent(old@, state.1, reports@))]
-#[ensures((match result { None => false, Some(_) => true }) == (control_request_admitted(old@, state, request, node, target)
+#[ensures((result != None) == (control_request_admitted(old@, state, request, node, target)
     && (control_record_count(state.1.kraft_version, request.kind) == 0
         || (base@ >= 0 && base@ + control_record_count(state.1.kraft_version, request.kind) <= i64::MAX@
-            && prefix_count(old@, reports@, request.kind, node,
-                base@ + control_record_count(state.1.kraft_version, request.kind), false, reports@.len())
-                >= old@.len() / 2 + 1
-            && prefix_count(old@, reports@, request.kind, node,
-                base@ + control_record_count(state.1.kraft_version, request.kind), true, reports@.len())
-                >= next_size(old@.len(), request.kind) / 2 + 1))))]
+            && control_prefix_majorities(old@, reports@, request.kind, node,
+                base@ + control_record_count(state.1.kraft_version, request.kind))))))]
 #[ensures(match result { None => true, Some((plan, next, deltas, support)) =>
     admitted_plan(state.1, request.kind, plan)
     && next@.len() == plan.next_voter_count@ && next@.len() > 0
-    && (forall<id: u64> has_node(next@, next@.len(), id)
-        == expected_member(old@, old@.len(), request.kind, node, id))
-    && (forall<i: Int, j: Int> 0 <= i && i < j && j < next@.len() ==> next@[i] != next@[j])
+    && (membership_matches_change(old@, next@, request.kind, node))
+    && (crate::sequence::distinct(next@))
     && deltas@.len() == control_record_count(state.1.kraft_version, request.kind)
     && (forall<i: Int> 0 <= i && i < deltas@.len() ==> deltas@[i]@ == i)
     && (support == None) == (deltas@.len() == 0)
@@ -57,16 +26,14 @@ type SupportedControl = Option<(
             && counts.0@ == prefix_count(old@, reports@, request.kind, node, end@, false, reports@.len())
             && counts.1@ == prefix_count(old@, reports@, request.kind, node, end@, true, reports@.len())
             && counts.0@ >= old@.len() / 2 + 1 && counts.1@ >= next@.len() / 2 + 1
-            && exists<i: Int> 0 <= i && i < old@.len() && old@[i] == common
-                && reports@[i].0@ >= end@ && reports@[i].1@ >= end@
-                && has_node(next@, next@.len(), common)
+            && common_prefix_reported(old@, reports@, next@, common, end@)
                 && forall<j: Int> 0 <= j && j < deltas@.len()
                     ==> base@ + deltas@[j]@ < end@,
     },
 })]
 pub(crate) fn reconfiguration_control_prefix_support(
     old: &[u64],
-    state: (ReconfigurationLeadership, CurrentVoterSet),
+    state: ReconfigurationState,
     request: VoterChangeRequest,
     node: u64,
     target: TargetVoter,

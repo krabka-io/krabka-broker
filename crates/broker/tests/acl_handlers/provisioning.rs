@@ -21,11 +21,8 @@ use crate::{
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn create_acls_super_user_can_provision_and_describe() {
-    let log_dir = tempfile::tempdir().unwrap();
-    let cfg = sasl_plain_broker_config(log_dir.path(), &[("admin", "admin-secret")], Some("admin"));
-
-    let handle = Broker::start(cfg).await.expect("broker must start");
-    let addr = handle.listen_addr();
+    let (_log_dir, handle, addr) =
+        crate::sasl_cluster::start_admin_with(&[("admin", "admin-secret")]).await;
 
     // Provision: Allow Read on Topic LITERAL "foo" for User:alice from *.
     let create_req = CreateAclsRequest {
@@ -116,11 +113,8 @@ async fn create_acls_non_super_user_rejected() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn delete_acls_removes_matching() {
-    let log_dir = tempfile::tempdir().unwrap();
-    let cfg = sasl_plain_broker_config(log_dir.path(), &[("admin", "admin-secret")], Some("admin"));
-
-    let handle = Broker::start(cfg).await.expect("broker must start");
-    let addr = handle.listen_addr();
+    let (_log_dir, handle, addr) =
+        crate::sasl_cluster::start_admin_with(&[("admin", "admin-secret")]).await;
 
     // Provision two ACLs (Read on "foo", Write on "bar").
     let create_req = CreateAclsRequest {

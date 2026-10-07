@@ -51,7 +51,8 @@ pub(crate) use self::{
 };
 use crate::{
     config::ReplicationRuntimeConfig, partition_registry::PartitionRegistry,
-    throttle::ThrottleState, txn::coordinator::TxnCoordinator,
+    replicator::ReplicationConnectionConfig, throttle::ThrottleState,
+    txn::coordinator::TxnCoordinator,
 };
 
 /// A `(topic, partition)` pair. The supervisor keys follower tasks, local
@@ -92,14 +93,8 @@ fn resolve_leader_endpoint(
     broker: &krabka_metadata::BrokerRegistrationRecord,
     listener_name: &str,
 ) -> (String, u16) {
-    broker
-        .endpoints
-        .iter()
-        .find(|e| e.name == listener_name)
-        .map_or_else(
-            || (broker.host.clone(), broker.port),
-            |e| (e.host.clone(), e.port),
-        )
+    let (host, port) = crate::broker::registered_listener_endpoint(broker, listener_name);
+    (host.to_owned(), port)
 }
 
 pub(crate) struct ReplicatorSupervisor {
@@ -210,6 +205,16 @@ pub(crate) struct ReplicatorSupervisorConfig {
 }
 
 impl ReplicatorSupervisor {
+    /// Clone the common dialer and policy after each initializer's identity and shutdown.
+    fn connection_config(&self) -> ReplicationConnectionConfig {
+        ReplicationConnectionConfig {
+            inter_broker_client: self.inter_broker_client.clone(),
+            inter_broker_listener_protocol: self.inter_broker_listener_protocol,
+            inter_broker_server_name: self.inter_broker_server_name.clone(),
+            replication: self.replication.clone(),
+        }
+    }
+
     pub(crate) fn new(config: ReplicatorSupervisorConfig) -> Self {
         let ReplicatorSupervisorConfig {
             node_id,

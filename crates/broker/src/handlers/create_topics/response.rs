@@ -45,30 +45,22 @@ pub(super) fn topic_error_result(
 /// [`crate::config_keys::WRITE_FREEZE`] -- and reporting them as writable
 /// would contradict this broker's own `DescribeConfigs` and its two alter
 /// paths.
-/// `overrides` is the map the create would write, which is what a
-/// `validate_only` row has to be answered from: the topic is not in the image
-/// there, and Kafka builds the same row from `creationConfigs` either way.
-pub(super) fn effective_topic_configs(
-    image: &krabka_metadata::MetadataImage,
-    node: krabka_metadata::NodeId,
-    topic: &str,
-    overrides: &std::collections::BTreeMap<String, String>,
-    unstable: crate::api_catalog::UnstableApiVersions,
-    statics: &std::collections::BTreeMap<&'static str, String>,
+/// The supplied entries already resolve the create request's override map,
+/// including a validate-only topic that is absent from the metadata image.
+pub(super) fn creatable_topic_configs(
+    entries: Vec<krabka_protocol::owned::describe_configs_response::DescribeConfigsResourceResult>,
 ) -> Vec<CreatableTopicConfigs> {
-    crate::handlers::describe_configs::effective_topic_configs(
-        image, node, topic, overrides, unstable, statics,
-    )
-    .into_iter()
-    .map(|entry| CreatableTopicConfigs {
-        name: entry.name,
-        value: entry.value,
-        read_only: entry.read_only,
-        config_source: entry.config_source,
-        is_sensitive: entry.is_sensitive,
-        ..Default::default()
-    })
-    .collect()
+    entries
+        .into_iter()
+        .map(|entry| CreatableTopicConfigs {
+            name: entry.name,
+            value: entry.value,
+            read_only: entry.read_only,
+            config_source: entry.config_source,
+            is_sensitive: entry.is_sensitive,
+            ..Default::default()
+        })
+        .collect()
 }
 
 pub(super) fn create_topics_response(

@@ -18,15 +18,11 @@
 //! refusal is different: a denied read of the break-glass surface is a signal
 //! an auditor should see, so this handler audits one.
 
-use bytes::Bytes;
 use krabka_audit::{AuditOutcome, PrivilegedPhase};
 use krabka_metadata::{BreakGlassProposalRecord, MetadataImage};
-use krabka_protocol::{
-    Decode,
-    krabka::break_glass::{
-        BreakGlassApproval as WireApproval, DescribeBreakGlassRequest, DescribeBreakGlassResponse,
-        DescribedBreakGlassProposal,
-    },
+use krabka_protocol::krabka::break_glass::{
+    BreakGlassApproval as WireApproval, DescribeBreakGlassRequest, DescribeBreakGlassResponse,
+    DescribedBreakGlassProposal,
 };
 use uuid::Uuid;
 
@@ -39,81 +35,70 @@ use crate::{
             from_wire_uuid, to_wire_uuid,
         },
     },
-    broker::Broker,
     codes,
-    error::BrokerError,
-    handlers::{RequestContext, encode_response},
+    handlers::encode_response,
 };
 
-#[tracing::instrument(
-    name = "handle_describe_break_glass",
-    level = "info",
-    skip_all,
-    fields(api = "DescribeBreakGlass"),
-    err
-)]
-pub(crate) async fn handle(
-    broker: &Broker,
-    version: i16,
-    _correlation_id: i32,
-    req_bytes: &[u8],
-    ctx: &RequestContext<'_>,
-) -> Result<Bytes, BrokerError> {
-    let mut cur = req_bytes;
-    let req = DescribeBreakGlassRequest::decode(&mut cur, version)?;
+wire_handler!(
+    handle,
+    "handle_describe_break_glass",
+    "DescribeBreakGlass",
+    "info",
+    DescribeBreakGlassRequest,
+    |broker, version, req, ctx| {
+        let image = broker.controller.current_image();
+        let outcome = if cluster_describe_denied(broker.config.authorizer.as_ref(), &image, ctx) {
+            Err(Refusal::new(
+                codes::CLUSTER_AUTHORIZATION_FAILED,
+                "describe-break-glass denied",
+            ))
+        } else {
+            select(
+                &image,
+                req.pending_only,
+                wanted_id(req.proposal_id),
+                crate::time_util::now_ms(),
+            )
+        };
 
-    let image = broker.controller.current_image();
-    let outcome = if cluster_describe_denied(broker.config.authorizer.as_ref(), &image, ctx) {
-        Err(Refusal::new(
-            codes::CLUSTER_AUTHORIZATION_FAILED,
-            "describe-break-glass denied",
-        ))
-    } else {
-        select(
-            &image,
-            req.pending_only,
-            wanted_id(req.proposal_id),
-            crate::time_util::now_ms(),
-        )
-    };
-
-    let response = match outcome {
-        Ok(proposals) => DescribeBreakGlassResponse {
-            throttle_time_ms: 0,
-            error_code: codes::NONE,
-            error_message: None,
-            proposals,
-            ..DescribeBreakGlassResponse::default()
-        },
-        Err(refusal) => {
-            let policy = BreakGlassPolicy::new(&broker.config.break_glass);
-            audit_privileged(
-                broker.audit_log.as_ref(),
-                ctx,
-                policy.fingerprint(),
-                &PrivilegedAudit {
-                    outcome: AuditOutcome::Failure,
-                    phase: PrivilegedPhase::Refused,
-                    action: UNKNOWN_ACTION,
-                    target: "",
-                    proposal_id: wanted_id(req.proposal_id),
-                    counterparties: &[],
-                    key_id: "",
-                    signature: &[],
-                    signature_verified: false,
-                    reason: &refusal.message,
-                },
-            );
-            DescribeBreakGlassResponse {
+        let response = match outcome {
+            Ok(proposals) => DescribeBreakGlassResponse {
                 throttle_time_ms: 0,
-                error_code: refusal.code,
-                error_message: Some(refusal.message),
+                error_code: codes::NONE,
+                error_message: None,
+                proposals,
                 ..DescribeBreakGlassResponse::default()
+            },
+            Err(refusal) => {
+                let policy = BreakGlassPolicy::new(&broker.config.break_glass);
+                audit_privileged(
+                    broker.audit_log.as_ref(),
+                    ctx,
+                    policy.fingerprint(),
+                    &PrivilegedAudit {
+                        outcome: AuditOutcome::Failure,
+                        phase: PrivilegedPhase::Refused,
+                        action: UNKNOWN_ACTION,
+                        target: "",
+                        proposal_id: wanted_id(req.proposal_id),
+                        counterparties: &[],
+                        key_id: "",
+                        signature: &[],
+                        signature_verified: false,
+                        reason: &refusal.message,
+                    },
+                );
+                DescribeBreakGlassResponse {
+                    throttle_time_ms: 0,
+                    error_code: refusal.code,
+                    error_message: Some(refusal.message),
+                    ..DescribeBreakGlassResponse::default()
+                }
             }
-        }
-    };
-    encode_response(&response, version)
-}
+        };
+        encode_response(&response, version)
+    }
+);
 
 /// The proposal a request names, or `None` when it asks for every proposal.
 fn wanted_id(id: krabka_protocol::primitives::uuid::Uuid) -> Option<Uuid> {

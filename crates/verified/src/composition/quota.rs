@@ -22,7 +22,7 @@ fn refilled_quota_balance(available: Int, debt: Int, refill: Int, burst: Int) ->
 /// Counts are effective micro-tokens; the host serializes the steps without
 /// another refill, charge, reset, or refund between charge and refund.
 #[requires(available@ <= burst@ && (available@ == 0 || debt@ == 0))]
-#[ensures((match result { Some(_) => true, None => false }) ==
+#[ensures((result != None) ==
     (requested@ - refilled_quota_balance(available@, debt@, refill@, burst@) <= u64::MAX@))]
 #[ensures(match result {
     None => true,

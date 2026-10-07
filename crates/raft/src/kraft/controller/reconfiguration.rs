@@ -431,34 +431,40 @@ impl Engine {
                 .saturating_add(i64::from(record.offset_delta));
             self.controls.apply(offset, &control)?;
         }
-        let latest = self.controls.latest_voters().clone();
-        if latest != previous {
-            let actions = self.apply_voter_set(latest.clone());
-            self.peers.update_voters(&latest);
-            self.execute(actions);
-        }
+        self.apply_changed_voters(&previous);
         Ok(())
     }
 
-    pub fn restore_control_state_after_truncation(&mut self, offset: i64) {
-        let previous = self.controls.latest_voters().clone();
-        self.controls.truncate_to(offset);
+    fn apply_changed_voters(&mut self, previous: &VoterSet) {
         let latest = self.controls.latest_voters().clone();
-        if latest != previous {
+        if latest != *previous {
             let actions = self.apply_voter_set(latest.clone());
             self.peers.update_voters(&latest);
             self.execute(actions);
         }
-        if self
-            .pending_reconfig
-            .as_ref()
-            .is_some_and(|pending| pending.need_offset.0 > offset)
-            && let Some(mut pending) = self.pending_reconfig.take()
+    }
+
+    /// Release a pending reconfiguration that this leadership can no longer commit.
+    pub fn fail_pending_reconfiguration(&mut self) {
+        if let Some(mut pending) = self.pending_reconfig.take()
             && let Some(reply) = pending.reply.take()
         {
             let _ = reply.send(Err(RaftError::NotLeader {
                 current_leader: self.core.quorum_state().leader_id,
             }));
+        }
+    }
+
+    pub fn restore_control_state_after_truncation(&mut self, offset: i64) {
+        let previous = self.controls.latest_voters().clone();
+        self.controls.truncate_to(offset);
+        self.apply_changed_voters(&previous);
+        if self
+            .pending_reconfig
+            .as_ref()
+            .is_some_and(|pending| pending.need_offset.0 > offset)
+        {
+            self.fail_pending_reconfiguration();
         }
     }
 

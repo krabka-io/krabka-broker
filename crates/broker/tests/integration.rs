@@ -2,6 +2,16 @@
 //! `krabka-client-core`. These run on every push (no Docker required).
 
 use assert2::{assert, check};
+
+use crate::support::{
+    client::connect_client,
+    discovery::{api_versions_request_for, topic_metadata_request},
+    fetch::{fetch_partition, single_partition_fetch},
+    offsets::{list_offset_partition, single_partition_list_offsets},
+    produce::single_partition_produce,
+    records::value_record,
+    topics::{creatable_topic, create_topic_request},
+};
 mod support;
 
 use std::time::Duration;
@@ -10,17 +20,13 @@ use bytes::{BufMut, Bytes, BytesMut};
 use krabka_protocol::{
     Encode,
     owned::{
-        api_versions_request::ApiVersionsRequest,
-        create_topics_request::{CreatableTopic, CreateTopicsRequest},
-        fetch_request::{FetchPartition, FetchRequest, FetchTopic},
-        list_offsets_request::{ListOffsetsPartition, ListOffsetsRequest, ListOffsetsTopic},
+        list_offsets_request::{ListOffsetsPartition, ListOffsetsRequest},
         metadata_request::MetadataRequest,
-        produce_request::{PartitionProduceData, ProduceRequest, TopicProduceData},
     },
     records::{Record, RecordBatch},
 };
 use support::topic_id_for;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::AsyncReadExt;
 
 /// Build a `RecordBatch` with one entry per provided value. Codegen's
 /// `PartitionProduceData.records` is `Option<RecordsPayload>`. Callers
@@ -34,11 +40,10 @@ fn record_batch_with_values(values: &[&str]) -> RecordBatch {
         ..RecordBatch::default()
     };
     for (i, v) in values.iter().enumerate() {
-        batch.records.push(Record {
-            offset_delta: i32::try_from(i).expect("test fixture small enough for i32"),
-            value: Some(Bytes::from(v.to_string())),
-            ..Default::default()
-        });
+        batch.records.push(value_record(
+            i32::try_from(i).expect("test fixture small enough for i32"),
+            Some(Bytes::from(v.to_string())),
+        ));
     }
     batch
 }
@@ -59,10 +64,11 @@ fn timestamped_batch(entries: &[(&str, i64)]) -> RecordBatch {
     };
     for (i, (v, ts)) in entries.iter().enumerate() {
         batch.records.push(Record {
-            offset_delta: i32::try_from(i).expect("small"),
             timestamp_delta: ts - base_ts,
-            value: Some(Bytes::from((*v).to_string())),
-            ..Default::default()
+            ..value_record(
+                i32::try_from(i).expect("small"),
+                Some(Bytes::from((*v).to_string())),
+            )
         });
     }
     batch
@@ -73,37 +79,20 @@ async fn list_offsets_by_timestamp_local() {
     let p = support::start().await;
 
     p.client
-        .send(CreateTopicsRequest {
-            topics: vec![CreatableTopic {
-                name: "by_ts".into(),
-                num_partitions: 1,
-                replication_factor: 1,
-                ..Default::default()
-            }],
-            timeout_ms: 5_000,
-            ..Default::default()
-        })
+        .send(create_topic_request(creatable_topic("by_ts", 1, 1), 5_000))
         .await
         .unwrap();
     let topic_id = topic_id_for(&p.client, "by_ts").await;
 
     // Offsets 0..=2 with timestamps 100, 200, 300.
     p.client
-        .send(ProduceRequest {
-            acks: 1,
-            timeout_ms: 5_000,
-            topic_data: vec![TopicProduceData {
-                name: "by_ts".into(),
-                topic_id,
-                partition_data: vec![PartitionProduceData {
-                    index: 0,
-                    records: Some(timestamped_batch(&[("a", 100), ("b", 200), ("c", 300)]).into()),
-                    ..Default::default()
-                }],
-                ..Default::default()
-            }],
-            ..Default::default()
-        })
+        .send(single_partition_produce(
+            "by_ts",
+            topic_id,
+            0,
+            Some(timestamped_batch(&[("a", 100), ("b", 200), ("c", 300)]).into()),
+            (1, 5_000),
+        ))
         .await
         .unwrap();
 
@@ -113,16 +102,7 @@ async fn list_offsets_by_timestamp_local() {
             client
                 .send(ListOffsetsRequest {
                     replica_id: -1,
-                    topics: vec![ListOffsetsTopic {
-                        name: "by_ts".into(),
-                        partitions: vec![ListOffsetsPartition {
-                            partition_index: 0,
-                            timestamp: ts,
-                            ..Default::default()
-                        }],
-                        ..Default::default()
-                    }],
-                    ..Default::default()
+                    ..single_partition_list_offsets("by_ts", list_offset_partition(0, ts))
                 })
                 .await
                 .unwrap()
@@ -152,11 +132,7 @@ async fn end_to_end_create_produce_fetch_delete() {
     // 1. ApiVersions.
     let v = p
         .client
-        .send(ApiVersionsRequest {
-            client_software_name: "krabka".into(),
-            client_software_version: "0.0.0".into(),
-            ..Default::default()
-        })
+        .send(api_versions_request_for("krabka", "0.0.0"))
         .await
         .unwrap();
     assert!(v.error_code == 0);
@@ -164,50 +140,26 @@ async fn end_to_end_create_produce_fetch_delete() {
     // 2. CreateTopics.
     let cr = p
         .client
-        .send(CreateTopicsRequest {
-            topics: vec![CreatableTopic {
-                name: "e2e".into(),
-                num_partitions: 1,
-                replication_factor: 1,
-                ..Default::default()
-            }],
-            timeout_ms: 5_000,
-            ..Default::default()
-        })
+        .send(create_topic_request(creatable_topic("e2e", 1, 1), 5_000))
         .await
         .unwrap();
     assert!(cr.topics[0].error_code == 0);
 
     // 3. Metadata — confirm topic is visible and grab its UUID.
-    let meta = p
-        .client
-        .send(MetadataRequest {
-            topics: None,
-            ..Default::default()
-        })
-        .await
-        .unwrap();
+    let meta = p.client.send(topic_metadata_request(None)).await.unwrap();
     assert!(meta.topics.iter().any(|t| t.name.as_deref() == Some("e2e")));
     let topic_id = topic_id_for(&p.client, "e2e").await;
 
     // 4. Produce 3 records.
     let pr = p
         .client
-        .send(ProduceRequest {
-            acks: 1,
-            timeout_ms: 5_000,
-            topic_data: vec![TopicProduceData {
-                name: "e2e".into(),
-                topic_id,
-                partition_data: vec![PartitionProduceData {
-                    index: 0,
-                    records: Some(record_batch_with_values(&["a", "b", "c"]).into()),
-                    ..Default::default()
-                }],
-                ..Default::default()
-            }],
-            ..Default::default()
-        })
+        .send(single_partition_produce(
+            "e2e",
+            topic_id,
+            0,
+            Some(record_batch_with_values(&["a", "b", "c"]).into()),
+            (1, 5_000),
+        ))
         .await
         .unwrap();
     assert!(pr.responses[0].partition_responses[0].error_code == 0);
@@ -217,16 +169,14 @@ async fn end_to_end_create_produce_fetch_delete() {
         .client
         .send(ListOffsetsRequest {
             replica_id: -1,
-            topics: vec![ListOffsetsTopic {
-                name: "e2e".into(),
-                partitions: vec![ListOffsetsPartition {
+            ..single_partition_list_offsets(
+                "e2e",
+                ListOffsetsPartition {
                     partition_index: 0,
                     timestamp: -1, // latest
                     ..Default::default()
-                }],
-                ..Default::default()
-            }],
-            ..Default::default()
+                },
+            )
         })
         .await
         .unwrap();
@@ -236,23 +186,12 @@ async fn end_to_end_create_produce_fetch_delete() {
     // 6. Fetch and confirm 3 records are returned.
     let fr = p
         .client
-        .send(FetchRequest {
-            max_wait_ms: 100,
-            min_bytes: 1,
-            max_bytes: 1 << 20,
-            topics: vec![FetchTopic {
-                topic: "e2e".into(),
-                topic_id,
-                partitions: vec![FetchPartition {
-                    partition: 0,
-                    fetch_offset: 0,
-                    partition_max_bytes: 1 << 20,
-                    ..Default::default()
-                }],
-                ..Default::default()
-            }],
-            ..Default::default()
-        })
+        .send(single_partition_fetch(
+            "e2e",
+            topic_id,
+            fetch_partition(0, 0, 1 << 20),
+            (100, 1, 1 << 20),
+        ))
         .await
         .unwrap();
     let part = &fr.responses[0].partitions[0];
@@ -273,16 +212,10 @@ async fn produce_acks_zero_sends_no_frame_and_keeps_connection_usable() {
     let p = support::start().await;
     let create = p
         .client
-        .send(CreateTopicsRequest {
-            topics: vec![CreatableTopic {
-                name: "one-way-produce".into(),
-                num_partitions: 1,
-                replication_factor: 1,
-                ..Default::default()
-            }],
-            timeout_ms: 5_000,
-            ..Default::default()
-        })
+        .send(create_topic_request(
+            creatable_topic("one-way-produce", 1, 1),
+            5_000,
+        ))
         .await
         .expect("create topic");
     assert!(create.topics[0].error_code == 0);
@@ -290,20 +223,13 @@ async fn produce_acks_zero_sends_no_frame_and_keeps_connection_usable() {
     let mut stream = tokio::net::TcpStream::connect(p.broker.listen_addr())
         .await
         .expect("connect raw client");
-    let produce = ProduceRequest {
-        acks: 0,
-        timeout_ms: 5_000,
-        topic_data: vec![TopicProduceData {
-            name: "one-way-produce".into(),
-            partition_data: vec![PartitionProduceData {
-                index: 0,
-                records: Some(record_batch_with_values(&["value"]).into()),
-                ..Default::default()
-            }],
-            ..Default::default()
-        }],
-        ..Default::default()
-    };
+    let produce = single_partition_produce(
+        "one-way-produce",
+        krabka_protocol::primitives::uuid::Uuid::default(),
+        0,
+        Some(record_batch_with_values(&["value"]).into()),
+        (0, 5_000),
+    );
     let mut body = BytesMut::new();
     produce.encode(&mut body, 9).expect("encode Produce v9");
     let client_id = b"acks-zero-test";
@@ -315,12 +241,9 @@ async fn produce_acks_zero_sends_no_frame_and_keeps_connection_usable() {
     frame.put_slice(client_id);
     frame.put_u8(0);
     frame.put_slice(&body);
-    stream
-        .write_u32(u32::try_from(frame.len()).unwrap())
+    crate::support::wire::write_frame(&mut stream, &frame, None)
         .await
         .unwrap();
-    stream.write_all(&frame).await.unwrap();
-    stream.flush().await.unwrap();
 
     let unexpected_response =
         tokio::time::timeout(Duration::from_millis(150), stream.readable()).await;
@@ -341,12 +264,9 @@ async fn produce_acks_zero_sends_no_frame_and_keeps_connection_usable() {
     metadata_frame.put_slice(client_id);
     metadata_frame.put_u8(0);
     metadata_frame.put_slice(&metadata_body);
-    stream
-        .write_u32(u32::try_from(metadata_frame.len()).unwrap())
+    crate::support::wire::write_frame(&mut stream, &metadata_frame, None)
         .await
         .unwrap();
-    stream.write_all(&metadata_frame).await.unwrap();
-    stream.flush().await.unwrap();
 
     let response_len = tokio::time::timeout(Duration::from_secs(5), stream.read_u32())
         .await
@@ -360,16 +280,7 @@ async fn produce_acks_zero_sends_no_frame_and_keeps_connection_usable() {
         .client
         .send(ListOffsetsRequest {
             replica_id: -1,
-            topics: vec![ListOffsetsTopic {
-                name: "one-way-produce".into(),
-                partitions: vec![ListOffsetsPartition {
-                    partition_index: 0,
-                    timestamp: -1,
-                    ..Default::default()
-                }],
-                ..Default::default()
-            }],
-            ..Default::default()
+            ..single_partition_list_offsets("one-way-produce", list_offset_partition(0, -1))
         })
         .await
         .expect("read log end");
@@ -385,23 +296,12 @@ async fn second_open_recovers_partitions_from_disk() {
         let config = krabka_broker::BrokerConfig::for_tests(dir.path().to_path_buf());
         let handle = krabka_broker::Broker::start(config).await.unwrap();
         let bootstrap = handle.listen_addr().to_string();
-        let client = krabka_client_core::Client::builder()
-            .bootstrap(&bootstrap)
-            .client_id("recovery-test")
-            .build()
-            .await
-            .unwrap();
+        let client = connect_client(&bootstrap, Some("recovery-test")).await;
         let cr = client
-            .send(CreateTopicsRequest {
-                topics: vec![CreatableTopic {
-                    name: "persisted".into(),
-                    num_partitions: 2,
-                    replication_factor: 1,
-                    ..Default::default()
-                }],
-                timeout_ms: 5_000,
-                ..Default::default()
-            })
+            .send(create_topic_request(
+                creatable_topic("persisted", 2, 1),
+                5_000,
+            ))
             .await
             .unwrap();
         assert!(cr.topics[0].error_code == 0);
@@ -413,19 +313,8 @@ async fn second_open_recovers_partitions_from_disk() {
     config.bootstrap_mode = krabka_broker::BootstrapMode::Rejoin;
     let handle = krabka_broker::Broker::start(config).await.unwrap();
     let bootstrap = handle.listen_addr().to_string();
-    let client = krabka_client_core::Client::builder()
-        .bootstrap(&bootstrap)
-        .client_id("recovery-test")
-        .build()
-        .await
-        .unwrap();
-    let meta = client
-        .send(MetadataRequest {
-            topics: None,
-            ..Default::default()
-        })
-        .await
-        .unwrap();
+    let client = connect_client(&bootstrap, Some("recovery-test")).await;
+    let meta = client.send(topic_metadata_request(None)).await.unwrap();
     let t = meta
         .topics
         .iter()

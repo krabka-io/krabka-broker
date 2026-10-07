@@ -35,9 +35,7 @@ use crate::{
 /// the first `SaslAuthenticate` round.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn gssapi_handshake_advertised_when_enabled() {
-    let log_dir = tempfile::tempdir().unwrap();
-    let mut cfg = crate::support::sasl_plaintext_config(log_dir.path().to_path_buf());
-    cfg.enabled_sasl_mechanisms = vec![SaslMechanism::Gssapi];
+    let (_log_dir, mut cfg) = crate::support::sasl::sasl_temp_config(vec![SaslMechanism::Gssapi]);
     cfg.gssapi = Some(krabka_broker::GssapiConfig {
         // Points at the committed fixture, but the handshake path never reads
         // it (the acceptor is built lazily on the first SaslAuthenticate).
@@ -115,9 +113,7 @@ async fn gssapi_inter_broker_client_authenticates_from_keytab() {
     let kdc_url =
         std::env::var("SSPI_KDC_URL").unwrap_or_else(|_| "tcp://localhost:88".to_string());
 
-    let log_dir = tempfile::tempdir().unwrap();
-    let mut cfg = crate::support::sasl_plaintext_config(log_dir.path().to_path_buf());
-    cfg.enabled_sasl_mechanisms = vec![SaslMechanism::Gssapi];
+    let (_log_dir, mut cfg) = crate::support::sasl::sasl_temp_config(vec![SaslMechanism::Gssapi]);
     cfg.gssapi = Some(krabka_broker::GssapiConfig {
         keytab_path: fixtures.join("kafka.keytab"),
         service_name: "kafka".to_string(),

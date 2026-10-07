@@ -53,23 +53,22 @@ use self::{
     response::{apply_submit_error, err_result},
     validation::{CLUSTER_ALTER_DENIED_MESSAGE, SCRAM_UNSUPPORTED_MESSAGE},
 };
-use crate::{broker::Broker, codes, error::BrokerError};
+use crate::{broker::Broker, codes};
 
-/// The `typed` dispatch entry point: [`answer`] at any version, which the
-/// generated adapter encodes.
-#[tracing::instrument(
-    name = "handle_alter_user_scram_credentials",
-    level = "info",
-    skip_all,
-    fields(api = "AlterUserScramCredentials")
-)]
-pub(crate) async fn handle(
-    broker: &Broker,
-    req: AlterUserScramCredentialsRequest,
-    _version: i16,
-    ctx: &crate::handlers::RequestContext<'_>,
-) -> Result<AlterUserScramCredentialsResponse, BrokerError> {
-    Ok(answer(broker, req, ctx).await)
+context_handler! {
+    /// The `typed` dispatch entry point: [`answer`] at any version, which the
+    /// generated adapter encodes.
+    #[tracing::instrument(
+        name = "handle_alter_user_scram_credentials",
+        level = "info",
+        skip_all,
+        fields(api = "AlterUserScramCredentials")
+    )]
+    AlterUserScramCredentialsRequest => AlterUserScramCredentialsResponse,
+    (broker, req, _version, ctx),
+    {
+        Ok(answer(broker, req, ctx).await)
+    }
 }
 
 /// Runs the `AlterUserScramCredentials` request and returns the typed

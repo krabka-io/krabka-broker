@@ -18,19 +18,17 @@ use bytes::{BufMut as _, Bytes, BytesMut};
 use krabka_broker::{
     BrokerConfig, BrokerHandle, authorizer::SimpleAclAuthorizer, config::InterBrokerCredentials,
 };
-use krabka_metadata::{
-    AclEntry, AclOperation, MetadataRecord, PatternType, PermissionType, ResourceType, TopicRecord,
-};
+use krabka_metadata::{AclOperation, MetadataRecord, TopicRecord};
 use krabka_protocol::{
     Decode, Encode, UnknownTaggedFields,
     owned::{
         broker_heartbeat_request::{self, BrokerHeartbeatRequest},
         broker_heartbeat_response::BrokerHeartbeatResponse,
-        create_topics_request::{self, CreatableTopic, CreateTopicsRequest},
+        create_topics_request::{self},
         create_topics_response::{CreatableTopicResult, CreateTopicsResponse},
         describe_cluster_request::{self, DescribeClusterRequest},
         describe_cluster_response::DescribeClusterResponse,
-        describe_quorum_request::{self, DescribeQuorumRequest, PartitionData, TopicData},
+        describe_quorum_request::{self},
         describe_quorum_response::DescribeQuorumResponse,
         sasl_authenticate_request::SaslAuthenticateRequest,
         sasl_authenticate_response::SaslAuthenticateResponse,
@@ -53,6 +51,8 @@ use tokio_rustls::rustls::{
     ClientConfig,
     pki_types::{CertificateDer, PrivateKeyDer, ServerName, pem::PemObject as _},
 };
+
+use crate::support::topics::{creatable_topic, create_topic_request};
 
 const CLUSTER_AUTHORIZATION_FAILED: i16 = 31;
 const MESSAGE: &str = "Cluster authorization failed.";
@@ -94,15 +94,9 @@ async fn start_with(
 
 async fn allow(broker: &BrokerHandle, principal: &str, operation: AclOperation) {
     broker
-        .submit_metadata_record_for_test(MetadataRecord::V1AccessControlEntry(AclEntry {
-            resource_type: ResourceType::Cluster,
-            resource_name: "kafka-cluster".into(),
-            pattern_type: PatternType::Literal,
-            principal: principal.into(),
-            host: "*".into(),
-            operation,
-            permission_type: PermissionType::Allow,
-        }))
+        .submit_metadata_record_for_test(crate::support::acl::cluster_acl_record(
+            principal, "*", operation,
+        ))
         .await
         .expect("seed ACL");
 }
@@ -221,17 +215,7 @@ fn submit_change_response(bytes: &Bytes) -> KrabkaSubmitChangeResponse {
 
 fn describe_quorum() -> Bytes {
     encode(
-        &DescribeQuorumRequest {
-            topics: vec![TopicData {
-                topic_name: "__cluster_metadata".to_owned(),
-                partitions: vec![PartitionData {
-                    partition_index: 0,
-                    ..Default::default()
-                }],
-                ..Default::default()
-            }],
-            ..Default::default()
-        },
+        &crate::support::quorum::describe_quorum_request("__cluster_metadata".to_owned(), vec![0]),
         describe_quorum_request::MAX_VERSION,
     )
 }
@@ -366,16 +350,10 @@ async fn a_sasl_controller_listener_authorizes_each_request_for_its_principal() 
         create_version,
         true,
         &encode(
-            &CreateTopicsRequest {
-                topics: vec![CreatableTopic {
-                    name: "created-by-creator".to_owned(),
-                    num_partitions: 1,
-                    replication_factor: 1,
-                    ..Default::default()
-                }],
-                timeout_ms: 5_000,
-                ..Default::default()
-            },
+            &create_topic_request(
+                creatable_topic("created-by-creator".to_owned(), 1, 1),
+                5_000,
+            ),
             create_version,
         ),
     )

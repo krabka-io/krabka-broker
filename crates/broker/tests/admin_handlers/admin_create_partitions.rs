@@ -3,20 +3,18 @@
 //! the `INVALID_REPLICA_ASSIGNMENT` path that must add no partition at all.
 
 use assert2::assert;
-use krabka_protocol::owned::{
-    create_partitions_request::{CreatePartitionsRequest, CreatePartitionsTopic},
-    create_topics_request::{CreatableTopic, CreateTopicsRequest},
+use krabka_protocol::owned::create_partitions_request::{
+    CreatePartitionsRequest, CreatePartitionsTopic,
 };
 
 use crate::{
     admin_harness::{build_client, create_topic_helper},
-    support::{start_n_node, start_n_node_with_retry, wait_for_all_brokers_registered},
+    support::topics::{creatable_topic, create_topic_request},
 };
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn automatic_placement_takes_a_fenced_broker_only_as_a_last_resort() {
-    let mut cluster = start_n_node_with_retry(3).await;
-    wait_for_all_brokers_registered(&cluster, 3).await;
+    let mut cluster = crate::support::registered_cluster(3).await;
     // Stop a broker that is neither the one the test talks to nor the
     // controller leader. Its controlled shutdown ends fenced, as Kafka's
     // `processBrokerHeartbeat` fences a broker that may shut down, and it
@@ -37,16 +35,10 @@ async fn automatic_placement_takes_a_fenced_broker_only_as_a_last_resort() {
         .await;
 
     let created = client
-        .send(CreateTopicsRequest {
-            topics: vec![CreatableTopic {
-                name: "t-usable-brokers".into(),
-                num_partitions: 1,
-                replication_factor: 2,
-                ..Default::default()
-            }],
-            timeout_ms: 5_000,
-            ..Default::default()
-        })
+        .send(create_topic_request(
+            creatable_topic("t-usable-brokers", 1, 2),
+            5_000,
+        ))
         .await
         .unwrap();
     assert!(created.topics[0].error_code == 0);
@@ -84,16 +76,10 @@ async fn automatic_placement_takes_a_fenced_broker_only_as_a_last_resort() {
     // takes it last, so a replication factor of 3 on the 3 registered brokers
     // succeeds. The fenced replica stays out of the ISR and never leads.
     let last_resort = client
-        .send(CreateTopicsRequest {
-            topics: vec![CreatableTopic {
-                name: "t-last-resort".into(),
-                num_partitions: 1,
-                replication_factor: 3,
-                ..Default::default()
-            }],
-            timeout_ms: 5_000,
-            ..Default::default()
-        })
+        .send(create_topic_request(
+            creatable_topic("t-last-resort", 1, 3),
+            5_000,
+        ))
         .await
         .unwrap();
     assert!(last_resort.topics[0].error_code == 0);
@@ -109,16 +95,10 @@ async fn automatic_placement_takes_a_fenced_broker_only_as_a_last_resort() {
     assert!(record.leader == record.replicas[0]);
 
     let rejected = client
-        .send(CreateTopicsRequest {
-            topics: vec![CreatableTopic {
-                name: "t-too-many-replicas".into(),
-                num_partitions: 1,
-                replication_factor: 4,
-                ..Default::default()
-            }],
-            timeout_ms: 5_000,
-            ..Default::default()
-        })
+        .send(create_topic_request(
+            creatable_topic("t-too-many-replicas", 1, 4),
+            5_000,
+        ))
         .await
         .unwrap();
     assert!(rejected.topics[0].error_code == 38);
@@ -129,9 +109,8 @@ async fn automatic_placement_takes_a_fenced_broker_only_as_a_last_resort() {
 /// broker's local registry within a few seconds.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn create_partitions_extends_topic() {
-    let cluster = start_n_node(1).await.expect("start_n_node");
-    let (broker, cfg, _dir) = &cluster[0];
-    let client = build_client(cfg.listen_addr).await;
+    let (cluster, client) = crate::support::start_n_node_client(1, "admin-handlers-test").await;
+    let broker = &cluster[0].0;
 
     create_topic_helper(&client, "t-cp", 1).await;
 
@@ -168,9 +147,8 @@ async fn create_partitions_extends_topic() {
 async fn create_partitions_honors_explicit_assignments() {
     use krabka_protocol::owned::create_partitions_request::CreatePartitionsAssignment;
 
-    let cluster = start_n_node(1).await.expect("start_n_node");
-    let (broker, cfg, _dir) = &cluster[0];
-    let client = build_client(cfg.listen_addr).await;
+    let (cluster, client) = crate::support::start_n_node_client(1, "admin-handlers-test").await;
+    let broker = &cluster[0].0;
 
     create_topic_helper(&client, "t-cpa", 1).await;
 

@@ -1,9 +1,6 @@
-use std::{
-    collections::HashMap,
-    sync::{
-        Arc, Mutex,
-        atomic::{AtomicUsize, Ordering},
-    },
+use std::sync::{
+    Arc, Mutex,
+    atomic::{AtomicUsize, Ordering},
 };
 
 use assert2::assert;
@@ -12,11 +9,11 @@ use bytes::Bytes;
 use krabka_backup::diskless::capture_projection;
 use krabka_remote_storage::diskless::{
     CapturedWalRange, DisklessPartitionCapture, DisklessWalCapture, REPLAY_FENCE_KEY,
-    WalFlushRecord, WalIndexEntry, WalIndexKey,
+    WalFlushRecord, WalIndexEntry,
 };
 use krabka_remote_storage_topic::{
     AssignmentHandle, InProcessMetadataEventLog, MetadataEventLog, MetadataEventStream,
-    MetadataLogError, PartitionStart, RangeVisitor,
+    MetadataLogError, PartitionStart,
 };
 use uuid::Uuid;
 
@@ -54,6 +51,7 @@ impl InternalTopicLog {
     }
 }
 
+#[krabka_macros::metadata_log_delegate(krabka_remote_storage_topic, range)]
 #[async_trait]
 impl MetadataEventLog for InternalTopicLog {
     fn partition_count(&self) -> i32 {
@@ -95,16 +93,6 @@ impl MetadataEventLog for InternalTopicLog {
         }
         Ok(cutoffs)
     }
-
-    async fn visit_range(
-        &self,
-        partition: i32,
-        start: i64,
-        end: i64,
-        visit: &mut RangeVisitor<'_>,
-    ) -> Result<(), MetadataLogError> {
-        self.inner.visit_range(partition, start, end, visit).await
-    }
 }
 
 fn entry(first_offset: i64, last_offset: i64, byte_start: u64) -> WalIndexEntry {
@@ -121,19 +109,27 @@ fn entry(first_offset: i64, last_offset: i64, byte_start: u64) -> WalIndexEntry 
 
 /// The keyed index record a broker flush publishes for `entry`.
 fn flush(object_key: &str, entry: WalIndexEntry) -> (Bytes, Bytes) {
-    let key = WalIndexKey::from(&entry).to_bytes();
-    let value = WalFlushRecord {
-        object_key: object_key.into(),
-        format_version: WalFlushRecord::FORMAT_VERSION,
-        entries: vec![entry],
-    }
-    .to_bytes()
-    .unwrap();
+    let (key, value) = WalFlushRecord::keyed_entry(object_key, entry).unwrap();
     (key, value)
 }
 
-fn orders() -> HashMap<Uuid, (String, i32)> {
-    HashMap::from([(TOPIC_ID, ("orders".to_owned(), 1))])
+krabka_macros::wal_capture_topic_fixture!(orders, TOPIC_ID, "orders", 1);
+
+fn expected_capture(
+    captured_at_ms: u64,
+    source_cutoffs: Vec<i64>,
+    partition: DisklessPartitionCapture,
+) -> DisklessWalCapture {
+    DisklessWalCapture {
+        format_version: DisklessWalCapture::FORMAT_VERSION,
+        captured_at_ms,
+        source_cutoffs,
+        partitions: vec![partition],
+        metadata_snapshot_sha256: None,
+        rlmm_snapshot_sha256: None,
+        group_offsets_sha256: None,
+        authentication: None,
+    }
 }
 
 #[tokio::test]
@@ -167,11 +163,10 @@ async fn capture_reads_committed_index_state_to_the_high_watermarks_without_prod
 
     assert!(
         capture
-            == DisklessWalCapture {
-                format_version: DisklessWalCapture::FORMAT_VERSION,
-                captured_at_ms: 42,
-                source_cutoffs: vec![2, 2, 0],
-                partitions: vec![DisklessPartitionCapture {
+            == expected_capture(
+                42,
+                vec![2, 2, 0],
+                DisklessPartitionCapture {
                     topic: "orders".to_owned(),
                     topic_id: TOPIC_ID,
                     partition: 0,
@@ -181,12 +176,8 @@ async fn capture_reads_committed_index_state_to_the_high_watermarks_without_prod
                         object_key: "diskless-wal/1/a.ckwl".to_owned(),
                         entry: entry(4, 7, 6),
                     }],
-                }],
-                metadata_snapshot_sha256: None,
-                rlmm_snapshot_sha256: None,
-                group_offsets_sha256: None,
-                authentication: None,
-            }
+                }
+            )
     );
     assert!(log.publishes.load(Ordering::SeqCst) == 0);
     assert!(log.subscriptions.load(Ordering::SeqCst) == 0);
@@ -200,23 +191,18 @@ async fn capture_of_an_empty_index_completes_at_zero_cutoffs() {
 
     assert!(
         capture
-            == DisklessWalCapture {
-                format_version: DisklessWalCapture::FORMAT_VERSION,
-                captured_at_ms: 7,
-                source_cutoffs: vec![0, 0],
-                partitions: vec![DisklessPartitionCapture {
+            == expected_capture(
+                7,
+                vec![0, 0],
+                DisklessPartitionCapture {
                     topic: "orders".to_owned(),
                     topic_id: TOPIC_ID,
                     partition: 0,
                     delete_floor: 0,
                     recovery_cutoff: 0,
                     ranges: Vec::new(),
-                }],
-                metadata_snapshot_sha256: None,
-                rlmm_snapshot_sha256: None,
-                group_offsets_sha256: None,
-                authentication: None,
-            }
+                }
+            )
     );
     assert!(log.publishes.load(Ordering::SeqCst) == 0);
 }

@@ -16,15 +16,15 @@ predicate gt_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other
 
 meta "rewrite_def" predicate gt_log_Int
 
-function clamp_to [#"/workspace/crates/verified/src/delivery.rs" 38 0 38 51] (value: int) (low: int) (high: int) : int
- = [%#sdelivery'3] if value < low then low else if gt_log_Int value high then high else value
+function clamp_to [#"/workspace/crates/verified/src/delivery.rs" 38 0 38 51] (value: int) (low: int) (high: int) : int =
+  [%#sdelivery'3] if value < low then low else if gt_log_Int value high then high else value
 
 meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let delivery_watermark_advance [#"/workspace/crates/verified/src/delivery.rs" 55 0 60 8]
-  (log_start: Int64.t) (current': Int64.t) (candidate: Int64.t) (log_end: Int64.t) (return (x: Int64.t)) =
+let delivery_watermark_advance [#"/workspace/crates/verified/src/delivery.rs" 55 0 60 8] (log_start: Int64.t)
+  (current': Int64.t) (candidate: Int64.t) (log_end: Int64.t) (return (x: Int64.t)) =
 {[@stop_split] [@expl:delivery_watermark_advance requires] [%#sdelivery] Int64.to_int log_start <= Int64.to_int log_end}
   (! bb0
   [ bb0 = s0

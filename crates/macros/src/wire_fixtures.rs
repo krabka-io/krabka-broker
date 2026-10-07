@@ -1,0 +1,104 @@
+//! Wire and metadata fixtures shared across test crates.
+
+use moxy::{
+    ast::ParseError,
+    token::{Span, TokenStream, TokenTree},
+};
+
+pub(crate) fn topic_record(tokens: TokenStream) -> Result<TokenStream, ParseError> {
+    let name = crate::fixtures::name(tokens)?;
+    Ok(moxy::template! {
+        pub(crate) fn {{ name }}(name: &str, topic_id: ::uuid::Uuid) -> ::krabka_metadata::TopicRecord {
+            ::krabka_metadata::TopicRecord {
+                name: name.into(),
+                topic_id,
+                partitions: 1,
+                replication_factor: 1,
+            }
+        }
+    })
+}
+
+pub(crate) fn producer_batch(input: TokenStream) -> Result<TokenStream, ParseError> {
+    let arguments: Vec<_> = input.into_iter().collect();
+    let (name, value) = match arguments.as_slice() {
+        [TokenTree::Ident(name), comma, value @ ..]
+            if comma.is_punct_comma() && !value.is_empty() =>
+        {
+            (name, TokenStream::from(value))
+        }
+        _ => {
+            return Err(ParseError::new(
+                Span::call_site(),
+                "expected function name, record value expression",
+            ));
+        }
+    };
+    Ok(moxy::template! {
+        pub(crate) fn {{ name }}(
+            (producer_id, producer_epoch): (i64, i16), base_sequence: i32,
+            records: i32, max_timestamp: i64, transactional: bool,
+        ) -> ::krabka_protocol::records::RecordBatch {
+            ::krabka_protocol::records::RecordBatch {
+                attributes: ::krabka_protocol::records::Attributes::default().with_transactional(transactional),
+                last_offset_delta: records - 1, base_timestamp: max_timestamp, max_timestamp,
+                producer_id, producer_epoch, base_sequence,
+                records: (0..records).map(|offset_delta| ::krabka_protocol::records::Record {
+                    offset_delta, value: Some({{ value }}), ..Default::default()
+                }).collect(),
+                ..Default::default()
+            }
+        }
+    })
+}
+
+pub(crate) fn create_topic(input: TokenStream) -> Result<TokenStream, ParseError> {
+    let name = crate::fixtures::name(input)?;
+    Ok(moxy::template! {
+        pub(crate) fn {{ name }}(
+            topic: &str, configs: &[(&str, &str)], num_partitions: i32,
+            replication_factor: i16, timeout_ms: i32,
+        ) -> ::krabka_protocol::owned::create_topics_request::CreateTopicsRequest {
+            ::krabka_protocol::owned::create_topics_request::CreateTopicsRequest {
+                topics: vec![::krabka_protocol::owned::create_topics_request::CreatableTopic {
+                    name: topic.to_owned(), num_partitions, replication_factor,
+                    configs: configs.iter().map(|(name, value)| ::krabka_protocol::owned::create_topics_request::CreatableTopicConfig {
+                        name: (*name).to_owned(), value: Some((*value).to_owned()), ..Default::default()
+                    }).collect(),
+                    ..Default::default()
+                }], timeout_ms, ..Default::default()
+            }
+        }
+    })
+}
+
+pub(crate) fn consumer_fetch(input: TokenStream) -> Result<TokenStream, ParseError> {
+    let name = crate::fixtures::name(input)?;
+    Ok(moxy::template! {
+        pub(crate) fn {{ name }}(topic: &str) -> ::krabka_protocol::owned::fetch_request::FetchRequest {
+            ::krabka_protocol::owned::fetch_request::FetchRequest {
+                replica_id: -1, max_wait_ms: 0, min_bytes: 1, max_bytes: 1 << 20,
+                topics: vec![::krabka_protocol::owned::fetch_request::FetchTopic {
+                    topic: topic.to_string(), partitions: vec![::krabka_protocol::owned::fetch_request::FetchPartition {
+                        partition: 0, fetch_offset: 0, partition_max_bytes: 1 << 20, ..Default::default()
+                    }], ..Default::default()
+                }], ..Default::default()
+            }
+        }
+    })
+}
+
+pub(crate) fn single_replica_partition(input: TokenStream) -> Result<TokenStream, ParseError> {
+    let name = crate::fixtures::name(input)?;
+    Ok(moxy::template! {
+        pub(crate) fn {{ name }}(
+            topic: &str, partition: i32, node: ::krabka_metadata::NodeId,
+        ) -> ::krabka_metadata::PartitionRecord {
+            ::krabka_metadata::PartitionRecord {
+                topic: topic.to_owned(), partition, leader: node, replicas: vec![node], isr: vec![node],
+                leader_epoch: ::krabka_metadata::LeaderEpoch(0), adding_replicas: vec![],
+                removing_replicas: vec![], directories: vec![], partition_epoch: 0,
+            }
+        }
+    })
+}

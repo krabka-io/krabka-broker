@@ -117,7 +117,6 @@ mod tests {
     use assert2::check;
     use krabka_metadata::{
         BrokerConfigRecord, DEFAULT_BROKER_CONFIG_NODE_ID, MetadataRecord, TopicConfigRecord,
-        TopicRecord,
     };
 
     use super::*;
@@ -128,12 +127,9 @@ mod tests {
     /// `(node, key, value)`.
     fn image(overrides: &[(&str, &str)], broker: &[(NodeId, &str, &str)]) -> MetadataImage {
         let mut image = MetadataImage::new(uuid::Uuid::nil());
-        image.apply(&MetadataRecord::V1Topic(TopicRecord {
-            name: "t".into(),
-            topic_id: uuid::Uuid::from_u128(1),
-            partitions: 1,
-            replication_factor: 1,
-        }));
+        image.apply(&MetadataRecord::V1Topic(
+            crate::test_support::single_partition_topic("t", uuid::Uuid::from_u128(1)),
+        ));
         image.apply(&MetadataRecord::V1TopicConfig(TopicConfigRecord {
             topic: "t".into(),
             overrides: overrides

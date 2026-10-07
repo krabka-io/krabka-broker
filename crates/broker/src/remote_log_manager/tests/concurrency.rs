@@ -16,14 +16,13 @@ use std::{
 };
 
 use assert2::check;
+use fixtures::{missing_remote_reads, rolled_tiered_partition_at};
 use krabka_remote_storage::{
     CustomMetadata, LogSegmentData, RemoteLogSegmentMetadata, RemoteStorageError,
 };
 
 use super::*;
-use crate::remote_log_manager::test_support::{
-    missing_remote_reads, rolled_tiered_partition_at, sweep_once,
-};
+use crate::remote_log_manager::test_support as fixtures;
 
 /// How long a parked copy waits for the other partition before it gives up.
 ///
@@ -131,28 +130,12 @@ impl RemoteStorageManager for TestRsm {
         }
     }
 
-    missing_remote_reads!();
-
-    fn delete_log_segment_data(
-        &self,
-        _metadata: &RemoteLogSegmentMetadata,
-    ) -> Result<(), RemoteStorageError> {
-        Ok(())
-    }
+    missing_remote_reads!(delete_ok);
 }
 
 /// The `orders` topic with `partitions` partitions, so a tick has more than
 /// one partition to reach.
-fn image_with_orders_partitions(partitions: i32) -> MetadataImage {
-    let mut image = MetadataImage::new(Uuid::from_u128(9));
-    image.apply(&MetadataRecord::V1Topic(TopicRecord {
-        name: "orders".into(),
-        topic_id: tp().topic_id,
-        partitions,
-        replication_factor: 1,
-    }));
-    image
-}
+use fixtures::orders_image as image_with_orders_partitions;
 
 /// `orders-index`, led by this broker, with sealed segments the tier lacks.
 fn tiered_partition_at(index: i32, log_dir: &std::path::Path) -> Arc<Partition> {
@@ -195,16 +178,11 @@ async fn a_parked_copy_does_not_hold_the_next_partitions_copy() {
 
     let gated = Arc::new(TestRsm::new(CopyBehaviour::Gate));
     let rsm: Arc<dyn RemoteStorageManager> = gated.clone();
-    let rlmm: Arc<dyn RemoteLogMetadataManager> = Arc::new(InmemoryRemoteLogMetadataManager::new());
+    let rlmm = fixtures::in_memory_metadata();
     let controller = fixed_source(image_with_orders_partitions(2));
 
     let started = Instant::now();
-    sweep_once(
-        &partitions,
-        &controller,
-        &tier(ArchiveMode::Mutable, &rsm, &rlmm),
-    )
-    .await;
+    fixtures::sweep_mutable(&partitions, &controller, &rsm, &rlmm).await;
     let elapsed = started.elapsed();
 
     check!(
@@ -222,17 +200,7 @@ async fn a_parked_copy_does_not_hold_the_next_partitions_copy() {
     );
     // Both partitions finished: the parked one resumes the moment the gate
     // opens, so a concurrent sweep costs it nothing but the wait.
-    for index in [0, 1] {
-        let listed = rlmm
-            .list_remote_log_segments(&TopicIdPartition::new(tp().topic_id, "orders", index))
-            .unwrap();
-        check!(
-            listed
-                .iter()
-                .any(|md| md.state() == RemoteLogSegmentState::CopySegmentFinished),
-            "partition {index} finished no copy"
-        );
-    }
+    fixtures::check_partitions_copied(&rlmm, [0, 1]);
 }
 
 /// The bound itself. Four partitions and two copier slots: the store may
@@ -253,7 +221,7 @@ async fn the_copier_bound_caps_the_copies_in_flight() {
 
     let counting = Arc::new(TestRsm::new(CopyBehaviour::Dwell));
     let rsm: Arc<dyn RemoteStorageManager> = counting.clone();
-    let rlmm: Arc<dyn RemoteLogMetadataManager> = Arc::new(InmemoryRemoteLogMetadataManager::new());
+    let rlmm = fixtures::in_memory_metadata();
     let controller = fixed_source(image_with_orders_partitions(4));
 
     tick_all(
@@ -278,15 +246,5 @@ async fn the_copier_bound_caps_the_copies_in_flight() {
         peak == 2,
         "the sweep used only {peak} of its two copier slots"
     );
-    for index in 0..4 {
-        let listed = rlmm
-            .list_remote_log_segments(&TopicIdPartition::new(tp().topic_id, "orders", index))
-            .unwrap();
-        check!(
-            listed
-                .iter()
-                .any(|md| md.state() == RemoteLogSegmentState::CopySegmentFinished),
-            "partition {index} finished no copy"
-        );
-    }
+    fixtures::check_partitions_copied(&rlmm, 0..4);
 }

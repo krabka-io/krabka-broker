@@ -51,10 +51,7 @@ use krabka_client_admin::AdminClient;
 use krabka_client_core::{
     Client, CoordinatorKeyType, build_find_coordinator, coordinator_endpoint,
 };
-use krabka_ids::LeaderEpoch;
-use krabka_metadata::{
-    MetadataImage, MetadataRecord, NodeId, PartitionRecord, TopicConfigRecord, TopicRecord,
-};
+use krabka_metadata::{MetadataImage, MetadataRecord, NodeId, TopicConfigRecord, TopicRecord};
 use krabka_protocol::owned::describe_configs_request::{
     DescribeConfigsRequest, DescribeConfigsResource,
 };
@@ -67,6 +64,8 @@ use crate::{
     args::ControllerListener,
     fixture::{Fixture, build_fixture},
 };
+
+krabka_macros::single_replica_partition_fixture!(single_replica_partition);
 
 /// The group whose position must survive the disaster.
 const GROUP: &str = "orders-consumers";
@@ -132,18 +131,11 @@ fn metadata_checkpoint(fixture: &Fixture) -> Vec<u8> {
         replication_factor: 1,
     }));
     for partition in 0..2 {
-        image.apply(&MetadataRecord::V1Partition(PartitionRecord {
-            topic: TOPIC.to_owned(),
+        image.apply(&MetadataRecord::V1Partition(single_replica_partition(
+            TOPIC,
             partition,
-            leader: NodeId(1),
-            replicas: vec![NodeId(1)],
-            isr: vec![NodeId(1)],
-            leader_epoch: LeaderEpoch(0),
-            adding_replicas: vec![],
-            removing_replicas: vec![],
-            directories: vec![],
-            partition_epoch: 0,
-        }));
+            NodeId(1),
+        )));
     }
     image.apply(&MetadataRecord::V1TopicConfig(TopicConfigRecord {
         topic: TOPIC.to_owned(),

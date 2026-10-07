@@ -1,19 +1,19 @@
 use super::*;
 use crate::{jwks::JwksCacheFacts, oauth::*};
 
+fn cache_snapshot_ok(at: i64, c: JwksCacheFacts) -> bool {
+    c.generation_before.is_multiple_of(2)
+        && c.generation_before == c.generation_after
+        && (!c.expiry_enabled
+            || (c.expiry_ms >= 0
+                && c.last_successful_fetch_ms > 0
+                && at >= c.last_successful_fetch_ms
+                && i128::from(at) - i128::from(c.last_successful_fetch_ms)
+                    <= i128::from(c.expiry_ms)))
+}
+
 fn completion_ok(start: i64, finish: i64, cache: Option<JwksCacheFacts>) -> bool {
-    start >= 0
-        && finish >= start
-        && cache.is_none_or(|c| {
-            c.generation_before % 2 == 0
-                && c.generation_before == c.generation_after
-                && (!c.expiry_enabled
-                    || (c.expiry_ms >= 0
-                        && c.last_successful_fetch_ms > 0
-                        && finish >= c.last_successful_fetch_ms
-                        && i128::from(finish) - i128::from(c.last_successful_fetch_ms)
-                            <= i128::from(c.expiry_ms)))
-        })
+    start >= 0 && finish >= start && cache.is_none_or(|c| cache_snapshot_ok(finish, c))
 }
 
 fn oracle(
@@ -21,16 +21,7 @@ fn oracle(
     cache: Option<JwksCacheFacts>,
     completed: (i64, u64),
 ) -> OAuthSessionDecision {
-    let initial_ok = cache.is_none_or(|c| {
-        c.generation_before % 2 == 0
-            && c.generation_before == c.generation_after
-            && (!c.expiry_enabled
-                || (c.expiry_ms >= 0
-                    && c.last_successful_fetch_ms > 0
-                    && f.now_ms >= c.last_successful_fetch_ms
-                    && i128::from(f.now_ms) - i128::from(c.last_successful_fetch_ms)
-                        <= i128::from(c.expiry_ms)))
-    });
+    let initial_ok = cache.is_none_or(|c| cache_snapshot_ok(f.now_ms, c));
     let after = cache.map(|mut c| {
         c.generation_after = completed.1;
         c
@@ -70,6 +61,35 @@ fn facts(start: i64, expiry: i64) -> OAuthSessionFacts {
     }
 }
 
+fn configured_facts(
+    start: i64,
+    expiry: i64,
+    enabled: bool,
+    cap: i64,
+    reauth: bool,
+    matching: bool,
+) -> OAuthSessionFacts {
+    OAuthSessionFacts {
+        cap: if enabled {
+            OAuthSessionCap::Enabled
+        } else {
+            OAuthSessionCap::Disabled
+        },
+        cap_ms: cap,
+        authentication: if reauth {
+            OAuthAuthenticationKind::Reauthentication
+        } else {
+            OAuthAuthenticationKind::Initial
+        },
+        principal: if matching {
+            OAuthPrincipalMatch::Matches
+        } else {
+            OAuthPrincipalMatch::Differs
+        },
+        ..facts(start, expiry)
+    }
+}
+
 fn cache(start: i64) -> JwksCacheFacts {
     JwksCacheFacts {
         generation_before: 2,
@@ -96,25 +116,9 @@ fn validation_completion_checks_both_snapshot_times_and_exact_session() {
                     for cap in [-1, 0, 1, i64::MAX] {
                         for reauth in [false, true] {
                             for matching in [false, true] {
-                                let f = OAuthSessionFacts {
-                                    cap: if enabled {
-                                        OAuthSessionCap::Enabled
-                                    } else {
-                                        OAuthSessionCap::Disabled
-                                    },
-                                    cap_ms: cap,
-                                    authentication: if reauth {
-                                        OAuthAuthenticationKind::Reauthentication
-                                    } else {
-                                        OAuthAuthenticationKind::Initial
-                                    },
-                                    principal: if matching {
-                                        OAuthPrincipalMatch::Matches
-                                    } else {
-                                        OAuthPrincipalMatch::Differs
-                                    },
-                                    ..facts(started, expiry)
-                                };
+                                let f = configured_facts(
+                                    started, expiry, enabled, cap, reauth, matching,
+                                );
                                 for c in [
                                     None,
                                     Some(cache(started)),
@@ -198,9 +202,7 @@ proptest! {
         generation in any::<u64>(),
     ) {
         let f = OAuthSessionFacts { expiry: if present { OAuthExpiryPresence::Present } else { OAuthExpiryPresence::Missing },
-            cap: if enabled { OAuthSessionCap::Enabled } else { OAuthSessionCap::Disabled }, cap_ms: cap,
-            authentication: if reauth { OAuthAuthenticationKind::Reauthentication } else { OAuthAuthenticationKind::Initial },
-            principal: if matching { OAuthPrincipalMatch::Matches } else { OAuthPrincipalMatch::Differs }, ..facts(times[0], expiry) };
+            ..configured_facts(times[0], expiry, enabled, cap, reauth, matching) };
         let c = raw.map(|(before, after, fetch, ttl, enabled)| JwksCacheFacts {
             generation_before: before, generation_after: after, last_successful_fetch_ms: fetch,
             now_ms: times[0], expiry_ms: ttl, expiry_enabled: enabled });

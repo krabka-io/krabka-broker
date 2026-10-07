@@ -113,11 +113,6 @@ mod tests {
     use tempfile::TempDir;
 
     use super::*;
-    use crate::{
-        config::{BootstrapMode, ControllerConfig},
-        controller::Controller,
-        types::NodeId,
-    };
 
     #[test]
     fn load_latest_checkpoint_picks_highest_offset_then_epoch() {
@@ -153,13 +148,7 @@ mod tests {
 
     #[tokio::test]
     async fn read_snapshot_range_rejects_the_end_and_everything_past_it() {
-        let dir = TempDir::new().unwrap();
-        let cfg = ControllerConfig {
-            bootstrap_mode: BootstrapMode::Join,
-            initial_voters: krabka_metadata::VoterSet::from_voters(std::iter::empty()),
-            ..ControllerConfig::for_tests(NodeId(1), dir.path().to_path_buf())
-        };
-        let ctrl = Controller::start(cfg).await.expect("join start");
+        let (dir, ctrl) = crate::controller::test_support::joining_controller("join start").await;
         let checkpoint_dir = crate::metadata_partition_dir(dir.path());
         std::fs::create_dir_all(&checkpoint_dir).unwrap();
         std::fs::write(

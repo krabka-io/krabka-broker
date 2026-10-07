@@ -27,6 +27,7 @@ mod audit;
 mod coordinators;
 mod diskless_index;
 mod endpoints;
+pub(crate) use endpoints::registered_listener_endpoint;
 mod finish;
 mod gauges;
 mod handle;

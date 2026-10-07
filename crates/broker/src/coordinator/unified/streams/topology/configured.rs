@@ -489,7 +489,7 @@ fn changelog_topic_partition_counts(
 
 /// The source topics and then the repartition source topics of a
 /// subtopology.
-fn input_topics(subtopology: &StoredSubtopology) -> impl Iterator<Item = &str> {
+pub(super) fn input_topics(subtopology: &StoredSubtopology) -> impl Iterator<Item = &str> {
     subtopology.source_topics.iter().map(String::as_str).chain(
         subtopology
             .repartition_source_topics

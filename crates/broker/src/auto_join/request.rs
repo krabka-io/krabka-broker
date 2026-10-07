@@ -212,7 +212,6 @@ mod tests {
         ) -> krabka_raft::QuorumState {
             krabka_raft::QuorumState {
                 current_term: 3,
-                last_applied_index: 0,
                 current_leader: leader.map(krabka_raft::NodeId),
                 voters: voters
                     .iter()
@@ -238,11 +237,7 @@ mod tests {
                         )
                     })
                     .collect(),
-                per_voter_matched_index: std::collections::BTreeMap::new(),
-                per_replica_last_fetch_ms: std::collections::BTreeMap::new(),
-                per_replica_last_caught_up_ms: std::collections::BTreeMap::new(),
-                observer_directory_ids: std::collections::BTreeMap::new(),
-                is_leader: false,
+                ..Default::default()
             }
         }
 

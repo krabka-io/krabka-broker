@@ -1,8 +1,8 @@
-(* #"/workspace/crates/verified/src/worm.rs" 123 0 123 83 *)
+(* #"/workspace/crates/verified/src/worm.rs" 86 60 86 73 *)
 
-let%span sworm = "/workspace/crates/verified/src/worm.rs" 124 29 124 30
-let%span sworm'0 = "/workspace/crates/verified/src/worm.rs" 121 10 121 48
-let%span sworm'1 = "/workspace/crates/verified/src/worm.rs" 99 8 115 9
+let%span sworm = "/workspace/crates/verified/src/worm.rs" 95 33 95 34
+let%span sworm'0 = "/workspace/crates/verified/src/worm.rs" 140 14 140 52
+let%span sworm'1 = "/workspace/crates/verified/src/worm.rs" 95 16 111 17
 
 use creusot.int.UInt64
 use creusot.prelude.Any
@@ -30,7 +30,7 @@ type t_WormObjectSetDecision =
   | DigestMismatch
   | Admit
 
-function worm_object_set_model [#"/workspace/crates/verified/src/worm.rs" 97 0 97 76] (facts: t_WormObjectSetFacts) : t_WormObjectSetDecision
+function worm_object_set_model [#"/workspace/crates/verified/src/worm.rs" 85 58 85 85] (facts: t_WormObjectSetFacts) : t_WormObjectSetDecision
  = [%#sworm'1] if UInt64.t'int facts.object_count = 0 then
     Empty
   else
@@ -50,18 +50,18 @@ function worm_object_set_model [#"/workspace/crates/verified/src/worm.rs" 97 0 9
               SizeMismatch
             else
               if facts.digests.require_digests /\ not facts.digests.digests_match then DigestMismatch else Admit
-          
-        
-      
-    
-  
+
+
+
+
+
 
 
 meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let worm_object_set_decision [#"/workspace/crates/verified/src/worm.rs" 123 0 123 83] (facts: t_WormObjectSetFacts)
+let worm_object_set_decision [#"/workspace/crates/verified/src/worm.rs" 86 60 86 73] (facts: t_WormObjectSetFacts)
   (return (x: t_WormObjectSetDecision)) = (! bb0
   [ bb0 = s0
     [ s0 = [ &_4 <- facts.object_count = ([%#sworm] (0: UInt64.t)) ] s1

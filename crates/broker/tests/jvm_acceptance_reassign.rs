@@ -14,6 +14,8 @@ mod support;
 // `tests/`, where every `.rs` file would become another test binary.
 #[path = "jvm_acceptance_reassign/cancel_gate.rs"]
 mod cancel_gate;
+#[path = "jvm_acceptance_reassign/cluster.rs"]
+mod cluster;
 // The oracle harness these suites compare against. It is `jvm_acceptance_cli`'s
 // file, shared rather than copied: see its own module documentation.
 #[path = "jvm_acceptance_cli/oracle.rs"]

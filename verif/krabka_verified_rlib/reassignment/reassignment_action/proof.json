@@ -2,8 +2,8 @@
   "profile": [],
   "proofs": {
     "Coma": {
-      "vc_len_bool": { "prover": "alt-ergo", "time": 0.01 },
-      "vc_reassignment_action": { "prover": "alt-ergo", "time": 0.022 }
+      "vc_len_bool": { "prover": "alt-ergo", "time": 0.014 },
+      "vc_reassignment_action": { "prover": "alt-ergo", "time": 0.02 }
     }
   }
 }

@@ -4,14 +4,16 @@ use creusot_std::prelude::ensures;
 #[cfg(creusot)]
 use creusot_std::prelude::{DeepModel, logic};
 
-/// Why a manifest signature is not an accepted attestation.
-#[cfg_attr(creusot, derive(DeepModel))]
-#[cfg_attr(not(creusot), derive(Debug, Clone, Copy, PartialEq, Eq))]
-pub enum WormSignatureDecision {
-    Unsigned,
-    Untrusted,
-    Invalid,
-    Admit,
+model_types! {
+    @derives (derive(DeepModel))
+        (derive(Debug, Clone, Copy, PartialEq, Eq));
+    /// Why a manifest signature is not an accepted attestation.
+    pub enum WormSignatureDecision {
+        Unsigned,
+        Untrusted,
+        Invalid,
+        Admit,
+    }
 }
 
 /// Requires a present signature, an externally trusted key, and verification
@@ -39,105 +41,108 @@ pub fn worm_signature_decision(
     }
 }
 
-/// Why the objects named by one manifest are not an exact archive set.
-#[cfg_attr(creusot, derive(DeepModel))]
-#[cfg_attr(not(creusot), derive(Debug, Clone, Copy, PartialEq, Eq))]
-pub enum WormObjectSetDecision {
-    Empty,
-    DuplicateKey,
-    CoordinateMismatch,
-    MissingObject,
-    CountMismatch,
-    SizeMismatch,
-    DigestMismatch,
-    Admit,
+model_types! {
+    @derives (derive(DeepModel))
+        (derive(Debug, Clone, Copy, PartialEq, Eq));
+    /// Why the objects named by one manifest are not an exact archive set.
+    pub enum WormObjectSetDecision {
+        Empty,
+        DuplicateKey,
+        CoordinateMismatch,
+        MissingObject,
+        CountMismatch,
+        SizeMismatch,
+        DigestMismatch,
+        Admit,
+    }
+
+    /// Host observations about the objects belonging to one signed segment.
+    pub struct WormObjectIdentityFacts {
+        pub unique_keys: bool,
+        pub coordinates_match: bool,
+    }
+
+    pub struct WormObjectAvailabilityFacts {
+        pub all_present: bool,
+        pub sizes_match: bool,
+    }
+
+    pub struct WormDigestFacts {
+        pub require_digests: bool,
+        pub digests_match: bool,
+    }
+
+    pub struct WormObjectSetFacts {
+        pub object_count: u64,
+        pub listed_count: u64,
+        pub identity: WormObjectIdentityFacts,
+        pub availability: WormObjectAvailabilityFacts,
+        pub digests: WormDigestFacts,
+    }
 }
 
-/// Host observations about the objects belonging to one signed segment.
-#[cfg_attr(creusot, derive(DeepModel))]
-#[cfg_attr(not(creusot), derive(Debug, Clone, Copy, PartialEq, Eq))]
-pub struct WormObjectIdentityFacts {
-    pub unique_keys: bool,
-    pub coordinates_match: bool,
+macro_rules! worm_rule_body {
+    (model; {$($head:tt)*} {$($body:tt)*}) => { $($head)* { pearlite! { $($body)* } } };
+    (runtime; {$($head:tt)*} {$($body:tt)*}) => { $($head)* { $($body)* } };
 }
 
-#[cfg_attr(creusot, derive(DeepModel))]
-#[cfg_attr(not(creusot), derive(Debug, Clone, Copy, PartialEq, Eq))]
-pub struct WormObjectAvailabilityFacts {
-    pub all_present: bool,
-    pub sizes_match: bool,
-}
-
-#[cfg_attr(creusot, derive(DeepModel))]
-#[cfg_attr(not(creusot), derive(Debug, Clone, Copy, PartialEq, Eq))]
-pub struct WormDigestFacts {
-    pub require_digests: bool,
-    pub digests_match: bool,
-}
-
-#[cfg_attr(creusot, derive(DeepModel))]
-#[cfg_attr(not(creusot), derive(Debug, Clone, Copy, PartialEq, Eq))]
-pub struct WormObjectSetFacts {
-    pub object_count: u64,
-    pub listed_count: u64,
-    pub identity: WormObjectIdentityFacts,
-    pub availability: WormObjectAvailabilityFacts,
-    pub digests: WormDigestFacts,
-}
-
-/// The object-set rule, as the first failed check in diagnostic order: an
-/// empty set, a repeated key, a key at the wrong coordinates, an object the
-/// store does not hold, a listing with another object count, an object of
-/// another size, and, when digests are required, a digest mismatch. A set
-/// that passes every check is `Admit`.
-// cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
-#[cfg(creusot)]
-#[cfg_attr(test, mutants::skip)]
-#[logic]
-fn worm_object_set_model(facts: WormObjectSetFacts) -> WormObjectSetDecision {
-    pearlite! {
-        if facts.object_count@ == 0 {
-            WormObjectSetDecision::Empty
-        } else if !facts.identity.unique_keys {
-            WormObjectSetDecision::DuplicateKey
-        } else if !facts.identity.coordinates_match {
-            WormObjectSetDecision::CoordinateMismatch
-        } else if !facts.availability.all_present {
-            WormObjectSetDecision::MissingObject
-        } else if facts.object_count@ != facts.listed_count@ {
-            WormObjectSetDecision::CountMismatch
-        } else if !facts.availability.sizes_match {
-            WormObjectSetDecision::SizeMismatch
-        } else if facts.digests.require_digests && !facts.digests.digests_match {
-            WormObjectSetDecision::DigestMismatch
-        } else {
-            WormObjectSetDecision::Admit
+macro_rules! worm_object_set_kernel {
+    ($mode:ident; {$($head:tt)*} ($facts:ident);
+        count [$($count:tt)*] listed [$($listed:tt)*]) => {
+        worm_rule_body! { $mode;
+            { $($head)* }
+            {
+                if $($count)* == 0 {
+                    WormObjectSetDecision::Empty
+                } else if !$facts.identity.unique_keys {
+                    WormObjectSetDecision::DuplicateKey
+                } else if !$facts.identity.coordinates_match {
+                    WormObjectSetDecision::CoordinateMismatch
+                } else if !$facts.availability.all_present {
+                    WormObjectSetDecision::MissingObject
+                } else if $($count)* != $($listed)* {
+                    WormObjectSetDecision::CountMismatch
+                } else if !$facts.availability.sizes_match {
+                    WormObjectSetDecision::SizeMismatch
+                } else if $facts.digests.require_digests && !$facts.digests.digests_match {
+                    WormObjectSetDecision::DigestMismatch
+                } else {
+                    WormObjectSetDecision::Admit
+                }
+            }
         }
-    }
+    };
 }
 
-/// Requires a nonempty, one-to-one object set with exact coordinates, sizes,
-/// and, when requested, digests; see `worm_object_set_model`.
-#[ensures(result == worm_object_set_model(facts))]
-#[must_use]
-pub fn worm_object_set_decision(facts: WormObjectSetFacts) -> WormObjectSetDecision {
-    if facts.object_count == 0 {
-        WormObjectSetDecision::Empty
-    } else if !facts.identity.unique_keys {
-        WormObjectSetDecision::DuplicateKey
-    } else if !facts.identity.coordinates_match {
-        WormObjectSetDecision::CoordinateMismatch
-    } else if !facts.availability.all_present {
-        WormObjectSetDecision::MissingObject
-    } else if facts.object_count != facts.listed_count {
-        WormObjectSetDecision::CountMismatch
-    } else if !facts.availability.sizes_match {
-        WormObjectSetDecision::SizeMismatch
-    } else if facts.digests.require_digests && !facts.digests.digests_match {
-        WormObjectSetDecision::DigestMismatch
-    } else {
-        WormObjectSetDecision::Admit
-    }
+worm_object_set_kernel! {
+    model;
+{
+    /// The object-set rule, as the first failed check in diagnostic order: an
+    /// empty set, a repeated key, a key at the wrong coordinates, an object the
+    /// store does not hold, a listing with another object count, an object of
+    /// another size, and, when digests are required, a digest mismatch. A set
+    /// that passes every check is `Admit`.
+    // cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
+    #[cfg(creusot)]
+    #[cfg_attr(test, mutants::skip)]
+    #[logic]
+    fn worm_object_set_model(facts: WormObjectSetFacts) -> WormObjectSetDecision
+}
+(facts);
+    count [facts.object_count@] listed [facts.listed_count@]
+}
+
+worm_object_set_kernel! {
+    runtime;
+{
+    /// Requires a nonempty, one-to-one object set with exact coordinates, sizes,
+    /// and, when requested, digests; see `worm_object_set_model`.
+    #[ensures(result == worm_object_set_model(facts))]
+    #[must_use]
+    pub fn worm_object_set_decision(facts: WormObjectSetFacts) -> WormObjectSetDecision
+}
+(facts);
+    count [facts.object_count] listed [facts.listed_count]
 }
 
 #[cfg(test)]

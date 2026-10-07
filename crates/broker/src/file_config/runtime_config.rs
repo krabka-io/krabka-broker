@@ -32,26 +32,6 @@ pub struct RuntimeFileConfig {
     /// and closes a connection that sends an older version, as a 4.3.1 broker
     /// does. `true` keeps a pre-0.11 client working.
     pub legacy_request_versions_enable: Option<bool>,
-    /// Cadence at which the KIP-714 client-metrics cache evicts entries.
-    pub client_metrics_eviction_tick: Option<Time>,
-    /// Minimum age at which a client-metrics entry counts as stale.
-    pub client_metrics_stale_floor: Option<Time>,
-    /// Default KIP-714 client telemetry subscription push interval.
-    pub client_metrics_default_interval: Option<Time>,
-    /// Maximum accepted KIP-714 client telemetry payload size.
-    pub client_metrics_telemetry_max: Option<ByteSize>,
-    /// Lifetime of a Prometheus client-metrics snapshot.
-    pub client_metrics_prom_snapshot_ttl: Option<Time>,
-    /// Cadence of KIP-405 remote-log metadata reconciliation.
-    pub rlmm_reconcile_tick: Option<Time>,
-    /// Initial retry delay while remote-log metadata bootstrap is incomplete.
-    pub rlmm_bootstrap_backoff_initial: Option<Time>,
-    /// Maximum retry delay while remote-log metadata bootstrap is incomplete.
-    pub rlmm_bootstrap_backoff_max: Option<Time>,
-    /// Maximum KIP-612 connection-creation quota delay.
-    pub connection_creation_throttle_max: Option<Time>,
-    /// Timeout for one OPA authorization request.
-    pub opa_http_timeout: Option<Time>,
     /// Timeout for one schema-registry request.
     pub schema_registry_http_timeout: Option<Time>,
     /// Timeout for one OAuth JWKS fetch.
@@ -82,34 +62,6 @@ pub struct RuntimeFileConfig {
     /// Maximum number of members in one classic group, Kafka's
     /// `group.max.size`.
     pub classic_group_max_size: Option<usize>,
-    /// Maximum time a classic-protocol follower waits for its `SyncGroup`
-    /// assignment.
-    pub sync_group_follower_wait: Option<Time>,
-    /// Replica-log collection deadline under the aggressive unclean-recovery
-    /// strategy.
-    pub unclean_recovery_aggressive_deadline: Option<Time>,
-    /// Replica-log collection deadline under the balanced unclean-recovery
-    /// strategy.
-    pub unclean_recovery_balanced_deadline: Option<Time>,
-    /// Deadline for an operator-triggered unclean recovery.
-    pub operator_recovery_deadline: Option<Time>,
-    /// Maximum request-quota throttle delay, which bounds how long one
-    /// response over `request_percentage` mutes a client. Equivalent to
-    /// Kafka's `quota.window.size.seconds`; byte-rate and controller-mutation
-    /// throttles are not bounded.
-    pub quota_throttle_max: Option<Time>,
-    /// Time window that sizes the client byte-rate quota token bucket's burst
-    /// capacity. Equivalent to Kafka's sampling window `quota.window.num *
-    /// quota.window.size.seconds`.
-    pub quota_window: Option<Time>,
-    /// Time window whose throughput defines the KIP-599 controller-mutation
-    /// quota burst capacity (default 11 s), Kafka's
-    /// `controller.quota.window.num` x `controller.quota.window.size.seconds`.
-    pub controller_mutation_quota_window: Option<Time>,
-    /// Maximum self-registration attempts before startup fails.
-    pub self_registration_max_attempts: Option<u32>,
-    /// Maximum bytes fetched by one metadata observer request.
-    pub observer_fetch_max: Option<ByteSize>,
     /// Capacity of the asynchronous audit event queue.
     pub audit_event_queue_capacity: Option<usize>,
     /// Number of offsets included in one audit tail request.
@@ -466,65 +418,8 @@ pub struct RuntimeFileConfig {
     /// Maximum number of members in one share group, Kafka's
     /// `group.share.max.size`: from 1 to 1000.
     pub share_group_max_size: Option<usize>,
-    /// How long an acquired share record stays locked before it is released
-    /// for redelivery, Kafka's `group.share.record.lock.duration.ms`: a whole
-    /// number of milliseconds from 1s to 1h, within the minimum and maximum
-    /// below.
-    pub share_group_record_lock_duration: Option<Time>,
-    /// Lower bound on the record lock duration, and on a group's
-    /// `share.record.lock.duration.ms`, Kafka's
-    /// `group.share.min.record.lock.duration.ms`: from 1s to 30s.
-    pub share_group_min_record_lock_duration: Option<Time>,
-    /// Upper bound on the record lock duration, and on a group's
-    /// `share.record.lock.duration.ms`, Kafka's
-    /// `group.share.max.record.lock.duration.ms`: from 30s to 1h.
-    pub share_group_max_record_lock_duration: Option<Time>,
-    /// The delivery count at which a share record is archived, Kafka's
-    /// `group.share.delivery.count.limit`: from 2 to 10, within the minimum
-    /// and maximum below.
-    pub share_group_delivery_count_limit: Option<i16>,
-    /// Lower bound on the delivery count limit, and on a group's
-    /// `share.delivery.count.limit`, Kafka's
-    /// `group.share.min.delivery.count.limit`: from 2 to 5.
-    pub share_group_min_delivery_count_limit: Option<i16>,
-    /// Upper bound on the delivery count limit, and on a group's
-    /// `share.delivery.count.limit`, Kafka's
-    /// `group.share.max.delivery.count.limit`: from 5 to 25.
-    pub share_group_max_delivery_count_limit: Option<i16>,
-    /// Maximum records a share partition may hold in flight, Kafka's
-    /// `group.share.partition.max.record.locks`: from 100 to 10000, within
-    /// the minimum and maximum below.
-    pub share_group_partition_max_record_locks: Option<i32>,
-    /// Lower bound on the record lock limit, and on a group's
-    /// `share.partition.max.record.locks`, Kafka's
-    /// `group.share.min.partition.max.record.locks`: from 100 to 2000.
-    pub share_group_min_partition_max_record_locks: Option<i32>,
-    /// Upper bound on the record lock limit, and on a group's
-    /// `share.partition.max.record.locks`, Kafka's
-    /// `group.share.max.partition.max.record.locks`: from 2000 to 10000.
-    pub share_group_max_partition_max_record_locks: Option<i32>,
     /// Cadence of the share-group backlog poll.
     pub share_group_backlog_poll_interval: Option<Time>,
-    /// Whether the broker serves KIP-1071 streams groups.
-    pub streams_group_enable: Option<bool>,
-    /// Default streams-group session timeout, the group's
-    /// `streams.session.timeout.ms`.
-    pub streams_group_session_timeout: Option<Time>,
-    /// Default streams-group heartbeat interval, the group's
-    /// `streams.heartbeat.interval.ms`.
-    pub streams_group_heartbeat_interval: Option<Time>,
-    /// Lowest session timeout a streams group may run with, Kafka's
-    /// `group.streams.min.session.timeout.ms`.
-    pub streams_group_min_session_timeout: Option<Time>,
-    /// Highest session timeout a streams group may run with, Kafka's
-    /// `group.streams.max.session.timeout.ms`.
-    pub streams_group_max_session_timeout: Option<Time>,
-    /// Lowest heartbeat interval a streams group may run with, Kafka's
-    /// `group.streams.min.heartbeat.interval.ms`.
-    pub streams_group_min_heartbeat_interval: Option<Time>,
-    /// Highest heartbeat interval a streams group may run with, Kafka's
-    /// `group.streams.max.heartbeat.interval.ms`.
-    pub streams_group_max_heartbeat_interval: Option<Time>,
     /// Maximum number of members in one streams group.
     pub streams_group_max_size: Option<usize>,
     /// Number of standby replicas the assignor places for each task, the

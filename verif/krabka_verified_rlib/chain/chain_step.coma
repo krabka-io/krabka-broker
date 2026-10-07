@@ -1,13 +1,13 @@
-(* #"/workspace/crates/verified/src/chain.rs" 91 0 91 86 *)
+(* #"/workspace/crates/verified/src/chain.rs" 92 0 92 86 *)
 
-let%span schain = "/workspace/crates/verified/src/chain.rs" 96 30 96 38
-let%span schain'0 = "/workspace/crates/verified/src/chain.rs" 99 43 99 44
-let%span schain'1 = "/workspace/crates/verified/src/chain.rs" 99 28 99 44
-let%span schain'2 = "/workspace/crates/verified/src/chain.rs" 80 10 80 80
-let%span schain'3 = "/workspace/crates/verified/src/chain.rs" 81 10 82 41
-let%span schain'4 = "/workspace/crates/verified/src/chain.rs" 83 10 84 38
-let%span schain'5 = "/workspace/crates/verified/src/chain.rs" 85 10 87 37
-let%span schain'6 = "/workspace/crates/verified/src/chain.rs" 88 10 89 82
+let%span schain = "/workspace/crates/verified/src/chain.rs" 97 30 97 38
+let%span schain'0 = "/workspace/crates/verified/src/chain.rs" 100 43 100 44
+let%span schain'1 = "/workspace/crates/verified/src/chain.rs" 100 28 100 44
+let%span schain'2 = "/workspace/crates/verified/src/chain.rs" 81 10 81 80
+let%span schain'3 = "/workspace/crates/verified/src/chain.rs" 82 10 83 41
+let%span schain'4 = "/workspace/crates/verified/src/chain.rs" 84 10 85 38
+let%span schain'5 = "/workspace/crates/verified/src/chain.rs" 86 10 88 37
+let%span schain'6 = "/workspace/crates/verified/src/chain.rs" 89 10 90 82
 
 use creusot.int.UInt64
 use creusot.prelude.Any
@@ -21,7 +21,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let chain_step [#"/workspace/crates/verified/src/chain.rs" 91 0 91 86] (expected_seq: UInt64.t) (actual_seq: UInt64.t)
+let chain_step [#"/workspace/crates/verified/src/chain.rs" 92 0 92 86] (expected_seq: UInt64.t) (actual_seq: UInt64.t)
   (head_matches: bool) (return (x: t_ChainStep)) = (! bb0
   [ bb0 = s0
     [ s0 = [ &_23 <- actual_seq <> expected_seq ] s1

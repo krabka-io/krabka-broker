@@ -31,13 +31,9 @@
 mod support;
 
 use assert2::assert;
-use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use krabka_broker::BrokerHandle;
 use krabka_client_core::Client;
-use krabka_protocol::{
-    owned::create_topics_request::{CreatableTopic, CreateTopicsRequest},
-    records::{Record, RecordBatch},
-};
+use krabka_protocol::records::{Record, RecordBatch};
 
 /// Port that the broker binds on the host, and that the container reaches
 /// through `host.docker.internal`.
@@ -64,12 +60,7 @@ const CONFIGS: &str = "/opt/kafka/bin/kafka-configs.sh";
 const SHARE_STATE_TOPIC: &str = "__share_group_state";
 const SHARE_STATE_PARTITIONS: i32 = 50;
 
-fn share_coordinator_key(group: &str, tid: uuid::Uuid, partition: i32) -> String {
-    format!(
-        "{group}:{}:{partition}",
-        URL_SAFE_NO_PAD.encode(tid.as_bytes())
-    )
-}
+use support::share::coordinator_key as share_coordinator_key;
 
 /// Boots one broker bound to `0.0.0.0:9092` that advertises
 /// `host.docker.internal:9092`. The Docker container's connect after Metadata
@@ -79,42 +70,19 @@ async fn start_host_broker() -> (BrokerHandle, tempfile::TempDir) {
     support::start_jvm_single("krabka_broker=info,info", |_| {}).await
 }
 async fn connect() -> Client {
-    Client::builder()
-        .bootstrap(support::jvm_client_addr().to_string())
-        .client_id("krabka-share-test")
-        .build()
-        .await
-        .expect("client build")
+    support::client::connect_owned(
+        support::jvm_client_addr(),
+        "krabka-share-test",
+        "client build",
+    )
+    .await
 }
 
 /// Creates `topic` with 1 partition and waits until this broker leads
 /// partition 0.
 async fn create_topic(broker: &BrokerHandle, client: &Client, topic: &str) -> uuid::Uuid {
-    let resp = client
-        .send(CreateTopicsRequest {
-            topics: vec![CreatableTopic {
-                name: topic.into(),
-                num_partitions: 1,
-                replication_factor: 1,
-                ..Default::default()
-            }],
-            timeout_ms: 5_000,
-            ..Default::default()
-        })
-        .await
-        .expect("CreateTopics");
-    assert!(
-        resp.topics[0].error_code == 0,
-        "topic create failed: {resp:?}"
-    );
-    broker.wait_until_partition_present(topic, 0).await;
-    assert!(broker.has_partition(topic, 0), "partition never led");
-    let image = broker.controller_image_for_test();
-    image
-        .topic(topic)
-        .map(|t| *t.topic_id.as_bytes())
-        .map(uuid::Uuid::from_bytes)
-        .expect("topic present in image")
+    support::client::create_led_topic(broker, client, topic, 1).await;
+    support::share::topic_id(broker, topic)
 }
 
 /// Creates `__share_group_state` in advance, as a KIP-932 client would create
@@ -215,6 +183,17 @@ fn set_share_auto_offset_reset(bootstrap: &str, group: &str, value: &str) {
     );
 }
 
+async fn prepare_share_topic(
+    broker: &BrokerHandle,
+    topic: &str,
+    group: &str,
+) -> (Client, uuid::Uuid) {
+    let client = connect().await;
+    let tid = create_topic(broker, &client, topic).await;
+    bootstrap_share_state(broker, &client, &share_coordinator_key(group, tid, 0)).await;
+    (client, tid)
+}
+
 /// The main differential test. A real JVM `KafkaShareConsumer` joins a fresh
 /// Krabka share group, reads every produced record, and acknowledges
 /// implicitly on poll. The test asserts that each produced value appears in
@@ -228,9 +207,7 @@ async fn jvm_share_consumer_reads_krabka() {
     let group = "jvm-share-g";
     let values = ["share-alpha", "share-bravo", "share-charlie", "share-delta"];
 
-    let client = connect().await;
-    let tid = create_topic(&broker, &client, topic).await;
-    bootstrap_share_state(&broker, &client, &share_coordinator_key(group, tid, 0)).await;
+    let (client, tid) = prepare_share_topic(&broker, topic, group).await;
     produce(&client, topic, tid, &values).await;
 
     // Drive the real JVM KafkaShareConsumer. The group config sets the
@@ -347,9 +324,7 @@ async fn jvm_share_consumer_by_duration_skips_records_outside_the_window() {
     let stale = ["dur-stale-one", "dur-stale-two"];
     let recent = ["dur-recent-one", "dur-recent-two"];
 
-    let client = connect().await;
-    let tid = create_topic(&broker, &client, topic).await;
-    bootstrap_share_state(&broker, &client, &share_coordinator_key(group, tid, 0)).await;
+    let (client, tid) = prepare_share_topic(&broker, topic, group).await;
     let now = now_ms();
     produce_at(&client, topic, tid, &stale, now - 2 * 60 * 60 * 1_000).await;
     produce_at(&client, topic, tid, &recent, now).await;
@@ -401,9 +376,7 @@ async fn jvm_share_consumer_defaults_to_latest() {
     let group = "jvm-share-glatest";
     let values = ["latest-alpha", "latest-bravo"];
 
-    let client = connect().await;
-    let tid = create_topic(&broker, &client, topic).await;
-    bootstrap_share_state(&broker, &client, &share_coordinator_key(group, tid, 0)).await;
+    let (client, tid) = prepare_share_topic(&broker, topic, group).await;
     produce(&client, topic, tid, &values).await;
 
     let consumed = docker_run(&[
@@ -449,9 +422,7 @@ async fn register_jvm_share_group(
     group: &str,
     values: &[&str],
 ) {
-    let client = connect().await;
-    let tid = create_topic(broker, &client, topic).await;
-    bootstrap_share_state(broker, &client, &share_coordinator_key(group, tid, 0)).await;
+    let (client, tid) = prepare_share_topic(broker, topic, group).await;
     produce(&client, topic, tid, values).await;
     let bootstrap = bootstrap_addr();
     set_share_auto_offset_reset(bootstrap, group, "earliest");

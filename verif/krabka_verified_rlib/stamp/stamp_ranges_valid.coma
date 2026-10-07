@@ -12,7 +12,7 @@ let%span sstamp'3 = "/workspace/crates/verified/src/stamp.rs" 34 14 34 35
 let%span sstamp'4 = "/workspace/crates/verified/src/stamp.rs" 35 18 35 29
 let%span sstamp'5 = "/workspace/crates/verified/src/stamp.rs" 33 16 33 83
 let%span sstamp'6 = "/workspace/crates/verified/src/stamp.rs" 32 16 32 80
-let%span sstamp'7 = "/workspace/crates/verified/src/stamp.rs" 31 16 31 44
+let%span sstamp'7 = "/workspace/crates/verified/src/stamp.rs" 31 16 31 59
 let%span sstamp'8 = "/workspace/crates/verified/src/stamp.rs" 30 16 30 38
 let%span sstamp'9 = "/workspace/crates/verified/src/stamp.rs" 36 11 36 23
 let%span sstamp'10 = "/workspace/crates/verified/src/stamp.rs" 36 26 36 38
@@ -26,7 +26,8 @@ let%span sstamp'17 = "/workspace/crates/verified/src/stamp.rs" 39 8 39 18
 let%span sstamp'18 = "/workspace/crates/verified/src/stamp.rs" 37 19 37 24
 let%span sstamp'19 = "/workspace/crates/verified/src/stamp.rs" 41 4 41 8
 let%span sstamp'20 = "/workspace/crates/verified/src/stamp.rs" 23 10 23 51
-let%span sstamp'21 = "/workspace/crates/verified/src/stamp.rs" 15 8 17 87
+let%span sstamp'21 = "/workspace/crates/verified/src/stamp.rs" 139 16 139 42
+let%span sstamp'22 = "/workspace/crates/verified/src/stamp.rs" 15 8 17 87
 
 use creusot.slice.Slice64
 use creusot.int.Int64
@@ -53,8 +54,11 @@ predicate well_founded_relation_Int [@inline:trivial] (self: int) (other: int) =
 
 meta "rewrite_def" predicate well_founded_relation_Int
 
-predicate sorted_disjoint [#"/workspace/crates/verified/src/stamp.rs" 13 0 13 64] (bases: Seq.seq Int64.t) (lasts: Seq.seq Int64.t) =
+predicate stamp_range_arrays_parallel [#"/workspace/crates/verified/src/stamp.rs" 138 0 138 72] (bases: Seq.seq Int64.t) (lasts: Seq.seq Int64.t) =
   [%#sstamp'21] Seq.length bases = Seq.length lasts
+
+predicate sorted_disjoint [#"/workspace/crates/verified/src/stamp.rs" 13 0 13 64] (bases: Seq.seq Int64.t) (lasts: Seq.seq Int64.t) =
+  [%#sstamp'22] Seq.length bases = Seq.length lasts
   /\ (forall i: int. 0 <= i /\ i < Seq.length bases -> Int64.to_int (Seq.get bases i) <= Int64.to_int (Seq.get lasts i))
   /\ (forall i: int. 1 <= i /\ i < Seq.length bases
     -> Int64.to_int (Seq.get lasts (i - 1)) < Int64.to_int (Seq.get bases i))
@@ -78,7 +82,7 @@ let stamp_ranges_valid [#"/workspace/crates/verified/src/stamp.rs" 25 0 25 63] (
       - UInt64.t'int index)}
       bb5invariant
     | bb5invariant = {[@expl:loop invariant #0] [%#sstamp'8] UInt64.t'int index <= Seq.length (Slice64.view bases)}
-      {[@expl:loop invariant #1] [%#sstamp'7] Seq.length (Slice64.view bases) = Seq.length (Slice64.view lasts)}
+      {[@expl:loop invariant #1] [%#sstamp'7] stamp_range_arrays_parallel (Slice64.view bases) (Slice64.view lasts)}
       {[@expl:loop invariant #2] [%#sstamp'6] forall i: int. 0 <= i /\ i < UInt64.t'int index
         -> Int64.to_int (Seq.get (Slice64.view bases) i) <= Int64.to_int (Seq.get (Slice64.view lasts) i)}
       {[@expl:loop invariant #3] [%#sstamp'5] forall i: int. 1 <= i /\ i < UInt64.t'int index

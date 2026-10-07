@@ -28,21 +28,22 @@
 //! These tests are Windows-gated like the other multi-broker tests. openraft
 //! `debug_assert!` races on the hosted Windows scheduler.
 
-use std::time::{Duration, Instant};
-
 use assert2::assert;
 use krabka_broker::BrokerHandle;
 use krabka_client_core::Client;
 use krabka_protocol::{
-    owned::{
-        create_topics_request::{CreatableTopic, CreateTopicsRequest},
-        produce_request::{PartitionProduceData, ProduceRequest, TopicProduceData},
-        produce_response::NodeEndpoint,
-    },
+    owned::{create_topics_request::CreateTopicsRequest, produce_response::NodeEndpoint},
     primitives::uuid::Uuid as WireUuid,
-    records::{Record, RecordBatch},
+    records::RecordBatch,
 };
 use support::cluster_lock;
+
+use crate::support::{
+    client::connect_client,
+    produce::single_partition_produce,
+    records::{batch_from_records, value_record},
+    topics::creatable_topic,
+};
 
 mod support;
 
@@ -59,12 +60,10 @@ fn one_record_batch(v: &str) -> RecordBatch {
     RecordBatch {
         base_offset: 0,
         last_offset_delta: 0,
-        records: vec![Record {
-            offset_delta: 0,
-            value: Some(bytes::Bytes::from(v.to_string())),
-            ..Default::default()
-        }],
-        ..Default::default()
+        ..batch_from_records(vec![value_record(
+            0,
+            Some(bytes::Bytes::from(v.to_string())),
+        )])
     }
 }
 
@@ -82,21 +81,13 @@ async fn produce_one(
     value: &str,
 ) -> (i16, i32, Vec<NodeEndpoint>) {
     let resp = client
-        .send(ProduceRequest {
-            acks: 1,
-            timeout_ms: 5_000,
-            topic_data: vec![TopicProduceData {
-                name: topic.into(),
-                topic_id,
-                partition_data: vec![PartitionProduceData {
-                    index: partition,
-                    records: Some(one_record_batch(value).into()),
-                    ..Default::default()
-                }],
-                ..Default::default()
-            }],
-            ..Default::default()
-        })
+        .send(single_partition_produce(
+            topic,
+            topic_id,
+            partition,
+            Some(one_record_batch(value).into()),
+            (1, 5_000),
+        ))
         .await
         .expect("produce round-trip");
     let pr = &resp.responses[0].partition_responses[0];
@@ -107,33 +98,7 @@ async fn produce_one(
     )
 }
 
-/// Block until `broker` has materialized its LOCAL replica for
-/// `(topic, partition)`. That is, the supervisor reconcile has turned the
-/// metadata image into a live writer-actor and `PartitionRegistry::get`
-/// returns `Some`. A Produce sent directly at a broker before this is done
-/// races the broker's image/replica catch-up. The broker applies the metadata
-/// image per-broker and a follower lags the controller, so a Produce can
-/// surface two errors. The first is `UNKNOWN_TOPIC_ID` (100): the broker's
-/// image hasn't applied this `topic_id` yet, and it resolves the request by id
-/// before the leadership gate. The second is a transient
-/// `NOT_LEADER_OR_FOLLOWER` (6): the image names this broker leader but the
-/// writer-actor isn't spun up yet. A materialized local replica implies the
-/// image already holds the topic + partition, so both races are closed.
-/// Panics if the replica never appears within 30s.
-async fn wait_for_local_replica(broker: &BrokerHandle, topic: &str, partition: i32) {
-    let deadline = Instant::now() + Duration::from_secs(30);
-    while broker.local_log_end_offset(topic, partition).is_none() {
-        assert!(
-            Instant::now() <= deadline,
-            "broker never materialized a local replica for {topic}/{partition}"
-        );
-        // intentional: gates on the LOCAL writer-actor (PartitionRegistry)
-        // being materialized by the supervisor reconcile, which lags the
-        // metadata image. No image-based awaiter observes local-registry
-        // materialization, so an event-driven signal isn't available here.
-        tokio::time::sleep(Duration::from_millis(100)).await;
-    }
-}
+use crate::support::partitions::wait_for_local_replica;
 
 /// Case A of [`produce_to_non_leader_is_rejected`]: a Produce sent to a
 /// non-leader that *does* hold a follower replica.
@@ -168,11 +133,7 @@ async fn rf3_produce_to_a_follower_is_refused(
         .local_log_end_offset("gate-rf3", 0)
         .expect("follower hosts gate-rf3");
 
-    let follower_client = Client::builder()
-        .bootstrap(follower_addr)
-        .build()
-        .await
-        .unwrap();
+    let follower_client = connect_client(follower_addr, None).await;
     let (code, leader_hint, node_endpoints) =
         produce_one(&follower_client, "gate-rf3", rf3_id, 0, "rf3-to-follower").await;
     assert!(
@@ -226,33 +187,18 @@ async fn rf3_produce_to_a_follower_is_refused(
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn produce_to_non_leader_is_rejected() {
     let _g = cluster_lock().lock().await;
-    let cluster = support::start_n_node_with_retry(3).await;
-    support::wait_for_all_brokers_registered(&cluster, 3).await;
+    let cluster = crate::support::registered_cluster(3).await;
 
     let bootstrap = cluster[0].1.listen_addr.to_string();
-    let admin = Client::builder()
-        .bootstrap(bootstrap.clone())
-        .build()
-        .await
-        .unwrap();
+    let admin = connect_client(bootstrap.clone(), None).await;
 
     // rf=3 topic (a replica on every broker) and a rf=1, 6-partition topic
     // (each partition on exactly one broker, so non-leaders hold no replica).
     let cr = admin
         .send(CreateTopicsRequest {
             topics: vec![
-                CreatableTopic {
-                    name: "gate-rf3".into(),
-                    num_partitions: 1,
-                    replication_factor: 3,
-                    ..Default::default()
-                },
-                CreatableTopic {
-                    name: "gate-rf1".into(),
-                    num_partitions: 6,
-                    replication_factor: 1,
-                    ..Default::default()
-                },
+                creatable_topic("gate-rf3", 1, 3),
+                creatable_topic("gate-rf1", 6, 1),
             ],
             timeout_ms: 5_000,
             ..Default::default()
@@ -344,11 +290,8 @@ async fn produce_to_non_leader_is_rejected() {
         .iter()
         .position(|(h, _, _)| h.node_id() == rf3_leader)
         .unwrap();
-    let leader3_client = Client::builder()
-        .bootstrap(cluster[rf3_leader_idx].1.listen_addr.to_string())
-        .build()
-        .await
-        .unwrap();
+    let leader3_client =
+        connect_client(cluster[rf3_leader_idx].1.listen_addr.to_string(), None).await;
     // Gate on the leader broker's own replica/image catch-up before producing,
     // so the success Produce can't race the image apply (UNKNOWN_TOPIC_ID 100 /
     // transient NOT_LEADER 6) — and so the `leo_before` read below is non-None.
@@ -376,11 +319,8 @@ async fn produce_to_non_leader_is_rejected() {
         .iter()
         .position(|(h, _, _)| h.node_id() == rf1_leader)
         .unwrap();
-    let leader1_client = Client::builder()
-        .bootstrap(cluster[rf1_leader_idx].1.listen_addr.to_string())
-        .build()
-        .await
-        .unwrap();
+    let leader1_client =
+        connect_client(cluster[rf1_leader_idx].1.listen_addr.to_string(), None).await;
     // The observed flake: without this gate the Produce can reach the rf=1
     // leader before its image has applied the gate-rf1 topic_id, so the v13
     // topic_id resolution misses and returns UNKNOWN_TOPIC_ID (100) instead of
@@ -408,7 +348,5 @@ async fn produce_to_non_leader_is_rejected() {
         "rf=1 record must be durably stored on its leader; leo={leader1_leo}"
     );
 
-    for (h, _, _) in cluster {
-        h.shutdown().await;
-    }
+    crate::support::shutdown_cluster(cluster).await;
 }

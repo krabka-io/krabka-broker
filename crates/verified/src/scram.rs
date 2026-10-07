@@ -1,58 +1,63 @@
 //! SCRAM credential alteration planning decisions.
 
-#[cfg(creusot)]
-use std::clone::Clone;
+use creusot_std::prelude::*;
 
-#[cfg(creusot)]
-use creusot_std::prelude::DeepModel;
-use creusot_std::prelude::ensures;
+model_types! {
+    @proof (derive(std::clone::Clone, Copy, DeepModel));
+    /// Credential operation represented by one KIP-554 request row.
+    pub enum ScramAlterationKind {
+        Delete,
+        Upsert,
+    }
 
-/// Credential operation represented by one KIP-554 request row.
-#[cfg_attr(creusot, derive(Clone, Copy, DeepModel))]
-#[cfg_attr(not(creusot), derive(Clone, Copy, Debug, PartialEq, Eq))]
-pub enum ScramAlterationKind {
-    Delete,
-    Upsert,
+    /// State left by an earlier row for the same user.
+    pub enum ScramPriorState {
+        Unseen,
+        Accepted,
+        Rejected,
+    }
+
+    /// Scalar facts projected from one request row and the current metadata image.
+    pub struct ScramAlterationFacts {
+        pub kind: ScramAlterationKind,
+        pub prior: ScramPriorState,
+        pub authorized: bool,
+        pub name_empty: bool,
+        pub mechanism: i8,
+        pub iterations: i32,
+        pub min_iterations: i32,
+        pub max_iterations: i32,
+        pub deletion_target_exists: bool,
+    }
+
+    /// The first applicable Kafka error, or the mechanism of one accepted row.
+    pub enum ScramAlterationDecision {
+        KeepPriorError,
+        Duplicate,
+        Unauthorized,
+        EmptyName,
+        UnsupportedMechanism,
+        TooFewIterations,
+        TooManyIterations,
+        MissingCredential,
+        AcceptSha256,
+        AcceptSha512,
+    }
 }
 
-/// State left by an earlier row for the same user.
-#[cfg_attr(creusot, derive(Clone, Copy, DeepModel))]
-#[cfg_attr(not(creusot), derive(Clone, Copy, Debug, PartialEq, Eq))]
-pub enum ScramPriorState {
-    Unseen,
-    Accepted,
-    Rejected,
+open_logic! {
+fn alteration_mechanism_admitted(facts: ScramAlterationFacts) -> bool {
+    pearlite! { alteration_name_admitted(facts)
+    && (facts.mechanism@ == 1 || facts.mechanism@ == 2) }
+}
 }
 
-/// Scalar facts projected from one request row and the current metadata image.
-#[cfg_attr(creusot, derive(Clone, Copy, DeepModel))]
-#[cfg_attr(not(creusot), derive(Clone, Copy, Debug, PartialEq, Eq))]
-pub struct ScramAlterationFacts {
-    pub kind: ScramAlterationKind,
-    pub prior: ScramPriorState,
-    pub authorized: bool,
-    pub name_empty: bool,
-    pub mechanism: i8,
-    pub iterations: i32,
-    pub min_iterations: i32,
-    pub max_iterations: i32,
-    pub deletion_target_exists: bool,
+open_logic! {
+pub fn alteration_name_admitted(facts: ScramAlterationFacts) -> bool {
+    pearlite! { facts.prior == ScramPriorState::Unseen
+    && facts.authorized
+    && !facts.name_empty }
 }
-
-/// The first applicable Kafka error, or the mechanism of one accepted row.
-#[cfg_attr(creusot, derive(Clone, Copy, DeepModel))]
-#[cfg_attr(not(creusot), derive(Clone, Copy, Debug, PartialEq, Eq))]
-pub enum ScramAlterationDecision {
-    KeepPriorError,
-    Duplicate,
-    Unauthorized,
-    EmptyName,
-    UnsupportedMechanism,
-    TooFewIterations,
-    TooManyIterations,
-    MissingCredential,
-    AcceptSha256,
-    AcceptSha512,
 }
 
 /// Apply KIP-554 validation and conflict rules in their response precedence.
@@ -70,42 +75,28 @@ pub enum ScramAlterationDecision {
         facts.prior == ScramPriorState::Unseen && facts.authorized && facts.name_empty
     }
     ScramAlterationDecision::UnsupportedMechanism => {
-        facts.prior == ScramPriorState::Unseen
-            && facts.authorized
-            && !facts.name_empty
+        alteration_name_admitted(facts)
             && facts.mechanism@ != 1
             && facts.mechanism@ != 2
     }
     ScramAlterationDecision::TooFewIterations => {
-        facts.prior == ScramPriorState::Unseen
-            && facts.authorized
-            && !facts.name_empty
-            && (facts.mechanism@ == 1 || facts.mechanism@ == 2)
+        alteration_mechanism_admitted(facts)
             && facts.kind == ScramAlterationKind::Upsert
             && facts.iterations@ < facts.min_iterations@
     }
     ScramAlterationDecision::TooManyIterations => {
-        facts.prior == ScramPriorState::Unseen
-            && facts.authorized
-            && !facts.name_empty
-            && (facts.mechanism@ == 1 || facts.mechanism@ == 2)
+        alteration_mechanism_admitted(facts)
             && facts.kind == ScramAlterationKind::Upsert
             && facts.iterations@ >= facts.min_iterations@
             && facts.iterations@ > facts.max_iterations@
     }
     ScramAlterationDecision::MissingCredential => {
-        facts.prior == ScramPriorState::Unseen
-            && facts.authorized
-            && !facts.name_empty
-            && (facts.mechanism@ == 1 || facts.mechanism@ == 2)
+        alteration_mechanism_admitted(facts)
             && facts.kind == ScramAlterationKind::Delete
             && !facts.deletion_target_exists
     }
     ScramAlterationDecision::AcceptSha256 | ScramAlterationDecision::AcceptSha512 => {
-        facts.prior == ScramPriorState::Unseen
-            && facts.authorized
-            && !facts.name_empty
-            && (facts.mechanism@ == 1 || facts.mechanism@ == 2)
+        alteration_mechanism_admitted(facts)
             && match facts.kind {
                 ScramAlterationKind::Delete => facts.deletion_target_exists,
                 ScramAlterationKind::Upsert => {

@@ -12,7 +12,12 @@ use bytes::BytesMut;
 use krabka_protocol::{Decode, Encode};
 use tokio::net::TcpStream;
 
-use crate::{CLIENT_ID, kafka_wire};
+use crate::{
+    CLIENT_ID, kafka_wire,
+    support::configs::{
+        describe_resource, incremental_config, incremental_request, incremental_resource,
+    },
+};
 
 pub type ConfigOperations = Vec<(String, Option<String>, i8)>;
 pub type ConfigResources = Vec<(i8, String, ConfigOperations)>;
@@ -55,18 +60,15 @@ pub async fn drive_describe_configs(
     const VERSION: i16 = 1;
 
     use krabka_protocol::owned::{
-        describe_configs_request::{DescribeConfigsRequest, DescribeConfigsResource},
+        describe_configs_request::DescribeConfigsRequest,
         describe_configs_response::DescribeConfigsResponse,
     };
 
     let req = DescribeConfigsRequest {
         resources: resources
             .into_iter()
-            .map(|(resource_type, resource_name)| DescribeConfigsResource {
-                resource_type,
-                resource_name,
-                configuration_keys: None,
-                ..Default::default()
+            .map(|(resource_type, resource_name)| {
+                describe_resource(resource_type, resource_name, None)
             })
             .collect(),
         include_synonyms: false,
@@ -103,36 +105,26 @@ pub async fn drive_describe_configs(
 async fn incremental_alter_configs_on(stream: &mut TcpStream, resources: ConfigResources) -> i16 {
     const VERSION: i16 = 1;
 
-    use krabka_protocol::owned::{
-        incremental_alter_configs_request::{
-            AlterConfigsResource, AlterableConfig, IncrementalAlterConfigsRequest,
-        },
-        incremental_alter_configs_response::IncrementalAlterConfigsResponse,
-    };
+    use krabka_protocol::owned::incremental_alter_configs_response::IncrementalAlterConfigsResponse;
 
-    let req = IncrementalAlterConfigsRequest {
-        resources: resources
+    let req = incremental_request(
+        resources
             .into_iter()
-            .map(
-                |(resource_type, resource_name, configs)| AlterConfigsResource {
+            .map(|(resource_type, resource_name, configs)| {
+                incremental_resource(
                     resource_type,
                     resource_name,
-                    configs: configs
+                    configs
                         .into_iter()
-                        .map(|(name, value, config_operation)| AlterableConfig {
-                            name,
-                            config_operation,
-                            value,
-                            ..Default::default()
+                        .map(|(name, value, config_operation)| {
+                            incremental_config(name, value, config_operation)
                         })
                         .collect(),
-                    ..Default::default()
-                },
-            )
+                )
+            })
             .collect(),
-        validate_only: false,
-        ..Default::default()
-    };
+        false,
+    );
 
     let resp: IncrementalAlterConfigsResponse =
         kafka_wire::exchange(stream, &req, 44, VERSION, 1, CLIENT_ID, true)

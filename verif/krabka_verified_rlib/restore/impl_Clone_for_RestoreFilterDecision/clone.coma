@@ -1,4 +1,4 @@
-(* #"/workspace/crates/verified/src/restore.rs" 10 27 10 32 *)
+(* #"/workspace/crates/verified/src/restore.rs" 7 19 7 36 *)
 
 (* <restore::RestoreFilterDecision as std::clone::Clone> *)
 
@@ -10,8 +10,8 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let clone_RestoreFilterDecision [#"/workspace/crates/verified/src/restore.rs" 10 27 10 32]
-  (self: t_RestoreFilterDecision) (return (x: t_RestoreFilterDecision)) = (! bb0
+let clone_RestoreFilterDecision [#"/workspace/crates/verified/src/restore.rs" 7 19 7 36] (self: t_RestoreFilterDecision)
+  (return (x: t_RestoreFilterDecision)) = (! bb0
   [ bb0 = s0 [ s0 = [ &_ret <- self ] s1 | s1 = return {_ret} ] ]
   [ & _ret: t_RestoreFilterDecision = Any.any_l () | & self: t_RestoreFilterDecision = self ])
   [ return (result: t_RestoreFilterDecision) -> (! return {result}) ]

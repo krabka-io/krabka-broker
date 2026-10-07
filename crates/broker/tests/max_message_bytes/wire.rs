@@ -7,13 +7,11 @@ use krabka_broker::{BrokerHandle, codes};
 use krabka_client_core::Client;
 use krabka_compression::CompressionType;
 use krabka_protocol::{
-    owned::{
-        create_topics_request::{CreatableTopic, CreatableTopicConfig, CreateTopicsRequest},
-        produce_response::{LeaderIdAndEpoch, PartitionProduceResponse},
-    },
-    primitives::uuid::Uuid as WireUuid,
-    records::{Record, RecordBatch},
+    owned::produce_response::PartitionProduceResponse, primitives::uuid::Uuid as WireUuid,
+    records::RecordBatch,
 };
+
+use crate::support::records::{batch_from_records, value_record};
 
 /// Kafka's `max.message.bytes`, and its broker-wide default
 /// `message.max.bytes`, which a topic that sets neither inherits.
@@ -45,24 +43,9 @@ pub(super) async fn create_topic(
     configs: &[(&str, &str)],
 ) -> WireUuid {
     let response = client
-        .send(CreateTopicsRequest {
-            topics: vec![CreatableTopic {
-                name: name.to_owned(),
-                num_partitions: 1,
-                replication_factor: 1,
-                configs: configs
-                    .iter()
-                    .map(|(name, value)| CreatableTopicConfig {
-                        name: (*name).to_owned(),
-                        value: Some((*value).to_owned()),
-                        ..Default::default()
-                    })
-                    .collect(),
-                ..Default::default()
-            }],
-            timeout_ms: 5_000,
-            ..Default::default()
-        })
+        .send(crate::support::topics::configured_topic_request(
+            name, configs, 1, 1, 5_000,
+        ))
         .await
         .expect("CreateTopics");
     let created = &response.topics[0];
@@ -103,12 +86,10 @@ fn one_record(value_len: usize) -> RecordBatch {
         last_offset_delta: 0,
         max_timestamp: 12_345,
         producer_id: -1,
-        records: vec![Record {
-            offset_delta: 0,
-            value: Some(Bytes::from(vec![b'x'; value_len])),
-            ..Default::default()
-        }],
-        ..RecordBatch::default()
+        ..batch_from_records(vec![value_record(
+            0,
+            Some(Bytes::from(vec![b'x'; value_len])),
+        )])
     }
 }
 
@@ -160,19 +141,7 @@ pub(super) async fn produce_batch(
 /// has trimmed, so they all pass 0. The value a trimmed log answers with is
 /// pinned in `crates/broker/tests/produce_log_start_offset.rs`, where a
 /// `DeleteRecords` moves it off 0 first.
-pub(super) fn accepted(base_offset: i64, log_start_offset: i64) -> PartitionProduceResponse {
-    PartitionProduceResponse {
-        index: 0,
-        error_code: codes::NONE,
-        base_offset,
-        log_append_time_ms: -1,
-        log_start_offset,
-        record_errors: vec![],
-        error_message: None,
-        current_leader: LeaderIdAndEpoch::default(),
-        unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(Vec::new()),
-    }
-}
+pub(super) use crate::support::produce::expected_partition_success as accepted;
 
 /// The partition row an oversized batch answers with.
 ///
@@ -204,14 +173,7 @@ pub(super) fn record_list_too_large() -> PartitionProduceResponse {
 
 fn refused_before_append(error_code: i16) -> PartitionProduceResponse {
     PartitionProduceResponse {
-        index: 0,
         error_code,
-        base_offset: -1,
-        log_append_time_ms: -1,
-        log_start_offset: -1,
-        record_errors: vec![],
-        error_message: None,
-        current_leader: LeaderIdAndEpoch::default(),
-        unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(Vec::new()),
+        ..accepted(-1, -1)
     }
 }

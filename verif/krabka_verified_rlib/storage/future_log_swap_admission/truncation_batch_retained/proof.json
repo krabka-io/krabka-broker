@@ -2,7 +2,7 @@
   "profile": [],
   "proofs": {
     "Coma": {
-      "vc_truncation_batch_retained": { "prover": "alt-ergo", "time": 0.003 }
+      "vc_truncation_batch_retained": { "prover": "alt-ergo", "time": 0.014 }
     }
   }
 }

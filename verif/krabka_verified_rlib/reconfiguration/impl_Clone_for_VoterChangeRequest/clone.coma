@@ -1,4 +1,4 @@
-(* #"/workspace/crates/verified/src/reconfiguration.rs" 54 27 54 32 *)
+(* #"/workspace/crates/verified/src/reconfiguration.rs" 14 19 14 36 *)
 
 (* <reconfiguration::VoterChangeRequest as std::clone::Clone> *)
 
@@ -13,7 +13,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let clone_VoterChangeRequest [#"/workspace/crates/verified/src/reconfiguration.rs" 54 27 54 32]
+let clone_VoterChangeRequest [#"/workspace/crates/verified/src/reconfiguration.rs" 14 19 14 36]
   (self: t_VoterChangeRequest) (return (x: t_VoterChangeRequest)) = (! bb0
   [ bb0 = s0 [ s0 = [ &_ret <- self ] s1 | s1 = return {_ret} ] ]
   [ & _ret: t_VoterChangeRequest = Any.any_l () | & self: t_VoterChangeRequest = self ])

@@ -206,11 +206,23 @@ mod tests {
         test_support::test_ctx,
     };
 
+    /// Check the response and unchanged credential image for a refused request.
+    macro_rules! check_refusal {
+        (($response:ident, $expected:ident, $image:ident), $broker:ident, $request:ident, $context:ident,
+            $code:expr, $message:expr, [$($mechanism:expr => $state:ident),+ $(,)?]) => {
+            let $response = answer(&$broker, $request, &$context).await;
+            let $expected = crate::handlers::alter_user_scram_credentials::test_support::expected_response(vec![
+                expected_result("alice", $code, Some($message)),
+            ]);
+            assert!($response == $expected);
+            let $image = $broker.controller.current_image();
+            $(assert!($image.scram_credential("alice", $mechanism).$state());)+
+        };
+    }
+
     #[tokio::test]
     async fn plan_emits_one_record_per_success_and_is_retry_stable() {
-        let (broker_handle, _dir) =
-            start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
-        let broker = broker_handle.broker_arc_for_test();
+        broker_fixture!((broker_handle, _dir, broker), allow_all);
         let mut overflow = valid_upsertion("overflow");
         overflow.iterations = i32::MAX;
         let req = AlterUserScramCredentialsRequest {
@@ -242,11 +254,12 @@ mod tests {
 
     #[tokio::test]
     async fn handle_duplicate_username_across_upsertion_mechanisms_returns_one_error_row() {
-        let (broker_handle, _dir) =
-            start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
-        let broker = broker_handle.broker_arc_for_test();
-        crate::test_support::wait_for_controller_leader(&broker).await;
-        test_ctx!(ctx, "admin");
+        broker_fixture!(
+            (broker_handle, _dir, broker),
+            allow_all,
+            context(ctx, "admin"),
+            controller_leader
+        );
         let req = AlterUserScramCredentialsRequest {
             upsertions: vec![
                 valid_upsertion_for_mechanism("alice", 1, SaslMechanism::ScramSha256),
@@ -255,37 +268,13 @@ mod tests {
             ..Default::default()
         };
 
-        let resp = answer(&broker, req, &ctx).await;
-
-        let expected =
-            crate::handlers::alter_user_scram_credentials::test_support::expected_response(vec![
-                expected_result(
-                    "alice",
-                    KAFKA_DUPLICATE_RESOURCE,
-                    Some("A user credential cannot be altered twice in the same request"),
-                ),
-            ]);
-        assert!(resp == expected);
-        let image = broker.controller.current_image();
-        assert!(
-            image
-                .scram_credential("alice", SaslMechanism::ScramSha256)
-                .is_none()
-        );
-        assert!(
-            image
-                .scram_credential("alice", SaslMechanism::ScramSha512)
-                .is_none()
-        );
+        check_refusal!((resp, expected, image), broker, req, ctx, KAFKA_DUPLICATE_RESOURCE, "A user credential cannot be altered twice in the same request", [SaslMechanism::ScramSha256 => is_none, SaslMechanism::ScramSha512 => is_none]);
         broker_handle.shutdown().await;
     }
 
     #[tokio::test]
     async fn handle_duplicate_username_between_deletion_and_upsertion_returns_one_error_row() {
-        let (broker_handle, _dir) =
-            start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
-        let broker = broker_handle.broker_arc_for_test();
-        crate::test_support::wait_for_controller_leader(&broker).await;
+        broker_fixture!((broker_handle, _dir, broker), allow_all, controller_leader);
         broker
             .controller
             .submit_change(vec![MetadataRecord::V1ScramCredential(
@@ -311,63 +300,22 @@ mod tests {
         let req =
             crate::handlers::alter_user_scram_credentials::test_support::mixed_mechanisms("alice");
 
-        let resp = answer(&broker, req, &ctx).await;
-
-        let expected =
-            crate::handlers::alter_user_scram_credentials::test_support::expected_response(vec![
-                expected_result(
-                    "alice",
-                    KAFKA_DUPLICATE_RESOURCE,
-                    Some("A user credential cannot be altered twice in the same request"),
-                ),
-            ]);
-        assert!(resp == expected);
-        let image = broker.controller.current_image();
-        assert!(
-            image
-                .scram_credential("alice", SaslMechanism::ScramSha512)
-                .is_some()
-        );
-        assert!(
-            image
-                .scram_credential("alice", SaslMechanism::ScramSha256)
-                .is_none()
-        );
+        check_refusal!((resp, expected, image), broker, req, ctx, KAFKA_DUPLICATE_RESOURCE, "A user credential cannot be altered twice in the same request", [SaslMechanism::ScramSha512 => is_some, SaslMechanism::ScramSha256 => is_none]);
         broker_handle.shutdown().await;
     }
 
     #[tokio::test]
     async fn handle_duplicate_username_after_missing_deletion_preserves_resource_not_found() {
-        let (broker_handle, _dir) =
-            start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
-        let broker = broker_handle.broker_arc_for_test();
-        crate::test_support::wait_for_controller_leader(&broker).await;
-        test_ctx!(ctx, "admin");
+        broker_fixture!(
+            (broker_handle, _dir, broker),
+            allow_all,
+            context(ctx, "admin"),
+            controller_leader
+        );
         let req =
             crate::handlers::alter_user_scram_credentials::test_support::mixed_mechanisms("alice");
 
-        let resp = answer(&broker, req, &ctx).await;
-
-        let expected =
-            crate::handlers::alter_user_scram_credentials::test_support::expected_response(vec![
-                expected_result(
-                    "alice",
-                    codes::RESOURCE_NOT_FOUND,
-                    Some("Attempt to delete a user credential that does not exist"),
-                ),
-            ]);
-        assert!(resp == expected);
-        let image = broker.controller.current_image();
-        assert!(
-            image
-                .scram_credential("alice", SaslMechanism::ScramSha256)
-                .is_none()
-        );
-        assert!(
-            image
-                .scram_credential("alice", SaslMechanism::ScramSha512)
-                .is_none()
-        );
+        check_refusal!((resp, expected, image), broker, req, ctx, codes::RESOURCE_NOT_FOUND, "Attempt to delete a user credential that does not exist", [SaslMechanism::ScramSha256 => is_none, SaslMechanism::ScramSha512 => is_none]);
         broker_handle.shutdown().await;
     }
 }

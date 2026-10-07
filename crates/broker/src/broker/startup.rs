@@ -448,7 +448,7 @@ impl Broker {
         }
         .spawn();
 
-        let initial_unfence = runtime.initial_unfence.clone();
+        let initial_unfence = runtime.liveness_services.initial_unfence.clone();
         let images = controller.watch_image();
         let is_broker = config.is_broker();
         let node_id = config.node_id;

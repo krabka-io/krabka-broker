@@ -1,21 +1,17 @@
 //! `KRaft` voter-set wire admission.
 
-#[cfg(creusot)]
-use std::clone::Clone;
+use creusot_std::prelude::*;
 
-#[cfg(creusot)]
-use creusot_std::prelude::DeepModel;
-use creusot_std::prelude::ensures;
-
-/// Admission outcome for one voter carried by a `VotersRecord`.
-#[cfg_attr(creusot, derive(Clone, Copy, DeepModel))]
-#[cfg_attr(not(creusot), derive(Clone, Copy, Debug, PartialEq, Eq))]
-pub enum VoterWireDecision {
-    NegativeId,
-    DirectoryMismatch,
-    InvalidEndpoint,
-    InvalidVersionRange,
-    Accept,
+model_types! {
+    @proof (derive(std::clone::Clone, Copy, DeepModel));
+    /// Admission outcome for one voter carried by a `VotersRecord`.
+    pub enum VoterWireDecision {
+        NegativeId,
+        DirectoryMismatch,
+        InvalidEndpoint,
+        InvalidVersionRange,
+        Accept,
+    }
 }
 
 /// Validate the signed voter identity, exact directory translation, endpoint
@@ -63,14 +59,15 @@ pub fn voter_wire_decision(
     }
 }
 
-/// Admission outcome for the outer `VotersRecord` collection.
-#[cfg_attr(creusot, derive(Clone, Copy, DeepModel))]
-#[cfg_attr(not(creusot), derive(Clone, Copy, Debug, PartialEq, Eq))]
-pub enum VoterSetWireDecision {
-    UnsupportedRecordVersion,
-    Empty,
-    DuplicateId,
-    Accept,
+model_types! {
+    @proof (derive(std::clone::Clone, Copy, DeepModel));
+    /// Admission outcome for the outer `VotersRecord` collection.
+    pub enum VoterSetWireDecision {
+        UnsupportedRecordVersion,
+        Empty,
+        DuplicateId,
+        Accept,
+    }
 }
 
 /// Require the supported record version and a nonempty collection with one

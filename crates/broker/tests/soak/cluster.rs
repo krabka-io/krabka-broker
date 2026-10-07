@@ -95,9 +95,7 @@ pub(crate) struct SoakBroker {
 impl SoakBroker {
     /// `uid:gid` of the host data directory, for `docker run --user`.
     fn user(&self) -> String {
-        use std::os::unix::fs::MetadataExt as _;
-        let meta = std::fs::metadata(self.host_root()).expect("stat the host data directory");
-        format!("{}:{}", meta.uid(), meta.gid())
+        crate::support::storage::host_directory_user(self.host_root())
     }
 
     fn host_root(&self) -> &Path {
@@ -265,9 +263,7 @@ impl SoakBroker {
 impl Drop for SoakBroker {
     fn drop(&mut self) {
         // Best effort: a panic in `drop` would replace the real failure.
-        let _ = Command::new("docker")
-            .args(["rm", "--force", "--volumes", &self.name])
-            .output();
+        crate::support::remove_container_with_volumes(&self.name);
     }
 }
 

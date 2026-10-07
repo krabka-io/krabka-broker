@@ -551,6 +551,8 @@ mod tests {
         "AQIDBAUGBwgJCgsMDQ4PEA",
     ];
 
+    krabka_macros::flag_metadata_fixture!(flag_metadata);
+
     /// One line per flag `Args` declares itself, leaving out the flattened
     /// runtime and profiling groups: its long name, its environment variable,
     /// its default values, and which of [`PROBES`] its value parser accepts
@@ -570,16 +572,7 @@ mod tests {
                     .all(|inner| inner.get_id() != arg.get_id())
             })
             .map(|arg| {
-                let long = arg.get_long().unwrap_or_default();
-                let env = arg
-                    .get_env()
-                    .map(|env| env.to_string_lossy().into_owned())
-                    .unwrap_or_default();
-                let defaults = arg
-                    .get_default_values()
-                    .iter()
-                    .map(|value| value.to_string_lossy().into_owned())
-                    .collect::<Vec<_>>();
+                let (long, env, defaults) = flag_metadata(arg);
                 let accepted = PROBES
                     .iter()
                     .map(|probe| {

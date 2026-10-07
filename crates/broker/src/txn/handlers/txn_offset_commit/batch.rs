@@ -177,20 +177,18 @@ pub(super) fn append_error_code(error: &BrokerError) -> i16 {
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::HashSet, path::Path, sync::Arc};
+    use std::{collections::HashSet, sync::Arc};
 
     use assert2::{assert, check};
     use krabka_ids::PartitionIndex;
-    use krabka_log::{Log, LogConfig, Offset};
-    use krabka_metadata::{
-        LeaderEpoch, MetadataImage, MetadataRecord, PartitionRecord, TopicRecord,
-    };
+    use krabka_log::{Log, Offset, ReadOutput};
+    use krabka_metadata::MetadataImage;
 
     use super::*;
     use crate::{
         coordinator::bootstrap::{OFFSETS_PARTITION, OFFSETS_TOPIC},
-        test_support::FakeMetadataSource,
-        txn::handlers::txn_offset_commit::test_support::request,
+        test_support::{FakeMetadataSource, open_partition},
+        txn::handlers::txn_offset_commit::{test_support::request, verification::offset_batch},
     };
 
     /// This broker.
@@ -205,23 +203,10 @@ mod tests {
 
     /// An image in which `leader` leads the offsets partition at `epoch`.
     fn offsets_image(leader: NodeId, epoch: i32) -> MetadataImage {
-        let mut image = MetadataImage::new(uuid::Uuid::nil());
-        image.apply(&MetadataRecord::V1Topic(TopicRecord {
-            name: OFFSETS_TOPIC.into(),
-            topic_id: uuid::Uuid::from_u128(7),
-            partitions: OFFSETS_PARTITION + 1,
-            replication_factor: 1,
-        }));
-        image.apply(&MetadataRecord::V1Partition(PartitionRecord {
-            topic: OFFSETS_TOPIC.into(),
-            partition: OFFSETS_PARTITION,
-            leader,
-            leader_epoch: LeaderEpoch(epoch),
-            replicas: vec![leader],
-            isr: vec![leader],
-            ..PartitionRecord::default()
-        }));
-        image
+        crate::coordinator::test_support::offsets_partition_image(
+            (OFFSETS_PARTITION, leader, epoch),
+            &[leader],
+        )
     }
 
     /// Metadata in which this broker leads the offsets partition.
@@ -229,24 +214,49 @@ mod tests {
         offsets_led_by(NODE, 0)
     }
 
-    fn open_offsets_partition(registry: &PartitionRegistry, log_dir: &Path) {
-        let part_dir = crate::log_dir::partition_dir(log_dir, OFFSETS_TOPIC, OFFSETS_PARTITION);
-        std::fs::create_dir_all(&part_dir).expect("create offsets partition dir");
-        let log = Log::open(&part_dir, LogConfig::default()).expect("open offsets log");
-        let part = crate::broker::spawn_partition(
-            OFFSETS_TOPIC.to_string(),
-            PartitionIndex(OFFSETS_PARTITION),
-            log_dir.to_path_buf(),
-            log,
-            crate::log_dir_status::LogDirRegistry::default(),
-            Arc::new(crate::producer_state::ProducerState::new()),
-            false,
-        );
+    fn offsets_registry() -> (tempfile::TempDir, Arc<PartitionRegistry>) {
+        let dir = tempfile::TempDir::new().expect("tempdir");
+        let registry = Arc::new(PartitionRegistry::new());
         registry.insert(
             OFFSETS_TOPIC.into(),
             PartitionIndex(OFFSETS_PARTITION),
-            part,
+            open_partition(dir.path(), OFFSETS_TOPIC, OFFSETS_PARTITION),
         );
+        (dir, registry)
+    }
+
+    fn offsets_partition(registry: &PartitionRegistry) -> Arc<crate::partition::Partition> {
+        registry
+            .get(OFFSETS_TOPIC, PartitionIndex(OFFSETS_PARTITION))
+            .expect("offsets partition")
+    }
+
+    fn read_offsets(log: &Log) -> ReadOutput {
+        log.read(Offset(0), krabka_units::mebibytes(1))
+            .expect("read offsets log")
+    }
+
+    /// Bind the registered partition and keep its read guard in the caller's scope.
+    macro_rules! read_registered_offsets {
+        ($registry:expr; $part:ident, $log:ident, $read:ident) => {
+            let $part = offsets_partition($registry);
+            let $log = $part.log.lock().expect("lock offsets log");
+            let $read = read_offsets(&$log);
+        };
+    }
+
+    /// The append config of these tests, evaluated in the original argument order.
+    macro_rules! append_as_test_leader {
+        ($req:expr, $registry:expr, $filters:expr, $check:expr, $topic_ids:expr) => {
+            append_txn_batch(
+                $req,
+                ($registry, &led_here(), NODE),
+                OFFSETS_PARTITION,
+                12_345,
+                $filters,
+                ($check, $topic_ids),
+            )
+        };
     }
 
     /// The check a verification of `req`'s producer on the offsets partition
@@ -255,16 +265,8 @@ mod tests {
         registry: &PartitionRegistry,
         req: &TxnOffsetCommitRequest,
     ) -> crate::partition::ProducerAppendCheck {
-        let part = registry
-            .get(OFFSETS_TOPIC, PartitionIndex(OFFSETS_PARTITION))
-            .expect("offsets partition");
-        let batch = krabka_log::TransactionalBatch {
-            producer_id: krabka_log::ProducerId(req.producer_id),
-            producer_epoch: req.producer_epoch,
-            base_sequence: 0,
-            is_transactional: true,
-            is_control: false,
-        };
+        let part = offsets_partition(registry);
+        let batch = offset_batch(req);
         let guard = part
             .start_transaction_verification(batch, false, (0, i64::MAX))
             .await
@@ -272,34 +274,36 @@ mod tests {
         crate::partition::ProducerAppendCheck { batch, guard }
     }
 
-    #[tokio::test]
-    async fn append_txn_batch_writes_transactional_offset_records() {
-        let dir = tempfile::TempDir::new().expect("tempdir");
-        let registry = Arc::new(PartitionRegistry::new());
-        open_offsets_partition(&registry, dir.path());
-        let req = request();
-
-        let (appended, _write) = append_txn_batch(
-            &req,
-            (&registry, &led_here(), NODE),
-            OFFSETS_PARTITION,
-            12_345,
-            (&HashSet::new(), &HashSet::new()),
-            (verified(&registry, &req).await, false),
+    async fn append_here(
+        req: &TxnOffsetCommitRequest,
+        registry: &PartitionRegistry,
+        filters: (&HashSet<String>, &HashSet<(String, i32)>),
+        record_topic_ids: bool,
+    ) -> Result<Option<(AppendedTxnOffsets, LeaderAppend)>, i16> {
+        append_as_test_leader!(
+            req,
+            registry,
+            filters,
+            verified(registry, req).await,
+            record_topic_ids
         )
         .await
-        .expect("append batch")
-        .expect("records appended");
+    }
+
+    #[tokio::test]
+    async fn append_txn_batch_writes_transactional_offset_records() {
+        let (_dir, registry) = offsets_registry();
+        let req = request();
+
+        let (appended, _write) =
+            append_here(&req, &registry, (&HashSet::new(), &HashSet::new()), false)
+                .await
+                .expect("append batch")
+                .expect("records appended");
         check!(appended.written_at == 0);
         check!(appended.keys == vec![("orders".to_string(), 2), ("orders".to_string(), 3)]);
 
-        let part = registry
-            .get(OFFSETS_TOPIC, PartitionIndex(OFFSETS_PARTITION))
-            .expect("offsets partition");
-        let log = part.log.lock().expect("lock offsets log");
-        let read = log
-            .read(krabka_log::Offset(0), krabka_units::mebibytes(1))
-            .expect("read offsets log");
+        read_registered_offsets!(&registry; part, log, read);
         assert!(read.batches.len() == 1);
         let batch = &read.batches[0];
         check!(batch.attributes.is_transactional());
@@ -327,30 +331,15 @@ mod tests {
 
     #[tokio::test]
     async fn append_txn_batch_skips_denied_topics_without_appending() {
-        let dir = tempfile::TempDir::new().expect("tempdir");
-        let registry = Arc::new(PartitionRegistry::new());
-        open_offsets_partition(&registry, dir.path());
+        let (_dir, registry) = offsets_registry();
         let req = request();
         let denied = maplit::hashset! {"orders".to_string()};
 
-        let appended = append_txn_batch(
-            &req,
-            (&registry, &led_here(), NODE),
-            OFFSETS_PARTITION,
-            12_345,
-            (&denied, &HashSet::new()),
-            (verified(&registry, &req).await, false),
-        )
-        .await
-        .expect("all denied succeeds");
+        let appended = append_here(&req, &registry, (&denied, &HashSet::new()), false)
+            .await
+            .expect("all denied succeeds");
         check!(appended.is_none());
-        let part = registry
-            .get(OFFSETS_TOPIC, PartitionIndex(OFFSETS_PARTITION))
-            .expect("offsets partition");
-        let log = part.log.lock().expect("lock offsets log");
-        let read = log
-            .read(krabka_log::Offset(0), krabka_units::mebibytes(1))
-            .expect("read offsets log");
+        read_registered_offsets!(&registry; part, log, read);
         assert!(read.batches.is_empty());
     }
 
@@ -359,22 +348,15 @@ mod tests {
         let registry = Arc::new(PartitionRegistry::new());
         let req = request();
         let unverified = crate::partition::ProducerAppendCheck {
-            batch: krabka_log::TransactionalBatch {
-                producer_id: krabka_log::ProducerId(req.producer_id),
-                producer_epoch: req.producer_epoch,
-                base_sequence: 0,
-                is_transactional: true,
-                is_control: false,
-            },
+            batch: offset_batch(&req),
             guard: krabka_log::VerificationGuard::SENTINEL,
         };
-        let err = append_txn_batch(
+        let err = append_as_test_leader!(
             &req,
-            (&registry, &led_here(), NODE),
-            OFFSETS_PARTITION,
-            12_345,
+            &registry,
             (&HashSet::new(), &HashSet::new()),
-            (unverified, false),
+            unverified,
+            false
         )
         .await
         .expect_err("missing offsets partition");
@@ -424,9 +406,7 @@ mod tests {
             },
         ];
         for case in cases {
-            let dir = tempfile::TempDir::new().expect("tempdir");
-            let registry = Arc::new(PartitionRegistry::new());
-            open_offsets_partition(&registry, dir.path());
+            let (_dir, registry) = offsets_registry();
             let metadata = offsets_led_by(case.led_by.0, case.led_by.1);
             let req = request();
 
@@ -451,15 +431,8 @@ mod tests {
                 Err(code) => Err(code),
             };
 
-            let part = registry
-                .get(OFFSETS_TOPIC, PartitionIndex(OFFSETS_PARTITION))
-                .expect("offsets partition");
-            let logged_epochs: Vec<i32> = part
-                .log
-                .lock()
-                .expect("lock offsets log")
-                .read(Offset(0), krabka_units::mebibytes(1))
-                .expect("read offsets log")
+            let part = offsets_partition(&registry);
+            let logged_epochs: Vec<i32> = read_offsets(&part.log.lock().expect("lock offsets log"))
                 .batches
                 .iter()
                 .map(|batch| batch.partition_leader_epoch)
@@ -471,33 +444,18 @@ mod tests {
 
     #[tokio::test]
     async fn append_txn_batch_skips_unknown_rows_without_appending_them() {
-        let dir = tempfile::TempDir::new().expect("tempdir");
-        let registry = Arc::new(PartitionRegistry::new());
-        open_offsets_partition(&registry, dir.path());
+        let (_dir, registry) = offsets_registry();
         let req = request();
         let unknown = maplit::hashset! {("orders".to_string(), 3)};
 
-        let appended = append_txn_batch(
-            &req,
-            (&registry, &led_here(), NODE),
-            OFFSETS_PARTITION,
-            12_345,
-            (&HashSet::new(), &unknown),
-            (verified(&registry, &req).await, false),
-        )
-        .await
-        .expect("append batch")
-        .expect("one row still appended");
+        let appended = append_here(&req, &registry, (&HashSet::new(), &unknown), false)
+            .await
+            .expect("append batch")
+            .expect("one row still appended");
         let (appended, _write) = appended;
         check!(appended.keys == vec![("orders".to_string(), 2)]);
 
-        let part = registry
-            .get(OFFSETS_TOPIC, PartitionIndex(OFFSETS_PARTITION))
-            .expect("offsets partition");
-        let log = part.log.lock().expect("lock offsets log");
-        let read = log
-            .read(krabka_log::Offset(0), krabka_units::mebibytes(1))
-            .expect("read offsets log");
+        read_registered_offsets!(&registry; part, log, read);
         assert!(read.batches.len() == 1);
         assert!(read.batches[0].records.len() == 1);
     }
@@ -512,31 +470,21 @@ mod tests {
         for (mode, record_topic_ids, recorded) in
             [("4.3.1", false, None), ("trunk", true, Some(topic_id))]
         {
-            let dir = tempfile::TempDir::new().expect("tempdir");
-            let registry = Arc::new(PartitionRegistry::new());
-            open_offsets_partition(&registry, dir.path());
+            let (_dir, registry) = offsets_registry();
             let mut req = request();
             req.topics[0].topic_id = krabka_protocol::primitives::uuid::Uuid(topic_id.into_bytes());
 
-            append_txn_batch(
+            append_here(
                 &req,
-                (&registry, &led_here(), NODE),
-                OFFSETS_PARTITION,
-                12_345,
+                &registry,
                 (&HashSet::new(), &HashSet::new()),
-                (verified(&registry, &req).await, record_topic_ids),
+                record_topic_ids,
             )
             .await
             .expect("append batch")
             .expect("records appended");
 
-            let part = registry
-                .get(OFFSETS_TOPIC, PartitionIndex(OFFSETS_PARTITION))
-                .expect("offsets partition");
-            let log = part.log.lock().expect("lock offsets log");
-            let read = log
-                .read(krabka_log::Offset(0), krabka_units::mebibytes(1))
-                .expect("read offsets log");
+            read_registered_offsets!(&registry; part, log, read);
             let recorded_ids: Vec<Option<uuid::Uuid>> = read.batches[0]
                 .records
                 .iter()
@@ -556,20 +504,11 @@ mod tests {
     /// `INVALID_TXN_STATE`.
     #[tokio::test]
     async fn the_append_refuses_a_producer_the_log_check_does_not_admit() {
-        let dir = tempfile::TempDir::new().expect("tempdir");
-        let registry = Arc::new(PartitionRegistry::new());
-        open_offsets_partition(&registry, dir.path());
+        let (_dir, registry) = offsets_registry();
         let req = request();
-        append_txn_batch(
-            &req,
-            (&registry, &led_here(), NODE),
-            OFFSETS_PARTITION,
-            12_345,
-            (&HashSet::new(), &HashSet::new()),
-            (verified(&registry, &req).await, false),
-        )
-        .await
-        .expect("the verified producer appends");
+        append_here(&req, &registry, (&HashSet::new(), &HashSet::new()), false)
+            .await
+            .expect("the verified producer appends");
 
         let mut stale = request();
         stale.producer_epoch = req.producer_epoch - 1;
@@ -582,35 +521,22 @@ mod tests {
         ];
         for (label, req, expected) in cases {
             let unverified = crate::partition::ProducerAppendCheck {
-                batch: krabka_log::TransactionalBatch {
-                    producer_id: krabka_log::ProducerId(req.producer_id),
-                    producer_epoch: req.producer_epoch,
-                    base_sequence: 0,
-                    is_transactional: true,
-                    is_control: false,
-                },
+                batch: offset_batch(&req),
                 guard: krabka_log::VerificationGuard::SENTINEL,
             };
-            let refused = append_txn_batch(
+            let refused = append_as_test_leader!(
                 &req,
-                (&registry, &led_here(), NODE),
-                OFFSETS_PARTITION,
-                12_345,
+                &registry,
                 (&HashSet::new(), &HashSet::new()),
-                (unverified, false),
+                unverified,
+                false
             )
             .await
             .expect_err(label);
             assert!(refused == expected, "{label}");
         }
 
-        let part = registry
-            .get(OFFSETS_TOPIC, PartitionIndex(OFFSETS_PARTITION))
-            .expect("offsets partition");
-        let log = part.log.lock().expect("lock offsets log");
-        let read = log
-            .read(krabka_log::Offset(0), krabka_units::mebibytes(1))
-            .expect("read offsets log");
+        read_registered_offsets!(&registry; part, log, read);
         assert!(read.batches.len() == 1, "only the verified append landed");
     }
 }

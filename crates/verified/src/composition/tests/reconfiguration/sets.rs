@@ -7,12 +7,10 @@ use super::*;
 proptest! {
     #[test]
     fn changed_quorums_match_actual_set_intersections(
-        old in prop::collection::vec(0u64..12, 0..10), node in 0u64..13,
-        bits in any::<u16>(), operation in 0u8..4, membership in 0u8..4,
-        version in 0u16..3, requested in 0u16..3,
+        input in request_cases(),
         ballots in prop::collection::vec((any::<bool>(), any::<bool>()), 11),
     ) {
-        let (leader, context, request, target) = generated_request(old.len(), bits, operation, membership, version, requested);
+        let (old, node, (leader, context, request, target)) = input;
         check_overlap(&old, leader, context, request, node, target, &ballots[..=old.len()]);
     }
 }

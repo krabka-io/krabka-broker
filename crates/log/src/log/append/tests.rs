@@ -12,8 +12,10 @@ use crate::{
     io::LogIo,
     leader_epoch_checkpoint::EpochEntry,
     log::test_support::{
-        abort_marker, log_append_time_log, rolling_test_log, sample_batch, sample_batch_with_epoch,
+        abort_marker, append_transaction, assert_empty_append_state, assert_only_active,
+        log_append_time_log, rolling_test_log, sample_batch, sample_batch_with_epoch,
         test_batch_at, test_log, tiny_segments, transactional_batch, verbatim_from,
+        write_with_budget,
     },
     stamp_index::{StampEntry, StampIndex},
 };
@@ -23,15 +25,8 @@ struct FailAfterBytes(std::sync::Mutex<usize>);
 
 impl LogIo for FailAfterBytes {
     fn write(&self, file: &std::fs::File, buf: &[u8]) -> std::io::Result<usize> {
-        use std::io::Write;
-
         let mut remaining = self.0.lock().unwrap();
-        if *remaining == 0 {
-            return Err(std::io::ErrorKind::StorageFull.into());
-        }
-        let written = (&*file).write(&buf[..buf.len().min(*remaining)])?;
-        *remaining -= written;
-        Ok(written)
+        write_with_budget(file, buf, &mut remaining)
     }
 }
 
@@ -78,22 +73,30 @@ impl LogIo for FailSyncAt {
     }
 }
 
-#[test]
-fn partial_write_rolls_back_cursor_and_recovers_pre_append_state() {
-    let (dir, mut log) = test_log();
+fn fail_after_bytes(log: &mut Log, budget: usize) {
     log.test_set_io(std::sync::Arc::new(FailAfterBytes(std::sync::Mutex::new(
-        16,
+        budget,
     ))));
+}
 
-    let error = log.append(&mut sample_batch(2)).unwrap_err();
-
+fn assert_storage_full(error: &LogError) {
     assert!(
         matches!(error, LogError::Io(error) if error.kind() == std::io::ErrorKind::StorageFull)
     );
+}
+
+#[test]
+fn partial_write_rolls_back_cursor_and_recovers_pre_append_state() {
+    let (dir, mut log) = test_log();
+    fail_after_bytes(&mut log, 16);
+
+    let error = log.append(&mut sample_batch(2)).unwrap_err();
+
+    assert_storage_full(&error);
     assert!(log.log_end_offset() == Offset(0));
     assert!(log.producer_state_snapshot().is_empty());
     drop(log);
-    let recovered = Log::open(dir.path(), LogConfig::default()).unwrap();
+    let recovered = crate::test_support::open_log(dir.path());
     assert!(recovered.log_end_offset() == Offset(0));
 }
 
@@ -109,15 +112,11 @@ fn shorter_append_after_partial_write_leaves_no_physical_tail() {
     let mut failed = sample_batch(10);
     let partial_len = next.encoded_len() + 1;
     assert!(partial_len < failed.encoded_len());
-    log.test_set_io(std::sync::Arc::new(FailAfterBytes(std::sync::Mutex::new(
-        partial_len,
-    ))));
+    fail_after_bytes(&mut log, partial_len);
 
     let error = log.append(&mut failed).unwrap_err();
 
-    assert!(
-        matches!(error, LogError::Io(error) if error.kind() == std::io::ErrorKind::StorageFull)
-    );
+    assert_storage_full(&error);
     assert!(std::fs::metadata(&log_path).unwrap().len() == position);
 
     log.test_set_io(std::sync::Arc::new(crate::io::FileIo));
@@ -151,9 +150,7 @@ fn sync_failure_rolls_back_leo_producer_and_transaction_state() {
 
     assert!(matches!(error, LogError::Io(_)));
     assert!(io.0.load(std::sync::atomic::Ordering::Relaxed) == 2);
-    assert!(log.log_end_offset() == Offset(0));
-    assert!(log.lso() == Offset(0));
-    assert!(log.producer_state_snapshot().is_empty());
+    assert_empty_append_state(&log);
     assert!(log.pending_transaction_start(producer) == None);
     drop(log);
     let recovered = Log::open(dir.path(), config).unwrap();
@@ -276,20 +273,12 @@ fn append_at_uses_reconciled_frontier_floor() {
 /// log's later reads, not the write.
 #[test]
 fn a_replicated_batch_is_not_held_to_the_decompressed_record_limit() {
-    let dir = tempdir().unwrap();
-    let mut log = Log::open(
-        dir.path(),
-        LogConfig {
-            max_decompressed_record: Some(bytes(100)),
-            ..LogConfig::default()
-        },
-    )
-    .unwrap();
+    let (_dir, mut log) = crate::log::test_support::configured_test_log(LogConfig {
+        max_decompressed_record: Some(bytes(100)),
+        ..LogConfig::default()
+    });
     let mut batch = test_batch_at(0);
-    batch.attributes = batch
-        .attributes
-        .with_compression(krabka_compression::CompressionType::Gzip);
-    batch.records[0].value = Some(bytes::Bytes::from(vec![7_u8; 1_000]));
+    crate::log::test_support::gzip_value(&mut batch, 1_000);
 
     log.append_at(&mut batch, Offset(0)).unwrap();
 
@@ -319,9 +308,7 @@ fn invalid_interval_is_write_free_and_a_corrected_retry_succeeds() {
     let error = log.append(&mut invalid).unwrap_err();
 
     assert!(matches!(error, LogError::InvalidArgument(_)));
-    assert!(log.log_end_offset() == Offset(0));
-    assert!(log.lso() == Offset(0));
-    assert!(log.producer_state_snapshot().is_empty());
+    assert_empty_append_state(&log);
 
     let mut retry = sample_batch(1);
     assert!(log.append(&mut retry).unwrap().0 == Offset(0));
@@ -337,26 +324,18 @@ fn successor_overflow_is_rejected_before_log_mutation() {
     let error = log.append(&mut batch).unwrap_err();
 
     assert!(matches!(error, LogError::InvalidArgument(_)));
-    assert!(log.log_end_offset() == Offset(0));
-    assert!(log.lso() == Offset(0));
-    assert!(log.producer_state_snapshot().is_empty());
+    assert_empty_append_state(&log);
 }
 
 #[test]
 fn sidecar_failure_rolls_back_bytes_frontiers_and_allows_retry() {
-    let (_dir, mut log) = test_log();
-    log.set_stamp_source(std::sync::Arc::new(
-        crate::stamp_source::MonotonicStampSource::new(100, 1),
-    ))
-    .unwrap();
+    let (_dir, mut log) = crate::log::test_support::stamped_test_log(100, 1);
     log.stamp_indexes.clear();
 
     let error = log.append(&mut sample_batch(1)).unwrap_err();
 
     assert!(matches!(error, LogError::Corrupt(_)));
-    assert!(log.log_end_offset() == Offset(0));
-    assert!(log.lso() == Offset(0));
-    assert!(log.producer_state_snapshot().is_empty());
+    assert_empty_append_state(&log);
     assert!(log.active_txn_index.entries().is_empty());
     assert!(log.stamp_for_offset(Offset(0)).is_none());
 
@@ -368,12 +347,7 @@ fn sidecar_failure_rolls_back_bytes_frontiers_and_allows_retry() {
 
 #[test]
 fn segment_bytes_are_synced_before_durable_sidecars() {
-    let (_dir, mut stamped_log) = test_log();
-    stamped_log
-        .set_stamp_source(std::sync::Arc::new(
-            crate::stamp_source::MonotonicStampSource::new(100, 1),
-        ))
-        .unwrap();
+    let (_dir, mut stamped_log) = crate::log::test_support::stamped_test_log(100, 1);
     let stamp_syncs = std::sync::Arc::new(CountSync(std::sync::atomic::AtomicUsize::new(0)));
     stamped_log.test_set_io(stamp_syncs.clone());
 
@@ -383,9 +357,7 @@ fn segment_bytes_are_synced_before_durable_sidecars() {
     let (_dir, mut transaction_log) = test_log();
     let txn_syncs = std::sync::Arc::new(CountSync(std::sync::atomic::AtomicUsize::new(0)));
     transaction_log.test_set_io(txn_syncs.clone());
-    transaction_log
-        .append(&mut transactional_batch(7, 0, &["value"]))
-        .unwrap();
+    append_transaction(&mut transaction_log, (7, 0), &["value"]);
     assert!(txn_syncs.0.load(std::sync::atomic::Ordering::Relaxed) == 0);
 
     transaction_log.append(&mut abort_marker(7, 0)).unwrap();
@@ -394,20 +366,12 @@ fn segment_bytes_are_synced_before_durable_sidecars() {
 
 #[test]
 fn post_roll_failure_restores_the_previous_active_segment() {
-    let dir = tempdir().unwrap();
-    let mut log = Log::open(
-        dir.path(),
-        LogConfig {
-            flush_on_append: true,
-            ..tiny_segments()
-        },
-    )
-    .unwrap();
+    let (_dir, mut log) = crate::log::test_support::configured_test_log(LogConfig {
+        flush_on_append: true,
+        ..tiny_segments()
+    });
     log.append(&mut sample_batch(1)).unwrap();
-    log.set_stamp_source(std::sync::Arc::new(
-        crate::stamp_source::MonotonicStampSource::new(100, 1),
-    ))
-    .unwrap();
+    crate::log::test_support::install_stamps(&mut log, 100, 1);
     let io = std::sync::Arc::new(FailSyncAt {
         calls: std::sync::atomic::AtomicUsize::new(0),
         fail_at: 2,
@@ -418,10 +382,8 @@ fn post_roll_failure_restores_the_previous_active_segment() {
 
     assert!(matches!(error, LogError::Io(_)));
     assert!(io.calls.load(std::sync::atomic::Ordering::Relaxed) == 4);
-    assert!(log.log_end_offset() == Offset(1));
+    assert_only_active(&log, Offset(1), Offset(0));
     assert!(log.lso() == Offset(1));
-    assert!(log.segments.is_empty());
-    assert!(log.active.as_ref().unwrap().base_offset() == Offset(0));
     assert!(log.stamp_for_offset(Offset(1)).is_none());
 
     assert!(log.append(&mut sample_batch(1)).unwrap().0 == Offset(1));
@@ -433,16 +395,12 @@ fn post_roll_partial_write_restores_the_previous_active_segment() {
     let dir = tempdir().unwrap();
     let mut log = rolling_test_log(dir.path());
     log.append(&mut sample_batch(1)).unwrap();
-    log.test_set_io(std::sync::Arc::new(FailAfterBytes(std::sync::Mutex::new(
-        16,
-    ))));
+    fail_after_bytes(&mut log, 16);
 
     let error = log.append(&mut sample_batch(2)).unwrap_err();
 
     assert!(matches!(error, LogError::Io(_)));
-    assert!(log.log_end_offset() == Offset(1));
-    assert!(log.segments.is_empty());
-    assert!(log.active.as_ref().unwrap().base_offset() == Offset(0));
+    assert_only_active(&log, Offset(1), Offset(0));
 
     log.test_set_io(std::sync::Arc::new(crate::io::FileIo));
     assert!(log.append(&mut sample_batch(1)).unwrap().0 == Offset(1));
@@ -520,23 +478,18 @@ fn append_at_past_the_log_end_offset_leaves_a_hole() {
 
 #[test]
 fn segment_rolls_when_bytes_exceeded() {
-    let dir = tempdir().unwrap();
-    let config = LogConfig {
-        segment_size: bytes(200), // tiny so we roll fast
-        ..LogConfig::default()
-    };
-    let mut log = Log::open(dir.path(), config).unwrap();
-    for _ in 0..5 {
-        let mut b = sample_batch(2);
-        log.append(&mut b).unwrap();
-    }
+    // tiny so we roll fast
+    let (dir, _log) = crate::log::test_support::sample_log(
+        LogConfig {
+            segment_size: bytes(200),
+            ..LogConfig::default()
+        },
+        5,
+        2,
+    );
     // Multiple .log files should exist now.
-    let log_files: Vec<_> = std::fs::read_dir(dir.path())
-        .unwrap()
-        .filter_map(Result::ok)
-        .filter(|e| e.path().extension().and_then(|s| s.to_str()) == Some("log"))
-        .collect();
-    assert2::assert!(log_files.len() >= 2);
+    let log_files = crate::test_support::log_file_count(dir.path());
+    assert2::assert!(log_files >= 2);
 }
 
 /// Kafka's `LogSegment.shouldRoll` measures the wait to roll against the
@@ -572,16 +525,11 @@ fn segment_ms_rolls_against_the_incoming_batch_timestamp() {
         ),
     ];
     for (segment_ms, first_ts, incoming_ts, expect_roll, label) in cases {
-        let dir = tempdir().unwrap();
-        let mut log = Log::open(
-            dir.path(),
-            LogConfig {
-                segment_size: gibibytes(1),
-                segment_roll_interval: millis(segment_ms),
-                ..LogConfig::default()
-            },
-        )
-        .unwrap();
+        let (_dir, mut log) = crate::log::test_support::configured_test_log(LogConfig {
+            segment_size: gibibytes(1),
+            segment_roll_interval: millis(segment_ms),
+            ..LogConfig::default()
+        });
         let mut first = test_batch_at(0);
         first.base_timestamp = first_ts;
         first.max_timestamp = first_ts;
@@ -604,15 +552,10 @@ fn segment_ms_rolls_against_the_incoming_batch_timestamp() {
 fn an_idle_partition_never_rolls() {
     use krabka_units::prelude::millis;
 
-    let dir = tempdir().unwrap();
-    let mut log = Log::open(
-        dir.path(),
-        LogConfig {
-            segment_roll_interval: millis(1),
-            ..LogConfig::default()
-        },
-    )
-    .unwrap();
+    let (_dir, mut log) = crate::log::test_support::configured_test_log(LogConfig {
+        segment_roll_interval: millis(1),
+        ..LogConfig::default()
+    });
     log.append(&mut sample_batch(1)).unwrap();
 
     assert!(log.segments.is_empty());
@@ -664,16 +607,11 @@ fn a_full_offset_or_time_index_rolls_the_segment() {
         ),
     ];
     for (label, segment_index_size, rising, expected) in cases {
-        let dir = tempdir().unwrap();
-        let mut log = Log::open(
-            dir.path(),
-            LogConfig {
-                index_interval: bytes(1),
-                segment_index_size,
-                ..LogConfig::default()
-            },
-        )
-        .unwrap();
+        let (_dir, mut log) = crate::log::test_support::configured_test_log(LogConfig {
+            index_interval: bytes(1),
+            segment_index_size,
+            ..LogConfig::default()
+        });
         for timestamp in 0..10 {
             let mut batch = sample_batch(1);
             batch.max_timestamp = if rising { 1_000 + timestamp } else { 1_000 };
@@ -699,10 +637,7 @@ fn a_full_offset_or_time_index_rolls_the_segment() {
 fn roll_reopens_stampindex_for_new_segment() {
     let dir = tempdir().unwrap();
     let mut log = rolling_test_log(dir.path());
-    log.set_stamp_source(std::sync::Arc::new(
-        crate::stamp_source::MonotonicStampSource::new(100, 5),
-    ))
-    .unwrap();
+    crate::log::test_support::install_stamps(&mut log, 100, 5);
 
     log.append(&mut sample_batch(1)).unwrap(); // offset 0, segment 0, stamp 100
     log.append(&mut sample_batch(1)).unwrap(); // rolls: segment @ base 1, stamp 105
@@ -731,9 +666,7 @@ fn roll_reopens_stampindex_for_new_segment() {
 
 #[test]
 fn append_records_epoch_transition() {
-    use tempfile::TempDir;
-    let dir = TempDir::new().unwrap();
-    let mut log = Log::open(dir.path(), LogConfig::default()).unwrap();
+    let (_dir, mut log) = test_log();
     let mut b = sample_batch_with_epoch(3, 0);
     log.append(&mut b).unwrap();
     let mut b2 = sample_batch_with_epoch(2, 1); // 2 records at epoch 1
@@ -834,8 +767,7 @@ fn offset_for_timestamp_answers_in_append_time() {
 
     let (_base_offset, stamp) = log.append(&mut produced).unwrap();
 
-    let stamp = stamp.expect("a LogAppendTime log reports the stamp it wrote");
-    check!(log.offset_for_timestamp(1_000) == Some((Offset(0), stamp)));
+    let stamp = crate::log::test_support::check_append_time_lookup(&log, stamp);
     check!(log.offset_for_timestamp(stamp) == Some((Offset(0), stamp)));
     check!(log.offset_for_timestamp(stamp + 1) == None);
     drop(dir);

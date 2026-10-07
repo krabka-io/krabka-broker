@@ -20,12 +20,14 @@ use assert2::{assert, check};
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use krabka_broker::{BrokerConfig, BrokerHandle, NodeId};
 use krabka_client_core::Client;
-use krabka_protocol::owned::{
-    create_topics_request::{CreatableTopic, CreateTopicsRequest},
-    find_coordinator_request::FindCoordinatorRequest,
-    find_coordinator_response::FindCoordinatorResponse,
-};
+use krabka_protocol::owned::find_coordinator_response::FindCoordinatorResponse;
 use tempfile::TempDir;
+
+use crate::support::{
+    client::connect_owned,
+    discovery::coordinator_lookup_request,
+    topics::{creatable_topic, create_topic_request},
+};
 
 mod support;
 
@@ -45,22 +47,17 @@ const SETTLE: Duration = Duration::from_secs(60);
 type Cluster = Vec<(BrokerHandle, BrokerConfig, TempDir)>;
 
 async fn client(handle: &BrokerHandle) -> Client {
-    Client::builder()
-        .bootstrap(handle.listen_addr().to_string())
-        .client_id("coordinator-topics")
-        .build()
-        .await
-        .expect("client")
+    connect_owned(
+        handle.listen_addr().to_string(),
+        "coordinator-topics",
+        "client",
+    )
+    .await
 }
 
 async fn find(client: &Client, key_type: i8, key: &str) -> FindCoordinatorResponse {
     client
-        .send(FindCoordinatorRequest {
-            key: key.into(),
-            key_type,
-            coordinator_keys: vec![key.into()],
-            ..Default::default()
-        })
+        .send(coordinator_lookup_request(key, key_type, vec![key.into()]))
         .await
         .expect("FindCoordinator")
 }
@@ -138,9 +135,7 @@ async fn a_cold_cluster_replicates_the_offsets_topic_on_every_broker() {
     check!(next != coordinator);
     survivor.close();
 
-    for (handle, _, _) in cluster {
-        handle.shutdown().await;
-    }
+    crate::support::shutdown_cluster(cluster).await;
     drop(stopped_dir);
 }
 
@@ -169,9 +164,7 @@ async fn a_replication_factor_above_the_broker_count_leaves_the_coordinator_unav
     }
     admin.close();
 
-    for (handle, _, _) in cluster {
-        handle.shutdown().await;
-    }
+    crate::support::shutdown_cluster(cluster).await;
 }
 
 /// A broker that stops through a controlled shutdown stays registered,
@@ -202,16 +195,10 @@ async fn a_cleanly_stopped_broker_still_counts_toward_the_replication_factor() {
         .expect("a broker that is not the raft leader");
     let admin = client(&cluster[(position + 1) % cluster.len()].0).await;
     let created = admin
-        .send(CreateTopicsRequest {
-            topics: vec![CreatableTopic {
-                name: LED_TOPIC.into(),
-                num_partitions: 3,
-                replication_factor: 3,
-                ..Default::default()
-            }],
-            timeout_ms: 5_000,
-            ..Default::default()
-        })
+        .send(create_topic_request(
+            creatable_topic(LED_TOPIC, 3, 3),
+            5_000,
+        ))
         .await
         .expect("CreateTopics");
     assert!(created.topics[0].error_code == 0, "{created:?}");
@@ -270,8 +257,6 @@ async fn a_cleanly_stopped_broker_still_counts_toward_the_replication_factor() {
     let every_broker = vec![NodeId(1), NodeId(2), NodeId(3)];
     assert!(placed == vec![(every_broker, survivors); 3]);
 
-    for (handle, _, _) in cluster {
-        handle.shutdown().await;
-    }
+    crate::support::shutdown_cluster(cluster).await;
     drop(stopped_dir);
 }

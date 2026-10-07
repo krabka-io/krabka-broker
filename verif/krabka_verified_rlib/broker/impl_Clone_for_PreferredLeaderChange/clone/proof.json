@@ -4,7 +4,7 @@
     "Coma": {
       "vc_clone_PreferredLeaderChange": {
         "prover": "alt-ergo",
-        "time": 0.016
+        "time": 0.006
       }
     }
   }

@@ -4,14 +4,11 @@
 //! Release re-delivers the same offsets at a higher `delivery_count`. Reject
 //! archives them, so the start offset moves past the poison record.
 
-use std::time::Duration;
-
 use assert2::{assert, check};
-use krabka_broker::{BootstrapMode, Broker};
 
 use crate::{
     ACCEPT, NONE, REJECT, RELEASE,
-    harness::{bootstrap_share_state, broker_config, broker_test_permit, connect, join, produce_n},
+    harness::{broker_config, broker_test_permit, join, produce_n},
     share_rpc::{acquired_count, fetch_until_acquired, share_ack, share_fetch},
 };
 
@@ -72,11 +69,7 @@ async fn consume_accept_restart() {
     }
 
     {
-        let mut cfg = broker_config(log_dir);
-        cfg.bootstrap_mode = BootstrapMode::Rejoin;
-        let broker = Broker::start(cfg).await.unwrap();
-        let client = connect(&broker.listen_addr().to_string()).await;
-        bootstrap_share_state(&broker, &client, "g1").await;
+        let (broker, client) = crate::support::share::rejoin_group(log_dir, "g1").await;
 
         // A fresh member rejoins the recovered group; a fresh-session fetch
         // must observe the recovered SPSO (past offset 2) — zero acquired.
@@ -96,8 +89,8 @@ async fn consume_accept_restart() {
 /// Release re-delivers the same offsets with an incremented `delivery_count`.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn release_redelivers() {
-    let _permit = broker_test_permit().await;
-    let (broker, client, _dir, tid) = crate::support::share::topic_fixture("t", 1, |_| {}).await;
+    let (_permit, broker, client, _dir, tid) =
+        crate::support::share::permitted_topic_fixture("t", 1, |_| {}).await;
     let (member, _) = crate::harness::initialize_consumption(&broker, &client, tid, 2).await;
 
     let row = acquire_both(&client, &member, tid).await;
@@ -126,8 +119,8 @@ async fn release_redelivers() {
 /// acquires.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn reject_archives() {
-    let _permit = broker_test_permit().await;
-    let (broker, client, _dir, tid) = crate::support::share::topic_fixture("t", 1, |_| {}).await;
+    let (_permit, broker, client, _dir, tid) =
+        crate::support::share::permitted_topic_fixture("t", 1, |_| {}).await;
     let (member, _) = crate::harness::initialize_consumption(&broker, &client, tid, 2).await;
 
     let _row = acquire_both(&client, &member, tid).await;
@@ -147,17 +140,10 @@ async fn reject_archives() {
     // Produce one more (offset 2). The SPSO advanced past the rejected pair, so
     // only the new offset is acquired — proving the rejected ones were skipped.
     produce_n(&client, "t", tid, 0, 1).await;
-    let mut row3 = share_fetch(&client, "g1", &member, tid, 0, 3, 0).await;
-    for epoch in 4..18 {
-        if acquired_count(&row3) > 0 {
-            break;
-        }
-        // intentional: bounded RPC poll — acquiring the freshly produced offset
-        // 2 requires re-fetching; no image/metric signals when it becomes
-        // acquirable.
-        tokio::time::sleep(Duration::from_millis(100)).await;
-        row3 = share_fetch(&client, "g1", &member, tid, 0, epoch, 0).await;
-    }
+    let row3 = share_fetch(&client, "g1", &member, tid, 0, 3, 0).await;
+    let row3 =
+        crate::support::share::refetch_while_empty(&client, ("g1", &member, tid, 0), row3, 4..18)
+            .await;
     assert!(
         acquired_count(&row3) == 1,
         "only the new offset must be acquired, got {:?}",

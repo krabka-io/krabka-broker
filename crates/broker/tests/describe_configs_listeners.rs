@@ -7,6 +7,8 @@
 //! node opens only its data-plane listener, which `--bootstrap-server` dials. A
 //! combined node opens both, and both answer the same.
 
+mod support;
+
 use std::net::SocketAddr;
 
 use assert2::check;
@@ -15,13 +17,15 @@ use krabka_client_core::{Connection, ConnectionOptions};
 use krabka_protocol::{
     UnknownTaggedFields,
     owned::{
-        describe_configs_request::{DescribeConfigsRequest, DescribeConfigsResource},
+        describe_configs_request::DescribeConfigsRequest,
         describe_configs_response::{
             DescribeConfigsResourceResult, DescribeConfigsResult, DescribeConfigsSynonym,
         },
     },
 };
 use tempfile::TempDir;
+
+use crate::support::configs::describe_resource;
 
 /// Kafka's `ConfigResource.Type.BROKER`.
 const RESOURCE_TYPE_BROKER: i8 = 4;
@@ -115,12 +119,11 @@ async fn describe_listener_keys(address: SocketAddr, node: u64) -> DescribeConfi
     .expect("connect");
     let response = connection
         .send(DescribeConfigsRequest {
-            resources: vec![DescribeConfigsResource {
-                resource_type: RESOURCE_TYPE_BROKER,
-                resource_name: node.to_string(),
-                configuration_keys: Some(LISTENER_KEYS.map(str::to_owned).to_vec()),
-                ..Default::default()
-            }],
+            resources: vec![describe_resource(
+                RESOURCE_TYPE_BROKER,
+                node.to_string(),
+                Some(LISTENER_KEYS.map(str::to_owned).to_vec()),
+            )],
             include_synonyms: true,
             include_documentation: false,
             ..Default::default()

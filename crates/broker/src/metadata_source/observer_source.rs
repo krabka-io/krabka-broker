@@ -52,15 +52,8 @@ impl MetadataSource for ObserverSource {
         // and KIP-853 voter admin RPCs are forwarded to the controller.
         QuorumState {
             current_term: 0,
-            last_applied_index: 0,
             current_leader: *self.observer.watch_leader().borrow(),
-            voters: Vec::new(),
-            voter_nodes: std::collections::BTreeMap::new(),
-            per_voter_matched_index: std::collections::BTreeMap::new(),
-            per_replica_last_fetch_ms: std::collections::BTreeMap::new(),
-            per_replica_last_caught_up_ms: std::collections::BTreeMap::new(),
-            observer_directory_ids: std::collections::BTreeMap::new(),
-            is_leader: false,
+            ..Default::default()
         }
     }
     fn current_controller_epoch(&self) -> Option<u64> {

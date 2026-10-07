@@ -4,10 +4,10 @@
     "Coma": {
       "vc_len_RemoteRetentionSegment": {
         "prover": "alt-ergo",
-        "time": 0.004
+        "time": 0.012
       },
-      "vc_remote_retention_prefix": { "prover": "alt-ergo", "time": 0.196 },
-      "vc_saturating_sub": { "prover": "alt-ergo", "time": 0.003 }
+      "vc_remote_retention_prefix": { "prover": "z3", "time": 0.015 },
+      "vc_saturating_sub": { "prover": "alt-ergo", "time": 0.016 }
     }
   }
 }

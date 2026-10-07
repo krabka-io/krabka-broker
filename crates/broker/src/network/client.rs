@@ -41,16 +41,41 @@ const DEFAULT_SOCKET_BUFFER: ByteSize = mebibytes(1);
 /// accept side: an untuned connection still works, just less efficiently.
 #[cfg(not(target_family = "wasm"))]
 fn tune_outbound_socket(stream: &TcpStream, send_buffer: ByteSize, receive_buffer: ByteSize) {
-    if let Err(e) = stream.set_nodelay(true) {
-        tracing::debug!(error = %e, "TCP_NODELAY set failed on outbound socket");
+    tune_socket(
+        stream,
+        send_buffer,
+        receive_buffer,
+        [
+            |e| tracing::debug!(error = %e, "TCP_NODELAY set failed on outbound socket"),
+            |e| tracing::debug!(error = %e, "SO_SNDBUF set failed on outbound socket"),
+            |e| tracing::debug!(error = %e, "SO_RCVBUF set failed on outbound socket"),
+        ],
+    );
+}
+
+/// Apply options in their original order; callers retain their diagnostic call sites.
+pub(crate) fn tune_socket(
+    stream: &TcpStream,
+    send_buffer: ByteSize,
+    receive_buffer: ByteSize,
+    on_error: [fn(std::io::Error); 3],
+) {
+    if let Err(error) = stream.set_nodelay(true) {
+        on_error[0](error);
     }
-    let sock = socket2::SockRef::from(stream);
-    if let Err(e) = sock.set_send_buffer_size(send_buffer.bytes_usize()) {
-        tracing::debug!(error = %e, "SO_SNDBUF set failed on outbound socket");
+    #[cfg(not(target_family = "wasm"))]
+    {
+        let socket = socket2::SockRef::from(stream);
+        if let Err(error) = socket.set_send_buffer_size(send_buffer.bytes_usize()) {
+            on_error[1](error);
+        }
+        if let Err(error) = socket.set_recv_buffer_size(receive_buffer.bytes_usize()) {
+            on_error[2](error);
+        }
     }
-    if let Err(e) = sock.set_recv_buffer_size(receive_buffer.bytes_usize()) {
-        tracing::debug!(error = %e, "SO_RCVBUF set failed on outbound socket");
-    }
+    // WASI preview 1 has no socket-buffer options and keeps the host defaults.
+    #[cfg(target_family = "wasm")]
+    let _ = (send_buffer, receive_buffer);
 }
 
 /// Map the broker's [`InterBrokerCredentials`] onto the client-core
@@ -98,14 +123,9 @@ pub(crate) fn to_client_creds(c: &InterBrokerCredentials) -> krabka_client_core:
     }
 }
 
+#[krabka_macros::transport_errors]
 #[derive(Debug, Error)]
 pub enum InterBrokerError {
-    #[error("io: {0}")]
-    Io(#[from] std::io::Error),
-    #[error("tls: {0}")]
-    Tls(String),
-    #[error("sasl: {0}")]
-    Sasl(String),
     #[error("config: {0}")]
     Config(String),
     #[error("codec: {0}")]

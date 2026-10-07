@@ -19,12 +19,14 @@ use std::sync::{
 use assert2::{assert, check};
 use bytes::Bytes;
 use krabka_protocol::{
-    owned::{
-        create_topics_request::{CreatableTopic, CreateTopicsRequest},
-        fetch_request::{FetchPartition, FetchRequest, FetchTopic},
-        produce_request::{PartitionProduceData, ProduceRequest, TopicProduceData},
-    },
-    records::{Record, RecordBatch},
+    owned::create_topics_request::{CreatableTopic, CreateTopicsRequest},
+    records::RecordBatch,
+};
+
+use crate::support::{
+    fetch::{fetch_partition, single_partition_fetch},
+    produce::single_partition_produce,
+    records::{batch_from_records, value_record},
 };
 
 mod support;
@@ -36,16 +38,15 @@ fn batch_of(values: &[&str]) -> RecordBatch {
     let count = i32::try_from(values.len()).expect("a small batch");
     RecordBatch {
         last_offset_delta: count - 1,
-        records: values
-            .iter()
-            .zip(0..)
-            .map(|(value, offset_delta)| Record {
-                offset_delta,
-                value: Some(Bytes::from(value.to_string())),
-                ..Record::default()
-            })
-            .collect(),
-        ..RecordBatch::default()
+        ..batch_from_records(
+            values
+                .iter()
+                .zip(0..)
+                .map(|(value, offset_delta)| {
+                    value_record(offset_delta, Some(Bytes::from(value.to_string())))
+                })
+                .collect(),
+        )
     }
 }
 
@@ -69,43 +70,24 @@ async fn produce_and_fetch(client: &krabka_client_core::Client) -> usize {
     let topic_id = support::topic_id_for(client, TOPIC).await;
 
     let produced = client
-        .send(ProduceRequest {
-            acks: -1,
-            timeout_ms: 5_000,
-            topic_data: vec![TopicProduceData {
-                name: TOPIC.into(),
-                topic_id,
-                partition_data: vec![PartitionProduceData {
-                    index: 0,
-                    records: Some(batch_of(&["a", "b", "c"]).into()),
-                    ..PartitionProduceData::default()
-                }],
-                ..TopicProduceData::default()
-            }],
-            ..ProduceRequest::default()
-        })
+        .send(single_partition_produce(
+            TOPIC,
+            topic_id,
+            0,
+            Some(batch_of(&["a", "b", "c"]).into()),
+            (-1, 5_000),
+        ))
         .await
         .expect("Produce");
     assert!(produced.responses[0].partition_responses[0].error_code == 0);
 
     let fetched = client
-        .send(FetchRequest {
-            max_wait_ms: 100,
-            min_bytes: 1,
-            max_bytes: 1 << 20,
-            topics: vec![FetchTopic {
-                topic: TOPIC.into(),
-                topic_id,
-                partitions: vec![FetchPartition {
-                    partition: 0,
-                    fetch_offset: 0,
-                    partition_max_bytes: 1 << 20,
-                    ..FetchPartition::default()
-                }],
-                ..FetchTopic::default()
-            }],
-            ..FetchRequest::default()
-        })
+        .send(single_partition_fetch(
+            TOPIC,
+            topic_id,
+            fetch_partition(0, 0, 1 << 20),
+            (100, 1, 1 << 20),
+        ))
         .await
         .expect("Fetch");
     let partition = &fetched.responses[0].partitions[0];

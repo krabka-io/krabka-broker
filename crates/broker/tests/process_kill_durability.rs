@@ -189,9 +189,7 @@ impl BrokerProcess {
 
     /// `uid:gid` of the host data directory, for `docker run --user`.
     fn user(&self) -> String {
-        use std::os::unix::fs::MetadataExt as _;
-        let meta = std::fs::metadata(self.host_root()).expect("stat the host data directory");
-        format!("{}:{}", meta.uid(), meta.gid())
+        crate::support::storage::host_directory_user(self.host_root())
     }
 
     fn host_root(&self) -> &Path {
@@ -242,9 +240,7 @@ impl Drop for BrokerProcess {
     fn drop(&mut self) {
         // Best effort: a container that never started leaves nothing to remove,
         // and a panic in `drop` would replace the real failure with this one.
-        let _ = Command::new("docker")
-            .args(["rm", "--force", "--volumes", &self.name])
-            .output();
+        crate::support::remove_container_with_volumes(&self.name);
     }
 }
 
@@ -428,14 +424,12 @@ async fn produce_settled(producer: &Producer, topic: &str, keys: &[String]) -> V
 }
 
 fn record(topic: &str, key: &str) -> ProducerRecord {
-    ProducerRecord {
-        topic: topic.to_owned(),
-        partition: Some(0),
-        key: Some(key.to_owned().into()),
-        value: Some(key.to_owned().into()),
-        headers: vec![],
-        timestamp_ms: None,
-    }
+    crate::support::producer::producer_record(
+        topic.to_owned(),
+        Some(0),
+        Some(key.to_owned().into()),
+        Some(key.to_owned().into()),
+    )
 }
 
 /// A producer that reports an ack only when the broker gave it one.
@@ -445,15 +439,7 @@ fn record(topic: &str, key: &str) -> ProducerRecord {
 /// acknowledged, which is precisely the confusion this suite has to avoid.
 /// `acks=All` with one in-sync replica is the leader's own commit.
 async fn producer_for(bootstrap: &str) -> Producer {
-    Producer::builder()
-        .bootstrap(bootstrap)
-        .acks(Acks::All)
-        .enable_idempotence(false)
-        .retries(0)
-        .linger(Duration::ZERO)
-        .build()
-        .await
-        .expect("build a producer")
+    crate::support::producer::no_retry_acks_all_producer(bootstrap, None, "build a producer").await
 }
 
 /// Wait until a fresh producer can get one record acked, and return its key.

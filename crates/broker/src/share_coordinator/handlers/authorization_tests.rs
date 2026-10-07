@@ -349,18 +349,11 @@ async fn share_state_rpcs_need_cluster_action() {
         ));
         for partition in PARTITIONS {
             data_topics.push(krabka_metadata::MetadataRecord::V1Partition(
-                krabka_metadata::PartitionRecord {
-                    topic: name.clone(),
+                crate::coordinator::test_support::single_replica_partition(
+                    &name,
                     partition,
-                    leader: broker.config.node_id,
-                    replicas: vec![broker.config.node_id],
-                    isr: vec![broker.config.node_id],
-                    leader_epoch: krabka_metadata::LeaderEpoch(0),
-                    adding_replicas: vec![],
-                    removing_replicas: vec![],
-                    directories: vec![],
-                    partition_epoch: 0,
-                },
+                    broker.config.node_id,
+                ),
             ));
         }
     }

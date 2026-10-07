@@ -160,9 +160,9 @@ mod tests {
     use assert2::check;
     use bytes::{BufMut, BytesMut};
     use krabka_metadata::{
-        FeatureLevelRecord, LeaderEpoch, LeaderRecoveryState, MetadataRecord, NodeId,
-        PartitionElrRecord, PartitionRecord, PartitionRecoveryRecord, TopicRecord, Voter,
-        VoterEndpoint, VoterSet, voters::KRaftVersionRange,
+        FeatureLevelRecord, LeaderRecoveryState, MetadataRecord, NodeId, PartitionElrRecord,
+        PartitionRecord, PartitionRecoveryRecord, TopicRecord, Voter, VoterEndpoint, VoterSet,
+        voters::KRaftVersionRange,
     };
     use krabka_protocol::{
         owned::{
@@ -178,6 +178,8 @@ mod tests {
     use crate::snapshot::{
         SNAPSHOT_KRAFT_VERSION_BASE_OFFSET, SNAPSHOT_VOTERS_BASE_OFFSET, SnapshotWriter,
     };
+
+    krabka_macros::single_replica_partition_fixture!(single_replica_partition);
 
     fn sample_voter(id: NodeId, port: u16) -> Voter {
         Voter {
@@ -226,16 +228,9 @@ mod tests {
         }));
         for p in 0..3 {
             image.apply(&MetadataRecord::V1Partition(PartitionRecord {
-                topic: "orders".into(),
-                partition: p,
-                leader: NodeId(1),
                 replicas: vec![NodeId(1), NodeId(2)],
                 isr: vec![NodeId(1), NodeId(2)],
-                leader_epoch: LeaderEpoch(0),
-                adding_replicas: vec![],
-                removing_replicas: vec![],
-                directories: vec![],
-                partition_epoch: 0,
+                ..single_replica_partition("orders", p, NodeId(1))
             }));
         }
         image.apply(&MetadataRecord::V1PartitionElr(PartitionElrRecord {

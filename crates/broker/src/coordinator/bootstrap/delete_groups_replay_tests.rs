@@ -12,75 +12,27 @@ use std::sync::Arc;
 use assert2::check;
 use bytes::Bytes;
 use krabka_log::{Offset, ProducerId};
-use krabka_protocol::records::{Attributes, Record, RecordBatch};
-use tempfile::tempdir;
+use krabka_protocol::records::Record;
 
 use super::replay::{finalize, replay_records};
 use crate::{
     coordinator::{
-        persistence::{Key, OffsetCommitValue, parse_key},
-        unified::{
-            GroupCoordinator, actor::MetadataProvider, offsets_log::fake::InMemoryOffsetsLog,
-            reconciler::ReconcileInput,
-        },
+        persistence::Key,
+        test_support::{parsed_offset_records, replay_offset_batch as batch},
+        unified::{GroupCoordinator, offsets_log::fake::InMemoryOffsetsLog},
     },
     txn::marker::{MarkerType, build_marker_batch},
 };
 
-#[derive(Debug)]
-struct EmptyMeta;
-
-impl MetadataProvider for EmptyMeta {
-    fn snapshot(&self) -> ReconcileInput {
-        ReconcileInput::default()
-    }
-}
-
 fn coordinator(log: Arc<InMemoryOffsetsLog>) -> Arc<GroupCoordinator> {
-    Arc::new(GroupCoordinator::new(
-        crate::coordinator::unified::config::NextGenConfig::default(),
-        crate::coordinator::unified::share::config::ShareGroupConfig::default(),
-        Arc::new(EmptyMeta),
+    crate::coordinator::test_support::default_coordinator(
+        crate::coordinator::unified::actor::test_support::empty_metadata(),
         log,
-        crate::coordinator::unified::streams::config::StreamsGroupConfig::default(),
-    ))
+    )
 }
 
 fn commit(topic: &str, partition: i32, offset: i64) -> Record {
-    Record {
-        key: Some(OffsetCommitValue::encode_key("g", topic, partition).unwrap()),
-        value: Some(
-            OffsetCommitValue {
-                offset: Offset(offset),
-                leader_epoch: -1,
-                metadata: String::new(),
-                commit_timestamp_ms: 0,
-                expire_timestamp_ms: None,
-                topic_id: None,
-            }
-            .encode_value(),
-        ),
-        ..Default::default()
-    }
-}
-
-fn batch(producer_id: Option<i64>, records: Vec<Record>) -> RecordBatch {
-    let records: Vec<Record> = records
-        .into_iter()
-        .zip(0..)
-        .map(|(record, offset_delta)| Record {
-            offset_delta,
-            ..record
-        })
-        .collect();
-    RecordBatch {
-        producer_id: producer_id.unwrap_or(-1),
-        producer_epoch: if producer_id.is_some() { 0 } else { -1 },
-        attributes: Attributes::default().with_transactional(producer_id.is_some()),
-        last_offset_delta: i32::try_from(records.len()).unwrap() - 1,
-        records,
-        ..RecordBatch::default()
-    }
+    crate::coordinator::test_support::offset_record("g", topic, partition, offset)
 }
 
 fn offset_tombstone(topic: &str, partition: i32) -> (Key, Option<Bytes>) {
@@ -160,8 +112,7 @@ async fn a_deleted_group_and_its_offsets_stay_deleted_after_replay() {
     ];
 
     for row in rows {
-        let dir = tempdir().unwrap();
-        let mut log = krabka_log::Log::open(dir.path(), krabka_log::LogConfig::default()).unwrap();
+        let (_dir, mut log) = crate::coordinator::test_support::temp_log();
         // A classic GroupMetadata record makes the group exist even when it has
         // no offsets.
         let (group_key, group_value) = super::test_support::classic_group_record("g", "m1");
@@ -193,16 +144,7 @@ async fn a_deleted_group_and_its_offsets_stay_deleted_after_replay() {
         check!(before.delete_group("g").await == Ok(()), "{}", row.name);
 
         let appended = offsets_log.batches().await;
-        let written: Vec<(Key, Option<Bytes>)> = appended
-            .iter()
-            .flat_map(|batch| &batch.records)
-            .map(|record| {
-                (
-                    parse_key(record.key.as_ref().unwrap()).unwrap(),
-                    record.value.clone(),
-                )
-            })
-            .collect();
+        let written = parsed_offset_records(&appended);
         check!(appended.len() == 1, "{}", row.name);
         check!(written == row.expected_batch, "{}", row.name);
 

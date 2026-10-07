@@ -174,16 +174,11 @@ impl ControllerHandle {
 mod tests {
     use std::collections::BTreeSet;
 
-    use tempfile::TempDir;
-
     use super::*;
-    use crate::{config::ControllerConfig, controller::Controller};
 
     #[tokio::test]
     async fn change_membership_validates_delta_count() {
-        let dir = TempDir::new().unwrap();
-        let cfg = ControllerConfig::for_tests(NodeId(1), dir.path().to_path_buf());
-        let ctrl = Controller::start(cfg).await.expect("bootstrap");
+        let (_dir, ctrl) = crate::controller::test_support::bootstrap_controller("bootstrap").await;
 
         // 0 changes: current is {1}, target is {1} -> Ok(())
         let res_zero = ctrl.change_membership(BTreeSet::from([NodeId(1)])).await;

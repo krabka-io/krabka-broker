@@ -33,11 +33,16 @@ use crate::{
 pub(crate) const NOW_MS: i64 = 1_700_000_000_000;
 
 pub(super) fn batch(first: i64, last: i64) -> StateBatch {
+    state_batch(first, last, 0, 1)
+}
+
+/// A literal batch fixture shared by wire-layout and state-combination tests.
+pub(crate) fn state_batch(first: i64, last: i64, state: i8, count: i16) -> StateBatch {
     StateBatch {
         first_offset: Offset(first),
         last_offset: Offset(last),
-        delivery_state: 0,
-        delivery_count: 1,
+        delivery_state: state,
+        delivery_count: count,
     }
 }
 
@@ -45,7 +50,7 @@ pub(super) fn batch(first: i64, last: i64) -> StateBatch {
 ///
 /// The partition has a live writer, and it leads on node 1 at leader epoch
 /// 0. This function mirrors `fixture_partition` in `partition_registry`.
-pub(super) fn open_state_partition(reg: &PartitionRegistry, log_dir: &Path, p: i32) {
+pub(crate) fn open_state_partition(reg: &PartitionRegistry, log_dir: &Path, p: i32) {
     let part_dir = crate::log_dir::partition_dir(log_dir, bootstrap::TOPIC, p);
     std::fs::create_dir_all(&part_dir).unwrap();
     let log = Log::open(&part_dir, LogConfig::default()).unwrap();
@@ -66,6 +71,31 @@ pub(super) fn open_state_partition(reg: &PartitionRegistry, log_dir: &Path, p: i
         false,
     );
     reg.insert(bootstrap::TOPIC.into(), PartitionIndex(p), part);
+}
+
+/// Lead the open state logs, then initialize partition zero of group `g`.
+pub(super) async fn initialize_led_group(
+    coordinator: &ShareCoordinator,
+    topic_id: uuid::Uuid,
+    state_epoch: i32,
+    start_offset: Offset,
+) -> krabka_metadata::MetadataImage {
+    lead_all(coordinator).await;
+    let image = image_with_topic(topic_id, 1);
+    coordinator
+        .initialize(&image, "g", topic_id, 0, state_epoch, start_offset)
+        .await
+        .unwrap();
+    image
+}
+
+/// Register the requested number of live, initially led state partitions.
+pub(crate) fn open_state_partitions(dir: &Path, count: i32) -> Arc<PartitionRegistry> {
+    let registry = Arc::new(PartitionRegistry::new());
+    for partition in 0..count {
+        open_state_partition(&registry, dir, partition);
+    }
+    registry
 }
 
 /// A manual wall clock that reads [`NOW_MS`] until a test moves it.
@@ -89,10 +119,7 @@ pub(crate) fn configured_coordinator(
     Arc<PartitionRegistry>,
     Arc<ManualWallClock>,
 ) {
-    let reg = Arc::new(PartitionRegistry::new());
-    for p in 0..config.state_topic_num_partitions {
-        open_state_partition(&reg, dir, p);
-    }
+    let reg = open_state_partitions(dir, config.state_topic_num_partitions);
     let clock = manual_clock();
     let coord = ShareCoordinator::with_wall_clock(
         krabka_audit::NodeId(1),
@@ -121,6 +148,19 @@ pub(crate) enum Logged {
     Snapshot(ShareSnapshotValue),
     Update(ShareUpdateValue),
     Tombstone,
+}
+
+/// Decoded records appended after the caller's previous log-length snapshot.
+pub(crate) fn logged_since(
+    coordinator: &ShareCoordinator,
+    state_partition: PartitionIndex,
+    before: usize,
+) -> Vec<Logged> {
+    logged_records(coordinator, state_partition)
+        .into_iter()
+        .skip(before)
+        .map(|(_, logged)| logged)
+        .collect()
 }
 
 /// Every record of `state_partition` from its log start, with its offset.
@@ -192,18 +232,11 @@ pub(crate) fn image_with_topics(topics: &[(uuid::Uuid, i32)]) -> krabka_metadata
         ));
         for partition in 0..*partitions {
             records.push(krabka_metadata::MetadataRecord::V1Partition(
-                krabka_metadata::PartitionRecord {
-                    topic: name.clone(),
+                crate::coordinator::test_support::single_replica_partition(
+                    &name,
                     partition,
-                    leader: krabka_metadata::NodeId(1),
-                    replicas: vec![krabka_metadata::NodeId(1)],
-                    isr: vec![krabka_metadata::NodeId(1)],
-                    leader_epoch: krabka_metadata::LeaderEpoch(0),
-                    adding_replicas: vec![],
-                    removing_replicas: vec![],
-                    directories: vec![],
-                    partition_epoch: 0,
-                },
+                    krabka_metadata::NodeId(1),
+                ),
             ));
         }
     }

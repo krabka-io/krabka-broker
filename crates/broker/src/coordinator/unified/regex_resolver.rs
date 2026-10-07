@@ -247,7 +247,7 @@ mod tests {
 
     use super::*;
     use crate::{
-        authorizer::{AclSource, AllowAllAuthorizer, AuthorizationRequest, SimpleAclAuthorizer},
+        authorizer::{AllowAllAuthorizer, SimpleAclAuthorizer},
         test_support::peer,
     };
 
@@ -364,16 +364,10 @@ mod tests {
     fn each_distinct_match_is_authorized_once() {
         #[derive(Debug, Default)]
         struct Counting(AtomicUsize);
-        impl Authorizer for Counting {
-            fn authorize(
-                &self,
-                _source: &dyn AclSource,
-                _req: &AuthorizationRequest<'_>,
-            ) -> AuthorizationResult {
-                self.0.fetch_add(1, Ordering::SeqCst);
-                AuthorizationResult::Allow
-            }
-        }
+        krabka_macros::test_authorizer! { Counting, _req; {
+            self.0.fetch_add(1, Ordering::SeqCst);
+            AuthorizationResult::Allow
+        }}
         let counting = Arc::new(Counting::default());
         let resolver = resolver(image_with_topics(&["a", "b"]), counting.clone());
         let got = resolved(&resolver, &["a", ".*", "[ab]"]);

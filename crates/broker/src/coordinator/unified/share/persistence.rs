@@ -26,9 +26,6 @@ mod keys;
 mod member;
 mod partition_metadata;
 
-#[cfg(test)]
-mod test_support;
-
 pub use self::{
     assignment::{ShareGroupCurrentMemberAssignmentValue, ShareGroupTargetAssignmentMemberValue},
     epochs::{ShareGroupMetadataValue, ShareGroupTargetAssignmentMetadataValue},

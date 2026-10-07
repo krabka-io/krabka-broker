@@ -9,8 +9,8 @@
 
 use assert2::{assert, check};
 use krabka_broker::{Broker, BrokerConfig};
-use krabka_client_core::Client;
-use krabka_protocol::owned::api_versions_request::ApiVersionsRequest;
+
+use crate::support::{client::connect_owned, discovery::api_versions_request_for};
 
 mod support;
 
@@ -86,19 +86,10 @@ async fn standalone_format_feature_overrides_surface_in_api_versions() {
         .await
         .expect("broker start");
     let bootstrap = handle.listen_addr().to_string();
-    let client = Client::builder()
-        .bootstrap(&bootstrap)
-        .client_id("fmt-feature-test")
-        .build()
-        .await
-        .expect("client build");
+    let client = connect_owned(&bootstrap, "fmt-feature-test", "client build").await;
 
     let av = client
-        .send(ApiVersionsRequest {
-            client_software_name: "krabka-test".into(),
-            client_software_version: "0.0.0".into(),
-            ..Default::default()
-        })
+        .send(api_versions_request_for("krabka-test", "0.0.0"))
         .await
         .expect("ApiVersions");
     assert!(av.error_code == 0, "{av:?}");

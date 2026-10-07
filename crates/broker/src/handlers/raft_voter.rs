@@ -21,16 +21,26 @@ pub(super) type ClusterGate =
 /// The encoded, contextual entry point of each KIP-853 voter operation.
 macro_rules! handler {
     ($broker:ident, $version:ident, $bytes:ident, $ctx:ident, $body:block) => {
-        pub(crate) async fn handle(
-            $broker: &crate::broker::Broker,
-            $version: i16,
-            $bytes: &[u8],
-            $ctx: &crate::handlers::RequestContext<'_>,
-        ) -> Result<bytes::Bytes, crate::error::BrokerError> $body
+        wire_handler!(async ($broker, $version, $bytes, $ctx), $body);
     };
 }
 
 pub(super) use handler;
+
+/// Keep early encoded answers at the caller's entry point, before its own voter checks.
+macro_rules! admit {
+    ($request:ty, ($broker:expr, $version:expr, $bytes:expr, $ctx:expr), $api:expr, $gate:expr, $refusals:expr) => {
+        match crate::handlers::raft_voter::prelude::<$request, _>(
+            $broker, $version, $bytes, $ctx, $api, $gate, $refusals,
+        )
+        .await?
+        {
+            std::ops::ControlFlow::Break(answer) => return Ok(answer),
+            std::ops::ControlFlow::Continue(admitted) => admitted,
+        }
+    };
+}
+pub(super) use admit;
 
 #[cfg(test)]
 macro_rules! test_dispatch {
@@ -50,6 +60,47 @@ macro_rules! test_dispatch {
 #[cfg(test)]
 pub(super) use test_dispatch;
 
+/// Drive the shared denial scenario while keeping each API's optional message check.
+#[cfg(test)]
+macro_rules! check_denied_reconfiguration {
+    (($handle:ident, $directory:ident, $broker:ident, $context:ident, $response:ident), $version:expr $(, $message:expr)?) => {
+        broker_fixture!(($handle, $directory, $broker), deny_all, context($context, "alice"));
+        let $response = answer(&$broker, $version, &request(2), &$context).await;
+        assert!($response.error_code == crate::codes::CLUSTER_AUTHORIZATION_FAILED);
+        $(assert!($response.error_message.as_deref() == Some($message));)?
+        $handle.shutdown().await;
+    };
+}
+#[cfg(test)]
+pub(super) use check_denied_reconfiguration;
+
+/// An invalid add/remove id is refused before the controller reconfigures.
+#[cfg(test)]
+macro_rules! check_invalid_voter {
+    (($handle:ident, $directory:ident, $broker:ident, $context:ident, $request:ident, $response:ident),
+        $version:expr, $response_type:ident, $message:expr) => {
+        broker_fixture!(
+            ($handle, $directory, $broker),
+            allow_all,
+            context($context, "admin")
+        );
+        let mut $request = request(-7);
+        stamp_voter_request!($request, $broker);
+        let $response = answer(&$broker, $version, &$request, &$context).await;
+        assert!(
+            $response
+                == $response_type {
+                    error_code: crate::codes::INVALID_REQUEST,
+                    error_message: Some($message.into()),
+                    ..Default::default()
+                }
+        );
+        $handle.shutdown().await;
+    };
+}
+#[cfg(test)]
+pub(super) use check_invalid_voter;
+
 /// What a voter handler runs its own checks on once the prelude lets the
 /// request through.
 pub(super) struct Admitted<R> {
@@ -63,6 +114,21 @@ pub(super) struct Admitted<R> {
 pub(super) struct Refusals<R> {
     pub(super) denied: R,
     pub(super) not_leader: R,
+}
+
+impl<R: crate::handlers::ErrorResponse> Refusals<R> {
+    /// The add/remove leader-only refusals keep the caller's nullable messages.
+    /// Kafka sets only the error code on a failed leader check, so those callers
+    /// explicitly pass the generated empty-string default rather than null.
+    pub(super) fn messages(denied: Option<String>, not_leader: Option<String>) -> Self {
+        Self {
+            denied: R::error(crate::codes::CLUSTER_AUTHORIZATION_FAILED, denied),
+            not_leader: R::error(
+                krabka_raft::voter_requests::NOT_LEADER_OR_FOLLOWER,
+                not_leader,
+            ),
+        }
+    }
 }
 
 /// Decodes the request, applies `gate`, forwards the raw body as `api_key`
@@ -84,8 +150,7 @@ pub(super) async fn prelude<Req: for<'a> Decode<'a>, Resp: Encode>(
     gate: ClusterGate,
     refusals: Refusals<Resp>,
 ) -> Result<ControlFlow<Bytes, Admitted<Req>>, BrokerError> {
-    let mut cur: &[u8] = req_bytes;
-    let req = Req::decode(&mut cur, version)?;
+    let req = crate::handlers::decode_request::<Req>(req_bytes, version)?;
 
     let image = broker.controller.current_image();
 

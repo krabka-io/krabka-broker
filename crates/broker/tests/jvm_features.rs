@@ -222,8 +222,15 @@ fn kafka_add_controller() -> std::process::Output {
     output
 }
 
-/// Extract `FinalizedVersionLevel` for `feature` from `kafka-features describe`
-/// output. Returns `None` if the feature is absent or shows no finalized level.
+/// Require the requested feature alteration to succeed through the stock JVM tool.
+fn alter_feature(verb: &str, spec: &str) {
+    let out = kafka_features(&[verb, "--feature", spec]);
+    assert!(
+        out.status.success(),
+        "{verb} {spec} failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "requires Docker"]
@@ -260,12 +267,7 @@ async fn kafka_features_describe_and_round_trip() {
         ("upgrade", "transaction.version=2", 2),
     ];
     for (verb, spec, want) in round_trip {
-        let out = kafka_features(&[verb, "--feature", spec]);
-        assert!(
-            out.status.success(),
-            "{verb} {spec} failed: {}",
-            String::from_utf8_lossy(&out.stderr)
-        );
+        alter_feature(verb, spec);
         let desc = kafka_features(&["describe"]);
         let text = String::from_utf8_lossy(&desc.stdout);
         assert!(
@@ -423,12 +425,7 @@ async fn kafka_features_describes_and_round_trips_elr() {
 
     for (verb, want) in [("downgrade", 0), ("upgrade", 1)] {
         let spec = format!("{ELR}={want}");
-        let out = kafka_features(&[verb, "--feature", &spec]);
-        assert!(
-            out.status.success(),
-            "{verb} {spec} failed: {}",
-            String::from_utf8_lossy(&out.stderr)
-        );
+        alter_feature(verb, &spec);
         let desc = kafka_features(&["describe"]);
         let text = String::from_utf8_lossy(&desc.stdout);
         // A level-0 finalize is KIP-584's delete, so the finalized level is

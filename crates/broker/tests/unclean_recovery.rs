@@ -60,7 +60,6 @@ use krabka_broker::BrokerHandle;
 use krabka_metadata::{
     BrokerConfigRecord, MetadataRecord, PartitionElrRecord, PartitionRecord, TopicConfigRecord,
 };
-use tokio::net::TcpStream;
 
 mod kafka_wire;
 mod support;
@@ -84,28 +83,11 @@ const CLIENT_ID: &str = "krabka-unclean-test";
 /// The topic has one partition on `replicas`, in that order, so the tests
 /// know which broker leads it: an automatic placement starts at a random
 /// broker.
-async fn create_topic_plaintext(addr: SocketAddr, name: &str, replicas: &[i32]) {
-    let mut stream = TcpStream::connect(addr).await.expect("connect");
-    kafka_wire::create_topic_on(
-        &mut stream,
-        CLIENT_ID,
-        crate::support::topic_on(name, &[replicas]),
-    )
-    .await;
-}
-
+use crate::kafka_wire::create_assigned_topic_plaintext as create_topic_plaintext;
 /// Drives `ElectLeaders` over a fresh PLAINTEXT connection. It asserts that
 /// the top-level `error_code == 0`, and returns the per-partition
 /// `(partition_id, error_code)` rows for `topic`.
-async fn drive_elect_leaders(
-    addr: SocketAddr,
-    topic: &str,
-    partitions: Vec<i32>,
-    election_type: i8,
-) -> Vec<(i32, i16)> {
-    let mut stream = TcpStream::connect(addr).await.expect("connect");
-    kafka_wire::elect_leaders(&mut stream, CLIENT_ID, topic, partitions, election_type).await
-}
+use crate::kafka_wire::elect_leaders_plaintext as drive_elect_leaders;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Polling helpers
@@ -118,41 +100,7 @@ async fn wait_partition_hosted(handle: &BrokerHandle, topic: &str, partition: i3
     handle.wait_until_partition_present(topic, partition).await;
 }
 
-/// Waits until `handle`'s metadata image reports `leader` as the leader for
-/// `(topic, partition)`.
-async fn wait_partition_leader(handle: &BrokerHandle, topic: &str, partition: i32, leader: u64) {
-    // Event-driven: await the metadata image whose leader == expected (the image
-    // is the same source `partition_leader_for_test` reads; `leader` is non-zero).
-    handle
-        .wait_for_image(|img| {
-            img.partition(topic, partition)
-                .is_some_and(|p| p.leader == leader)
-        })
-        .await;
-}
-
-/// Waits until the ISR for `(topic, partition)` is exactly `expected`.
-async fn wait_partition_isr_only(
-    handle: &BrokerHandle,
-    topic: &str,
-    partition: i32,
-    expected: &[u64],
-) {
-    let expected_set: std::collections::HashSet<u64> = expected.iter().copied().collect();
-    // Event-driven: await the metadata image whose ISR set matches `expected`
-    // exactly (length-only `wait_until_isr_len` is too weak for a set assertion).
-    handle
-        .wait_for_image(|img| {
-            img.partition(topic, partition).is_some_and(|p| {
-                p.isr
-                    .iter()
-                    .map(|n| n.get())
-                    .collect::<std::collections::HashSet<u64>>()
-                    == expected_set
-            })
-        })
-        .await;
-}
+use crate::support::partitions::{wait_partition_isr_only, wait_partition_leader};
 
 /// The recovery strategy that routes an UNCLEAN election through the URM.
 fn topic_config(topic: &str) -> MetadataRecord {
@@ -215,7 +163,7 @@ async fn offline_partition_with_diverged_logs(
     let [h1, h2, h3] = handles;
     // ── Create the RF=3 topic. Partition 0's replica assignment is
     //    [1, 2, 3]; broker 1 is the preferred/first. ──
-    create_topic_plaintext(addr, topic, &[1, 2, 3]).await;
+    create_topic_plaintext(addr, CLIENT_ID, topic, &[1, 2, 3]).await;
     wait_partition_hosted(h1, topic, 0).await;
     wait_partition_hosted(h2, topic, 0).await;
     wait_partition_hosted(h3, topic, 0).await;
@@ -327,8 +275,7 @@ async fn run_unclean_recovery(elr: Option<&str>, witness: Option<u64>, expected_
     let lock = LOCK.get_or_init(|| tokio::sync::Mutex::new(()));
     let _g = lock.lock().await;
 
-    let cluster = support::start_n_node_with_retry(3).await;
-    support::wait_for_all_brokers_registered(&cluster, 3).await;
+    let cluster = crate::support::registered_cluster(3).await;
 
     let topic = "t";
     let addr = cluster[0].1.listen_addr;
@@ -401,7 +348,7 @@ async fn run_unclean_recovery(elr: Option<&str>, witness: Option<u64>, expected_
     eprintln!("sending ElectLeaders UNCLEAN to raft leader at {elect_addr}");
 
     // ── Trigger offset-aware recovery (election_type = 1 = UNCLEAN). ──
-    let result = drive_elect_leaders(elect_addr, topic, vec![0], 1).await;
+    let result = drive_elect_leaders(elect_addr, CLIENT_ID, topic, vec![0], 1).await;
     assert!(
         result == vec![(0, 0)],
         "expected error_code=0 for UNCLEAN election; got {result:?}"
@@ -422,7 +369,5 @@ async fn run_unclean_recovery(elr: Option<&str>, witness: Option<u64>, expected_
     wait_partition_isr_only(h1, topic, 0, &[expected_leader]).await;
 
     // Clean up.
-    for (h, _, _) in cluster {
-        h.shutdown().await;
-    }
+    crate::support::shutdown_cluster(cluster).await;
 }

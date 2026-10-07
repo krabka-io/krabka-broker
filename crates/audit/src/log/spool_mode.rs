@@ -137,70 +137,129 @@ mod tests {
         log::{
             AuditLog, AuditMode,
             test_support::{
-                FailableSink, REPLAY_EVERY, ROOMY_CAP, await_until, header, life, params,
-                params_with_clock, product, test_signer,
+                FailableSink, REPLAY_EVERY, ROOMY_CAP, await_until, failed_sink_stats,
+                finish_writer, healthy_sink_stats, life, params, params_with_clock, product,
+                record_sequences, spawn_writer, test_signer,
             },
         },
         spool::Spool,
         stats::AuditStats,
     };
 
-    type FailingSpoolFixture = (
-        Arc<AuditLog>,
-        Arc<FailableSink>,
-        Arc<AuditStats>,
-        Arc<qubit_clock::ManualMonotonicClock>,
-        tokio::task::JoinHandle<()>,
-    );
+    struct FailingSpoolFixture {
+        clock: Arc<qubit_clock::ManualMonotonicClock>,
+        stats: Arc<AuditStats>,
+        sink: Arc<FailableSink>,
+        log: Arc<AuditLog>,
+        handle: tokio::task::JoinHandle<()>,
+        _public_key: Option<Vec<u8>>,
+        // Close every task and shared state before deleting its spool directory.
+        _directory: tempfile::TempDir,
+    }
 
-    fn failing_spool(directory: &std::path::Path) -> FailingSpoolFixture {
-        let sink = Arc::new(FailableSink::default());
-        sink.set_fail(true);
-        let stats = Arc::new(AuditStats::new());
+    fn failing_spool(
+        cap: krabka_units::prelude::ByteSize,
+        checkpoint_every_n: Option<u64>,
+    ) -> FailingSpoolFixture {
+        let directory = tempfile::tempdir().unwrap();
+        let (signer, public_key) = checkpoint_every_n.map_or((None, None), |_| {
+            let (signer, public_key) = test_signer();
+            (Some(signer), Some(public_key))
+        });
+        let (sink, stats) = failed_sink_stats();
         let (log, rx) = AuditLog::new(64);
-        let spool = Spool::open(directory, ROOMY_CAP).unwrap();
-        let (params, clock) = params_with_clock(sink.clone(), spool, stats.clone());
-        (
+        let spool = Spool::open(directory.path(), cap).unwrap();
+        let (mut params, clock) = params_with_clock(sink.clone(), spool, stats.clone());
+        params.signer = signer;
+        params.checkpoint_every_n = checkpoint_every_n.unwrap_or(0);
+        FailingSpoolFixture {
             log,
             sink,
             stats,
             clock,
-            tokio::spawn(AuditWriter::new(rx, params).run()),
-        )
+            handle: spawn_writer(rx, params),
+            _public_key: public_key,
+            _directory: directory,
+        }
     }
 
-    #[tokio::test]
-    async fn records_spool_on_sink_failure_then_replay_to_sink() {
-        let dir = tempfile::tempdir().unwrap();
-        let (log, sink, stats, clock, h) = failing_spool(dir.path());
+    fn fail_closed_writer(
+        sink: Arc<FailableSink>,
+        spool: Spool,
+    ) -> (Arc<AuditLog>, tokio::task::JoinHandle<()>) {
+        let (log, receiver) = AuditLog::new_with_mode(8, AuditMode::FailClosed);
+        let handle = spawn_writer(receiver, params(sink, spool, Arc::new(AuditStats::new())));
+        (log, handle)
+    }
 
-        log.emit(life(1));
-        log.emit(life(2));
-        log.emit(life(3));
-        // wait until the writer has drained all three into the spool
-        await_until("3 records spooled", || stats.spooled() >= 3).await;
-        check!(stats.depth() >= 3);
-        check!(sink.inner.records().is_empty()); // nothing reached the topic yet
+    async fn check_required_failure(log: &AuditLog, reason: &str) {
+        let error = log.emit_required(life(1)).await.unwrap_err();
+        check!(error.to_string().contains(reason));
+    }
 
-        // topic recovers; fire the replay ticker by advancing the manual clock
+    fn first_chained_record() -> AuditRecord {
+        let mut record = AuditRecord::from_event(&life(0), &product());
+        record.push_chain_headers(0, &crate::chain::GENESIS_HEAD);
+        record
+    }
+
+    fn record_size(directory: &std::path::Path, record: &AuditRecord) -> krabka_units::ByteSize {
+        let mut spool = Spool::open(directory, ROOMY_CAP).unwrap();
+        check!(spool.append(record).unwrap());
+        spool.size()
+    }
+
+    async fn replay_spool(
+        sink: &FailableSink,
+        stats: &AuditStats,
+        clock: &qubit_clock::ManualMonotonicClock,
+    ) {
         sink.set_fail(false);
         clock
             .advance(REPLAY_EVERY.to_std())
             .expect("manual time moves forward");
         await_until("spool drained after replay", || stats.depth() == 0).await;
+    }
 
-        drop(log);
-        h.await.unwrap();
+    async fn drained_records(
+        log: Arc<AuditLog>,
+        handle: tokio::task::JoinHandle<()>,
+        sink: &FailableSink,
+        stats: &AuditStats,
+        clock: &qubit_clock::ManualMonotonicClock,
+    ) -> Vec<AuditRecord> {
+        check!(sink.inner.records().is_empty());
+        replay_spool(sink, stats, clock).await;
+        finish_writer(log, handle).await;
+        sink.inner.records()
+    }
+
+    #[tokio::test]
+    async fn records_spool_on_sink_failure_then_replay_to_sink() {
+        let fixture = failing_spool(ROOMY_CAP, None);
+
+        fixture.log.emit(life(1));
+        fixture.log.emit(life(2));
+        fixture.log.emit(life(3));
+        // wait until the writer has drained all three into the spool
+        await_until("3 records spooled", || fixture.stats.spooled() >= 3).await;
+        check!(fixture.stats.depth() >= 3);
+        // Nothing reached the topic yet; drained_records checks this before replay.
+
+        // topic recovers; fire the replay ticker by advancing the manual clock
+        let recs = drained_records(
+            fixture.log,
+            fixture.handle,
+            &fixture.sink,
+            &fixture.stats,
+            &fixture.clock,
+        )
+        .await;
 
         // all three chained records reached the sink, in order, with monotonic seq
-        let recs = sink.inner.records();
-        let seqs: Vec<String> = recs
-            .iter()
-            .filter(|r| r.class != AuditEventClass::Checkpoint)
-            .map(|r| header(r, "seq").unwrap())
-            .collect();
+        let seqs = record_sequences(&recs);
         check!(
-            (seqs, stats.replayed() >= 3, stats.depth())
+            (seqs, fixture.stats.replayed() >= 3, fixture.stats.depth())
                 == (
                     vec!["0".to_string(), "1".to_string(), "2".to_string()],
                     true,
@@ -212,32 +271,26 @@ mod tests {
     #[tokio::test]
     async fn direct_writes_when_sink_healthy_do_not_spool() {
         let dir = tempfile::tempdir().unwrap();
-        let sink = Arc::new(FailableSink::default()); // healthy
-        let stats = Arc::new(AuditStats::new());
+        let (sink, stats) = healthy_sink_stats(); // healthy
         let (log, rx) = AuditLog::new(16);
         let spool = Spool::open(dir.path(), ROOMY_CAP).unwrap();
-        let writer = AuditWriter::new(rx, params(sink.clone(), spool, stats.clone()));
-        let h = tokio::spawn(writer.run());
+        let h = spawn_writer(rx, params(sink.clone(), spool, stats.clone()));
         log.emit(life(1));
         log.emit(life(2));
-        drop(log);
-        h.await.unwrap();
+        finish_writer(log, h).await;
         check!((sink.inner.records().len(), stats.spooled(), stats.depth()) == (2, 0, 0));
     }
 
     #[tokio::test]
     async fn fail_closed_write_requests_durable_sink_acknowledgement() {
         let dir = tempfile::tempdir().unwrap();
-        let sink = Arc::new(FailableSink::default());
-        let stats = Arc::new(AuditStats::new());
+        let (sink, stats) = healthy_sink_stats();
         let (log, receiver) = AuditLog::new_with_mode(8, AuditMode::FailClosed);
         let spool = Spool::open(dir.path(), ROOMY_CAP).unwrap();
-        let writer = AuditWriter::new(receiver, params(sink.clone(), spool, Arc::clone(&stats)));
-        let handle = tokio::spawn(writer.run());
+        let handle = spawn_writer(receiver, params(sink.clone(), spool, Arc::clone(&stats)));
 
         log.emit_required(life(1)).await.unwrap();
-        drop(log);
-        handle.await.unwrap();
+        finish_writer(log, handle).await;
 
         check!(
             (
@@ -254,12 +307,9 @@ mod tests {
         let sink = Arc::new(FailableSink::default());
         sink.set_indeterminate(true);
         let spool = Spool::open(dir.path(), ROOMY_CAP).unwrap();
-        let (log, receiver) = AuditLog::new_with_mode(8, AuditMode::FailClosed);
-        let writer = AuditWriter::new(receiver, params(sink, spool, Arc::new(AuditStats::new())));
-        let handle = tokio::spawn(writer.run());
+        let (log, handle) = fail_closed_writer(sink, spool);
 
-        let error = log.emit_required(life(1)).await.unwrap_err();
-        check!(error.to_string().contains("indeterminate"));
+        check_required_failure(&log, "indeterminate").await;
         handle.await.unwrap();
         check!(
             log.emit_required(life(2))
@@ -286,7 +336,7 @@ mod tests {
         sink.set_indeterminate_after(1);
         let (log, receiver) = AuditLog::new(8);
         let (params, clock) = params_with_clock(sink.clone(), spool, Arc::new(AuditStats::new()));
-        let handle = tokio::spawn(AuditWriter::new(receiver, params).run());
+        let handle = spawn_writer(receiver, params);
 
         tokio::task::yield_now().await;
         clock
@@ -303,31 +353,25 @@ mod tests {
 
     #[tokio::test]
     async fn checkpoint_is_spooled_in_spool_mode_and_replayed_in_order() {
-        let dir = tempfile::tempdir().unwrap();
-        let (signer, _pubkey) = test_signer();
-        let sink = Arc::new(FailableSink::default());
-        sink.set_fail(true); // topic down → everything spools
-        let stats = Arc::new(AuditStats::new());
-        let (log, rx) = AuditLog::new(64);
-        let spool = Spool::open(dir.path(), ROOMY_CAP).unwrap();
-        let (mut p, clock) = params_with_clock(sink.clone(), spool, stats.clone());
-        p.signer = Some(signer);
-        p.checkpoint_every_n = 2; // emit a checkpoint after every 2 records
-        let writer = AuditWriter::new(rx, p);
-        let h = tokio::spawn(writer.run());
-        log.emit(life(0));
-        log.emit(life(1)); // 2 records → triggers a checkpoint, all spooled
+        // Topic down: records and count-triggered checkpoints spool together.
+        // Emit a checkpoint after every 2 records.
+        let fixture = failing_spool(ROOMY_CAP, Some(2));
+        fixture.log.emit(life(0));
+        fixture.log.emit(life(1)); // 2 records → triggers a checkpoint, all spooled
         // 2 chained records + 1 count-triggered checkpoint all land in the spool
-        await_until("2 records + checkpoint spooled", || stats.spooled() >= 3).await;
-        check!(sink.inner.records().is_empty()); // nothing on topic yet
-        sink.set_fail(false); // recover → replay drains spool in order
-        clock
-            .advance(REPLAY_EVERY.to_std())
-            .expect("manual time moves forward");
-        await_until("spool drained after replay", || stats.depth() == 0).await;
-        drop(log);
-        h.await.unwrap();
-        let recs = sink.inner.records();
+        await_until("2 records + checkpoint spooled", || {
+            fixture.stats.spooled() >= 3
+        })
+        .await;
+        // Nothing is on the topic yet; drained_records checks this before replay.
+        let recs = drained_records(
+            fixture.log,
+            fixture.handle,
+            &fixture.sink,
+            &fixture.stats,
+            &fixture.clock,
+        )
+        .await;
         // exactly 2 chained records, and at least one checkpoint, and the checkpoint
         // appears AFTER both chained records (it was spooled + replayed in order).
         check!(
@@ -359,13 +403,10 @@ mod tests {
             s.append(&rec).unwrap();
             s.size()
         };
-        let sink = Arc::new(FailableSink::default());
-        sink.set_fail(true); // stay in spool mode (no replay), so drops accumulate
-        let stats = Arc::new(AuditStats::new());
+        let (sink, stats) = failed_sink_stats(); // stay in spool mode (no replay), so drops accumulate
         let (log, rx) = AuditLog::new(64);
         let spool = Spool::open(dir.path(), one).unwrap();
-        let writer = AuditWriter::new(rx, params(sink.clone(), spool, stats.clone()));
-        let h = tokio::spawn(writer.run());
+        let h = spawn_writer(rx, params(sink.clone(), spool, stats.clone()));
         for i in 0..6 {
             log.emit(life(i));
         }
@@ -374,8 +415,7 @@ mod tests {
             stats.spooled() + stats.dropped() >= 6
         })
         .await;
-        drop(log);
-        h.await.unwrap();
+        finish_writer(log, h).await;
         // Strict bounds chosen to also kill the "return constant 1" mutants.
         assert2::check!(stats.dropped() >= 2); // many overflowed (kills inc_dropped/() , dropped->0/1)
         assert2::check!(stats.spool_bytes() > bytes(1)); // ~one record is buffered (kills spool_bytes->0/1)
@@ -384,50 +424,33 @@ mod tests {
     #[tokio::test]
     async fn full_spool_refuses_a_fail_closed_record() {
         let probe = tempfile::tempdir().unwrap();
-        let mut existing = AuditRecord::from_event(&life(0), &product());
-        existing.push_chain_headers(0, &crate::chain::GENESIS_HEAD);
-        let one = {
-            let mut spool = Spool::open(probe.path(), ROOMY_CAP).unwrap();
-            check!(spool.append(&existing).unwrap());
-            spool.size()
-        };
+        let existing = first_chained_record();
+        let one = record_size(probe.path(), &existing);
 
         let dir = tempfile::tempdir().unwrap();
         let mut spool = Spool::open(dir.path(), one).unwrap();
         check!(spool.append(&existing).unwrap());
         let sink = Arc::new(FailableSink::default());
         sink.set_fail(true);
-        let (log, receiver) = AuditLog::new_with_mode(8, AuditMode::FailClosed);
-        let writer = AuditWriter::new(receiver, params(sink, spool, Arc::new(AuditStats::new())));
-        let handle = tokio::spawn(writer.run());
+        let (log, handle) = fail_closed_writer(sink, spool);
 
-        let error = log.emit_required(life(1)).await.unwrap_err();
-        check!(error.to_string().contains("spool is full"));
+        check_required_failure(&log, "spool is full").await;
 
-        drop(log);
-        handle.await.unwrap();
+        finish_writer(log, handle).await;
     }
 
     #[tokio::test]
     async fn fail_open_spool_loss_is_followed_by_a_chain_marker() {
         let probe = tempfile::tempdir().unwrap();
-        let mut first = AuditRecord::from_event(&life(0), &product());
-        first.push_chain_headers(0, &crate::chain::GENESIS_HEAD);
-        let one = {
-            let mut spool = Spool::open(probe.path(), ROOMY_CAP).unwrap();
-            check!(spool.append(&first).unwrap());
-            spool.size()
-        };
+        let first = first_chained_record();
+        let one = record_size(probe.path(), &first);
 
         let dir = tempfile::tempdir().unwrap();
-        let sink = Arc::new(FailableSink::default());
-        sink.set_fail(true);
-        let stats = Arc::new(AuditStats::new());
+        let (sink, stats) = failed_sink_stats();
         let spool = Spool::open(dir.path(), one).unwrap();
         let (log, receiver) = AuditLog::new_with_mode_and_spool(8, AuditMode::FailOpen, &spool);
         let (params, clock) = params_with_clock(sink.clone(), spool, stats.clone());
-        let writer = AuditWriter::new(receiver, params);
-        let handle = tokio::spawn(writer.run());
+        let handle = spawn_writer(receiver, params);
 
         log.emit(life(0));
         log.emit(life(1));
@@ -470,47 +493,40 @@ mod tests {
                 <= one.bytes_u64()
         );
 
-        drop(log);
-        handle.await.unwrap();
+        finish_writer(log, handle).await;
     }
 
     #[tokio::test]
     async fn partial_replay_keeps_remainder_then_drains() {
-        let dir = tempfile::tempdir().unwrap();
-        let (log, sink, stats, clock, h) = failing_spool(dir.path());
-        log.emit(life(0));
-        log.emit(life(1));
-        log.emit(life(2));
-        await_until("3 records spooled", || stats.depth() == 3).await;
+        let fixture = failing_spool(ROOMY_CAP, None);
+        fixture.log.emit(life(0));
+        fixture.log.emit(life(1));
+        fixture.log.emit(life(2));
+        await_until("3 records spooled", || fixture.stats.depth() == 3).await;
 
         // allow exactly 2 replay writes, then fail → partial replay
-        sink.allow_n(2);
-        clock
+        fixture.sink.allow_n(2);
+        fixture
+            .clock
             .advance(REPLAY_EVERY.to_std())
             .expect("manual time moves forward");
         await_until("2 of 3 replayed", || {
-            stats.replayed() == 2 && stats.depth() == 1
+            fixture.stats.replayed() == 2 && fixture.stats.depth() == 1
         })
         .await;
-        check!(stats.depth() == 1); // remainder retained, still spooling
+        check!(fixture.stats.depth() == 1); // remainder retained, still spooling
 
         // allow the rest; fire the replay ticker again to drain the remainder
-        sink.allow_unlimited();
-        clock
+        fixture.sink.allow_unlimited();
+        fixture
+            .clock
             .advance(REPLAY_EVERY.to_std())
             .expect("manual time moves forward");
-        await_until("remainder drained", || stats.depth() == 0).await;
+        await_until("remainder drained", || fixture.stats.depth() == 0).await;
 
-        drop(log);
-        h.await.unwrap();
+        finish_writer(fixture.log, fixture.handle).await;
         // all 3 chained records reached the sink exactly once, in seq order
-        let seqs: Vec<String> = sink
-            .inner
-            .records()
-            .iter()
-            .filter(|r| r.class != AuditEventClass::Checkpoint)
-            .map(|r| header(r, "seq").unwrap())
-            .collect();
+        let seqs = record_sequences(&fixture.sink.inner.records());
         check!(seqs == vec!["0".to_string(), "1".to_string(), "2".to_string()]);
     }
 }

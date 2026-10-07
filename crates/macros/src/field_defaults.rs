@@ -42,17 +42,15 @@ pub(crate) fn expand(item: ItemStruct) -> Result<TokenStream, ParseError> {
         .map(initializer)
         .collect::<Result<Vec<_>, _>>()?;
 
-    let ident = item.ident;
-    let (impl_generics, type_generics, where_clause) = item.generics.split();
-    Ok(moxy::template! {
-        impl {{ impl_generics }} ::core::default::Default
-            for {{ ident }} {{ type_generics }} {{ where_clause }}
-        {
+    Ok(crate::meta::impl_block(
+        item,
+        &moxy::template! { ::core::default::Default for },
+        &moxy::template! {
             fn default() -> Self {
                 Self {
                     @for initializer in &initializers { {{ initializer }} }
                 }
             }
-        }
-    })
+        },
+    ))
 }

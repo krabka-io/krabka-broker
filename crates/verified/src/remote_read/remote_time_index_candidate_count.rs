@@ -1,9 +1,6 @@
 use creusot_std::prelude::*;
 
-// cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
-#[cfg(creusot)]
-#[cfg_attr(test, mutants::skip)]
-#[logic(open)]
+open_logic! {
 fn finished_selection(
     starts: Seq<i64>,
     ends: Seq<i64>,
@@ -24,15 +21,26 @@ fn finished_selection(
         }
     }
 }
+}
 
-#[requires(starts@.len() == ends@.len() && starts@.len() == finished@.len())]
-#[ensures(finished_selection(starts@, ends@, finished@, result, starts@.len(), latest))]
-fn select_finished_index(
-    starts: &[i64],
-    ends: &[i64],
-    finished: &[bool],
-    latest: bool,
-) -> Option<usize> {
+macro_rules! finished_selection_kernel {
+    ($(#[$attribute:meta])* $visibility:vis fn $name:ident;
+        arrays ($starts:ident, $ends:ident, $finished:ident);
+        latest $choice:expr $(; parameter $latest:ident)?;
+        body $body:block
+    ) => {
+        #[requires($starts@.len() == $ends@.len() && $starts@.len() == $finished@.len())]
+        #[ensures(finished_selection($starts@, $ends@, $finished@, result, $starts@.len(), $choice))]
+        $(#[$attribute])*
+        $visibility fn $name($starts: &[i64], $ends: &[i64], $finished: &[bool] $(, $latest: bool)?) -> Option<usize> $body
+    };
+}
+
+finished_selection_kernel! {
+ fn select_finished_index;
+arrays (starts, ends, finished);
+latest latest; parameter latest;
+body {
     let mut best: Option<usize> = None;
     let mut index = 0usize;
     #[invariant(index@ <= starts@.len())]
@@ -58,33 +66,32 @@ fn select_finished_index(
     }
     best
 }
+}
 
+finished_selection_kernel! {
 /// Select the earliest valid finished remote segment.
 ///
 /// The three slices are parallel arrays supplied from one metadata listing.
 /// Negative or inverted ranges are not candidates, even when their lifecycle
 /// state says the copy finished.
-#[requires(starts@.len() == ends@.len() && starts@.len() == finished@.len())]
-#[ensures(finished_selection(starts@, ends@, finished@, result, starts@.len(), false))]
 #[must_use]
-pub fn tiered_earliest_finished_index(
-    starts: &[i64],
-    ends: &[i64],
-    finished: &[bool],
-) -> Option<usize> {
+pub fn tiered_earliest_finished_index;
+arrays (starts, ends, finished);
+latest false;
+body {
     select_finished_index(starts, ends, finished, false)
 }
+}
 
+finished_selection_kernel! {
 /// Select the finished remote segment with the greatest valid inclusive end.
-#[requires(starts@.len() == ends@.len() && starts@.len() == finished@.len())]
-#[ensures(finished_selection(starts@, ends@, finished@, result, starts@.len(), true))]
 #[must_use]
-pub fn tiered_latest_finished_index(
-    starts: &[i64],
-    ends: &[i64],
-    finished: &[bool],
-) -> Option<usize> {
+pub fn tiered_latest_finished_index;
+arrays (starts, ends, finished);
+latest true;
+body {
     select_finished_index(starts, ends, finished, true)
+}
 }
 
 /// Select the valid leader epoch whose start is greatest at or below a
@@ -92,19 +99,7 @@ pub fn tiered_latest_finished_index(
 #[requires(epochs@.len() == starts@.len())]
 #[requires(0 <= segment_start@)]
 #[requires(segment_start@ <= segment_end@)]
-#[ensures(match result {
-    Some(best) => best@ < starts@.len()
-        && 0 <= epochs@[best@]@
-        && segment_start@ <= starts@[best@]@
-        && starts@[best@]@ <= segment_end@
-        && forall<i: Int> 0 <= i && i < starts@.len()
-            && 0 <= epochs@[i]@
-            && segment_start@ <= starts@[i]@
-            && starts@[i]@ <= segment_end@
-            ==> starts@[i]@ <= starts@[best@]@,
-    None => forall<i: Int> 0 <= i && i < starts@.len()
-        ==> epochs@[i]@ < 0 || starts@[i]@ < segment_start@ || segment_end@ < starts@[i]@,
-})]
+#[ensures(owning_epoch_selection(epochs@, starts@, segment_start@, segment_end@, starts@.len(), result))]
 #[must_use]
 pub fn tiered_owning_epoch_index(
     epochs: &[i32],
@@ -115,19 +110,7 @@ pub fn tiered_owning_epoch_index(
     let mut best: Option<usize> = None;
     let mut index = 0usize;
     #[invariant(index@ <= starts@.len())]
-    #[invariant(match best {
-        Some(best) => best@ < index@
-            && 0 <= epochs@[best@]@
-            && segment_start@ <= starts@[best@]@
-            && starts@[best@]@ <= segment_end@
-            && forall<i: Int> 0 <= i && i < index@
-                && 0 <= epochs@[i]@
-                && segment_start@ <= starts@[i]@
-                && starts@[i]@ <= segment_end@
-                ==> starts@[i]@ <= starts@[best@]@,
-        None => forall<i: Int> 0 <= i && i < index@
-            ==> epochs@[i]@ < 0 || starts@[i]@ < segment_start@ || segment_end@ < starts@[i]@,
-    })]
+    #[invariant(owning_epoch_selection(epochs@, starts@, segment_start@, segment_end@, index@, best))]
     #[variant(starts@.len() - index@)]
     while index < starts.len() {
         if epochs[index] >= 0 && starts[index] >= segment_start && starts[index] <= segment_end {
@@ -182,4 +165,26 @@ pub fn remote_time_index_candidate_count(entries: &[(i64, u32)], target_timestam
         count += 1;
     }
     count
+}
+
+open_logic! {
+/// The selected epoch is the greatest valid start in the scanned segment prefix.
+fn owning_epoch_selection(
+    epochs: Seq<i32>,
+    starts: Seq<i64>,
+    first: Int,
+    last: Int,
+    count: Int,
+    selected: Option<usize>,
+) -> bool {
+    pearlite! { match selected {
+        Some(best) => best@ < count && 0 <= epochs[best@]@
+            && first <= starts[best@]@ && starts[best@]@ <= last
+            && forall<i: Int> 0 <= i && i < count && 0 <= epochs[i]@
+                && first <= starts[i]@ && starts[i]@ <= last
+                ==> starts[i]@ <= starts[best@]@,
+        None => forall<i: Int> 0 <= i && i < count
+            ==> epochs[i]@ < 0 || starts[i]@ < first || last < starts[i]@,
+    } }
+}
 }

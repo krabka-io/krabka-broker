@@ -180,9 +180,7 @@ async fn background_recovery_case(case: &BackgroundCase) {
     take_offline(controller, victim).await;
     check_background_outcome(controller, case, victim).await;
 
-    for (handle, _, _) in cluster {
-        handle.shutdown().await;
-    }
+    crate::support::shutdown_cluster(cluster).await;
 }
 
 /// The background unclean-recovery path under each of the three settings it

@@ -24,59 +24,55 @@ use krabka_protocol::{
 };
 
 use crate::{
-    broker::Broker,
     codes,
     error::BrokerError,
     handlers::{cluster_action_denied, encode_response},
 };
 
-pub(crate) fn handle(
-    broker: &Broker,
-    version: i16,
-    req_bytes: &[u8],
-    ctx: &crate::handlers::RequestContext<'_>,
-) -> Result<Bytes, BrokerError> {
-    let image = broker.controller.current_image();
+wire_handler! {
+    (broker, version, req_bytes, ctx), {
+        let image = broker.controller.current_image();
 
-    // ── ACL preamble ────────────────────────────────────────────
-    // Inter-broker control-plane RPC: `ClusterAction` on
-    // `Cluster("kafka-cluster")`. The response has no top-level error
-    // field (it's a list of per-partition log-info rows), so on Deny we
-    // stamp `CLUSTER_AUTHORIZATION_FAILED (31)` on every requested
-    // partition — mirroring `alter_replica_log_dirs`' cluster-deny path.
-    if cluster_action_denied(broker.config.authorizer.as_ref(), &image, ctx) {
-        return respond(version, req_bytes, |_, partition| denied_row(partition));
-    }
-
-    respond(version, req_bytes, |topic_id, partition| {
-        let hosted = image
-            .topic_name_by_id(&uuid::Uuid::from_bytes(topic_id.0))
-            .and_then(|name| {
-                broker
-                    .partitions
-                    .get(name, krabka_ids::PartitionIndex(partition))
-            });
-        match hosted {
-            Some(part) => {
-                let epoch = part.current_leader_epoch.load(Ordering::Acquire);
-                PartitionLogInfo {
-                    partition,
-                    last_written_leader_epoch: epoch,
-                    current_leader_epoch: epoch,
-                    // Unwrap the `Offset` into the wire `i64` field.
-                    log_end_offset: part.log_end_offset().0,
-                    error_code: codes::NONE,
-                    error_message: None,
-                    ..Default::default()
-                }
-            }
-            None => unanswered(
-                partition,
-                codes::REPLICA_NOT_AVAILABLE,
-                "partition not hosted locally",
-            ),
+        // ── ACL preamble ────────────────────────────────────────────
+        // Inter-broker control-plane RPC: `ClusterAction` on
+        // `Cluster("kafka-cluster")`. The response has no top-level error
+        // field (it's a list of per-partition log-info rows), so on Deny we
+        // stamp `CLUSTER_AUTHORIZATION_FAILED (31)` on every requested
+        // partition — mirroring `alter_replica_log_dirs`' cluster-deny path.
+        if cluster_action_denied(broker.config.authorizer.as_ref(), &image, ctx) {
+            return respond(version, req_bytes, |_, partition| denied_row(partition));
         }
-    })
+
+        respond(version, req_bytes, |topic_id, partition| {
+            let hosted = image
+                .topic_name_by_id(&uuid::Uuid::from_bytes(topic_id.0))
+                .and_then(|name| {
+                    broker
+                        .partitions
+                        .get(name, krabka_ids::PartitionIndex(partition))
+                });
+            match hosted {
+                Some(part) => {
+                    let epoch = part.current_leader_epoch.load(Ordering::Acquire);
+                    PartitionLogInfo {
+                        partition,
+                        last_written_leader_epoch: epoch,
+                        current_leader_epoch: epoch,
+                        // Unwrap the `Offset` into the wire `i64` field.
+                        log_end_offset: part.log_end_offset().0,
+                        error_code: codes::NONE,
+                        error_message: None,
+                        ..Default::default()
+                    }
+                }
+                None => unanswered(
+                    partition,
+                    codes::REPLICA_NOT_AVAILABLE,
+                    "partition not hosted locally",
+                ),
+            }
+        })
+    }
 }
 
 /// Answers every requested `(topic_id, partition)` with the row `row` gives
@@ -161,11 +157,12 @@ mod tests {
         use crate::test_support::{peer, principal};
 
         let topic_uuid = uuid::Uuid::from_u128(0xABCD);
-        let (broker_handle, dir) = crate::test_support::start_broker_with_authorizer_no_audit(
-            Arc::new(crate::authorizer::AllowAllAuthorizer),
-        )
-        .await;
-        let broker = broker_handle.broker_arc_for_test();
+        broker_fixture!(
+            (broker_handle, dir, broker),
+            crate::test_support::start_broker_with_authorizer_no_audit(Arc::new(
+                crate::authorizer::AllowAllAuthorizer
+            ),)
+        );
 
         // Seed the topic so the handler resolves topic_id → name.
         broker
@@ -178,16 +175,13 @@ mod tests {
                     replication_factor: 1,
                 }),
                 MetadataRecord::V1Partition(PartitionRecord {
-                    topic: "orders".into(),
-                    partition: 0,
-                    leader: NodeId(1),
-                    replicas: vec![NodeId(1)],
-                    isr: vec![NodeId(1)],
-                    leader_epoch: krabka_metadata::LeaderEpoch(0),
-                    adding_replicas: vec![],
-                    removing_replicas: vec![],
                     directories: vec![uuid::Uuid::nil()],
                     partition_epoch: 1,
+                    ..crate::handlers::test_support::single_replica_partition(
+                        "orders",
+                        0,
+                        NodeId(1),
+                    )
                 }),
             ])
             .await
@@ -197,15 +191,8 @@ mod tests {
         let part_dir = crate::log_dir::partition_dir(dir.path(), "orders", 0);
         std::fs::create_dir_all(&part_dir).unwrap();
         let log = krabka_log::Log::open(&part_dir, krabka_log::LogConfig::default()).unwrap();
-        let part = crate::broker::spawn_partition(
-            "orders".to_string(),
-            krabka_ids::PartitionIndex(0),
-            dir.path().to_path_buf(),
-            log,
-            crate::log_dir_status::LogDirRegistry::default(),
-            Arc::new(crate::producer_state::ProducerState::new()),
-            false,
-        );
+        let part =
+            crate::test_support::spawn_standalone_partition(dir.path(), "orders", 0, log, false);
         part.current_leader_epoch.store(11, Ordering::Release);
         broker
             .partitions
@@ -223,9 +210,11 @@ mod tests {
         let mut req_buf = BytesMut::new();
         req.encode(&mut req_buf, version).expect("encode req");
 
-        let p = principal("admin");
-        let peer = peer();
-        let ctx = crate::test_support::request_context(&p, &peer, "inter-broker");
+        request_identity!(
+            (p, peer, ctx),
+            principal("admin"),
+            client_id = "inter-broker"
+        );
         let bytes = handle(&broker, version, &req_buf, &ctx).expect("handle");
         let mut cur: &[u8] = &bytes;
         let resp = GetReplicaLogInfoResponse::decode(&mut cur, version).unwrap();
@@ -252,18 +241,12 @@ mod tests {
             get_replica_log_info_response::GetReplicaLogInfoResponse,
         };
 
-        let authorizer =
-            crate::authorizer::SimpleAclAuthorizer::new(std::collections::HashSet::new());
-        let image = krabka_metadata::MetadataImage::new(uuid::Uuid::nil());
-        let principal = crate::test_support::principal("ANONYMOUS");
-        let peer = peer();
-        let ctx = crate::handlers::RequestContext::new(
-            &principal,
-            &peer,
-            "client-a",
-            "connection-a",
-            false,
-            "PLAINTEXT",
+        empty_acl_fixture!(
+            (authorizer, image),
+            (principal, peer, ctx),
+            crate::test_support::principal("ANONYMOUS"),
+            client_id = "client-a",
+            connection_id = "connection-a"
         );
 
         assert!(cluster_action_denied(&authorizer, &image, &ctx));

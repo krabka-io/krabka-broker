@@ -24,7 +24,6 @@ use crate::coordinator::unified::{
     assignor::Assignor,
     config::NextGenConfig,
     consumer_state::{GroupState, MemberState},
-    persistence_next_gen::MemberAssignmentState,
     reconciler::{self, ReconcileOutcome},
 };
 
@@ -134,24 +133,15 @@ pub(super) fn update_member_state(
     let mut names_changed = false;
     if let Some(m) = state.members.get_mut(&req.member_id) {
         m.last_seen = now;
-        if m.client_id != client.id {
-            m.client_id = client.id.to_string();
-            member_metadata_changed = true;
-        }
-        if m.client_host != client.host {
-            m.client_host = client.host.to_string();
-            member_metadata_changed = true;
-        }
+        member_metadata_changed |= client.update_metadata(&mut m.client_id, &mut m.client_host);
         // Kafka's `maybeUpdateRackId` and `maybeUpdateServerAssignorName`: an
         // absent value keeps the stored one. Neither changes the group epoch.
-        if req.rack_id.is_some() && req.rack_id != m.rack_id {
-            m.rack_id.clone_from(&req.rack_id);
-            member_metadata_changed = true;
-        }
-        if req.server_assignor.is_some() && req.server_assignor != m.server_assignor {
-            m.server_assignor.clone_from(&req.server_assignor);
-            member_metadata_changed = true;
-        }
+        member_metadata_changed |=
+            super::super::member_helpers::update_present(&mut m.rack_id, req.rack_id.as_ref());
+        member_metadata_changed |= super::super::member_helpers::update_present(
+            &mut m.server_assignor,
+            req.server_assignor.as_ref(),
+        );
         // Kafka's `maybeUpdateRebalanceTimeoutMs(ofSentinel(..))`: -1 keeps the
         // stored timeout, and any other value replaces it.
         if let Ok(millis) = u64::try_from(req.rebalance_timeout_ms) {
@@ -298,7 +288,6 @@ pub(super) fn build_member(
         .into_iter()
         .collect();
     MemberState {
-        member_id: member_id.into(),
         instance_id: req.instance_id.clone(),
         rack_id: req.rack_id.clone(),
         client_id: client.id.into(),
@@ -312,14 +301,7 @@ pub(super) fn build_member(
         rebalance_timeout: Duration::from_millis(
             u64::try_from(req.rebalance_timeout_ms.max(0)).unwrap_or(FALLBACK_REBALANCE_TIMEOUT_MS),
         ),
-        member_epoch: 0,
-        previous_member_epoch: 0,
-        assignment_state: MemberAssignmentState::Stable,
-        assigned_partitions: HashMap::new(),
-        partitions_pending_revocation: HashMap::new(),
-        assignment_epochs: HashMap::new(),
-        last_seen: now,
-        classic: None,
+        ..MemberState::empty(member_id, now)
     }
 }
 
@@ -331,14 +313,13 @@ mod tests {
 
     use super::*;
     use crate::coordinator::unified::{
-        GroupCoordinator,
         actor::{
-            GroupActorMessage,
             heartbeat::step_heartbeat,
             test_support::{StaticMetadata, empty_metadata},
         },
         assignor::{Assignment, GroupSpec, TopicMetadata},
         offsets_log::fake::InMemoryOffsetsLog,
+        persistence_next_gen::MemberAssignmentState,
         reconciler::ReconcileInput,
         regex_resolver::FixedRegexResolver,
     };
@@ -359,22 +340,8 @@ mod tests {
                 ..Default::default()
             },
         };
-        let mut state = GroupState::new("g");
-        for member_id in ["m1", "m2"] {
-            state.add_or_update_member(build_member(
-                member_id,
-                &ConsumerGroupHeartbeatRequest {
-                    subscribed_topic_names: Some(vec!["first".into()]),
-                    rebalance_timeout_ms: 60_000,
-                    ..Default::default()
-                },
-                crate::coordinator::unified::ClientIdentity {
-                    id: "client",
-                    host: "host",
-                },
-                Instant::now(),
-            ));
-        }
+        let mut state =
+            super::super::test_support::subscribed_consumer_group("g", &["m1", "m2"], &["first"]);
         run_reconcile(&mut state, &config, &metadata);
         state.advance_member_epoch("m1");
         state.advance_member_epoch("m2");
@@ -977,37 +944,26 @@ mod tests {
             .unwrap();
 
         let log = Arc::new(InMemoryOffsetsLog::default());
-        let coord = Arc::new(GroupCoordinator::new(
+        let coord = crate::coordinator::unified::actor::test_support::coordinator_with_log(
             config,
-            crate::coordinator::unified::share::config::ShareGroupConfig::assigning_at_once(),
             empty_metadata(),
             log,
-            crate::coordinator::unified::streams::config::StreamsGroupConfig::default(),
-        ));
+        );
         let handle = coord.get_or_create_consumer("g");
 
-        let (tx, rx) = tokio::sync::oneshot::channel();
-        handle
-            .tx
-            .send(GroupActorMessage::Heartbeat {
-                request: ConsumerGroupHeartbeatRequest {
-                    group_id: "g".into(),
-                    member_id: String::new(),
-                    member_epoch: 0,
-                    subscribed_topic_names: Some(vec!["t".into()]),
-                    server_assignor: Some("counting".into()),
-                    rebalance_timeout_ms: 60_000,
-                    ..Default::default()
-                },
-                client_id: "client-a".into(),
-                client_host: String::new(),
-                regex_resolver:
-                    crate::coordinator::unified::regex_resolver::no_topic_regex_resolver(),
-                reply: tx,
-            })
-            .await
-            .unwrap();
-        let resp = rx.await.unwrap();
+        let resp = crate::coordinator::unified::actor::test_support::rpc::consumer_request(
+            &handle,
+            ConsumerGroupHeartbeatRequest {
+                group_id: "g".into(),
+                member_id: String::new(),
+                member_epoch: 0,
+                subscribed_topic_names: Some(vec!["t".into()]),
+                server_assignor: Some("counting".into()),
+                rebalance_timeout_ms: 60_000,
+                ..Default::default()
+            },
+        )
+        .await;
         assert!(resp.error_code == 0);
         assert!(
             calls.load(Ordering::SeqCst) >= 1,

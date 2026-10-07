@@ -32,7 +32,7 @@ use self::{
     response::{feature_error, success, top_level_error},
     validate::{UpdateError, plan_updates},
 };
-use crate::{broker::Broker, codes, error::BrokerError};
+use crate::{broker::Broker, codes};
 
 /// `NOT_CONTROLLER`'s answer when the write reaches a node that has lost the
 /// quorum leadership.
@@ -73,21 +73,20 @@ fn kraft_upgrade_refusal(
     }
 }
 
-/// The `typed` dispatch entry point: [`answer`], which the generated adapter
-/// encodes.
-#[tracing::instrument(
-    name = "handle_update_features",
-    level = "info",
-    skip_all,
-    fields(api = "UpdateFeatures", version)
-)]
-pub(crate) async fn handle(
-    broker: &Broker,
-    req: UpdateFeaturesRequest,
-    version: i16,
-    ctx: &crate::handlers::RequestContext<'_>,
-) -> Result<UpdateFeaturesResponse, BrokerError> {
-    Ok(answer(broker, req, version, ctx).await)
+context_handler! {
+    /// The `typed` dispatch entry point: [`answer`], which the generated adapter
+    /// encodes.
+    #[tracing::instrument(
+        name = "handle_update_features",
+        level = "info",
+        skip_all,
+        fields(api = "UpdateFeatures", version)
+    )]
+    UpdateFeaturesRequest => UpdateFeaturesResponse,
+    (broker, req, version, ctx),
+    {
+        Ok(answer(broker, req, version, ctx).await)
+    }
 }
 
 /// Runs the `UpdateFeatures` request at `version` and returns the typed

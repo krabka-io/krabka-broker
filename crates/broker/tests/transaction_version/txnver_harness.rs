@@ -7,55 +7,30 @@
 //! below it has to be reached through a live feature downgrade.
 
 use assert2::assert;
-use krabka_broker::{Broker, BrokerConfig, BrokerHandle};
 use krabka_client_core::Client;
-use krabka_protocol::owned::{
-    create_topics_request::{CreatableTopic, CreateTopicsRequest},
-    update_features_request::{FeatureUpdateKey, UpdateFeaturesRequest},
-};
-use tempfile::TempDir;
+use krabka_protocol::owned::update_features_request::{FeatureUpdateKey, UpdateFeaturesRequest};
+
+use crate::support::client::connect_client;
 
 // Kafka error codes asserted below.
 pub const NONE: i16 = 0;
 pub const TRANSACTION_ABORTABLE: i16 = 120;
 
-pub async fn boot_single() -> (BrokerHandle, String, TempDir) {
-    let dir = TempDir::new().unwrap();
-    let broker = Broker::start(BrokerConfig::for_tests(dir.path().to_path_buf()))
-        .await
-        .unwrap();
-    let bootstrap = broker.listen_addr().to_string();
-    (broker, bootstrap, dir)
-}
+pub use crate::support::boot_single;
 
 pub async fn admin_client(bootstrap: &str) -> Client {
-    Client::builder()
-        .bootstrap(bootstrap)
-        .client_id("krabka-txnv-test")
-        .build()
-        .await
-        .unwrap()
+    connect_client(bootstrap, Some("krabka-txnv-test")).await
 }
 
 pub async fn create_topic(client: &Client, name: &str, partitions: i32) {
-    let cr = client
-        .send(CreateTopicsRequest {
-            topics: vec![CreatableTopic {
-                name: name.into(),
-                num_partitions: partitions,
-                replication_factor: 1,
-                ..Default::default()
-            }],
-            timeout_ms: 5_000,
-            ..Default::default()
-        })
-        .await
-        .unwrap();
-    assert!(
-        cr.topics[0].error_code == 0 || cr.topics[0].error_code == 36,
-        "create_topic {name}: error_code={}",
-        cr.topics[0].error_code
-    );
+    crate::support::transaction_wire::create_topic(
+        client,
+        name,
+        partitions,
+        Vec::new(),
+        "create_topic",
+    )
+    .await;
 }
 
 /// Downgrade the finalized `transaction.version` to `level` with a
@@ -87,5 +62,85 @@ pub async fn downgrade_transaction_version(client: &Client, level: i16) {
             row.error_code == 0,
             "transaction.version downgrade to {level} rejected: {resp:?}"
         );
+    }
+}
+
+/// A single materialized transaction-state partition, optionally reopened on the same directory.
+pub fn config(
+    log_dir: std::path::PathBuf,
+    bootstrap_mode: Option<krabka_broker::BootstrapMode>,
+) -> krabka_broker::BrokerConfig {
+    let mut config = krabka_broker::BrokerConfig::for_tests(log_dir);
+    config.transaction_state_num_partitions = 1;
+    config.transaction_state_replication_factor = 1;
+    if let Some(mode) = bootstrap_mode {
+        config.bootstrap_mode = mode;
+    }
+    config
+}
+
+/// Locate the named topic in its own metadata response, retaining its diagnostic.
+pub async fn topic_id(client: &Client, topic: &str) -> krabka_protocol::primitives::uuid::Uuid {
+    client
+        .send(crate::support::discovery::topic_metadata_request(Some(
+            vec![crate::support::topics::metadata_topic(
+                Some(topic.into()),
+                krabka_protocol::primitives::uuid::Uuid::default(),
+            )],
+        )))
+        .await
+        .expect("Metadata")
+        .topics
+        .iter()
+        .find(|row| row.name.as_deref() == Some(topic))
+        .map(|row| row.topic_id)
+        .expect("topic in metadata")
+}
+
+/// Trigger loading of the transaction coordinator without asserting on the lookup response.
+pub async fn find_coordinator(client: &Client, transactional_id: &str) {
+    let _ = client
+        .send(crate::support::discovery::coordinator_lookup_request(
+            transactional_id,
+            1,
+            vec![transactional_id.into()],
+        ))
+        .await
+        .expect("FindCoordinator");
+}
+
+/// A literal expected response table; no field is copied from an actual response.
+pub fn expected_partitions(
+    transactional_id: &str,
+    topic: &str,
+    partitions: &[(i32, i16)],
+) -> krabka_protocol::owned::add_partitions_to_txn_response::AddPartitionsToTxnResponse {
+    use krabka_protocol::owned::{
+        add_partitions_to_txn_response::{AddPartitionsToTxnResponse, AddPartitionsToTxnResult},
+        common::add_partitions_to_txn_response::{
+            add_partitions_to_txn_partition_result::AddPartitionsToTxnPartitionResult,
+            add_partitions_to_txn_topic_result::AddPartitionsToTxnTopicResult,
+        },
+    };
+    AddPartitionsToTxnResponse {
+        results_by_transaction: vec![AddPartitionsToTxnResult {
+            transactional_id: transactional_id.into(),
+            topic_results: vec![AddPartitionsToTxnTopicResult {
+                name: topic.into(),
+                results_by_partition: partitions
+                    .iter()
+                    .map(|&(partition_index, partition_error_code)| {
+                        AddPartitionsToTxnPartitionResult {
+                            partition_index,
+                            partition_error_code,
+                            ..Default::default()
+                        }
+                    })
+                    .collect(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        }],
+        ..Default::default()
     }
 }

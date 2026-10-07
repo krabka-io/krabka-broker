@@ -58,6 +58,28 @@ pub(super) fn record(offset_delta: i32) -> Record {
     }
 }
 
+/// Numbered records with the exact optional static keys under test.
+pub(super) fn keyed_records(keys: &[Option<&'static [u8]>]) -> Vec<Record> {
+    keys.iter()
+        .enumerate()
+        .map(|(offset, key)| Record {
+            key: key.map(Bytes::from_static),
+            ..record(i32::try_from(offset).unwrap())
+        })
+        .collect()
+}
+
+pub(super) fn timestamped_records(deltas: &[i64]) -> Vec<Record> {
+    deltas
+        .iter()
+        .enumerate()
+        .map(|(offset, &timestamp_delta)| Record {
+            timestamp_delta,
+            ..record(i32::try_from(offset).unwrap())
+        })
+        .collect()
+}
+
 pub(super) fn header(name: &str, value: &[u8]) -> RecordHeader {
     RecordHeader {
         key: name.to_owned(),
@@ -106,6 +128,19 @@ pub(super) fn decide(
     owned: &RecordBatch,
 ) -> (BatchDecision, Vec<RecordDecision>) {
     try_decide(predicates, partition, owned).expect("valid record coordinates")
+}
+
+/// Assert both independent verdicts returned by the batch/record decision harness.
+pub(super) fn check_decision(
+    predicates: &Predicates,
+    partition: &PartitionRef,
+    owned: &RecordBatch,
+    expected_batch: BatchDecision,
+    expected_records: &[RecordDecision],
+) {
+    let (batch_decision, records) = decide(predicates, partition, owned);
+    assert2::check!(batch_decision == expected_batch);
+    assert2::check!(records == expected_records);
 }
 
 pub(super) fn try_decide(

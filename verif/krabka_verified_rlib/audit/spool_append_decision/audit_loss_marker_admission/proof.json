@@ -4,9 +4,9 @@
     "Coma": {
       "vc_audit_loss_marker_admission": {
         "prover": "alt-ergo",
-        "time": 0.013
+        "time": 0.026
       },
-      "vc_elim_Some": { "prover": "alt-ergo", "time": 0.007 }
+      "vc_elim_Some": { "prover": "alt-ergo", "time": 0.019 }
     }
   }
 }

@@ -14,7 +14,7 @@ use std::{net::SocketAddr, sync::Arc};
 use assert2::check;
 use krabka_broker::{Broker, BrokerConfig, BrokerHandle, SslPrincipalMapper, config::ListenerSpec};
 use krabka_protocol::owned::create_delegation_token_request::CreateDelegationTokenRequest;
-use krabka_security::{ClientAuthMode, ListenerProtocol, SecretBytes, TlsConfig};
+use krabka_security::{ClientAuthMode, ListenerProtocol, TlsConfig};
 use tempfile::TempDir;
 use tokio::net::TcpStream;
 use tokio_rustls::{
@@ -72,9 +72,7 @@ async fn start_broker(
     for user in super_users {
         cfg.super_users.insert((*user).to_string());
     }
-    cfg.delegation_token_secret_key = Some(SecretBytes::new(b"anon-master-key".to_vec()));
-    cfg.delegation_token_max_lifetime = krabka_units::days(7);
-    cfg.delegation_token_default_renew_period = krabka_units::hours(24);
+    crate::support::sasl::delegation_token_defaults(&mut cfg, b"anon-master-key");
 
     let handle = Broker::start(cfg).await.expect("broker must start");
     let addr = handle.listen_addr();

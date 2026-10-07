@@ -228,44 +228,44 @@ impl Model for FsModel {
         }
     }
 
-    fn next_state(&self, last: &Self::State, a: Self::Action) -> Option<Self::State> {
-        let mut s = last.clone();
-        let forgotten: Vec<ForgottenTopic> = a
-            .forget
-            .into_iter()
-            .map(|(r, p)| forgotten_topic(r, p))
-            .collect();
-        let topics: Vec<FetchTopic> = a
-            .sub
-            .into_iter()
-            .map(|(r, p, mb)| fetch_topic(r, p, mb))
-            .collect();
+    krabka_macros::model_transition!(last, a, s; {
+            let forgotten: Vec<ForgottenTopic> = a
+                .forget
+                .into_iter()
+                .map(|(r, p)| forgotten_topic(r, p))
+                .collect();
+            let topics: Vec<FetchTopic> = a
+                .sub
+                .into_iter()
+                .map(|(r, p, mb)| fetch_topic(r, p, mb))
+                .collect();
 
-        apply_incremental(&mut s.partitions, &forgotten, &topics);
+            apply_incremental(&mut s.partitions, &forgotten, &topics);
 
-        // Headline safety, per transition (fires the moment a shadow appears).
-        assert2::assert!(
-            no_shadow(&s.partitions),
-            "shadow entry after {a:?}: {:?}",
-            s.proj()
-        );
-
-        // Subscription fidelity: a subscribed partition is reflected with the
-        // requested max_bytes by some key matching the request's identity.
-        if let Some((r, p, mb)) = a.sub {
-            let present = s
-                .partitions
-                .iter()
-                .any(|(k, st)| ref_matches(k, r, p) && st.max_bytes == mb);
+            // Headline safety, per transition (fires the moment a shadow appears).
             assert2::assert!(
-                present,
-                "subscription not reflected after {a:?}: {:?}",
+                no_shadow(&s.partitions),
+                "shadow entry after {a:?}: {:?}",
                 s.proj()
             );
-        }
 
-        Some(s)
-    }
+            // Subscription fidelity: a subscribed partition is reflected with the
+            // requested max_bytes by some key matching the request's identity.
+            if let Some((r, p, mb)) = a.sub {
+                let present = s
+                    .partitions
+                    .iter()
+                    .any(|(k, st)| ref_matches(k, r, p) && st.max_bytes == mb);
+                assert2::assert!(
+                    present,
+                    "subscription not reflected after {a:?}: {:?}",
+                    s.proj()
+                );
+            }
+
+            Some(s)
+
+    });
 
     fn properties(&self) -> Vec<Property<Self>> {
         vec![
@@ -300,10 +300,10 @@ fn run(model: FsModel, label: &str, pinned_unique_states: usize) {
         "[{label}] unique-state bound exceeded ({})",
         checker.unique_state_count()
     );
-    // Pin: a changed count is a changed model, not a retuning knob.
-    assert2::assert!(
-        checker.unique_state_count() == pinned_unique_states,
-        "[{label}] unique-state count moved: the reachable set of this model changed"
+    crate::model_check::assert_pinned_count(
+        checker.unique_state_count(),
+        pinned_unique_states,
+        label,
     );
     checker.assert_properties();
 }

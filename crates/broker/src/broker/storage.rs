@@ -134,16 +134,20 @@ pub(super) async fn recover_storage_and_groups(
                     log,
                     log_dir_status: log_dir_status.clone(),
                     producer_state: Arc::clone(&producer_state),
-                    max_produce_group: config.max_produce_group,
-                    partition_writer_queue_depth: config.partition_writer_queue_depth,
-                    diskless_wal_local_replica_count: config.diskless_wal_local_replica_count,
-                    diskless,
-                    hot_tail: Some(Arc::clone(&diskless_runtime.hot_tail)),
-                    wal_shards: Some(Arc::clone(&diskless_runtime.wal_shards)),
-                    sequencer: diskless.then(|| {
-                        Arc::new(crate::wal::ControllerSequencer::new(Arc::clone(controller)))
-                            as Arc<dyn crate::wal::OffsetSequencer>
-                    }),
+                    runtime: crate::partition::PartitionRuntimeConfig::from_broker(
+                        config,
+                        diskless,
+                        (
+                            Some(Arc::clone(&diskless_runtime.hot_tail)),
+                            Some(Arc::clone(&diskless_runtime.wal_shards)),
+                            diskless.then(|| {
+                                Arc::new(crate::wal::ControllerSequencer::new(Arc::clone(
+                                    controller,
+                                )))
+                                    as Arc<dyn crate::wal::OffsetSequencer>
+                            }),
+                        ),
+                    ),
                 },
                 initial_target,
             )?;

@@ -14,7 +14,7 @@ mod sim_harness;
 use std::cell::RefCell;
 
 use krabka_ids::{NodeId, Offset};
-use krabka_protocol::records::{Attributes, Record, RecordBatch};
+use krabka_protocol::records::RecordBatch;
 use krabka_raft::kraft::{
     KraftLog,
     types::{Epoch, LogOffsetMetadata, LogView},
@@ -60,30 +60,14 @@ impl KraftBackedLog {
     }
 }
 
+krabka_macros::epoch_record_batch_fixture!(epoch_record_batch);
+
 /// Builds a single-record batch stamped with `epoch`. The log assigns
 /// `base_offset` on `append`, which is the leader path, or `append_at` pins it,
 /// which is the follower path. The value here is therefore only a placeholder.
 fn make_batch(epoch: Epoch, value: &[u8]) -> RecordBatch {
     let epoch_i32 = i32::try_from(epoch).expect("epoch fits in i32");
-    RecordBatch {
-        base_offset: 0,
-        partition_leader_epoch: epoch_i32,
-        attributes: Attributes::default(),
-        last_offset_delta: 0,
-        base_timestamp: 0,
-        max_timestamp: 0,
-        producer_id: -1,
-        producer_epoch: -1,
-        base_sequence: -1,
-        records: vec![Record {
-            attributes: 0,
-            timestamp_delta: 0,
-            offset_delta: 0,
-            key: None,
-            value: Some(bytes::Bytes::copy_from_slice(value)),
-            headers: Vec::new(),
-        }],
-    }
+    epoch_record_batch(0, epoch_i32, value)
 }
 
 impl LogView for KraftBackedLog {
@@ -220,9 +204,7 @@ use assert2::check;
 #[test]
 fn voters_logs_byte_identical_up_to_hwm_over_real_log() {
     let mut sim = new_with_kraft_log(&[NodeId(1), NodeId(2), NodeId(3)]);
-    sim.run_until_stable(10_000);
-    assert2::assert!(sim.leaders().len() == 1);
-    let leader = sim.leaders()[0];
+    let leader = sim.stabilize_one_leader(10_000);
 
     sim.leader_append(leader, 5); // 5 real batches stamped in the leader's epoch
     sim.run_until_stable(10_000);
@@ -250,9 +232,7 @@ fn voters_logs_byte_identical_up_to_hwm_over_real_log() {
 #[test]
 fn follower_truncates_real_log_on_divergence_then_reconverges() {
     let mut sim = new_with_kraft_log(&[NodeId(1), NodeId(2), NodeId(3)]);
-    sim.run_until_stable(10_000);
-    assert2::assert!(sim.leaders().len() == 1);
-    let leader = sim.leaders()[0];
+    let leader = sim.stabilize_one_leader(10_000);
 
     // Get the leader to commit some real data first.
     sim.leader_append(leader, 3);
@@ -314,9 +294,7 @@ fn follower_truncates_real_log_on_divergence_then_reconverges() {
 #[test]
 fn hwm_agrees_and_never_exceeds_any_voter_log_end() {
     let mut sim = new_with_kraft_log(&[NodeId(1), NodeId(2), NodeId(3)]);
-    sim.run_until_stable(10_000);
-    assert2::assert!(sim.leaders().len() == 1);
-    let leader = sim.leaders()[0];
+    let leader = sim.stabilize_one_leader(10_000);
 
     sim.leader_append(leader, 3);
     sim.run_until_stable(10_000);

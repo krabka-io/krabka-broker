@@ -356,9 +356,7 @@ mod tests {
     /// `test-util` feature, which this workspace does not turn on, so a test
     /// reads a histogram the way Prometheus does.
     async fn render(metrics: &BrokerMetrics) -> String {
-        let mut out = String::new();
-        let registry = metrics.registry.lock().await;
-        prometheus_client::encoding::text::encode(&mut out, &registry).expect("encode registry");
+        crate::metrics::test_support::render_registry!(metrics, out, registry; expect("encode registry"));
         out
     }
 
@@ -494,9 +492,7 @@ mod tests {
         assert!(m.in_flight_requests.get() == 1);
         assert!(m.active_connections.get() == 5);
 
-        let mut buf = String::new();
-        let r = m.registry.lock().await;
-        prometheus_client::encoding::text::encode(&mut buf, &r).unwrap();
+        crate::metrics::test_support::render_registry!(m, buf, r; unwrap());
         assert!(
             buf.contains("krabka_broker_request_duration_seconds_count{api_key=\"Produce\"} 2"),
             "expected 2 Produce latency samples in:\n{buf}"
@@ -523,9 +519,7 @@ mod tests {
         }
         m.record_connection_close(ConnectionCloseReason::Idle);
 
-        let mut buf = String::new();
-        let r = m.registry.lock().await;
-        prometheus_client::encoding::text::encode(&mut buf, &r).unwrap();
+        crate::metrics::test_support::render_registry!(m, buf, r; unwrap());
 
         // A `Family` renders its series in map order, so sort before
         // comparing: what matters is the set of series and their values.

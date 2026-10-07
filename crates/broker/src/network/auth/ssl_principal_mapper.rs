@@ -249,6 +249,19 @@ mod tests {
 
     use super::*;
 
+    fn check_mappings<'a>(
+        cases: impl IntoIterator<Item = (&'a [&'a str], &'a str, Option<&'a str>)>,
+    ) {
+        for (specs, distinguished_name, expected) in cases {
+            let mapper =
+                SslPrincipalMapper::parse(specs).unwrap_or_else(|_| panic!("{specs:?} parses"));
+            check!(
+                mapper.apply(distinguished_name).as_deref() == expected,
+                "{specs:?} against {distinguished_name}"
+            );
+        }
+    }
+
     /// Kafka's own documented `ssl.principal.mapping.rules` examples, each
     /// against a DN it matches and one it does not.
     #[test]
@@ -298,14 +311,7 @@ mod tests {
             // nothing.
             (&[][..], "CN=alice,OU=x,O=y", None),
         ];
-        for (specs, distinguished_name, expected) in cases {
-            let mapper =
-                SslPrincipalMapper::parse(specs).unwrap_or_else(|_| panic!("{specs:?} parses"));
-            check!(
-                mapper.apply(distinguished_name).as_deref() == expected,
-                "{specs:?} against {distinguished_name}"
-            );
-        }
+        check_mappings(cases);
     }
 
     /// `Matcher.matches()` and `String.replaceAll`, which the `regex` crate
@@ -348,14 +354,7 @@ mod tests {
             // two references are stray, so the second one throws.
             (&["RULE:^(.*),(.*),(.*)$/$4@$5/"][..], "a,b,c", None),
         ];
-        for (specs, distinguished_name, expected) in cases {
-            let mapper =
-                SslPrincipalMapper::parse(specs).unwrap_or_else(|_| panic!("{specs:?} parses"));
-            check!(
-                mapper.apply(distinguished_name).as_deref() == expected,
-                "{specs:?} against {distinguished_name}"
-            );
-        }
+        check_mappings(cases);
     }
 
     /// The configured default is Kafka's `["DEFAULT"]`, so a listener with no

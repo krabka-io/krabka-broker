@@ -22,13 +22,12 @@ fn heartbeat(group: &str) -> ConsumerGroupHeartbeatRequest {
     // consumer_group_next_gen.rs. The feature gate is the first check after
     // decode, so this reaches it regardless of whether the topic exists.
     ConsumerGroupHeartbeatRequest {
-        group_id: group.into(),
-        member_id: uuid::Uuid::new_v4().to_string(),
-        member_epoch: 0,
-        topic_partitions: Some(vec![]),
-        rebalance_timeout_ms: 30_000,
         subscribed_topic_names: Some(vec!["t".into()]),
-        ..Default::default()
+        ..crate::support::consumer_groups::joining_consumer(
+            group,
+            uuid::Uuid::new_v4().to_string(),
+            30_000,
+        )
     }
 }
 

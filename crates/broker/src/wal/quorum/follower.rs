@@ -1,12 +1,11 @@
 //! Pull-based durable WAL follower for one diskless shard.
 
-use std::{path::PathBuf, sync::Arc};
+use std::path::PathBuf;
 
 use krabka_client_core::ClientError;
 use krabka_log::LogConfig;
 use krabka_protocol::owned::fetch_response::FetchResponse;
 use krabka_raft::NodeId;
-use krabka_security::ListenerProtocol;
 use krabka_units::convert::{ByteSizeExt as _, TimeExt as _};
 use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
@@ -30,7 +29,7 @@ use super::{
     registry::ShardId,
     wire::{QuorumGroup, fetch_request},
 };
-use crate::{codes, config::ReplicationRuntimeConfig};
+use crate::codes;
 
 pub(crate) struct Config {
     pub(crate) node_id: NodeId,
@@ -44,10 +43,7 @@ pub(crate) struct Config {
     pub(crate) storage: LogConfig,
     pub(crate) client_id: String,
     pub(crate) shutdown: CancellationToken,
-    pub(crate) inter_broker_client: Arc<crate::network::client::InterBrokerClient>,
-    pub(crate) inter_broker_listener_protocol: ListenerProtocol,
-    pub(crate) inter_broker_server_name: String,
-    pub(crate) replication: ReplicationRuntimeConfig,
+    pub(crate) connection: crate::replicator::ReplicationConnectionConfig,
 }
 
 pub(crate) async fn run(config: Config) {
@@ -77,7 +73,7 @@ pub(crate) async fn run(config: Config) {
         }
         if sleep_or_cancel(
             &config.shutdown,
-            config.replication.unexpected_error_backoff,
+            config.connection.replication.unexpected_error_backoff,
         )
         .await
         .is_err()
@@ -88,6 +84,7 @@ pub(crate) async fn run(config: Config) {
 }
 
 async fn run_inner(config: &Config, follower: &FollowerLog) -> Result<(), String> {
+    let replication = &config.connection.replication;
     let mut connection = connect_with_backoff(config).await?;
     loop {
         let requested = follower.end_offset();
@@ -97,12 +94,11 @@ async fn run_inner(config: &Config, follower: &FollowerLog) -> Result<(), String
             config.leader_epoch,
             follower.last_epoch(),
             requested.0,
-            config.replication.fetch_max,
+            replication.fetch_max,
         );
         request.max_wait_ms =
-            i32::try_from(config.replication.fetch_max_wait.millis_i64_trunc().max(0))
-                .unwrap_or(i32::MAX);
-        request.min_bytes = config.replication.fetch_min.bytes_i32();
+            i32::try_from(replication.fetch_max_wait.millis_i64_trunc().max(0)).unwrap_or(i32::MAX);
+        request.min_bytes = replication.fetch_min.bytes_i32();
         let response: FetchResponse = tokio::select! {
             () = config.shutdown.cancelled() => return Ok(()),
             response = connection.send(request) => match response {
@@ -113,7 +109,7 @@ async fn run_inner(config: &Config, follower: &FollowerLog) -> Result<(), String
                 }
                 Err(error) => {
                     warn!(error = %error, "diskless WAL fetch failed; reconnecting");
-                    sleep_or_cancel(&config.shutdown, config.replication.send_error_backoff)
+                    sleep_or_cancel(&config.shutdown, replication.send_error_backoff)
                         .await?;
                     connection = connect_with_backoff(config).await?;
                     continue;
@@ -121,11 +117,7 @@ async fn run_inner(config: &Config, follower: &FollowerLog) -> Result<(), String
             },
         };
         let Some(partition) = response_partition(response, config.shard) else {
-            sleep_or_cancel(
-                &config.shutdown,
-                config.replication.unexpected_error_backoff,
-            )
-            .await?;
+            sleep_or_cancel(&config.shutdown, replication.unexpected_error_backoff).await?;
             continue;
         };
         match partition.error_code {
@@ -148,11 +140,8 @@ async fn run_inner(config: &Config, follower: &FollowerLog) -> Result<(), String
                     .map_err(|error| error.to_string())?;
                 match fetch_progress(requested, appended)? {
                     FetchProgress::Idle => {
-                        sleep_or_cancel(
-                            &config.shutdown,
-                            config.replication.throttle_exhausted_backoff,
-                        )
-                        .await?;
+                        sleep_or_cancel(&config.shutdown, replication.throttle_exhausted_backoff)
+                            .await?;
                     }
                     FetchProgress::Advanced => {}
                 }
@@ -165,11 +154,7 @@ async fn run_inner(config: &Config, follower: &FollowerLog) -> Result<(), String
                     .map_err(|error| error.to_string())?;
             }
             codes::UNKNOWN_TOPIC_OR_PARTITION => {
-                sleep_or_cancel(
-                    &config.shutdown,
-                    config.replication.unknown_topic_retry_delay,
-                )
-                .await?;
+                sleep_or_cancel(&config.shutdown, replication.unknown_topic_retry_delay).await?;
             }
             codes::NOT_LEADER_OR_FOLLOWER
             | codes::FENCED_LEADER_EPOCH
@@ -179,11 +164,7 @@ async fn run_inner(config: &Config, follower: &FollowerLog) -> Result<(), String
                     error_code,
                     "diskless WAL follower received an unexpected error"
                 );
-                sleep_or_cancel(
-                    &config.shutdown,
-                    config.replication.unexpected_error_backoff,
-                )
-                .await?;
+                sleep_or_cancel(&config.shutdown, replication.unexpected_error_backoff).await?;
             }
         }
     }
@@ -191,20 +172,27 @@ async fn run_inner(config: &Config, follower: &FollowerLog) -> Result<(), String
 
 #[cfg(test)]
 mod tests {
-    use std::{path::Path, sync::Mutex};
+    use std::{
+        path::Path,
+        sync::{Arc, Mutex},
+    };
 
     use assert2::assert;
     use bytes::Bytes;
     use krabka_ids::{Offset, PartitionIndex};
     use krabka_log::Log;
     use krabka_protocol::records::{Record, RecordBatch};
+    use krabka_security::ListenerProtocol;
 
     use super::*;
-    use crate::wal::{
-        WalStore as _,
-        quorum::{
-            engine::WalShardEngine,
-            registry::{WalPlacement, WalShardRegistry},
+    use crate::{
+        config::ReplicationRuntimeConfig,
+        wal::{
+            WalStore as _,
+            quorum::{
+                engine::WalShardEngine,
+                registry::{WalPlacement, WalShardRegistry},
+            },
         },
     };
 
@@ -224,12 +212,14 @@ mod tests {
             storage: LogConfig::default(),
             client_id: "wal-follower-test".into(),
             shutdown,
-            inter_broker_client: Arc::new(crate::network::client::InterBrokerClient::new(
-                None, None,
-            )),
-            inter_broker_listener_protocol: ListenerProtocol::Plaintext,
-            inter_broker_server_name: "localhost".into(),
-            replication: ReplicationRuntimeConfig::default(),
+            connection: crate::replicator::ReplicationConnectionConfig {
+                inter_broker_client: Arc::new(crate::network::client::InterBrokerClient::new(
+                    None, None,
+                )),
+                inter_broker_listener_protocol: ListenerProtocol::Plaintext,
+                inter_broker_server_name: "localhost".into(),
+                replication: ReplicationRuntimeConfig::default(),
+            },
         }
     }
 
@@ -246,6 +236,28 @@ mod tests {
             leader_epoch: epoch,
         }});
         (registry, engine)
+    }
+
+    fn fetch_follower(
+        registry: &WalShardRegistry,
+        shard: ShardId,
+        follower: &FollowerLog,
+    ) -> krabka_protocol::owned::fetch_response::PartitionData {
+        let response = registry
+            .route_fetch_request(
+                &fetch_request(
+                    QuorumGroup::diskless_wal(shard.topic_id, shard.partition),
+                    NodeId(2),
+                    1,
+                    follower.last_epoch(),
+                    follower.end_offset().0,
+                    krabka_units::mebibytes(1),
+                ),
+                NodeId(2),
+            )
+            .unwrap()
+            .unwrap();
+        response_partition(response, shard).unwrap()
     }
 
     #[tokio::test]
@@ -399,21 +411,7 @@ mod tests {
         };
         let (registry, engine) = leader_registry(shard, &leader, 1);
 
-        let response = registry
-            .route_fetch_request(
-                &fetch_request(
-                    QuorumGroup::diskless_wal(shard.topic_id, shard.partition),
-                    NodeId(2),
-                    1,
-                    follower.last_epoch(),
-                    follower.end_offset().0,
-                    krabka_units::mebibytes(1),
-                ),
-                NodeId(2),
-            )
-            .unwrap()
-            .unwrap();
-        let partition = response_partition(response, shard).unwrap();
+        let partition = fetch_follower(&registry, shard, &follower);
         assert2::assert!((partition.diverging_epoch.end_offset) == (1));
         assert2::assert!((engine.durable_watermark()) == (Offset(0)));
 
@@ -425,21 +423,7 @@ mod tests {
             )
             .await
             .unwrap();
-        let response = registry
-            .route_fetch_request(
-                &fetch_request(
-                    QuorumGroup::diskless_wal(shard.topic_id, shard.partition),
-                    NodeId(2),
-                    1,
-                    follower.last_epoch(),
-                    follower.end_offset().0,
-                    krabka_units::mebibytes(1),
-                ),
-                NodeId(2),
-            )
-            .unwrap()
-            .unwrap();
-        let partition = response_partition(response, shard).unwrap();
+        let partition = fetch_follower(&registry, shard, &follower);
         follower
             .append(
                 Offset(1),

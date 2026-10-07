@@ -1,10 +1,4 @@
-use creusot_std::prelude::*;
-
-use super::{
-    AvailableTokens, BurstCapacity, RefillTokens, RequestedTokens, plan_consume, quota_charge,
-    refill_partition_preserves_consume_budget,
-};
-use crate::quota::{quota_debt_cap, quota_whole_request};
+use super::*;
 
 type DeadlineQuota = (u64, u64, u64, u64, u64, u64);
 
@@ -14,7 +8,7 @@ type DeadlineQuota = (u64, u64, u64, u64, u64, u64);
 /// full probe. Rate, burst and token quantum stay fixed, with no intervening
 /// charge/refund/consume. Clock claims, time conversion and publication are
 /// host obligations. Counts in the ledger are effective micro-tokens.
-#[requires(initial.0@ <= burst@ && (initial.0@ == 0 || initial.1@ == 0))]
+#[requires(crate::quota::balance_within_burst(initial.0@, initial.1@, burst@))]
 #[requires(initial.2@ < 1_000_000_000 && rate@ > 0 && units@ > 0)]
 #[requires(elapsed.0@ + elapsed.1@ <= u64::MAX@)]
 #[ensures(result.0@ == (charge.1@ * rate@ / 1_000_000_000).min(u64::MAX@))]

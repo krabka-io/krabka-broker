@@ -1,40 +1,40 @@
-(* #"/workspace/crates/verified/src/producer_snapshot/snapshot_transaction_valid.rs" 116 0 116 94 *)
+(* #"/workspace/crates/verified/src/producer_snapshot/snapshot_transaction_valid.rs" 108 0 108 94 *)
 
-let%span sord = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
-let%span sord'0 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
-let%span swell_founded = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/well_founded.rs" 43 8 43 33
-let%span sslice = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 331 18 331 22
-let%span ssnapshot_transaction_valid = "/workspace/crates/verified/src/producer_snapshot/snapshot_transaction_valid.rs" 117 17 117 33
-let%span ssnapshot_transaction_valid'0 = "/workspace/crates/verified/src/producer_snapshot/snapshot_transaction_valid.rs" 118 22 118 27
-let%span ssnapshot_transaction_valid'1 = "/workspace/crates/verified/src/producer_snapshot/snapshot_transaction_valid.rs" 119 31 119 35
-let%span ssnapshot_transaction_valid'2 = "/workspace/crates/verified/src/producer_snapshot/snapshot_transaction_valid.rs" 120 16 120 22
-let%span ssnapshot_transaction_valid'3 = "/workspace/crates/verified/src/producer_snapshot/snapshot_transaction_valid.rs" 125 14 125 39
-let%span ssnapshot_transaction_valid'4 = "/workspace/crates/verified/src/producer_snapshot/snapshot_transaction_valid.rs" 126 14 126 33
-let%span ssnapshot_transaction_valid'5 = "/workspace/crates/verified/src/producer_snapshot/snapshot_transaction_valid.rs" 123 16 124 40
-let%span ssnapshot_transaction_valid'6 = "/workspace/crates/verified/src/producer_snapshot/snapshot_transaction_valid.rs" 122 16 122 91
-let%span ssnapshot_transaction_valid'7 = "/workspace/crates/verified/src/producer_snapshot/snapshot_transaction_valid.rs" 121 16 121 42
-let%span ssnapshot_transaction_valid'8 = "/workspace/crates/verified/src/producer_snapshot/snapshot_transaction_valid.rs" 127 11 127 27
-let%span ssnapshot_transaction_valid'9 = "/workspace/crates/verified/src/producer_snapshot/snapshot_transaction_valid.rs" 128 22 128 26
-let%span ssnapshot_transaction_valid'10 = "/workspace/crates/verified/src/producer_snapshot/snapshot_transaction_valid.rs" 130 11 130 27
-let%span ssnapshot_transaction_valid'11 = "/workspace/crates/verified/src/producer_snapshot/snapshot_transaction_valid.rs" 131 31 131 36
-let%span ssnapshot_transaction_valid'12 = "/workspace/crates/verified/src/producer_snapshot/snapshot_transaction_valid.rs" 133 13 133 14
-let%span ssnapshot_transaction_valid'13 = "/workspace/crates/verified/src/producer_snapshot/snapshot_transaction_valid.rs" 133 8 133 14
-let%span ssnapshot_transaction_valid'14 = "/workspace/crates/verified/src/producer_snapshot/snapshot_transaction_valid.rs" 135 21 135 25
-let%span ssnapshot_transaction_valid'15 = "/workspace/crates/verified/src/producer_snapshot/snapshot_transaction_valid.rs" 136 16 136 22
-let%span ssnapshot_transaction_valid'16 = "/workspace/crates/verified/src/producer_snapshot/snapshot_transaction_valid.rs" 139 14 139 35
-let%span ssnapshot_transaction_valid'17 = "/workspace/crates/verified/src/producer_snapshot/snapshot_transaction_valid.rs" 140 14 140 29
-let%span ssnapshot_transaction_valid'18 = "/workspace/crates/verified/src/producer_snapshot/snapshot_transaction_valid.rs" 138 16 138 87
-let%span ssnapshot_transaction_valid'19 = "/workspace/crates/verified/src/producer_snapshot/snapshot_transaction_valid.rs" 137 16 137 38
-let%span ssnapshot_transaction_valid'20 = "/workspace/crates/verified/src/producer_snapshot/snapshot_transaction_valid.rs" 141 11 141 23
-let%span ssnapshot_transaction_valid'21 = "/workspace/crates/verified/src/producer_snapshot/snapshot_transaction_valid.rs" 142 21 142 26
-let%span ssnapshot_transaction_valid'22 = "/workspace/crates/verified/src/producer_snapshot/snapshot_transaction_valid.rs" 144 13 144 14
-let%span ssnapshot_transaction_valid'23 = "/workspace/crates/verified/src/producer_snapshot/snapshot_transaction_valid.rs" 144 8 144 14
-let%span ssnapshot_transaction_valid'24 = "/workspace/crates/verified/src/producer_snapshot/snapshot_transaction_valid.rs" 146 5 146 46
-let%span ssnapshot_transaction_valid'25 = "/workspace/crates/verified/src/producer_snapshot/snapshot_transaction_valid.rs" 146 17 146 45
-let%span ssnapshot_transaction_valid'26 = "/workspace/crates/verified/src/producer_snapshot/snapshot_transaction_valid.rs" 113 11 113 36
-let%span ssnapshot_transaction_valid'27 = "/workspace/crates/verified/src/producer_snapshot/snapshot_transaction_valid.rs" 114 10 114 75
-let%span ssnapshot_transaction_valid'28 = "/workspace/crates/verified/src/producer_snapshot/snapshot_transaction_valid.rs" 41 8 45 55
-let%span ssnapshot_transaction_valid'29 = "/workspace/crates/verified/src/producer_snapshot/snapshot_transaction_valid.rs" 24 16 24 79
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span swell_founded = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/well_founded.rs" 43 8 43 33
+let%span sslice = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 331 18 331 22
+let%span ssnapshot_transaction_valid = "/workspace/crates/verified/src/producer_snapshot/snapshot_transaction_valid.rs" 109 17 109 33
+let%span ssnapshot_transaction_valid'0 = "/workspace/crates/verified/src/producer_snapshot/snapshot_transaction_valid.rs" 110 22 110 27
+let%span ssnapshot_transaction_valid'1 = "/workspace/crates/verified/src/producer_snapshot/snapshot_transaction_valid.rs" 111 31 111 35
+let%span ssnapshot_transaction_valid'2 = "/workspace/crates/verified/src/producer_snapshot/snapshot_transaction_valid.rs" 112 16 112 22
+let%span ssnapshot_transaction_valid'3 = "/workspace/crates/verified/src/producer_snapshot/snapshot_transaction_valid.rs" 117 14 117 39
+let%span ssnapshot_transaction_valid'4 = "/workspace/crates/verified/src/producer_snapshot/snapshot_transaction_valid.rs" 118 14 118 33
+let%span ssnapshot_transaction_valid'5 = "/workspace/crates/verified/src/producer_snapshot/snapshot_transaction_valid.rs" 115 16 116 40
+let%span ssnapshot_transaction_valid'6 = "/workspace/crates/verified/src/producer_snapshot/snapshot_transaction_valid.rs" 114 16 114 91
+let%span ssnapshot_transaction_valid'7 = "/workspace/crates/verified/src/producer_snapshot/snapshot_transaction_valid.rs" 113 16 113 42
+let%span ssnapshot_transaction_valid'8 = "/workspace/crates/verified/src/producer_snapshot/snapshot_transaction_valid.rs" 119 11 119 27
+let%span ssnapshot_transaction_valid'9 = "/workspace/crates/verified/src/producer_snapshot/snapshot_transaction_valid.rs" 120 22 120 26
+let%span ssnapshot_transaction_valid'10 = "/workspace/crates/verified/src/producer_snapshot/snapshot_transaction_valid.rs" 122 11 122 27
+let%span ssnapshot_transaction_valid'11 = "/workspace/crates/verified/src/producer_snapshot/snapshot_transaction_valid.rs" 123 31 123 36
+let%span ssnapshot_transaction_valid'12 = "/workspace/crates/verified/src/producer_snapshot/snapshot_transaction_valid.rs" 125 13 125 14
+let%span ssnapshot_transaction_valid'13 = "/workspace/crates/verified/src/producer_snapshot/snapshot_transaction_valid.rs" 125 8 125 14
+let%span ssnapshot_transaction_valid'14 = "/workspace/crates/verified/src/producer_snapshot/snapshot_transaction_valid.rs" 127 21 127 25
+let%span ssnapshot_transaction_valid'15 = "/workspace/crates/verified/src/producer_snapshot/snapshot_transaction_valid.rs" 128 16 128 22
+let%span ssnapshot_transaction_valid'16 = "/workspace/crates/verified/src/producer_snapshot/snapshot_transaction_valid.rs" 131 14 131 35
+let%span ssnapshot_transaction_valid'17 = "/workspace/crates/verified/src/producer_snapshot/snapshot_transaction_valid.rs" 132 14 132 29
+let%span ssnapshot_transaction_valid'18 = "/workspace/crates/verified/src/producer_snapshot/snapshot_transaction_valid.rs" 130 16 130 87
+let%span ssnapshot_transaction_valid'19 = "/workspace/crates/verified/src/producer_snapshot/snapshot_transaction_valid.rs" 129 16 129 38
+let%span ssnapshot_transaction_valid'20 = "/workspace/crates/verified/src/producer_snapshot/snapshot_transaction_valid.rs" 133 11 133 23
+let%span ssnapshot_transaction_valid'21 = "/workspace/crates/verified/src/producer_snapshot/snapshot_transaction_valid.rs" 134 21 134 26
+let%span ssnapshot_transaction_valid'22 = "/workspace/crates/verified/src/producer_snapshot/snapshot_transaction_valid.rs" 136 13 136 14
+let%span ssnapshot_transaction_valid'23 = "/workspace/crates/verified/src/producer_snapshot/snapshot_transaction_valid.rs" 136 8 136 14
+let%span ssnapshot_transaction_valid'24 = "/workspace/crates/verified/src/producer_snapshot/snapshot_transaction_valid.rs" 138 5 138 46
+let%span ssnapshot_transaction_valid'25 = "/workspace/crates/verified/src/producer_snapshot/snapshot_transaction_valid.rs" 138 17 138 45
+let%span ssnapshot_transaction_valid'26 = "/workspace/crates/verified/src/producer_snapshot/snapshot_transaction_valid.rs" 105 11 105 36
+let%span ssnapshot_transaction_valid'27 = "/workspace/crates/verified/src/producer_snapshot/snapshot_transaction_valid.rs" 106 10 106 75
+let%span ssnapshot_transaction_valid'28 = "/workspace/crates/verified/src/producer_snapshot/snapshot_transaction_valid.rs" 34 8 38 55
+let%span ssnapshot_transaction_valid'29 = "/workspace/crates/verified/src/producer_snapshot/snapshot_transaction_valid.rs" 19 16 19 79
 
 use creusot.slice.Slice64
 use creusot.int.UInt64
@@ -61,11 +61,11 @@ let len_i64 (self_: Slice64.slice Int64.t) (return (x: UInt64.t)) = any
     = UInt64.t'int result}
     (! return {result}) ]
 
-predicate is_segment_base [#"/workspace/crates/verified/src/producer_snapshot/snapshot_transaction_valid.rs" 23 0 23 60] (bases: Seq.seq Int64.t) (offset: int) =
+predicate is_segment_base [#"/workspace/crates/verified/src/producer_snapshot/snapshot_transaction_valid.rs" 18 0 18 60] (bases: Seq.seq Int64.t) (offset: int) =
   [%#ssnapshot_transaction_valid'29] exists j: int. 0 <= j
     /\ j < Seq.length bases /\ Int64.to_int (Seq.get bases j) = offset
 
-predicate kafka_stray_removed [#"/workspace/crates/verified/src/producer_snapshot/snapshot_transaction_valid.rs" 39 0 39 84] (snapshots: Seq.seq Int64.t) (index: int) (bases: Seq.seq Int64.t) =
+predicate kafka_stray_removed [#"/workspace/crates/verified/src/producer_snapshot/snapshot_transaction_valid.rs" 32 0 32 84] (snapshots: Seq.seq Int64.t) (index: int) (bases: Seq.seq Int64.t) =
   [%#ssnapshot_transaction_valid'28] not is_segment_base bases (Int64.to_int (Seq.get snapshots index))
   /\ not ((forall j: int. 0 <= j /\ j < Seq.length snapshots
       -> Int64.to_int (Seq.get snapshots j) <= Int64.to_int (Seq.get snapshots index))
@@ -76,7 +76,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let producer_snapshot_stray [#"/workspace/crates/verified/src/producer_snapshot/snapshot_transaction_valid.rs" 116 0 116 94]
+let producer_snapshot_stray [#"/workspace/crates/verified/src/producer_snapshot/snapshot_transaction_valid.rs" 108 0 108 94]
   (snapshots: Slice64.slice Int64.t) (index: UInt64.t) (segment_bases: Slice64.slice Int64.t) (return (x: bool)) =
 {[@stop_split] [@expl:producer_snapshot_stray requires] [%#ssnapshot_transaction_valid'26] UInt64.t'int index
   < Seq.length (Slice64.view snapshots)}

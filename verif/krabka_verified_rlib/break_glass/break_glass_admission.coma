@@ -1,12 +1,12 @@
-(* #"/workspace/crates/verified/src/break_glass.rs" 72 0 72 83 *)
+(* #"/workspace/crates/verified/src/break_glass.rs" 64 0 64 83 *)
 
 let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
-let%span sbreak_glass = "/workspace/crates/verified/src/break_glass.rs" 54 10 54 71
-let%span sbreak_glass'0 = "/workspace/crates/verified/src/break_glass.rs" 55 10 55 91
-let%span sbreak_glass'1 = "/workspace/crates/verified/src/break_glass.rs" 56 10 57 58
-let%span sbreak_glass'2 = "/workspace/crates/verified/src/break_glass.rs" 58 10 60 61
-let%span sbreak_glass'3 = "/workspace/crates/verified/src/break_glass.rs" 61 10 65 68
-let%span sbreak_glass'4 = "/workspace/crates/verified/src/break_glass.rs" 66 10 70 70
+let%span sbreak_glass = "/workspace/crates/verified/src/break_glass.rs" 46 10 46 71
+let%span sbreak_glass'0 = "/workspace/crates/verified/src/break_glass.rs" 47 10 47 91
+let%span sbreak_glass'1 = "/workspace/crates/verified/src/break_glass.rs" 48 10 49 58
+let%span sbreak_glass'2 = "/workspace/crates/verified/src/break_glass.rs" 50 10 52 61
+let%span sbreak_glass'3 = "/workspace/crates/verified/src/break_glass.rs" 53 10 57 68
+let%span sbreak_glass'4 = "/workspace/crates/verified/src/break_glass.rs" 58 10 62 70
 
 use creusot.int.UInt64
 use creusot.prelude.Any
@@ -39,7 +39,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let break_glass_admission [#"/workspace/crates/verified/src/break_glass.rs" 72 0 72 83]
+let break_glass_admission [#"/workspace/crates/verified/src/break_glass.rs" 64 0 64 83]
   (facts: t_BreakGlassProposalFacts) (return (x: t_BreakGlassAdmission)) = (! bb0
   [ bb0 = any [ br0 -> {facts.withdrawn = false} (! bb2) | br1 -> {facts.withdrawn} (! bb1) ]
   | bb1 = s0 [ s0 = [ &_ret <- Withdrawn ] s1 | s1 = return {_ret} ]

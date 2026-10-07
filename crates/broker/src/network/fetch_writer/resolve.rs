@@ -29,37 +29,26 @@ use crate::error::BrokerError;
 /// that was truncated or unlinked under the reader. A `Raw` or `Legacy`
 /// payload is a refcount bump and cannot fail.
 pub fn resolve_records_inline(payload: &RecordsPayload) -> Result<Vec<WriteOp>, BrokerError> {
-    let bytes = match payload {
+    let bytes = krabka_macros::records_payload_match! { match payload {
         // `Raw`/`Legacy` are already verbatim wire bytes — share the `Bytes`.
         RecordsPayload::Raw(b) | RecordsPayload::Legacy(b) => b.clone(),
         // Parsed batches must be encoded; rare on the fetch path.
-        RecordsPayload::V2(_) => {
-            let mut buf = BytesMut::with_capacity(payload.payload_len());
-            payload
-                .encode_to(&mut buf)
-                .map_err(|e| BrokerError::Io(std::io::Error::other(e.to_string())))?;
-            buf.freeze()
-        }
-        #[cfg(any(
-            target_os = "linux",
-            target_os = "macos",
-            target_os = "ios",
-            target_os = "tvos",
-            target_os = "watchos",
-            target_os = "freebsd",
-            target_os = "dragonfly",
-        ))]
+        RecordsPayload::V2(_) => encode_payload(payload)?,
         RecordsPayload::FileRegions(_) => {
             // TLS / non-sendfile fallback for a FileRegions payload: pread into a
             // buffer (byte-identical to the sendfile'd region).
-            let mut buf = BytesMut::with_capacity(payload.payload_len());
-            payload
-                .encode_to(&mut buf)
-                .map_err(|e| BrokerError::Io(std::io::Error::other(e.to_string())))?;
-            buf.freeze()
+            encode_payload(payload)?
         }
-    };
+    } };
     Ok(vec![WriteOp::Inline(bytes)])
+}
+
+fn encode_payload(payload: &RecordsPayload) -> Result<bytes::Bytes, BrokerError> {
+    let mut buf = BytesMut::with_capacity(payload.payload_len());
+    payload
+        .encode_to(&mut buf)
+        .map_err(|error| BrokerError::Io(std::io::Error::other(error.to_string())))?;
+    Ok(buf.freeze())
 }
 
 crate::sendfile_cfg! {
@@ -179,27 +168,17 @@ mod tests {
         }
     }
 
+    krabka_macros::file_region_fixture!(region_bytes);
+
     /// Resolve a plan to bytes and read File ops out of their backing
     /// file. This mirrors what the sendfile drain transmits and what the
     /// TLS pread fallback copies.
     fn resolve_ops_to_bytes(ops: &[WriteOp]) -> Vec<u8> {
-        use std::os::unix::fs::FileExt;
         let mut out = Vec::new();
         for op in ops {
             match op {
                 WriteOp::Inline(b) => out.extend_from_slice(b),
-                WriteOp::File(region) => {
-                    let mut buf = vec![0u8; region.len];
-                    let mut filled = 0;
-                    let mut off = region.offset;
-                    while filled < buf.len() {
-                        let n = region.file.read_at(&mut buf[filled..], off).unwrap();
-                        assert2::assert!(n > 0);
-                        filled += n;
-                        off += n as u64;
-                    }
-                    out.extend_from_slice(&buf);
-                }
+                WriteOp::File(region) => out.extend_from_slice(&region_bytes(region)),
             }
         }
         out

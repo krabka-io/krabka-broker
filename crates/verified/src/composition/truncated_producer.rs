@@ -2,9 +2,16 @@ use creusot_std::prelude::*;
 
 #[cfg(creusot)]
 use super::control_truncation::physical_truncation_input_valid;
+#[cfg(creusot)]
+use super::control_truncation::whole_batch_frontier;
 use super::{
     ProducerDecision, ProducerSnapshotEntryFacts, rebuilt_data_window_bounds_retry,
     whole_batch_truncation_bounds_controls,
+};
+#[cfg(creusot)]
+use crate::producer_snapshot::{
+    nonduplicate_snapshot_decision, recovered_batch_coordinates, retained_producer_row,
+    snapshot_sequence_matches,
 };
 
 // Actual end, retained history count, rebuilt window start, decision, retry witness.
@@ -25,17 +32,12 @@ type TruncatedRetry = (
 #[requires(physical_truncation_input_valid(ends@, physical_start@, cut@, previous_hwm@))]
 #[requires(rows@.len() > 0
     && (forall<i: Int> 0 <= i && i < rows@.len() ==>
-        crate::producer_snapshot::snapshot_entry_valid_model(
-            if ends@.len() == 0 { physical_start@ } else { ends@[ends@.len() - 1]@ }, rows@[i])
-        && rows@[i].last_offset@ >= 0
-        && rows@[i].producer_id == rows@[0].producer_id
+        retained_producer_row(if ends@.len() == 0 { physical_start@ } else { ends@[ends@.len() - 1]@ }, rows@[i], rows@[0].producer_id)
         && exists<j: Int> 0 <= j && j < ends@.len() && ends@[j]@ == rows@[i].last_offset@ + 1)
     && (forall<i: Int, j: Int> 0 <= i && i < j && j < rows@.len() ==>
         rows@[i].last_offset@ < rows@[j].last_offset@
         && rows@[i].producer_epoch@ <= rows@[j].producer_epoch@))]
-#[ensures(physical_start@ <= result.0@ && result.0@ <= cut@
-    && (result.0 == physical_start || exists<i: Int> 0 <= i && i < ends@.len() && ends@[i] == result.0)
-    && (forall<i: Int> 0 <= i && i < ends@.len() && ends@[i]@ <= cut@ ==> ends@[i]@ <= result.0@)
+#[ensures(whole_batch_frontier(ends@, physical_start, cut@, result.0)
     && result.2@ <= result.1@ && result.1@ <= rows@.len() && result.1@ - result.2@ <= 5
     && (forall<i: Int> 0 <= i && i < rows@.len() ==>
         (i < result.1@) == (rows@[i].last_offset@ < cut@)
@@ -49,32 +51,22 @@ type TruncatedRetry = (
     && (match result.3 { ProducerDecision::Duplicate { .. } => true, _ => false }) ==
         (exists<i: Int> result.2@ <= i && i < result.1@
             && request.0 == rows@[i].producer_epoch
-            && request.1@ == crate::producer::sequence_modulo_2_31(rows@[i].last_sequence@ - rows@[i].offset_delta@)
-            && rows@[i].last_sequence@ == crate::producer::sequence_modulo_2_31(request.1@ + request.2@))
+            && snapshot_sequence_matches(rows@[i], request.1@, request.2@))
     && match result.4 { None => (match result.3 { ProducerDecision::Duplicate { .. } => false, _ => true }),
         Some((index, base, frontier, ready)) => result.2@ <= index@ && index@ < result.1@
             && (match result.3 { ProducerDecision::Duplicate { retained: slot } =>
                 slot@ == if index@ + 1 == result.1@ { 4 } else { index@ - result.2@ }, _ => false })
-            && base@ == rows@[index@].last_offset@ - rows@[index@].offset_delta@
-            && frontier@ == rows@[index@].last_offset@ + 1
-            && 0 <= base@ && base@ < frontier@ && frontier@ <= result.0@
+            && recovered_batch_coordinates(rows@[index@], base@, frontier@, result.0@)
             && ready == (previous_hwm@ >= frontier@)
             && request.0 == rows@[index@].producer_epoch
-            && request.1@ == crate::producer::sequence_modulo_2_31(rows@[index@].last_sequence@ - rows@[index@].offset_delta@)
-            && rows@[index@].last_sequence@ == crate::producer::sequence_modulo_2_31(request.1@ + request.2@)
+            && snapshot_sequence_matches(rows@[index@], request.1@, request.2@)
             && (forall<i: Int> result.2@ <= i && i < index@ ==>
-                !(request.1@ == crate::producer::sequence_modulo_2_31(rows@[i].last_sequence@ - rows@[i].offset_delta@)
-                && rows@[i].last_sequence@ == crate::producer::sequence_modulo_2_31(request.1@ + request.2@))),
+                !(snapshot_sequence_matches(rows@[i], request.1@, request.2@))),
     }
     && (result.1@ == 0 ==> result.3 == if request.3 && result.0@ == 0 && request.1@ != 0 {
         ProducerDecision::OutOfOrder } else { ProducerDecision::Append })
     && (result.1@ > 0 && result.4 == None ==> result.3 ==
-        if request.0@ < rows@[result.1@ - 1].producer_epoch@ { ProducerDecision::Fenced }
-        else if request.0@ > rows@[result.1@ - 1].producer_epoch@ {
-            if request.1@ == 0 { ProducerDecision::Append } else { ProducerDecision::OutOfOrder }
-        } else if request.1@ == crate::producer::sequence_modulo_2_31(
-            rows@[result.1@ - 1].last_sequence@ + 1) { ProducerDecision::Append }
-        else { ProducerDecision::OutOfOrder }))]
+        nonduplicate_snapshot_decision(request.0@, rows@[result.1@ - 1].producer_epoch@, request.1@, rows@[result.1@ - 1].last_sequence@)))]
 pub(super) fn truncated_replay_bounds_first_retry(
     ends: &[i64],
     physical_start: i64,

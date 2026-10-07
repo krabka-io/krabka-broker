@@ -116,7 +116,7 @@ pub(super) fn follower_partition_fetch_cap(cfg: &Config) -> FetchThrottleDecisio
         || cfg.lag.in_sync()
         || !follower_partition_throttled(cfg)
     {
-        return FetchThrottleDecision::Fetch(cfg.replication.fetch_max);
+        return FetchThrottleDecision::Fetch(cfg.connection.replication.fetch_max);
     }
 
     // The bucket seam counts raw bytes, so the budget crosses into `u64` here
@@ -125,7 +125,7 @@ pub(super) fn follower_partition_fetch_cap(cfg: &Config) -> FetchThrottleDecisio
     let granted = cfg
         .throttle_state
         .follower_in
-        .try_consume(cfg.replication.fetch_max.bytes_u64());
+        .try_consume(cfg.connection.replication.fetch_max.bytes_u64());
     // KIP-73: the measured follower-side throttled-replication rate, Kafka's
     // `kafka.server:type=FollowerReplication,name=byte-rate`.
     cfg.metrics.record_replication_throttled_in(granted);
@@ -159,7 +159,7 @@ mod tests {
 
         assert!(
             follower_partition_fetch_cap(&cfg)
-                == FetchThrottleDecision::Fetch(cfg.replication.fetch_max)
+                == FetchThrottleDecision::Fetch(cfg.connection.replication.fetch_max)
         );
     }
 
@@ -169,7 +169,7 @@ mod tests {
 
         assert!(
             follower_partition_fetch_cap(&cfg)
-                == FetchThrottleDecision::Fetch(cfg.replication.fetch_max)
+                == FetchThrottleDecision::Fetch(cfg.connection.replication.fetch_max)
         );
     }
 
@@ -212,7 +212,7 @@ mod tests {
             let want = if throttled {
                 FetchThrottleDecision::Sleep
             } else {
-                FetchThrottleDecision::Fetch(cfg.replication.fetch_max)
+                FetchThrottleDecision::Fetch(cfg.connection.replication.fetch_max)
             };
             check!(follower_partition_fetch_cap(&cfg) == want, "{list}");
         }
@@ -272,7 +272,7 @@ mod tests {
             let want = if throttled {
                 FetchThrottleDecision::Sleep
             } else {
-                FetchThrottleDecision::Fetch(cfg.replication.fetch_max)
+                FetchThrottleDecision::Fetch(cfg.connection.replication.fetch_max)
             };
             check!(follower_partition_fetch_cap(&cfg) == want, "{label}");
         }
@@ -303,7 +303,7 @@ mod tests {
         check!(
             (fetching, behind)
                 == (
-                    FetchThrottleDecision::Fetch(cfg.replication.fetch_max),
+                    FetchThrottleDecision::Fetch(cfg.connection.replication.fetch_max),
                     FetchThrottleDecision::Sleep
                 )
         );

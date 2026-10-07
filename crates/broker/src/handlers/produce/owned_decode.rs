@@ -21,57 +21,45 @@ pub(super) fn decode_owned_batch(
     metrics: &crate::metrics::BrokerMetrics,
     policy: RecordDecompressionPolicy,
 ) -> Result<RecordBatch, i16> {
-    match payload {
+    krabka_macros::records_payload_match! { match payload {
         RecordsPayload::V2(batches) => exactly_one_v2_batch(batches),
-        RecordsPayload::Raw(bytes) => match RecordsPayload::from_bytes_with_policy(bytes, policy) {
+        RecordsPayload::Raw(bytes) => krabka_macros::records_payload_match! { match RecordsPayload::from_bytes_with_policy(bytes, policy) {
             Ok(RecordsPayload::V2(batches)) => exactly_one_v2_batch(batches),
             Ok(RecordsPayload::Raw(_) | RecordsPayload::Legacy(_)) | Err(_) => {
                 Err(codes::INVALID_RECORD)
             }
-            #[cfg(any(
-                target_os = "linux",
-                target_os = "macos",
-                target_os = "ios",
-                target_os = "tvos",
-                target_os = "watchos",
-                target_os = "freebsd",
-                target_os = "dragonfly",
-            ))]
             Ok(RecordsPayload::FileRegions(_)) => Err(codes::INVALID_RECORD),
-        },
-        #[cfg(any(
-            target_os = "linux",
-            target_os = "macos",
-            target_os = "ios",
-            target_os = "tvos",
-            target_os = "watchos",
-            target_os = "freebsd",
-            target_os = "dragonfly",
-        ))]
+        } },
         RecordsPayload::FileRegions(_) => Err(codes::INVALID_REQUEST),
-        RecordsPayload::Legacy(bytes) => {
-            match krabka_records_legacy::legacy_to_v2_with_policy(&bytes, policy) {
-                Ok(rb) => {
-                    if !topic_name.is_empty() {
-                        metrics.record_produce_message_conversion(topic_name);
-                    }
-                    let mut rb = rb;
-                    rb.base_offset = 0;
-                    rb.last_offset_delta = i32::try_from(rb.records.len())
-                        .map_err(|_| codes::INVALID_RECORD)?
-                        .checked_sub(1)
-                        .ok_or(codes::INVALID_RECORD)?;
-                    for (offset, record) in rb.records.iter_mut().enumerate() {
-                        record.offset_delta =
-                            i32::try_from(offset).map_err(|_| codes::INVALID_RECORD)?;
-                    }
-                    Ok(rb)
-                }
-                Err(e) => {
-                    tracing::warn!(error = %e, "legacy_to_v2 failed");
-                    Err(codes::INVALID_RECORD)
-                }
+        RecordsPayload::Legacy(bytes) => decode_legacy_batch(&bytes, topic_name, metrics, policy),
+    } }
+}
+
+fn decode_legacy_batch(
+    bytes: &bytes::Bytes,
+    topic_name: &Arc<str>,
+    metrics: &crate::metrics::BrokerMetrics,
+    policy: RecordDecompressionPolicy,
+) -> Result<RecordBatch, i16> {
+    match krabka_records_legacy::legacy_to_v2_with_policy(bytes, policy) {
+        Ok(rb) => {
+            if !topic_name.is_empty() {
+                metrics.record_produce_message_conversion(topic_name);
             }
+            let mut rb = rb;
+            rb.base_offset = 0;
+            rb.last_offset_delta = i32::try_from(rb.records.len())
+                .map_err(|_| codes::INVALID_RECORD)?
+                .checked_sub(1)
+                .ok_or(codes::INVALID_RECORD)?;
+            for (offset, record) in rb.records.iter_mut().enumerate() {
+                record.offset_delta = i32::try_from(offset).map_err(|_| codes::INVALID_RECORD)?;
+            }
+            Ok(rb)
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "legacy_to_v2 failed");
+            Err(codes::INVALID_RECORD)
         }
     }
 }

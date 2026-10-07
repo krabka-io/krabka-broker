@@ -26,8 +26,6 @@
 //! hardcoded constant, a producer timestamp echoed back, and the `-1` sentinel
 //! all fail it.
 
-use std::time::{SystemTime, UNIX_EPOCH};
-
 use assert2::{assert, check};
 use bytes::Bytes;
 use krabka_broker::{BrokerHandle, codes};
@@ -35,12 +33,17 @@ use krabka_client_core::Client;
 use krabka_protocol::{
     owned::{
         create_topics_request::{CreatableTopic, CreatableTopicConfig, CreateTopicsRequest},
-        list_offsets_request::{ListOffsetsPartition, ListOffsetsRequest, ListOffsetsTopic},
-        produce_request::{PartitionProduceData, ProduceRequest, TopicProduceData},
+        list_offsets_request::ListOffsetsRequest,
         produce_response::{BatchIndexAndErrorMessage, LeaderIdAndEpoch, PartitionProduceResponse},
     },
     primitives::uuid::Uuid as WireUuid,
     records::{Record, RecordBatch, RecordsPayload, TimestampType},
+};
+
+use crate::support::{
+    offsets::{list_offset_partition, single_partition_list_offsets},
+    produce::single_partition_produce,
+    records::{batch_from_records, value_record},
 };
 
 mod support;
@@ -56,16 +59,12 @@ const PRODUCER_TIMESTAMP_MS: i64 = 1_000;
 /// that [`PRODUCER_TIMESTAMP_MS`] sits far outside it.
 const WINDOW_MS: i64 = 3_600_000;
 
-/// This broker's wall clock, the one the log stamps from.
-fn now_ms() -> i64 {
-    i64::try_from(
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("the clock is at or after the epoch")
-            .as_millis(),
-    )
-    .expect("a millisecond clock reading fits in i64")
-}
+// This broker's wall clock, the one the log stamps from.
+krabka_macros::unix_millis_fixture!(
+    now_ms,
+    "the clock is at or after the epoch",
+    "a millisecond clock reading fits in i64"
+);
 
 /// A `LogAppendTime` topic answers the clock reading it stamped, and stores
 /// that same reading rather than the producer's timestamp.
@@ -341,30 +340,19 @@ async fn produce(
         last_offset_delta: 0,
         base_timestamp: timestamp_ms,
         max_timestamp: timestamp_ms,
-        records: vec![Record {
-            offset_delta: 0,
+        ..batch_from_records(vec![Record {
             timestamp_delta: 0,
-            value: Some(Bytes::from_static(b"frame")),
-            ..Record::default()
-        }],
-        ..RecordBatch::default()
+            ..value_record(0, Some(Bytes::from_static(b"frame")))
+        }])
     };
     let response = client
-        .send(ProduceRequest {
-            acks: 1,
-            timeout_ms: 5_000,
-            topic_data: vec![TopicProduceData {
-                name: topic.to_owned(),
-                topic_id,
-                partition_data: vec![PartitionProduceData {
-                    index: 0,
-                    records: Some(RecordsPayload::V2(vec![batch])),
-                    ..PartitionProduceData::default()
-                }],
-                ..TopicProduceData::default()
-            }],
-            ..ProduceRequest::default()
-        })
+        .send(single_partition_produce(
+            topic.to_owned(),
+            topic_id,
+            0,
+            Some(RecordsPayload::V2(vec![batch])),
+            (1, 5_000),
+        ))
         .await
         .expect("Produce");
     response.responses[0].partition_responses[0].clone()
@@ -377,16 +365,10 @@ async fn offset_for_time(client: &Client, topic: &str, timestamp_ms: i64) -> Opt
     let response = client
         .send(ListOffsetsRequest {
             replica_id: -1,
-            topics: vec![ListOffsetsTopic {
-                name: topic.to_owned(),
-                partitions: vec![ListOffsetsPartition {
-                    partition_index: 0,
-                    timestamp: timestamp_ms,
-                    ..ListOffsetsPartition::default()
-                }],
-                ..ListOffsetsTopic::default()
-            }],
-            ..ListOffsetsRequest::default()
+            ..single_partition_list_offsets(
+                topic.to_owned(),
+                list_offset_partition(0, timestamp_ms),
+            )
         })
         .await
         .expect("ListOffsets");

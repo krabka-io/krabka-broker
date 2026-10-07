@@ -202,27 +202,41 @@ mod tests {
 
     use assert2::assert;
     use krabka_metadata::{AclOperation, MetadataRecord, ResourceType, ScramCredentialRecord};
-    use krabka_protocol::UnknownTaggedFields;
+
+    macro_rules! empty_describe_fixture {
+        (($handle:ident, $directory:ident, $broker:ident, $principal:ident, $peer:ident, $context:ident, $response:ident), $authorizer:expr) => {
+            broker_fixture!(
+                ($handle, $directory, $broker),
+                crate::test_support::start_broker_with_authorizer($authorizer)
+            );
+            request_identity!(
+                ($principal, $peer, $context),
+                crate::test_support::principal("alice"),
+                client_id = "scram-describe-test",
+                address = crate::test_support::peer()
+            );
+            let $response = handle(
+                &$broker,
+                &DescribeUserScramCredentialsRequest::default(),
+                0,
+                &$context,
+            );
+        };
+    }
 
     #[derive(Debug)]
     struct ClusterDescribeOnly;
 
-    impl crate::authorizer::Authorizer for ClusterDescribeOnly {
-        fn authorize(
-            &self,
-            _source: &dyn krabka_authz::AclSource,
-            req: &crate::authorizer::AuthorizationRequest<'_>,
-        ) -> AuthorizationResult {
-            if req.resource_type == ResourceType::Cluster
-                && req.resource_name == crate::handlers::acl_wire::CLUSTER_RESOURCE_NAME
-                && req.operation == AclOperation::Describe
-            {
-                return AuthorizationResult::Allow;
-            }
-
-            AuthorizationResult::Deny
+    test_authorizer!(ClusterDescribeOnly, (self, _source, req), {
+        if req.resource_type == ResourceType::Cluster
+            && req.resource_name == crate::handlers::acl_wire::CLUSTER_RESOURCE_NAME
+            && req.operation == AclOperation::Describe
+        {
+            return AuthorizationResult::Allow;
         }
-    }
+
+        AuthorizationResult::Deny
+    });
 
     use super::*;
     use crate::authorizer::AuthorizationResult;
@@ -261,22 +275,13 @@ mod tests {
         }
     }
 
+    krabka_macros::scram_users_fixture!(scram_users_request);
+
     fn run_handle_filter(
         users_filter: Option<Vec<String>>,
         seeded: &[(&str, SaslMechanism, u32)],
     ) -> DescribeUserScramCredentialsResponse {
-        use krabka_protocol::owned::describe_user_scram_credentials_request::UserName;
-        let req = DescribeUserScramCredentialsRequest {
-            users: users_filter.map(|v| {
-                v.into_iter()
-                    .map(|n| UserName {
-                        name: n,
-                        ..Default::default()
-                    })
-                    .collect()
-            }),
-            ..Default::default()
-        };
+        let req = scram_users_request(users_filter);
         let image = img_with_scram(seeded);
         process_targets_for_test(&image, req.users.as_deref())
     }
@@ -304,17 +309,15 @@ mod tests {
                 ("bob", SaslMechanism::ScramSha512, 8192),
             ],
         );
-        let expected = vec![DescribeUserScramCredentialsResult {
+        let expected = vec![tagged_wire!(DescribeUserScramCredentialsResult {
             user: "alice".to_string(),
             error_code: 0,
             error_message: None,
-            credential_infos: vec![CredentialInfo {
+            credential_infos: vec![tagged_wire!(CredentialInfo {
                 mechanism: 2,
                 iterations: 4096,
-                unknown_tagged_fields: UnknownTaggedFields(Vec::new()),
-            }],
-            unknown_tagged_fields: UnknownTaggedFields(Vec::new()),
-        }];
+            })],
+        })];
         assert!(resp.results == expected);
     }
 
@@ -324,15 +327,14 @@ mod tests {
             Some(vec!["ghost".into()]),
             &[("alice", SaslMechanism::ScramSha512, 4096)],
         );
-        let expected = vec![DescribeUserScramCredentialsResult {
+        let expected = vec![tagged_wire!(DescribeUserScramCredentialsResult {
             user: "ghost".to_string(),
             error_code: 91,
             error_message: Some(
                 "Attempt to describe a user credential that does not exist: ghost".to_string(),
             ),
             credential_infos: Vec::new(),
-            unknown_tagged_fields: UnknownTaggedFields(Vec::new()),
-        }];
+        })];
         assert!(resp.results == expected);
     }
 
@@ -369,11 +371,10 @@ mod tests {
         assert!(bob.error_code == 0);
         assert!(
             bob.credential_infos
-                == vec![CredentialInfo {
+                == vec![tagged_wire!(CredentialInfo {
                     mechanism: 2,
                     iterations: 8192,
-                    unknown_tagged_fields: UnknownTaggedFields(Vec::new()),
-                }]
+                })]
         );
     }
 
@@ -414,28 +415,17 @@ mod tests {
 
     #[tokio::test]
     async fn handle_allows_cluster_describe_authorization() {
-        let (broker_handle, _dir) =
-            crate::test_support::start_broker_with_authorizer(Arc::new(ClusterDescribeOnly)).await;
-        let broker = broker_handle.broker_arc_for_test();
-        let principal = crate::test_support::principal("alice");
-        let peer = crate::test_support::peer();
-        let ctx = crate::test_support::request_context(&principal, &peer, "scram-describe-test");
-
-        let resp = handle(
-            &broker,
-            &DescribeUserScramCredentialsRequest::default(),
-            0,
-            &ctx,
+        empty_describe_fixture!(
+            (broker_handle, _dir, broker, principal, peer, ctx, resp),
+            Arc::new(ClusterDescribeOnly)
         );
 
         assert!(
-            resp == DescribeUserScramCredentialsResponse {
-                throttle_time_ms: 0,
+            resp == unthrottled_wire!(DescribeUserScramCredentialsResponse {
                 error_code: 0,
                 error_message: None,
                 results: Vec::new(),
-                unknown_tagged_fields: UnknownTaggedFields(Vec::new()),
-            },
+            }),
             "Cluster Describe should authorize"
         );
         broker_handle.shutdown().await;
@@ -443,30 +433,17 @@ mod tests {
 
     #[tokio::test]
     async fn handle_rejects_without_cluster_describe_authorization() {
-        let (broker_handle, _dir) = crate::test_support::start_broker_with_authorizer(Arc::new(
-            crate::test_support::DenyAll,
-        ))
-        .await;
-        let broker = broker_handle.broker_arc_for_test();
-        let principal = crate::test_support::principal("alice");
-        let peer = crate::test_support::peer();
-        let ctx = crate::test_support::request_context(&principal, &peer, "scram-describe-test");
-
-        let resp = handle(
-            &broker,
-            &DescribeUserScramCredentialsRequest::default(),
-            0,
-            &ctx,
+        empty_describe_fixture!(
+            (broker_handle, _dir, broker, principal, peer, ctx, resp),
+            Arc::new(crate::test_support::DenyAll,)
         );
 
         assert!(
-            resp == DescribeUserScramCredentialsResponse {
-                throttle_time_ms: 0,
+            resp == unthrottled_wire!(DescribeUserScramCredentialsResponse {
                 error_code: CLUSTER_AUTHORIZATION_FAILED,
                 error_message: None,
                 results: Vec::new(),
-                unknown_tagged_fields: UnknownTaggedFields(Vec::new()),
-            }
+            })
         );
         broker_handle.shutdown().await;
     }
@@ -475,13 +452,12 @@ mod tests {
     fn denied_response_matches_kafka_get_error_response() {
         use krabka_protocol::owned::describe_user_scram_credentials_request::UserName;
 
-        let denied_row = DescribeUserScramCredentialsResult {
+        let denied_row = tagged_wire!(DescribeUserScramCredentialsResult {
             user: String::new(),
             error_code: CLUSTER_AUTHORIZATION_FAILED,
             error_message: None,
             credential_infos: Vec::new(),
-            unknown_tagged_fields: UnknownTaggedFields(Vec::new()),
-        };
+        });
         for (users, want_rows) in [
             (None, Vec::new()),
             (Some(Vec::new()), Vec::new()),
@@ -502,13 +478,11 @@ mod tests {
                 }),
                 ..Default::default()
             };
-            let want = DescribeUserScramCredentialsResponse {
-                throttle_time_ms: 0,
+            let want = unthrottled_wire!(DescribeUserScramCredentialsResponse {
                 error_code: CLUSTER_AUTHORIZATION_FAILED,
                 error_message: None,
                 results: want_rows,
-                unknown_tagged_fields: UnknownTaggedFields(Vec::new()),
-            };
+            });
             assert!(denied_response(&req) == want, "users = {users:?}");
         }
     }

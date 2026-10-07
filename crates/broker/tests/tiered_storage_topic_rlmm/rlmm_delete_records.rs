@@ -18,13 +18,7 @@ use std::time::{Duration, Instant};
 use assert2::{assert, check};
 use krabka_client_admin::{AdminClient, DeleteRecordsOp};
 use krabka_client_core::Client;
-use krabka_protocol::{
-    owned::{
-        create_topics_request::{CreatableTopic, CreatableTopicConfig, CreateTopicsRequest},
-        fetch_request::{FetchPartition, FetchRequest, FetchTopic},
-    },
-    primitives::uuid::Uuid as WireUuid,
-};
+use krabka_protocol::{owned::fetch_request::FetchRequest, primitives::uuid::Uuid as WireUuid};
 
 use crate::{
     rlmm_cluster::{
@@ -32,7 +26,10 @@ use crate::{
     },
     rlmm_round_trip::remote_log_files,
     run_broker_test,
-    support::topic_id_for,
+    support::{
+        fetch::{fetch_partition, single_partition_fetch},
+        topic_id_for,
+    },
 };
 
 const TOPIC: &str = "tiered-delete-records-itest";
@@ -121,43 +118,25 @@ async fn delete_records_puts_the_tiered_prefix_out_of_range_and_frees_it_case() 
 }
 
 async fn create_tiered_topic(client: &Client) {
-    let config = |name: &str, value: &str| CreatableTopicConfig {
-        name: name.into(),
-        value: Some(value.into()),
-        ..Default::default()
-    };
-    let resp = client
-        .send(CreateTopicsRequest {
-            topics: vec![CreatableTopic {
-                name: TOPIC.into(),
-                num_partitions: 1,
-                replication_factor: 1,
-                configs: vec![
-                    config("remote.storage.enable", "true"),
-                    config("internal.segment.bytes", "1024"),
-                    // Evict every copied segment from local disk, so the reads
-                    // below go to the remote tier.
-                    config("local.retention.bytes", "1"),
-                    // No total retention at all: the only thing that may
-                    // delete a remote segment in this test is the log-start
-                    // breach. `produce_records_for_test` stamps no record
-                    // timestamp, so the default 7-day `retention.ms` would
-                    // otherwise expire every copied segment on the first tick.
-                    config("retention.bytes", "-1"),
-                    config("retention.ms", "-1"),
-                ],
-                ..Default::default()
-            }],
-            timeout_ms: 5_000,
-            ..Default::default()
-        })
-        .await
-        .expect("CreateTopics");
-    assert!(
-        resp.topics[0].error_code == 0,
-        "CreateTopics failed: {:?}",
-        resp.topics[0].error_message
-    );
+    crate::topic_fixture::create_configured_topic(
+        client,
+        TOPIC,
+        crate::support::topics::topic_configs([
+            ("remote.storage.enable", "true"),
+            ("internal.segment.bytes", "1024"),
+            // Evict every copied segment from local disk, so the reads
+            // below go to the remote tier.
+            ("local.retention.bytes", "1"),
+            // No total retention at all: the only thing that may
+            // delete a remote segment in this test is the log-start
+            // breach. `produce_records_for_test` stamps no record
+            // timestamp, so the default 7-day `retention.ms` would
+            // otherwise expire every copied segment on the first tick.
+            ("retention.bytes", "-1"),
+            ("retention.ms", "-1"),
+        ]),
+    )
+    .await;
 }
 
 /// Wait for the copy task to tier at least `want` segments.
@@ -206,22 +185,12 @@ async fn fetch_once(
     fetch_offset: i64,
 ) -> krabka_protocol::owned::fetch_response::PartitionData {
     let resp = client
-        .send(FetchRequest {
-            max_wait_ms: 500,
-            min_bytes: 1,
-            topics: vec![FetchTopic {
-                topic: TOPIC.into(),
-                topic_id,
-                partitions: vec![FetchPartition {
-                    partition: 0,
-                    fetch_offset,
-                    partition_max_bytes: 1_048_576,
-                    ..Default::default()
-                }],
-                ..Default::default()
-            }],
-            ..Default::default()
-        })
+        .send(single_partition_fetch(
+            TOPIC,
+            topic_id,
+            fetch_partition(0, fetch_offset, 1_048_576),
+            (500, 1, FetchRequest::default().max_bytes),
+        ))
         .await
         .expect("Fetch");
     resp.responses

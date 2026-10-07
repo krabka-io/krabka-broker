@@ -106,72 +106,72 @@ impl Model for ClientServerFailoverModel {
         }
     }
 
-    fn next_state(&self, last: &Self::State, action: Self::Action) -> Option<Self::State> {
-        let mut s = last.clone();
-        match action {
-            Action::ClientSend(outcome) => last.apply_client_send(SendKind::Send, outcome),
-            Action::ClientRetry(outcome) => last.apply_client_send(SendKind::Retry, outcome),
-            Action::Replicate(follower) => {
-                if follower == s.leader || !s.live(s.leader) || !s.live(follower) {
-                    return None;
+    krabka_macros::model_transition!(last, action, s; {
+            match action {
+                Action::ClientSend(outcome) => last.apply_client_send(SendKind::Send, outcome),
+                Action::ClientRetry(outcome) => last.apply_client_send(SendKind::Retry, outcome),
+                Action::Replicate(follower) => {
+                    if follower == s.leader || !s.live(s.leader) || !s.live(follower) {
+                        return None;
+                    }
+                    let leader_log = s.logs[s.leader];
+                    if s.log_len(s.leader) == 0 || s.logs[follower] == leader_log {
+                        return None;
+                    }
+                    s.logs[follower] = leader_log;
+                    Some(s)
                 }
-                let leader_log = s.logs[s.leader];
-                if s.log_len(s.leader) == 0 || s.logs[follower] == leader_log {
-                    return None;
+                Action::AdvanceHwm => {
+                    if !s.live(s.leader) || s.hwm != 0 || !s.hwm_prefix_replicated() {
+                        return None;
+                    }
+                    s.hwm = 1;
+                    Some(s)
                 }
-                s.logs[follower] = leader_log;
-                Some(s)
+                Action::AckCommitted => {
+                    if !s.can_ack_committed() {
+                        return None;
+                    }
+                    s.acked_offset = Some(BASE_OFFSET);
+                    s.batch = BatchState::Acked;
+                    s.last_result = Some(ProduceResult::Acked);
+                    Some(s)
+                }
+                Action::KillLeader => {
+                    if !s.live(s.leader) || s.live_count() <= 1 {
+                        return None;
+                    }
+                    s.live &= !(1 << s.leader);
+                    s.refresh_needed = true;
+                    s.mark_failover();
+                    Some(s)
+                }
+                Action::ElectClean(follower) => {
+                    if follower == s.leader || !s.live(follower) || !s.contains_hwm_prefix(follower) {
+                        return None;
+                    }
+                    s.leader = follower;
+                    s.refresh_needed = s.cached_leader != s.leader || !s.live(s.cached_leader);
+                    s.refresh_leader_producer_entry();
+                    s.mark_failover();
+                    Some(s)
+                }
+                Action::RefreshMetadata => {
+                    if !s.live(s.leader) {
+                        return None;
+                    }
+                    if s.metadata_refreshes >= MAX_METADATA_REFRESHES {
+                        return None;
+                    }
+                    s.metadata_refreshes = s.metadata_refreshes.saturating_add(1);
+                    s.cached_leader = s.leader;
+                    s.refresh_needed = false;
+                    s.refresh_leader_producer_entry();
+                    Some(s)
+                }
             }
-            Action::AdvanceHwm => {
-                if !s.live(s.leader) || s.hwm != 0 || !s.hwm_prefix_replicated() {
-                    return None;
-                }
-                s.hwm = 1;
-                Some(s)
-            }
-            Action::AckCommitted => {
-                if !s.can_ack_committed() {
-                    return None;
-                }
-                s.acked_offset = Some(BASE_OFFSET);
-                s.batch = BatchState::Acked;
-                s.last_result = Some(ProduceResult::Acked);
-                Some(s)
-            }
-            Action::KillLeader => {
-                if !s.live(s.leader) || s.live_count() <= 1 {
-                    return None;
-                }
-                s.live &= !(1 << s.leader);
-                s.refresh_needed = true;
-                s.mark_failover();
-                Some(s)
-            }
-            Action::ElectClean(follower) => {
-                if follower == s.leader || !s.live(follower) || !s.contains_hwm_prefix(follower) {
-                    return None;
-                }
-                s.leader = follower;
-                s.refresh_needed = s.cached_leader != s.leader || !s.live(s.cached_leader);
-                s.refresh_leader_producer_entry();
-                s.mark_failover();
-                Some(s)
-            }
-            Action::RefreshMetadata => {
-                if !s.live(s.leader) {
-                    return None;
-                }
-                if s.metadata_refreshes >= MAX_METADATA_REFRESHES {
-                    return None;
-                }
-                s.metadata_refreshes = s.metadata_refreshes.saturating_add(1);
-                s.cached_leader = s.leader;
-                s.refresh_needed = false;
-                s.refresh_leader_producer_entry();
-                Some(s)
-            }
-        }
-    }
+
+    });
 
     fn properties(&self) -> Vec<Property<Self>> {
         let mut properties = Self::safety_properties();

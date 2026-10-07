@@ -212,15 +212,13 @@ mod tests {
 
     use super::*;
     use crate::materialize::test_support::{
-        args_from, batch, record, record_with_key, topic_id_partition, verified_segment,
+        args_from, batch, materialization_context, record, record_with_key, reopen_orders,
+        topic_id_partition, verified_segment,
     };
 
     #[tokio::test]
     async fn keep_only_batches_round_trip_verbatim_at_their_original_offsets() {
-        let target = tempfile::tempdir().expect("tempdir");
-        let args = args_from(&[], target.path());
-        let partition = topic_id_partition("orders", 0);
-        let predicates = Predicates::from_args(&args).expect("predicates");
+        let (_target, args, partition, predicates) = materialization_context(&[]);
 
         let batches = vec![
             batch(0, vec![record(0, "a"), record(1, "b"), record(2, "c")]),
@@ -239,8 +237,7 @@ mod tests {
         check!(outcome.records_dropped == 0);
         check!(outcome.end_offset == Offset(4));
 
-        let dir = name::partition_dir(&args.target.log_dir, "orders", 0);
-        let log = Log::open(&dir, LogConfig::default()).expect("reopen");
+        let log = reopen_orders(&args);
         let read = log
             .read(Offset(0), LogConfig::default().segment_size)
             .expect("read back");
@@ -249,10 +246,8 @@ mod tests {
 
     #[tokio::test]
     async fn an_emptied_batch_becomes_a_bare_header_and_the_next_batch_still_appends() {
-        let target = tempfile::tempdir().expect("tempdir");
-        let args = args_from(&["--exclude-key", "^drop$"], target.path());
-        let partition = topic_id_partition("orders", 0);
-        let predicates = Predicates::from_args(&args).expect("predicates");
+        let (_target, args, partition, predicates) =
+            materialization_context(&["--exclude-key", "^drop$"]);
 
         let excluded = vec![
             record_with_key(0, "drop"),
@@ -273,8 +268,7 @@ mod tests {
         check!(outcome.records_kept == 1);
         check!(outcome.end_offset == Offset(3));
 
-        let dir = name::partition_dir(&args.target.log_dir, "orders", 0);
-        let log = Log::open(&dir, LogConfig::default()).expect("reopen");
+        let log = reopen_orders(&args);
         // The bare header's full archived span (offsets 0..=2) is still
         // claimed, so log_end_offset already accounts for batch_b at offset 3.
         check!(log.log_end_offset() == Offset(4));
@@ -291,10 +285,8 @@ mod tests {
 
     #[tokio::test]
     async fn a_filtered_batch_keeps_the_survivors_original_absolute_offsets() {
-        let target = tempfile::tempdir().expect("tempdir");
-        let args = args_from(&["--exclude-key", "^drop$"], target.path());
-        let partition = topic_id_partition("orders", 0);
-        let predicates = Predicates::from_args(&args).expect("predicates");
+        let (_target, args, partition, predicates) =
+            materialization_context(&["--exclude-key", "^drop$"]);
 
         let batch_a = batch(
             0,
@@ -317,8 +309,7 @@ mod tests {
         check!(outcome.records_dropped == 1);
         check!(outcome.end_offset == Offset(2));
 
-        let dir = name::partition_dir(&args.target.log_dir, "orders", 0);
-        let log = Log::open(&dir, LogConfig::default()).expect("reopen");
+        let log = reopen_orders(&args);
         let read = log
             .read(Offset(0), LogConfig::default().segment_size)
             .expect("read back");
@@ -342,10 +333,8 @@ mod tests {
         // space of the archive would shrink. This is the regression a Filter
         // decision that happens to exclude a batch's LAST record must not
         // reintroduce.
-        let target = tempfile::tempdir().expect("tempdir");
-        let args = args_from(&["--exclude-key", "^drop$"], target.path());
-        let partition = topic_id_partition("orders", 0);
-        let predicates = Predicates::from_args(&args).expect("predicates");
+        let (_target, args, partition, predicates) =
+            materialization_context(&["--exclude-key", "^drop$"]);
 
         let batch_a = batch(0, vec![record(0, "keep0"), record_with_key(2, "drop")]);
         let batch_b = batch(3, vec![record(0, "keep3")]);
@@ -361,8 +350,7 @@ mod tests {
         check!(outcome.records_dropped == 1);
         check!(outcome.end_offset == Offset(3));
 
-        let dir = name::partition_dir(&args.target.log_dir, "orders", 0);
-        let log = Log::open(&dir, LogConfig::default()).expect("reopen");
+        let log = reopen_orders(&args);
         let read = log
             .read(Offset(0), LogConfig::default().segment_size)
             .expect("read back");
@@ -379,10 +367,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_second_segment_continues_without_resetting_the_first() {
-        let target = tempfile::tempdir().expect("tempdir");
-        let args = args_from(&[], target.path());
-        let partition = topic_id_partition("orders", 0);
-        let predicates = Predicates::from_args(&args).expect("predicates");
+        let (_target, args, partition, predicates) = materialization_context(&[]);
 
         let batch_1 = batch(0, vec![record(0, "a"), record(1, "b")]);
         let segment_1 = verified_segment(0, std::slice::from_ref(&batch_1));
@@ -398,8 +383,7 @@ mod tests {
             .expect("segment 2");
         check!(outcome_2.end_offset == Offset(2));
 
-        let dir = name::partition_dir(&args.target.log_dir, "orders", 0);
-        let log = Log::open(&dir, LogConfig::default()).expect("reopen");
+        let log = reopen_orders(&args);
         let read = log
             .read(Offset(0), LogConfig::default().segment_size)
             .expect("read back");
@@ -410,10 +394,7 @@ mod tests {
 
     #[tokio::test]
     async fn the_first_segment_resets_an_empty_log_to_a_nonzero_base() {
-        let target = tempfile::tempdir().expect("tempdir");
-        let args = args_from(&[], target.path());
-        let partition = topic_id_partition("orders", 0);
-        let predicates = Predicates::from_args(&args).expect("predicates");
+        let (_target, args, partition, predicates) = materialization_context(&[]);
 
         let batches = vec![batch(1000, vec![record(0, "x"), record(1, "y")])];
         let segment = verified_segment(1000, &batches);
@@ -424,8 +405,7 @@ mod tests {
         check!(outcome.base_offset == Offset(1000));
         check!(outcome.end_offset == Offset(1001));
 
-        let dir = name::partition_dir(&args.target.log_dir, "orders", 0);
-        let log = Log::open(&dir, LogConfig::default()).expect("reopen");
+        let log = reopen_orders(&args);
         check!(log.log_start_offset() == Offset(1000));
         check!(log.log_end_offset() == Offset(1002));
         let read = log

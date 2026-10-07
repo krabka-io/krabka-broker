@@ -47,9 +47,6 @@ use jvm_acceptance::{
 };
 use krabka_broker::BrokerHandle;
 use krabka_log::DeliveryPolicy;
-use krabka_protocol::owned::create_topics_request::{
-    CreatableTopic, CreatableTopicConfig, CreateTopicsRequest,
-};
 
 const SCHEDULED_TOPIC: &str = "jvm-deliver-at-time-scheduled";
 const IMMEDIATE_TOPIC: &str = "jvm-deliver-at-time-immediate";
@@ -169,35 +166,18 @@ public final class DeliverAtTimeProbe {
 // configuring the topic is an operator action, and the KFC records the tool
 // limitation under Compatibility.
 async fn create_topic(bootstrap: &str, topic: &str, mode: &str) {
-    let client = krabka_client_core::Client::builder()
-        .bootstrap(bootstrap)
-        .build()
-        .await
-        .expect("client for the host listener");
-    let response = client
-        .send(CreateTopicsRequest {
-            topics: vec![CreatableTopic {
-                name: topic.to_owned(),
-                num_partitions: 1,
-                replication_factor: 1,
-                configs: vec![CreatableTopicConfig {
-                    name: "delivery.mode".to_owned(),
-                    value: Some(mode.to_owned()),
-                    ..CreatableTopicConfig::default()
-                }],
-                ..CreatableTopic::default()
-            }],
-            timeout_ms: 5_000,
-            ..CreateTopicsRequest::default()
-        })
-        .await
-        .expect("CreateTopics");
-    let created = response.topics.first().expect("one topic result");
-    assert!(
-        created.error_code == 0,
-        "create {topic}: {:?}",
-        created.error_message
-    );
+    let client =
+        support::client::connect_with_context(bootstrap, None, "client for the host listener")
+            .await;
+    support::client::create_configured_topic(
+        &client,
+        topic,
+        &[("delivery.mode", mode)],
+        1,
+        1,
+        5_000,
+    )
+    .await;
 }
 
 // Wait until `delivery.mode` has reached the partition's own `LogConfig`.
@@ -299,12 +279,7 @@ fn jvm_console_consume(bootstrap: &str) -> Vec<String> {
             "30000",
         ],
     );
-    String::from_utf8_lossy(&out.stdout)
-        .lines()
-        .map(str::trim)
-        .filter(|line| !line.is_empty())
-        .map(ToOwned::to_owned)
-        .collect()
+    support::jvm_output_lines(&out)
 }
 
 // A stock JVM producer schedules a record and a stock JVM consumer waits for

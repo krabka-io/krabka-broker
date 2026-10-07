@@ -2,7 +2,7 @@
   "profile": [],
   "proofs": {
     "Coma": {
-      "vc_vote_wire_decision": { "prover": "alt-ergo", "time": 0.033 }
+      "vc_vote_wire_decision": { "prover": "alt-ergo", "time": 0.024 }
     }
   }
 }

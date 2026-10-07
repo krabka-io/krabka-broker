@@ -11,6 +11,20 @@ pub struct PinnedCertVerifier {
     pub mismatch: &'static str,
 }
 
+// Both protocol versions accept the signature for this already-pinned fixture certificate.
+macro_rules! accept_pinned_signature {
+    ($($name:ident),+ $(,)?) => {$(
+        fn $name(
+            &self,
+            _message: &[u8],
+            _cert: &CertificateDer<'_>,
+            _dss: &DigitallySignedStruct,
+        ) -> Result<HandshakeSignatureValid, tokio_rustls::rustls::Error> {
+            Ok(HandshakeSignatureValid::assertion())
+        }
+    )+};
+}
+
 impl ServerCertVerifier for PinnedCertVerifier {
     fn verify_server_cert(
         &self,
@@ -27,23 +41,7 @@ impl ServerCertVerifier for PinnedCertVerifier {
         }
     }
 
-    fn verify_tls12_signature(
-        &self,
-        _message: &[u8],
-        _cert: &CertificateDer<'_>,
-        _dss: &DigitallySignedStruct,
-    ) -> Result<HandshakeSignatureValid, tokio_rustls::rustls::Error> {
-        Ok(HandshakeSignatureValid::assertion())
-    }
-
-    fn verify_tls13_signature(
-        &self,
-        _message: &[u8],
-        _cert: &CertificateDer<'_>,
-        _dss: &DigitallySignedStruct,
-    ) -> Result<HandshakeSignatureValid, tokio_rustls::rustls::Error> {
-        Ok(HandshakeSignatureValid::assertion())
-    }
+    accept_pinned_signature!(verify_tls12_signature, verify_tls13_signature);
 
     fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
         self.schemes.clone()
@@ -70,15 +68,10 @@ pub fn ssl_config(
     tls: krabka_security::TlsConfig,
 ) -> krabka_broker::BrokerConfig {
     let mut config = krabka_broker::BrokerConfig::for_tests(log_dir);
-    config.listeners = vec![krabka_broker::config::ListenerSpec {
-        name: "SSL".to_string(),
-        bind_addr: "127.0.0.1:0".parse().unwrap(),
-        advertised: "127.0.0.1:0".to_string(),
-        protocol: krabka_security::ListenerProtocol::Ssl,
-        tls_config: None,
-        sasl_mechanisms: None,
-        principal_mapper: krabka_broker::SslPrincipalMapper::default(),
-    }];
+    config.listeners = vec![crate::support::listeners::loopback_listener(
+        "SSL",
+        krabka_security::ListenerProtocol::Ssl,
+    )];
     config.inter_broker_listener_name = "SSL".to_string();
     config.tls_config = Some(tls);
     config

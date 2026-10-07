@@ -116,6 +116,20 @@ impl Fixture {
         coordinator
     }
 
+    /// Start the coordinator and create a group before driving its protocol.
+    pub(crate) async fn coordinator_with_group(
+        &self,
+        group: &str,
+        spec: GroupSpec,
+    ) -> BarrierCoordinator {
+        let coordinator = self.coordinator().await;
+        coordinator
+            .create_group(group, spec)
+            .await
+            .expect("the group is created");
+        coordinator
+    }
+
     // A coordinator that replayed the state partitions from the log.
     pub(super) async fn recovered(&self) -> BarrierCoordinator {
         let coordinator = self.coordinator().await;

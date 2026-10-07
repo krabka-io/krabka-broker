@@ -118,14 +118,12 @@ mod tests {
     use tempfile::tempdir;
 
     use super::*;
-    use crate::segment::test_support::{DENSE_INDEX, sample_batch};
+    use crate::segment::test_support::{DENSE_INDEX, sample_batch, seeded_segment};
 
     #[test]
     fn position_for_and_walk_batch_headers_semantics() {
         let dir = tempdir().unwrap();
-        let mut seg = Segment::create(dir.path(), Offset(10)).unwrap();
-        seg.append(&sample_batch(10, 5, 1_000), DENSE_INDEX)
-            .unwrap();
+        let mut seg = seeded_segment(dir.path(), 10, &[(10, 5, 1_000)]);
         let pos2 = seg.log_size;
         seg.append(&sample_batch(15, 5, 2_000), DENSE_INDEX)
             .unwrap();
@@ -188,11 +186,7 @@ mod tests {
     #[test]
     fn a_read_past_an_indexed_batch_starts_at_the_batch_after_it() {
         let dir = tempdir().unwrap();
-        let mut seg = Segment::create(dir.path(), Offset(10)).unwrap();
-        seg.append(&sample_batch(10, 5, 1_000), DENSE_INDEX)
-            .unwrap();
-        seg.append(&sample_batch(15, 5, 2_000), DENSE_INDEX)
-            .unwrap();
+        let mut seg = seeded_segment(dir.path(), 10, &[(10, 5, 1_000), (15, 5, 2_000)]);
         let third = seg.log_size;
         seg.append(&sample_batch(20, 5, 3_000), DENSE_INDEX)
             .unwrap();

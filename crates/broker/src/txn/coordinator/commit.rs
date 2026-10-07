@@ -88,10 +88,7 @@ fn uncommitted(partition: PartitionIndex, append_code: i16) -> BrokerError {
 /// it: this broker must lead the partition at the term's leader epoch, and
 /// the ISR must hold `min.insync.replicas` members.
 fn append_refusal(image: &MetadataImage, node_id: NodeId, term: StateTerm) -> Option<i16> {
-    if !term_holds_in(image, node_id, term) {
-        return Some(codes::NOT_LEADER_OR_FOLLOWER);
-    }
-    isr_below_min(image, node_id, term).then_some(codes::NOT_ENOUGH_REPLICAS)
+    term_refusal(image, node_id, term, codes::NOT_ENOUGH_REPLICAS)
 }
 
 /// Why `image` fails an `acks=-1` append in `term` whose records the high
@@ -100,10 +97,25 @@ fn append_refusal(image: &MetadataImage, node_id: NodeId, term: StateTerm) -> Op
 /// below `min.insync.replicas` after the append, and the leadership may have
 /// moved.
 fn completion_refusal(image: &MetadataImage, node_id: NodeId, term: StateTerm) -> Option<i16> {
+    term_refusal(
+        image,
+        node_id,
+        term,
+        codes::NOT_ENOUGH_REPLICAS_AFTER_APPEND,
+    )
+}
+
+/// Check the held leadership before applying the append phase's ISR error.
+fn term_refusal(
+    image: &MetadataImage,
+    node_id: NodeId,
+    term: StateTerm,
+    isr_error: i16,
+) -> Option<i16> {
     if !term_holds_in(image, node_id, term) {
         return Some(codes::NOT_LEADER_OR_FOLLOWER);
     }
-    isr_below_min(image, node_id, term).then_some(codes::NOT_ENOUGH_REPLICAS_AFTER_APPEND)
+    isr_below_min(image, node_id, term).then_some(isr_error)
 }
 
 /// Whether the ISR of the term's partition in `image` is smaller than its

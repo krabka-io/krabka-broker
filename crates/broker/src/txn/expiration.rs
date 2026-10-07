@@ -22,30 +22,20 @@
 
 use std::sync::Arc;
 
-use krabka_units::{Time, convert::TimeExt as _};
-use tokio_util::sync::CancellationToken;
 use tracing::{debug, info};
 
-use crate::{
-    metadata_source::MetadataSource, task_util::run_every, txn::coordinator::TxnCoordinator,
-};
+use crate::{metadata_source::MetadataSource, txn::coordinator::TxnCoordinator};
 
-/// Entry point of the spawned task. It returns when `shutdown` is cancelled.
-///
-/// The cadence is
-/// [`crate::config::BrokerConfig::txn_abort_cleanup_interval`], which mirrors
-/// Kafka's `transaction.abort.timed.out.transaction.cleanup.interval.ms` and
-/// defaults to 10s. The broker spawns this task only when that interval is
-/// non-zero.
-pub(crate) async fn run(
-    coord: Arc<TxnCoordinator>,
-    controller: Arc<dyn MetadataSource>,
-    interval: Time,
-    shutdown: CancellationToken,
-) {
-    let tick = tokio::time::interval(interval.to_std());
-    run_every(tick, &shutdown, || sweep_once(&coord, &*controller)).await;
-    info!("txn idle-transaction reaper shutting down");
+super::util::reaper_task! {
+    /// Entry point of the spawned task. It returns when `shutdown` is cancelled.
+    ///
+    /// The cadence is
+    /// [`crate::config::BrokerConfig::txn_abort_cleanup_interval`], which mirrors
+    /// Kafka's `transaction.abort.timed.out.transaction.cleanup.interval.ms` and
+    /// defaults to 10s. The broker spawns this task only when that interval is
+    /// non-zero.
+    run(coord, controller, interval; shutdown) => sweep_once(&coord, &*controller);
+    "txn idle-transaction reaper shutting down"
 }
 
 /// Runs one sweep. It resolves `transaction.version`, refreshes the

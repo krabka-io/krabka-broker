@@ -21,21 +21,14 @@ use super::failure::Failure;
 /// same flags.
 ///
 /// [`run_from_args`]: crate::run_from_args
+#[krabka_macros::bootstrap_cli_fields]
 #[derive(Parser)]
 #[command(
     name = "krabka-guard",
     version,
     about = "Freeze topic writes, lift a freeze, and run the break-glass two-person rule"
 )]
-pub struct Cli {
-    /// One or more `host:port` pairs to bootstrap against.
-    #[arg(long, short = 'b', env = "KRABKA_BOOTSTRAP_SERVER", required = true)]
-    pub bootstrap_server: String,
-
-    /// What to do.
-    #[command(subcommand)]
-    pub command: Command,
-}
+pub struct Cli {}
 
 /// The two halves of the tool.
 #[derive(Subcommand)]

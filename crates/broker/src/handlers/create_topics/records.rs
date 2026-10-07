@@ -2,11 +2,9 @@
 //! one `PartitionRecord` per partition, and the `TopicConfigRecord` that
 //! carries the config overrides the request asked for.
 
-use krabka_metadata::{MetadataRecord, PartitionRecord, TopicConfigRecord, TopicRecord};
+use krabka_metadata::{MetadataRecord, TopicConfigRecord, TopicRecord};
 use krabka_protocol::owned::create_topics_request::CreatableTopic;
 use uuid::Uuid;
-
-use super::INITIAL_LEADER_EPOCH;
 
 /// Kafka's `computeConfigChanges` refusal of a config with a null value: the
 /// `INVALID_CONFIG` message that names every such config, in request order.
@@ -63,18 +61,7 @@ pub(super) fn topic_records(
     // that were active, and one of them leads.
     records.extend(assignments.iter().zip(leaderships).enumerate().map(
         |(index, (replicas, leadership))| {
-            MetadataRecord::V1Partition(PartitionRecord {
-                topic: request.name.clone(),
-                partition: i32::try_from(index).unwrap_or(0),
-                leader: leadership.leader,
-                replicas: replicas.clone(),
-                isr: leadership.isr.clone(),
-                leader_epoch: krabka_metadata::LeaderEpoch(INITIAL_LEADER_EPOCH),
-                adding_replicas: vec![],
-                removing_replicas: vec![],
-                directories: vec![],
-                partition_epoch: 0,
-            })
+            leadership.partition_record(&request.name, i32::try_from(index).unwrap_or(0), replicas)
         },
     ));
     if !overrides.is_empty() {

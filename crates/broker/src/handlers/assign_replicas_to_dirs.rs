@@ -21,12 +21,7 @@ use krabka_protocol::owned::{
     assign_replicas_to_dirs_response::AssignReplicasToDirsResponse,
 };
 
-use crate::{
-    broker::Broker,
-    codes,
-    error::BrokerError,
-    handlers::{ApiVersion, RequestContext, forward_to_controller::is_active_controller},
-};
+use crate::{codes, error::BrokerError, handlers::forward_to_controller::is_active_controller};
 
 mod changes;
 mod response;
@@ -40,64 +35,63 @@ use self::{
     validation::check_broker_epoch,
 };
 
-pub(crate) async fn handle(
-    broker: &Broker,
-    req: AssignReplicasToDirsRequest,
-    _version: ApiVersion,
-    ctx: &RequestContext<'_>,
-) -> Result<AssignReplicasToDirsResponse, BrokerError> {
-    let controller = broker.controller.clone();
-    let image = controller.current_image();
+context_handler! {
+    AssignReplicasToDirsRequest => AssignReplicasToDirsResponse,
+    (broker, req, _version, ctx),
+    {
+        let controller = broker.controller.clone();
+        let image = controller.current_image();
 
-    // ── ACL preamble ────────────────────────────────────────────
-    // Inter-broker control-plane RPC: `ClusterAction` on
-    // `Cluster("kafka-cluster")`. On Deny → whole-response
-    // `error_code = CLUSTER_AUTHORIZATION_FAILED (31)`, as Kafka's
-    // `ControllerApis.handleAssignReplicasToDirs` requires before it forwards
-    // to the controller.
-    if crate::handlers::cluster_action_denied(broker.config.authorizer.as_ref(), &image, ctx) {
-        return Ok(AssignReplicasToDirsResponse {
-            error_code: codes::CLUSTER_AUTHORIZATION_FAILED,
-            ..Default::default()
-        });
-    }
-
-    if !is_active_controller(broker) {
-        return Ok(not_controller_response());
-    }
-
-    // Kafka's `ClusterControlManager.checkBrokerEpoch`, which
-    // `ReplicationControlManager.handleAssignReplicasToDirs` runs before it
-    // looks at the reported rows. Fences out a stale or restarted broker: an
-    // unregistered id (a negative wire value included) gets
-    // `BROKER_ID_NOT_REGISTERED`, and a registered id reporting the wrong
-    // epoch gets `STALE_BROKER_EPOCH`.
-    let broker_slot_id = match check_broker_epoch(&image, req.broker_id, req.broker_epoch) {
-        Ok(broker_slot_id) => broker_slot_id,
-        Err(error_code) => {
+        // ── ACL preamble ────────────────────────────────────────────
+        // Inter-broker control-plane RPC: `ClusterAction` on
+        // `Cluster("kafka-cluster")`. On Deny → whole-response
+        // `error_code = CLUSTER_AUTHORIZATION_FAILED (31)`, as Kafka's
+        // `ControllerApis.handleAssignReplicasToDirs` requires before it forwards
+        // to the controller.
+        if crate::handlers::cluster_action_denied(broker.config.authorizer.as_ref(), &image, ctx) {
             return Ok(AssignReplicasToDirsResponse {
-                error_code,
+                error_code: codes::CLUSTER_AUTHORIZATION_FAILED,
                 ..Default::default()
             });
         }
-    };
-    if image.finalized_metadata_version().is_some_and(|level| {
-        level < krabka_metadata::metadata_version::DIRECTORY_ASSIGNMENT_MIN_LEVEL
-    }) {
-        return Ok(AssignReplicasToDirsResponse {
-            error_code: codes::UNSUPPORTED_VERSION,
-            ..Default::default()
-        });
-    }
-    let AssignmentPlan { changes, response } = plan_assignments(&image, broker_slot_id, &req);
 
-    if !changes.is_empty()
-        && let Err(e) = controller.submit_change(changes).await
-    {
-        return Err(BrokerError::Replication(format!("submit_change: {e}")));
-    }
+        if !is_active_controller(broker) {
+            return Ok(not_controller_response());
+        }
 
-    Ok(response)
+        // Kafka's `ClusterControlManager.checkBrokerEpoch`, which
+        // `ReplicationControlManager.handleAssignReplicasToDirs` runs before it
+        // looks at the reported rows. Fences out a stale or restarted broker: an
+        // unregistered id (a negative wire value included) gets
+        // `BROKER_ID_NOT_REGISTERED`, and a registered id reporting the wrong
+        // epoch gets `STALE_BROKER_EPOCH`.
+        let broker_slot_id = match check_broker_epoch(&image, req.broker_id, req.broker_epoch) {
+            Ok(broker_slot_id) => broker_slot_id,
+            Err(error_code) => {
+                return Ok(AssignReplicasToDirsResponse {
+                    error_code,
+                    ..Default::default()
+                });
+            }
+        };
+        if image.finalized_metadata_version().is_some_and(|level| {
+            level < krabka_metadata::metadata_version::DIRECTORY_ASSIGNMENT_MIN_LEVEL
+        }) {
+            return Ok(AssignReplicasToDirsResponse {
+                error_code: codes::UNSUPPORTED_VERSION,
+                ..Default::default()
+            });
+        }
+        let AssignmentPlan { changes, response } = plan_assignments(&image, broker_slot_id, &req);
+
+        if !changes.is_empty()
+            && let Err(e) = controller.submit_change(changes).await
+        {
+            return Err(BrokerError::Replication(format!("submit_change: {e}")));
+        }
+
+        Ok(response)
+    }
 }
 
 #[cfg(test)]
@@ -115,6 +109,21 @@ mod tests {
         test_support::{VERSION, handle_allowed, own_broker_epoch, request},
         *,
     };
+    use crate::broker::Broker;
+
+    macro_rules! seeded_topic_fixture {
+        (($handle:ident, $directory:ident, $broker:ident, $epoch:ident, $dir_id:ident, $topic_id:ident)) => {
+            broker_fixture!(
+                ($handle, $directory, $broker),
+                crate::test_support::start_broker_with(|_| {}),
+                controller_leader
+            );
+            let $epoch = own_broker_epoch(&$broker);
+            let $dir_id = uuid::Uuid::from_u128(0xAA);
+            let $topic_id = uuid::Uuid::from_u128(0xBB);
+            seed_topic(&$broker, $topic_id).await;
+        };
+    }
 
     /// The topic reference and the partition that one request row reports.
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -135,13 +144,14 @@ mod tests {
     /// topic does not have.
     #[tokio::test]
     async fn handle_answers_each_partition_with_kafkas_error_code() {
-        let (broker_handle, _dir) = crate::test_support::start_broker_with(|_| {}).await;
-        let broker = broker_handle.broker_arc_for_test();
-        crate::test_support::wait_for_controller_leader(&broker).await;
-        let broker_epoch = own_broker_epoch(&broker);
-        let dir_uuid = uuid::Uuid::from_u128(0xAA);
-        let topic_uuid = uuid::Uuid::from_u128(0xBB);
-        seed_topic(&broker, topic_uuid).await;
+        seeded_topic_fixture!((
+            broker_handle,
+            _dir,
+            broker,
+            broker_epoch,
+            dir_uuid,
+            topic_uuid
+        ));
 
         let cases = [
             (Report::KnownPartition, codes::NONE),
@@ -167,24 +177,19 @@ mod tests {
             actual.push((report, resp));
             expected.push((
                 report,
-                AssignReplicasToDirsResponse {
-                    throttle_time_ms: 0,
+                unthrottled_wire!(AssignReplicasToDirsResponse {
                     error_code: codes::NONE,
-                    directories: vec![RespDirData {
+                    directories: vec![tagged_wire!(RespDirData {
                         id: ProtocolUuid(dir_uuid.into_bytes()),
-                        topics: vec![RespTopicData {
+                        topics: vec![tagged_wire!(RespTopicData {
                             topic_id: ProtocolUuid(topic_id.into_bytes()),
-                            partitions: vec![RespPartData {
+                            partitions: vec![tagged_wire!(RespPartData {
                                 partition_index,
                                 error_code,
-                                unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(vec![]),
-                            }],
-                            unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(vec![]),
-                        }],
-                        unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(vec![]),
-                    }],
-                    unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(vec![]),
-                },
+                            })],
+                        })],
+                    })],
+                }),
             ));
         }
         assert!(actual == expected);
@@ -207,16 +212,13 @@ mod tests {
                     replication_factor: 1,
                 }),
                 MetadataRecord::V1Partition(PartitionRecord {
-                    topic: "t".into(),
-                    partition: 0,
-                    leader: krabka_audit::NodeId(1),
-                    replicas: vec![krabka_audit::NodeId(1)],
-                    isr: vec![krabka_audit::NodeId(1)],
-                    leader_epoch: krabka_metadata::LeaderEpoch(0),
-                    adding_replicas: vec![],
-                    removing_replicas: vec![],
                     directories: vec![uuid::Uuid::nil()],
-                    partition_epoch: 0,
+                    ..crate::handlers::test_support::replicated_partition(
+                        "t",
+                        0,
+                        krabka_audit::NodeId(1),
+                        &[krabka_audit::NodeId(1)],
+                    )
                 }),
             ])
             .await
@@ -225,9 +227,11 @@ mod tests {
 
     #[tokio::test]
     async fn handle_leader_commits_known_directory_assignment() {
-        let (broker_handle, _dir) = crate::test_support::start_broker_with(|_| {}).await;
-        let broker = broker_handle.broker_arc_for_test();
-        crate::test_support::wait_for_controller_leader(&broker).await;
+        broker_fixture!(
+            (broker_handle, _dir, broker),
+            crate::test_support::start_broker_with(|_| {}),
+            controller_leader
+        );
         let dir_uuid = uuid::Uuid::from_u128(0xAA);
         let topic_uuid = uuid::Uuid::from_u128(0xBB);
         seed_topic(&broker, topic_uuid).await;
@@ -247,9 +251,11 @@ mod tests {
 
     #[tokio::test]
     async fn handle_rejects_directory_assignment_below_kip_858_metadata_version() {
-        let (broker_handle, _dir) = crate::test_support::start_broker_with(|_| {}).await;
-        let broker = broker_handle.broker_arc_for_test();
-        crate::test_support::wait_for_controller_leader(&broker).await;
+        broker_fixture!(
+            (broker_handle, _dir, broker),
+            crate::test_support::start_broker_with(|_| {}),
+            controller_leader
+        );
         let topic_uuid = uuid::Uuid::from_u128(0xBB);
         broker
             .controller
@@ -294,11 +300,7 @@ mod tests {
     /// commits nothing.
     #[tokio::test]
     async fn handle_needs_cluster_action() {
-        let (broker_handle, _dir) = crate::test_support::start_broker_no_audit_with(|config| {
-            config.authorizer = std::sync::Arc::new(crate::test_support::GrantsInPrincipalName);
-        })
-        .await;
-        let broker = broker_handle.broker_arc_for_test();
+        broker_fixture!((broker_handle, _dir, broker), principal_grants);
         crate::test_support::wait_for_controller_leader(&broker).await;
         let broker_epoch = own_broker_epoch(&broker);
         let dir_uuid = uuid::Uuid::from_u128(0xAA);
@@ -337,13 +339,14 @@ mod tests {
     /// assignment.
     #[tokio::test]
     async fn handle_fences_stale_and_unregistered_brokers() {
-        let (broker_handle, _dir) = crate::test_support::start_broker_with(|_| {}).await;
-        let broker = broker_handle.broker_arc_for_test();
-        crate::test_support::wait_for_controller_leader(&broker).await;
-        let broker_epoch = own_broker_epoch(&broker);
-        let dir_uuid = uuid::Uuid::from_u128(0xAA);
-        let topic_uuid = uuid::Uuid::from_u128(0xBB);
-        seed_topic(&broker, topic_uuid).await;
+        seeded_topic_fixture!((
+            broker_handle,
+            _dir,
+            broker,
+            broker_epoch,
+            dir_uuid,
+            topic_uuid
+        ));
 
         // A stale epoch is refused, and the seeded directory slot is
         // untouched. `+ 1` rather than `- 1`: a registered epoch of 0 would
@@ -397,9 +400,11 @@ mod tests {
             AssignReplicasToDirsRequest, DirectoryData as ReqDirData,
         };
 
-        let (broker_handle, _dir) = crate::test_support::start_broker_with(|_| {}).await;
-        let broker = broker_handle.broker_arc_for_test();
-        crate::test_support::wait_for_controller_leader(&broker).await;
+        broker_fixture!(
+            (broker_handle, _dir, broker),
+            crate::test_support::start_broker_with(|_| {}),
+            controller_leader
+        );
 
         for broker_id in [99i32, -1] {
             let req = AssignReplicasToDirsRequest {

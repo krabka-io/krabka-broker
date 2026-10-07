@@ -25,17 +25,13 @@
 //! `PreviousMemberEpoch` is the member epoch before the last bump, which the
 //! heartbeat still accepts (`throwIfShareGroupMemberEpochIsInvalid`).
 
-use bytes::{BufMut, Bytes, BytesMut};
+use bytes::{BufMut, BytesMut};
 use krabka_protocol::primitives::uuid::Uuid;
 
 use crate::{
     coordinator::unified::persistence::{
-        flex::{
-            array_value_codec, get_compact_array, get_i8, get_i32_array, get_uuid,
-            put_compact_array, put_empty_tagged_fields, put_i32_array, put_uuid,
-            skip_tagged_fields,
-        },
-        get_i16, get_i32,
+        flex::{array_value_codec, get_assigned_topics, get_i8, put_assigned_topics, value_codec},
+        get_i32,
     },
     error::BrokerError,
 };
@@ -62,27 +58,19 @@ pub struct ShareGroupCurrentMemberAssignmentValue {
     pub assigned_partitions: Vec<(Uuid, Vec<i32>)>,
 }
 
-impl ShareGroupCurrentMemberAssignmentValue {
-    #[must_use]
-    pub fn encode(&self) -> Bytes {
-        let mut buf = BytesMut::new();
-        buf.put_i16(0);
+value_codec! {
+    ShareGroupCurrentMemberAssignmentValue,
+    encode(&self) -> buf {
         buf.put_i32(self.member_epoch);
         buf.put_i32(self.previous_member_epoch);
         buf.put_i8(MEMBER_STATE_STABLE);
-        encode_topic_partitions(&mut buf, &self.assigned_partitions);
-        put_empty_tagged_fields(&mut buf);
-        buf.freeze()
+        encode_topic_partitions(buf, &self.assigned_partitions);
     }
-    /// # Errors
-    /// Returns an error when log I/O fails, a record or index is corrupt, or the requested offset violates the segment state.
-    pub fn decode(mut buf: &[u8]) -> Result<Self, BrokerError> {
-        let _v = get_i16(&mut buf)?;
-        let member_epoch = get_i32(&mut buf)?;
-        let previous_member_epoch = get_i32(&mut buf)?;
-        let _state = get_i8(&mut buf)?;
-        let assigned_partitions = decode_topic_partitions(&mut buf)?;
-        skip_tagged_fields(&mut buf)?;
+    decode(buf) {
+        let member_epoch = get_i32(buf)?;
+        let previous_member_epoch = get_i32(buf)?;
+        let _state = get_i8(buf)?;
+        let assigned_partitions = decode_topic_partitions(buf)?;
         Ok(Self {
             member_epoch,
             previous_member_epoch,
@@ -92,20 +80,11 @@ impl ShareGroupCurrentMemberAssignmentValue {
 }
 
 fn encode_topic_partitions(buf: &mut BytesMut, items: &[(Uuid, Vec<i32>)]) {
-    put_compact_array(buf, items.iter(), |buf, (topic_id, partitions)| {
-        put_uuid(buf, topic_id.0);
-        put_i32_array(buf, partitions);
-        put_empty_tagged_fields(buf);
-    });
+    put_assigned_topics(buf, items, |(topic, partitions)| (topic, partitions));
 }
 
 fn decode_topic_partitions(buf: &mut &[u8]) -> Result<Vec<(Uuid, Vec<i32>)>, BrokerError> {
-    get_compact_array(buf, |buf| {
-        let topic_id = Uuid(get_uuid(buf)?);
-        let partitions = get_i32_array(buf)?;
-        skip_tagged_fields(buf)?;
-        Ok((topic_id, partitions))
-    })
+    get_assigned_topics(buf, |topic, partitions| (topic, partitions))
 }
 
 #[cfg(test)]
@@ -113,9 +92,12 @@ mod tests {
     use assert2::assert;
 
     use super::*;
-    use crate::coordinator::unified::share::persistence::{
-        KEY_SHARE_CURRENT_MEMBER_ASSIGNMENT, KEY_SHARE_TARGET_ASSIGNMENT_MEMBER, ShareGroupKey,
-        encode_share_key, parse_share_key, test_support::peek_version,
+    use crate::coordinator::unified::{
+        share::persistence::{
+            KEY_SHARE_CURRENT_MEMBER_ASSIGNMENT, KEY_SHARE_TARGET_ASSIGNMENT_MEMBER, ShareGroupKey,
+            encode_share_key, parse_share_key,
+        },
+        test_support::{peek_version, wire_bytes},
     };
 
     #[test]
@@ -123,12 +105,14 @@ mod tests {
         let v = ShareGroupTargetAssignmentMemberValue {
             topic_partitions: vec![(Uuid([1; 16]), vec![3])],
         };
-        let mut want: Vec<u8> = vec![0x00, 0x00, 0x02];
-        want.extend_from_slice(&[1u8; 16]);
-        want.push(0x02);
-        want.extend_from_slice(&3i32.to_be_bytes());
-        want.push(0x00); // TopicPartition tagged fields
-        want.push(0x00); // message tagged fields
+        let want = wire_bytes(&[
+            "000002",
+            "01010101010101010101010101010101",
+            "02",
+            "00000003",
+            "00", // TopicPartition tagged fields
+            "00", // message tagged fields
+        ]);
         assert!(&v.encode()[..] == &want[..]);
     }
 
@@ -156,12 +140,13 @@ mod tests {
             previous_member_epoch: 4,
             assigned_partitions: vec![],
         };
-        let mut want: Vec<u8> = vec![0x00, 0x00];
-        want.extend_from_slice(&5i32.to_be_bytes()); // MemberEpoch
-        want.extend_from_slice(&4i32.to_be_bytes()); // PreviousMemberEpoch
-        want.push(0x00); // MemberState.STABLE
-        want.push(0x01); // empty AssignedPartitions
-        want.push(0x00); // message tagged fields
+        let want = wire_bytes(&[
+            "0000", "00000005", // MemberEpoch
+            "00000004", // PreviousMemberEpoch
+            "00",       // MemberState.STABLE
+            "01",       // empty AssignedPartitions
+            "00",       // message tagged fields
+        ]);
         assert!(&v.encode()[..] == &want[..]);
     }
 

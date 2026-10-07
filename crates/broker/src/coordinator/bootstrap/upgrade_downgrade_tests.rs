@@ -8,13 +8,15 @@
 //! resurrects the group as a consumer.
 
 use assert2::assert;
-use krabka_protocol::records::RecordBatch;
 
 use super::{
-    replay::{Replayed, apply_record, finalize},
-    test_support::{bare_coordinator, classic_group_record},
+    replay::finalize,
+    test_support::{
+        bare_coordinator, classic_group_record, consumer_group_records, replay_classic_residue,
+        replay_stream,
+    },
 };
-use crate::coordinator::persistence::{self, GroupMetadataValue};
+use crate::coordinator::persistence::GroupMetadataValue;
 
 /// PROBLEM A, the downgrade trap: a group that started classic, then was
 /// UPGRADED to next-gen, then was DOWNGRADED back to classic must replay
@@ -25,24 +27,9 @@ use crate::coordinator::persistence::{self, GroupMetadataValue};
 /// that comes later rebuilds the classic group. Log order wins.
 #[tokio::test]
 async fn downgraded_group_replays_as_classic() {
-    use crate::coordinator::unified::{persistence_next_gen as ng, persistence_next_gen};
-
     let coord = bare_coordinator();
 
-    // Helper to encode a next-gen (group/member) record key.
-    let ng_group_key = |gid: &str| {
-        ng::encode_key(&ng::NextGenKey::GroupMetadata {
-            group_id: gid.into(),
-        })
-        .unwrap()
-    };
-    let ng_member_key = |gid: &str, mid: &str| {
-        ng::encode_key(&ng::NextGenKey::MemberMetadata {
-            group_id: gid.into(),
-            member_id: mid.into(),
-        })
-        .unwrap()
-    };
+    let [(group_key, group_value), (member_key, member_value)] = consumer_group_records(1, None);
 
     // Record stream in log order.
     let (k2_key, k2_val) = classic_group_record("g", "m1");
@@ -53,32 +40,13 @@ async fn downgraded_group_replays_as_classic() {
         // 2. upgrade drops k2 (tombstone)
         (GroupMetadataValue::encode_key("g").unwrap(), None),
         // 3. upgrade: next-gen group metadata
-        (
-            ng_group_key("g"),
-            Some(persistence_next_gen::GroupMetadataValue { epoch: 1 }.encode()),
-        ),
+        (group_key.clone(), Some(group_value)),
         // 4. upgrade: next-gen member metadata
-        (
-            ng_member_key("g", "m1"),
-            Some(
-                persistence_next_gen::MemberMetadataValue {
-                    instance_id: None,
-                    rack_id: None,
-                    client_id: "c1".into(),
-                    client_host: "/127.0.0.1".into(),
-                    subscribed_topic_names: vec!["t".into()],
-                    subscribed_topic_regex: None,
-                    server_assignor: None,
-                    rebalance_timeout_ms: 60_000,
-                    classic: None,
-                }
-                .encode(),
-            ),
-        ),
+        (member_key.clone(), Some(member_value)),
         // 5. downgrade drops k3 (next-gen group tombstone)
-        (ng_group_key("g"), None),
+        (group_key, None),
         // 6. downgrade drops k5 (next-gen member tombstone)
-        (ng_member_key("g", "m1"), None),
+        (member_key, None),
         // 7. downgrade writes a fresh k2 classic group
         (k2_key2, Some(k2_val2)),
     ];
@@ -112,29 +80,11 @@ async fn downgraded_group_replays_as_classic() {
 /// replays CLASSIC.
 #[tokio::test]
 async fn compacted_downgrade_residue_replays_as_classic() {
-    use crate::coordinator::unified::persistence_next_gen as ng;
-
-    let coord = bare_coordinator();
-
     // Post-compaction record stream. Compaction keeps only the LAST value
-    // per key, and the k3 + its tombstone both GC away (both gone), leaving:
-    let (k2_key, k2_val) = classic_group_record("g", "m1");
-    let stream: Vec<(bytes::Bytes, Option<bytes::Bytes>)> = vec![
-        // The k6 TOMBSTONE the fix emits in the downgrade batch survives
-        // compaction as the last value for the group-level k6 key. Replaying
-        // a tombstone must NOT create a next-gen seed.
-        (
-            ng::encode_key(&ng::NextGenKey::TargetAssignmentMetadata {
-                group_id: "g".into(),
-            })
-            .unwrap(),
-            None,
-        ),
-        // The fresh classic k2 written by the downgrade.
-        (k2_key, Some(k2_val)),
-    ];
-
-    let acc = super::test_support::replay_stream(&coord, stream);
+    // per key, and the k3 + its tombstone both GC away (both gone), leaving
+    // the k6 TOMBSTONE the fix emits and the authoritative classic k2.
+    // Replaying this surviving group-level tombstone must not create a seed.
+    let (coord, acc) = replay_classic_residue(None);
     finalize(&coord, acc).await;
 
     // The group must replay CLASSIC, not resurrect as next-gen.
@@ -149,27 +99,14 @@ async fn compacted_downgrade_residue_replays_as_classic() {
 async fn surviving_k6_write_cannot_resurrect_next_gen_ownership() {
     use crate::coordinator::unified::persistence_next_gen as ng;
 
-    let coord = bare_coordinator();
-    let (k2_key, k2_val) = classic_group_record("g", "m1");
-    let stream: Vec<(bytes::Bytes, Option<bytes::Bytes>)> = vec![
-        // A surviving k6 WRITE (what compaction would retain if the
-        // downgrade had NOT tombstoned k6).
-        (
-            ng::encode_key(&ng::NextGenKey::TargetAssignmentMetadata {
-                group_id: "g".into(),
-            })
-            .unwrap(),
-            Some(
-                ng::TargetAssignmentMetadataValue {
-                    assignment_epoch: 1,
-                }
-                .encode(),
-            ),
-        ),
-        (k2_key, Some(k2_val)),
-    ];
-
-    let acc = super::test_support::replay_stream(&coord, stream);
+    // A surviving k6 WRITE is what compaction retains if the downgrade
+    // omitted k6's tombstone. It precedes the authoritative classic k2.
+    let (coord, acc) = replay_classic_residue(Some(
+        ng::TargetAssignmentMetadataValue {
+            assignment_epoch: 1,
+        }
+        .encode(),
+    ));
 
     assert!(!coord.seeds.contains_key("g"));
 
@@ -189,45 +126,14 @@ async fn surviving_k6_write_cannot_resurrect_next_gen_ownership() {
 /// The test guards the PROBLEM A fix against an over-eager seed removal.
 #[tokio::test]
 async fn upgraded_group_without_tombstone_replays_as_consumer() {
-    use crate::coordinator::unified::{
-        GroupType, persistence_next_gen as ng, persistence_next_gen,
-    };
+    use crate::coordinator::unified::GroupType;
 
     let coord = bare_coordinator();
-    let stream: Vec<(bytes::Bytes, bytes::Bytes)> = vec![
-        (
-            ng::encode_key(&ng::NextGenKey::GroupMetadata {
-                group_id: "g".into(),
-            })
-            .unwrap(),
-            persistence_next_gen::GroupMetadataValue { epoch: 1 }.encode(),
-        ),
-        (
-            ng::encode_key(&ng::NextGenKey::MemberMetadata {
-                group_id: "g".into(),
-                member_id: "m1".into(),
-            })
-            .unwrap(),
-            persistence_next_gen::MemberMetadataValue {
-                instance_id: None,
-                rack_id: None,
-                client_id: "c1".into(),
-                client_host: "/127.0.0.1".into(),
-                subscribed_topic_names: vec!["t".into()],
-                subscribed_topic_regex: None,
-                server_assignor: None,
-                rebalance_timeout_ms: 60_000,
-                classic: None,
-            }
-            .encode(),
-        ),
-    ];
-    let batch = RecordBatch::default();
-    let mut acc = Replayed::default();
-    for (k, v) in stream {
-        let key = persistence::parse_key(&k).unwrap();
-        apply_record(&coord, &mut acc, key, &v, &batch).unwrap();
-    }
+    let stream = consumer_group_records(1, None);
+    let acc = replay_stream(
+        &coord,
+        stream.into_iter().map(|(key, value)| (key, Some(value))),
+    );
     finalize(&coord, acc).await;
 
     assert!(coord.group_type("g") != Some(GroupType::Classic));
@@ -243,62 +149,25 @@ async fn upgraded_group_without_tombstone_replays_as_consumer() {
 /// `is_classic == true` in the next-gen `Describe` view.
 #[tokio::test]
 async fn member_with_classic_block_replays_facade() {
-    use tokio::sync::oneshot;
-
-    use crate::coordinator::unified::{
-        actor::{GroupActorMessage, GroupKindTag},
-        persistence_next_gen as ng, persistence_next_gen,
-    };
+    use crate::coordinator::unified::{actor::GroupKindTag, persistence_next_gen};
 
     let coord = bare_coordinator();
-    let stream: Vec<(bytes::Bytes, bytes::Bytes)> = vec![
-        (
-            ng::encode_key(&ng::NextGenKey::GroupMetadata {
-                group_id: "g".into(),
-            })
-            .unwrap(),
-            persistence_next_gen::GroupMetadataValue { epoch: 2 }.encode(),
-        ),
-        (
-            ng::encode_key(&ng::NextGenKey::MemberMetadata {
-                group_id: "g".into(),
-                member_id: "m1".into(),
-            })
-            .unwrap(),
-            persistence_next_gen::MemberMetadataValue {
-                instance_id: None,
-                rack_id: None,
-                client_id: "c1".into(),
-                client_host: "/127.0.0.1".into(),
-                subscribed_topic_names: vec!["t".into()],
-                subscribed_topic_regex: None,
-                server_assignor: None,
-                rebalance_timeout_ms: 60_000,
-                classic: Some(persistence_next_gen::ClassicMemberMetadata {
-                    session_timeout_ms: 30_000,
-                    supported_protocols: vec![("range".into(), bytes::Bytes::from_static(b"meta"))],
-                }),
-            }
-            .encode(),
-        ),
-    ];
-    let batch = RecordBatch::default();
-    let mut acc = Replayed::default();
-    for (k, v) in stream {
-        let key = persistence::parse_key(&k).unwrap();
-        apply_record(&coord, &mut acc, key, &v, &batch).unwrap();
-    }
+    let stream = consumer_group_records(
+        2,
+        Some(persistence_next_gen::ClassicMemberMetadata {
+            session_timeout_ms: 30_000,
+            supported_protocols: vec![("range".into(), bytes::Bytes::from_static(b"meta"))],
+        }),
+    );
+    let acc = replay_stream(
+        &coord,
+        stream.into_iter().map(|(key, value)| (key, Some(value))),
+    );
     finalize(&coord, acc).await;
 
     let handle = coord.find("g").expect("consumer actor present");
     assert!(handle.kind == GroupKindTag::Consumer);
-    let (tx, rx) = oneshot::channel();
-    handle
-        .tx
-        .send(GroupActorMessage::Describe { reply: tx })
-        .await
-        .unwrap();
-    let view = rx.await.unwrap();
+    let view = crate::coordinator::unified::actor::test_support::rpc::describe(&handle).await;
     let m1 = view
         .members
         .iter()

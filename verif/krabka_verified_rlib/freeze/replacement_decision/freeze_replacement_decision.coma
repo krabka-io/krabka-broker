@@ -1,6 +1,6 @@
 (* #"/workspace/crates/verified/src/freeze/replacement_decision.rs" 41 0 41 94 *)
 
-let%span sord = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
 let%span sreplacement_decision = "/workspace/crates/verified/src/freeze/replacement_decision.rs" 39 10 39 51
 let%span sreplacement_decision'0 = "/workspace/crates/verified/src/freeze/replacement_decision.rs" 19 8 22 10
 

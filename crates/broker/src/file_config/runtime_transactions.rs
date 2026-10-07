@@ -190,7 +190,7 @@ mod tests {
 
     #[test]
     fn barrier_runtime_keys_land_in_the_broker_config() {
-        let file: FileConfig = toml::from_str(
+        let cfg = crate::file_config::test_support::configured(
             r#"
 [runtime]
 barrier_state_num_partitions = 12
@@ -202,12 +202,9 @@ barrier_retained_cuts = 25
 barrier_max_groups = 8
 barrier_max_topics_per_group = 16
 "#,
+            "parse barrier runtime config",
         )
-        .expect("parse barrier runtime config");
-        let mut cfg = crate::config::BrokerConfig::default();
-
-        file.apply_to(&mut cfg)
-            .expect("apply barrier runtime config");
+        .expect("apply barrier runtime config");
 
         let actual = (
             cfg.barrier_state_num_partitions,

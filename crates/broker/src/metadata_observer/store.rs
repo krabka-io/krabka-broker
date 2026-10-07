@@ -188,7 +188,7 @@ impl ObserverStore {
 #[cfg(test)]
 mod tests {
     use assert2::assert;
-    use krabka_metadata::{MetadataRecord, TopicRecord};
+    use krabka_metadata::MetadataRecord;
     use uuid::Uuid;
 
     use super::*;
@@ -196,12 +196,9 @@ mod tests {
     fn image_with(topics: &[&str]) -> MetadataImage {
         let mut image = MetadataImage::new(Uuid::nil());
         for name in topics {
-            image.apply(&MetadataRecord::V1Topic(TopicRecord {
-                name: (*name).to_string(),
-                topic_id: Uuid::new_v4(),
-                partitions: 1,
-                replication_factor: 1,
-            }));
+            image.apply(&MetadataRecord::V1Topic(
+                crate::test_support::single_partition_topic(name, Uuid::new_v4()),
+            ));
         }
         image
     }

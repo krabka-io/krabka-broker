@@ -71,7 +71,6 @@ pub(super) fn apply_submit_error(
 #[cfg(test)]
 mod tests {
     use assert2::assert;
-    use krabka_protocol::UnknownTaggedFields;
 
     use super::*;
     use crate::handlers::create_acls::test_support::{OPERATION_READ, creation, validate};
@@ -107,16 +106,14 @@ mod tests {
             ];
             apply_submit_error(&mut results, &submitted, &error);
             let expected = vec![
-                AclCreationResult {
+                tagged_wire!(AclCreationResult {
                     error_code: code,
                     error_message: None,
-                    unknown_tagged_fields: UnknownTaggedFields(Vec::new()),
-                },
-                AclCreationResult {
+                }),
+                tagged_wire!(AclCreationResult {
                     error_code: codes::INVALID_REQUEST,
                     error_message: Some("already invalid".into()),
-                    unknown_tagged_fields: UnknownTaggedFields(Vec::new()),
-                },
+                }),
             ];
             assert!(results == expected, "{error}");
         }

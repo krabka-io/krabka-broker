@@ -3,7 +3,7 @@
 
 use bytes::Bytes;
 use krabka_ids::Offset;
-use krabka_protocol::records::{Record, RecordBatch};
+use krabka_protocol::records::RecordBatch;
 use krabka_units::prelude::{ByteSize, ByteSizeExt, gibibytes};
 use tempfile::tempdir;
 
@@ -27,47 +27,62 @@ pub(super) fn sample_batch(base_offset: i64, n: i32, ts_base: i64) -> RecordBatc
         ..RecordBatch::default()
     };
     for i in 0..n {
-        b.records.push(Record {
-            offset_delta: i,
-            timestamp_delta: i64::from(i),
-            key: Some(Bytes::from(format!("k{i}"))),
-            value: Some(Bytes::from(format!("v{i}"))),
-            ..Default::default()
-        });
+        b.records
+            .push(crate::test_support::numbered_record(i, i64::from(i)));
     }
     b
 }
 
 pub(super) fn test_segment() -> (tempfile::TempDir, Segment) {
+    segment_at(0)
+}
+
+pub(super) fn segment_at(base: i64) -> (tempfile::TempDir, Segment) {
     let dir = tempdir().unwrap();
-    let seg = Segment::create(dir.path(), Offset(0)).unwrap();
+    let seg = Segment::create(dir.path(), Offset(base)).unwrap();
     (dir, seg)
 }
 
 pub(super) fn test_batch_at(off: i64) -> RecordBatch {
-    let mut b = RecordBatch {
-        base_offset: off,
-        base_timestamp: 1_000,
-        max_timestamp: 1_000,
-        last_offset_delta: 0,
-        ..RecordBatch::default()
-    };
-    b.records.push(Record {
-        offset_delta: 0,
-        timestamp_delta: 0,
-        value: Some(Bytes::from(format!("v{off}"))),
-        ..Default::default()
-    });
-    b
+    crate::test_support::single_record_batch(off, 1_000, Bytes::from(format!("v{off}")))
+}
+
+pub(super) fn seeded_segment(
+    dir: &std::path::Path,
+    base_offset: i64,
+    batches: &[(i64, i32, i64)],
+) -> Segment {
+    populated_segment(dir, base_offset, batches, DENSE_INDEX)
+}
+
+pub(super) fn populated_segment(
+    dir: &std::path::Path,
+    base_offset: i64,
+    batches: &[(i64, i32, i64)],
+    interval: ByteSize,
+) -> Segment {
+    let mut segment = Segment::create(dir, Offset(base_offset)).unwrap();
+    for &(base, count, timestamp) in batches {
+        segment
+            .append(&sample_batch(base, count, timestamp), interval)
+            .unwrap();
+    }
+    segment
 }
 
 pub(super) fn indexed_segment() -> (tempfile::TempDir, Segment) {
     let dir = tempdir().unwrap();
-    let mut segment = Segment::create(dir.path(), Offset(100)).unwrap();
-    for (base, count, timestamp) in [(100, 3, 100), (103, 2, 200), (105, 1, 300)] {
-        segment
-            .append(&sample_batch(base, count, timestamp), DENSE_INDEX)
-            .unwrap();
-    }
+    let segment = seeded_segment(
+        dir.path(),
+        100,
+        &[(100, 3, 100), (103, 2, 200), (105, 1, 300)],
+    );
     (dir, segment)
+}
+
+pub(super) fn sample_batches(batches: &[(i64, i32, i64)]) -> Vec<RecordBatch> {
+    batches
+        .iter()
+        .map(|&(base, count, timestamp)| sample_batch(base, count, timestamp))
+        .collect()
 }

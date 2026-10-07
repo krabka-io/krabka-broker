@@ -387,28 +387,24 @@ mod tests {
             });
             let handle = coord.get_or_create_classic("g");
             coord.mark_classic("g");
-            let (tx, rx) = tokio::sync::oneshot::channel();
-            handle
-                .tx
-                .send(GroupActorMessage::ClassicJoin {
-                    req: JoinGroupRequest {
-                        group_id: "g".into(),
-                        session_timeout_ms: 45_000,
-                        rebalance_timeout_ms: requested_ms,
-                        protocol_type: "consumer".into(),
-                        protocols: vec![JoinGroupRequestProtocol {
-                            name: "range".into(),
-                            ..Default::default()
-                        }],
+            let rx = rpc::begin(&handle, |tx| GroupActorMessage::ClassicJoin {
+                req: JoinGroupRequest {
+                    group_id: "g".into(),
+                    session_timeout_ms: 45_000,
+                    rebalance_timeout_ms: requested_ms,
+                    protocol_type: "consumer".into(),
+                    protocols: vec![JoinGroupRequestProtocol {
+                        name: "range".into(),
                         ..Default::default()
-                    },
-                    version,
-                    client_id: "client-a".into(),
-                    client_host: "127.0.0.1".into(),
-                    reply: tx,
-                })
-                .await
-                .unwrap();
+                    }],
+                    ..Default::default()
+                },
+                version,
+                client_id: "client-a".into(),
+                client_host: "127.0.0.1".into(),
+                reply: tx,
+            })
+            .await;
             let joined = rx.await.unwrap();
             check!(joined.error_code == codes::NONE, "v{version}");
 
@@ -467,18 +463,14 @@ mod tests {
         req: JoinGroupRequest,
         version: i16,
     ) -> JoinResult {
-        let (tx, rx) = tokio::sync::oneshot::channel();
-        handle
-            .tx
-            .send(GroupActorMessage::ClassicJoin {
-                req,
-                version,
-                client_id: "new-client".into(),
-                client_host: "new-host".into(),
-                reply: tx,
-            })
-            .await
-            .unwrap();
+        let rx = rpc::begin(handle, |tx| GroupActorMessage::ClassicJoin {
+            req,
+            version,
+            client_id: "new-client".into(),
+            client_host: "new-host".into(),
+            reply: tx,
+        })
+        .await;
         rx.await.unwrap()
     }
 
@@ -489,9 +481,7 @@ mod tests {
     async fn classic_stable_static_rejoin_persists_replaced_member() {
         let (coord, log) = make_coordinator();
         let (group, request) = stable_static_group_and_rejoin();
-        let generation = group.as_classic().unwrap().generation_id;
-        coord.seed_classic("g", Box::new(group));
-        let handle = coord.find("g").unwrap();
+        let (handle, generation) = super::super::test_support::seed_classic_group(&coord, group);
 
         let response = send_join(&handle, request).await;
 
@@ -525,9 +515,7 @@ mod tests {
     async fn classic_static_rejoin_append_failure_rolls_back_and_reports_error() {
         let (coord, log) = make_coordinator();
         let (group, request) = stable_static_group_and_rejoin();
-        let generation = group.as_classic().unwrap().generation_id;
-        coord.seed_classic("g", Box::new(group));
-        let handle = coord.find("g").unwrap();
+        let (handle, generation) = super::super::test_support::seed_classic_group(&coord, group);
         log.fail_next
             .store(true, std::sync::atomic::Ordering::SeqCst);
 
@@ -571,17 +559,12 @@ mod tests {
         // A brand-new classic member m2 joins the already-upgraded group as a
         // follower at its member epoch.
         let join2 = rpc::classic_join(&handle, "m2", "t").await;
-        let m2 = describe_member(&handle, "m2").await;
+        let m2 = rpc::describe_member(&handle, "m2").await;
         assert!(join2 == follower_join("m2", m2.member_epoch));
 
         // Both members re-sync at the (new) group epoch to pick up the
         // rebalanced two-way split.
-        let (tx, rx) = tokio::sync::oneshot::channel();
-        handle
-            .tx
-            .send(GroupActorMessage::Describe { reply: tx })
-            .await
-            .unwrap();
+        let rx = rpc::begin(&handle, |tx| GroupActorMessage::Describe { reply: tx }).await;
         let epoch = rx.await.unwrap().group_epoch;
         let sync_c = rpc::classic_sync(&handle, "m-classic", epoch).await;
         let sync2 = rpc::classic_sync(&handle, "m2", epoch).await;
@@ -659,12 +642,10 @@ mod tests {
 
             let joined = rpc::classic_join(&handle, "", "t").await;
 
-            let (tx, rx) = tokio::sync::oneshot::channel();
-            handle
-                .tx
-                .send(GroupActorMessage::ClassicInspect { reply: tx })
-                .await
-                .unwrap();
+            let rx = rpc::begin(&handle, |tx| GroupActorMessage::ClassicInspect {
+                reply: tx,
+            })
+            .await;
             let is_classic = rx.await.is_ok();
             let got = (
                 joined.error_code,
@@ -673,25 +654,6 @@ mod tests {
             );
             check!(got == want, "{label}");
         }
-    }
-
-    /// The live `Describe` view of `member_id`.
-    async fn describe_member(
-        handle: &crate::coordinator::unified::actor::GroupActorHandle,
-        member_id: &str,
-    ) -> crate::coordinator::unified::actor::DescribeMember {
-        let (tx, rx) = tokio::sync::oneshot::channel();
-        handle
-            .tx
-            .send(GroupActorMessage::Describe { reply: tx })
-            .await
-            .unwrap();
-        rx.await
-            .unwrap()
-            .members
-            .into_iter()
-            .find(|member| member.member_id == member_id)
-            .expect("member in the describe view")
     }
 
     /// Kafka's `classicGroupJoinToConsumerGroup` answer: no leader and no
@@ -780,12 +742,7 @@ mod tests {
                         },
                     "{label}"
                 );
-                let (tx, rx) = tokio::sync::oneshot::channel();
-                handle
-                    .tx
-                    .send(GroupActorMessage::Describe { reply: tx })
-                    .await
-                    .unwrap();
+                let rx = rpc::begin(&handle, |tx| GroupActorMessage::Describe { reply: tx }).await;
                 let members: Vec<String> = rx
                     .await
                     .unwrap()
@@ -798,7 +755,7 @@ mod tests {
             }
 
             check!(!joined.member_id.is_empty(), "{label}");
-            let member = describe_member(&handle, &joined.member_id).await;
+            let member = rpc::describe_member(&handle, &joined.member_id).await;
             check!(member.is_classic, "{label}");
             check!(
                 joined == follower_join(&member.member_id, member.member_epoch),
@@ -831,14 +788,9 @@ mod tests {
         let second = rpc::consumer_heartbeat(&handle, "native-2", 0, Some("t")).await;
         assert!(second.error_code == codes::NONE);
         let rejoined = rpc::classic_join(&handle, "m-classic", "t").await;
-        let (tx, rx) = tokio::sync::oneshot::channel();
-        handle
-            .tx
-            .send(GroupActorMessage::Describe { reply: tx })
-            .await
-            .unwrap();
+        let rx = rpc::begin(&handle, |tx| GroupActorMessage::Describe { reply: tx }).await;
         let group_epoch = rx.await.unwrap().group_epoch;
-        let member = describe_member(&handle, "m-classic").await;
+        let member = rpc::describe_member(&handle, "m-classic").await;
         assert!(member.member_epoch < group_epoch);
 
         check!(rejoined == follower_join("m-classic", member.member_epoch));

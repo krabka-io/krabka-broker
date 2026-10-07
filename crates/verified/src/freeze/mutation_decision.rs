@@ -32,6 +32,18 @@ pub const fn freeze_timestamp_in_window(set_at_ms: i64, now_ms: i64, max_skew_ms
     set_at_ms >= earliest && set_at_ms <= latest
 }
 
+open_logic! {
+fn freeze_signature_preconditions(facts: FreezeSignatureFacts) -> bool {
+    pearlite! { facts.identity == FreezeIdentityState::Bound
+    && freeze_timestamp_in_window_model(
+        facts.set_at_ms,
+        facts.now_ms,
+        facts.max_skew_ms,
+    )
+    && (!facts.replaces || facts.set_at_ms@ > facts.replaced_set_at_ms@) }
+}
+}
+
 /// Apply the six signature rules in their security-sensitive order.
 #[ensures(match result {
     FreezeSignatureDecision::UnknownKey => facts.identity == FreezeIdentityState::UnknownKey,
@@ -60,23 +72,11 @@ pub const fn freeze_timestamp_in_window(set_at_ms: i64, now_ms: i64, max_skew_ms
             && facts.set_at_ms@ <= facts.replaced_set_at_ms@
     }
     FreezeSignatureDecision::SignatureInvalid => {
-        facts.identity == FreezeIdentityState::Bound
-            && freeze_timestamp_in_window_model(
-                facts.set_at_ms,
-                facts.now_ms,
-                facts.max_skew_ms,
-            )
-            && (!facts.replaces || facts.set_at_ms@ > facts.replaced_set_at_ms@)
+        freeze_signature_preconditions(facts)
             && !facts.signature_valid
     }
     FreezeSignatureDecision::Admit => {
-        facts.identity == FreezeIdentityState::Bound
-            && freeze_timestamp_in_window_model(
-                facts.set_at_ms,
-                facts.now_ms,
-                facts.max_skew_ms,
-            )
-            && (!facts.replaces || facts.set_at_ms@ > facts.replaced_set_at_ms@)
+        freeze_signature_preconditions(facts)
             && facts.signature_valid
     }
 })]
@@ -140,49 +140,44 @@ pub fn freeze_scope_decision(
     }
 }
 
+// One exhaustive mutation policy supplies both the executable and logical classifiers.
+macro_rules! freeze_refusal {
+    ($kind:ident; {$($head:tt)*}) => {
+        $($head)* {
+            match $kind {
+            FreezeMutationKind::Produce
+            | FreezeMutationKind::TransactionEnlistment
+            | FreezeMutationKind::DeleteRecords
+            | FreezeMutationKind::DeleteTopic
+            | FreezeMutationKind::ReassignmentAlter
+            | FreezeMutationKind::Compaction
+            | FreezeMutationKind::Retention => true,
+            FreezeMutationKind::TransactionCompletion
+            | FreezeMutationKind::ReassignmentCompletion
+            | FreezeMutationKind::OffsetCommit
+            | FreezeMutationKind::Replication
+            | FreezeMutationKind::BarrierMarker
+            | FreezeMutationKind::TieringCopy => false,
+            }
+        }
+    };
+}
+
+freeze_refusal! { kind; {
 /// Classify the complete topic-mutation inventory under a live freeze.
 #[ensures(result == freeze_refusal_model(kind))]
 #[must_use]
-pub const fn freeze_refuses(kind: FreezeMutationKind) -> bool {
-    match kind {
-        FreezeMutationKind::Produce
-        | FreezeMutationKind::TransactionEnlistment
-        | FreezeMutationKind::DeleteRecords
-        | FreezeMutationKind::DeleteTopic
-        | FreezeMutationKind::ReassignmentAlter
-        | FreezeMutationKind::Compaction
-        | FreezeMutationKind::Retention => true,
-        FreezeMutationKind::TransactionCompletion
-        | FreezeMutationKind::ReassignmentCompletion
-        | FreezeMutationKind::OffsetCommit
-        | FreezeMutationKind::Replication
-        | FreezeMutationKind::BarrierMarker
-        | FreezeMutationKind::TieringCopy => false,
-    }
-}
+pub const fn freeze_refuses(kind: FreezeMutationKind) -> bool
+} }
 
+freeze_refusal! { kind; {
 /// Logical mirror of [`freeze_refuses`] for the mutation contract.
 // cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
 #[cfg(creusot)]
 #[cfg_attr(test, mutants::skip)]
 #[logic]
-fn freeze_refusal_model(kind: FreezeMutationKind) -> bool {
-    match kind {
-        FreezeMutationKind::Produce
-        | FreezeMutationKind::TransactionEnlistment
-        | FreezeMutationKind::DeleteRecords
-        | FreezeMutationKind::DeleteTopic
-        | FreezeMutationKind::ReassignmentAlter
-        | FreezeMutationKind::Compaction
-        | FreezeMutationKind::Retention => true,
-        FreezeMutationKind::TransactionCompletion
-        | FreezeMutationKind::ReassignmentCompletion
-        | FreezeMutationKind::OffsetCommit
-        | FreezeMutationKind::Replication
-        | FreezeMutationKind::BarrierMarker
-        | FreezeMutationKind::TieringCopy => false,
-    }
-}
+fn freeze_refusal_model(kind: FreezeMutationKind) -> bool
+} }
 
 /// Rank authorization ahead of freeze detail, then apply the one refusal
 /// classification shared by every mutation adapter.

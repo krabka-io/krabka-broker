@@ -79,14 +79,25 @@ pub fn build_offset_map(
 #[cfg(test)]
 mod tests {
     use bytes::Bytes;
-    use krabka_ids::{Offset, ProducerId};
+    use krabka_ids::Offset;
     use krabka_protocol::records::{Attributes, RecordBatch};
     use tempfile::tempdir;
 
     use super::*;
     use crate::compact::test_support::{
-        control_batch, make_record, write_sealed_batches, write_sealed_segment,
+        control_batch, make_record, superseded_records, transactional_record, write_sealed_batches,
+        write_sealed_segment,
     };
+
+    fn offset_map_for(segments: &[&Segment], aborted: Vec<AbortedTxn>) -> HashMap<Bytes, Offset> {
+        build_offset_map(segments, aborted, None).unwrap()
+    }
+
+    fn offset_map_of(records: Vec<krabka_protocol::records::Record>) -> HashMap<Bytes, Offset> {
+        let dir = tempdir().unwrap();
+        let segment = write_sealed_segment(dir.path(), 0, records);
+        offset_map_for(&[&segment], vec![])
+    }
 
     #[test]
     fn control_batch_key_is_not_indexed() {
@@ -103,25 +114,13 @@ mod tests {
         };
         data.records[0].offset_delta = 0;
         let seg = write_sealed_batches(dir.path(), &[control_batch(0, 1000, 1 /* COMMIT */), data]);
-        let segment_refs: Vec<&Segment> = vec![&seg];
-        let map = build_offset_map(&segment_refs, vec![], None).unwrap();
+        let map = offset_map_for(&[&seg], vec![]);
         assert2::assert!(map == maplit::hashmap! {Bytes::from_static(b"k1") => Offset(1)});
     }
 
     #[test]
     fn build_offset_map_keeps_newest_offset_per_key() {
-        let dir = tempdir().unwrap();
-        let first_segment = write_sealed_segment(
-            dir.path(),
-            0,
-            vec![
-                make_record(0, Some(b"k1"), Some(b"v1")),
-                make_record(1, Some(b"k2"), Some(b"v2")),
-                make_record(2, Some(b"k1"), Some(b"v3")), // k1 overwritten
-            ],
-        );
-        let segment_refs: Vec<&Segment> = vec![&first_segment];
-        let map = build_offset_map(&segment_refs, vec![], None).unwrap();
+        let map = offset_map_of(superseded_records());
         assert2::assert!(
             map == maplit::hashmap! {
             Bytes::from_static(b"k1") => Offset(2),
@@ -131,18 +130,11 @@ mod tests {
 
     #[test]
     fn build_offset_map_drops_null_key_records() {
-        let dir = tempdir().unwrap();
-        let first_segment = write_sealed_segment(
-            dir.path(),
-            0,
-            vec![
-                make_record(0, None, Some(b"no-key-1")),
-                make_record(1, Some(b"k1"), Some(b"v1")),
-                make_record(2, None, Some(b"no-key-2")),
-            ],
-        );
-        let segment_refs: Vec<&Segment> = vec![&first_segment];
-        let map = build_offset_map(&segment_refs, vec![], None).unwrap();
+        let map = offset_map_of(vec![
+            make_record(0, None, Some(b"no-key-1")),
+            make_record(1, Some(b"k1"), Some(b"v1")),
+            make_record(2, None, Some(b"no-key-2")),
+        ]);
         assert2::assert!(map == maplit::hashmap! {Bytes::from_static(b"k1") => Offset(1)});
     }
 
@@ -159,8 +151,7 @@ mod tests {
             10,
             vec![make_record(0, Some(b"k1"), Some(b"v2"))],
         );
-        let segment_refs: Vec<&Segment> = vec![&first_segment, &second_segment];
-        let map = build_offset_map(&segment_refs, vec![], None).unwrap();
+        let map = offset_map_for(&[&first_segment, &second_segment], vec![]);
         assert2::assert!(map == maplit::hashmap! {Bytes::from_static(b"k1") => Offset(10)});
     }
 
@@ -172,33 +163,18 @@ mod tests {
     #[test]
     fn an_aborted_batch_never_enters_the_map() {
         let dir = tempdir().unwrap();
-        let transactional =
-            |base_offset: i64, producer_id: i64, key: &[u8], value: &[u8]| RecordBatch {
-                base_offset,
-                last_offset_delta: 0,
-                producer_id,
-                attributes: Attributes::default().with_transactional(true),
-                records: vec![make_record(0, Some(key), Some(value))],
-                ..RecordBatch::default()
-            };
         let seg = write_sealed_batches(
             dir.path(),
             &[
-                transactional(5, 1000, b"k", b"committed"),
+                transactional_record(5, 1000, b"k", b"committed"),
                 control_batch(6, 1000, 1 /* COMMIT */),
-                transactional(10, 2000, b"k", b"aborted"),
-                transactional(11, 2000, b"only-aborted", b"v"),
+                transactional_record(10, 2000, b"k", b"aborted"),
+                transactional_record(11, 2000, b"only-aborted", b"v"),
                 control_batch(12, 2000, 0 /* ABORT */),
             ],
         );
-        let aborted = vec![AbortedTxn {
-            start_offset: Offset(10),
-            last_offset: Offset(12),
-            producer_id: ProducerId(2000),
-            last_stable_offset: Offset(13),
-        }];
-        let segment_refs: Vec<&Segment> = vec![&seg];
-        let map = build_offset_map(&segment_refs, aborted, None).unwrap();
+        let aborted = vec![crate::test_support::aborted_txn(2000, 10, 12, 13)];
+        let map = offset_map_for(&[&seg], aborted);
         assert2::assert!(map == maplit::hashmap! {Bytes::from_static(b"k") => Offset(5)});
     }
 }

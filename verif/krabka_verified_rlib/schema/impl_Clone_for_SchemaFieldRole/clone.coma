@@ -1,4 +1,4 @@
-(* #"/workspace/crates/verified/src/schema.rs" 48 27 48 32 *)
+(* #"/workspace/crates/verified/src/schema.rs" 44 19 44 36 *)
 
 (* <schema::SchemaFieldRole as std::clone::Clone> *)
 
@@ -10,7 +10,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let clone_SchemaFieldRole [#"/workspace/crates/verified/src/schema.rs" 48 27 48 32] (self: t_SchemaFieldRole)
+let clone_SchemaFieldRole [#"/workspace/crates/verified/src/schema.rs" 44 19 44 36] (self: t_SchemaFieldRole)
   (return (x: t_SchemaFieldRole)) = (! bb0
   [ bb0 = s0 [ s0 = [ &_ret <- self ] s1 | s1 = return {_ret} ] ]
   [ & _ret: t_SchemaFieldRole = Any.any_l () | & self: t_SchemaFieldRole = self ])

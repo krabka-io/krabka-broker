@@ -3,13 +3,17 @@
 //! retrying listener bind that proves a port was released, and the recording
 //! dialer that observes the client id an outbound fetch goes out with.
 
-use std::{net::SocketAddr, sync::Arc};
+use std::sync::Arc;
 
 use krabka_units::prelude::{ByteSize, Time, TimeExt as _, gibibytes, millis, secs};
 use uuid::Uuid;
 
 use crate::{
-    controller::ControllerHandle, error::RaftError, network::OutboundDialer, types::NodeId,
+    config::{BootstrapMode, ControllerConfig},
+    controller::{Controller, ControllerHandle},
+    error::RaftError,
+    network::OutboundDialer,
+    types::NodeId,
 };
 
 pub(super) const TEST_OP_TIMEOUT: Time = secs(2);
@@ -21,21 +25,35 @@ pub(super) const FAST_ELECTION_TIMEOUT: Time = millis(200);
 pub(super) const UNBOUNDED_FETCH: ByteSize = gibibytes(1);
 
 pub(super) fn topic_record(name: &str) -> krabka_metadata::MetadataRecord {
-    krabka_metadata::MetadataRecord::V1Topic(krabka_metadata::TopicRecord {
-        name: name.into(),
-        topic_id: Uuid::nil(),
-        partitions: 1,
-        replication_factor: 1,
-    })
+    krabka_metadata::MetadataRecord::V1Topic(crate::test_support::single_partition_topic(
+        name,
+        Uuid::nil(),
+    ))
 }
 
 pub(super) fn committable_topic_record(name: &str) -> krabka_metadata::MetadataRecord {
-    krabka_metadata::MetadataRecord::V1Topic(krabka_metadata::TopicRecord {
-        name: name.into(),
-        topic_id: Uuid::new_v4(),
-        partitions: 1,
-        replication_factor: 1,
-    })
+    krabka_metadata::MetadataRecord::V1Topic(crate::test_support::single_partition_topic(
+        name,
+        Uuid::new_v4(),
+    ))
+}
+
+pub(super) async fn bootstrap_controller(context: &str) -> (tempfile::TempDir, ControllerHandle) {
+    let dir = tempfile::TempDir::new().unwrap();
+    let config = ControllerConfig::for_tests(NodeId(1), dir.path().to_path_buf());
+    let controller = Controller::start(config).await.expect(context);
+    (dir, controller)
+}
+
+pub(super) async fn joining_controller(context: &str) -> (tempfile::TempDir, ControllerHandle) {
+    let dir = tempfile::TempDir::new().unwrap();
+    let cfg = ControllerConfig {
+        bootstrap_mode: BootstrapMode::Join,
+        initial_voters: krabka_metadata::VoterSet::from_voters(std::iter::empty()),
+        ..ControllerConfig::for_tests(NodeId(1), dir.path().to_path_buf())
+    };
+    let ctrl = Controller::start(cfg).await.expect(context);
+    (dir, ctrl)
 }
 
 pub(super) async fn wait_for_leader(ctrl: &ControllerHandle) {
@@ -60,19 +78,7 @@ pub(super) async fn submit_change_with_timeout(
         .map(|_| ())
 }
 
-pub(super) async fn bind_eventually(addr: SocketAddr) -> tokio::net::TcpListener {
-    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
-    loop {
-        match tokio::net::TcpListener::bind(addr).await {
-            Ok(listener) => return listener,
-            Err(err) if tokio::time::Instant::now() < deadline => {
-                let _ = err;
-                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-            }
-            Err(err) => panic!("listener address {addr} was not released: {err}"),
-        }
-    }
-}
+krabka_macros::bind_retry_fixture!(bind_eventually, ::std::time::Duration::from_secs(5));
 
 #[derive(Clone, Default)]
 pub(super) struct RecordingDialer {

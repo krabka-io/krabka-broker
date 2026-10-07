@@ -18,10 +18,8 @@
 //! an attestation and not a proof, and this response is what tells the two
 //! apart.
 
-use bytes::Bytes;
 use krabka_metadata::{MetadataImage, TopicFreezeRecord};
 use krabka_protocol::{
-    Decode,
     krabka::freeze::{
         DescribeTopicFreezesRequest, DescribeTopicFreezesResponse, DescribedTopicFreeze,
     },
@@ -29,50 +27,43 @@ use krabka_protocol::{
 };
 
 use crate::{
-    broker::Broker,
     codes,
-    error::BrokerError,
     freeze::handlers::{FreezeFilter, cluster_describe_denied, pattern_type_filter},
-    handlers::{RequestContext, acl_wire::pattern_type_to_wire, encode_response},
+    handlers::{acl_wire::pattern_type_to_wire, encode_response},
 };
 
-#[tracing::instrument(
-    name = "handle_describe_topic_freezes",
-    level = "info",
-    skip_all,
-    fields(api = "DescribeTopicFreezes"),
-    err
-)]
-pub(crate) async fn handle(
-    broker: &Broker,
-    version: i16,
-    _correlation_id: i32,
-    req_bytes: &[u8],
-    ctx: &RequestContext<'_>,
-) -> Result<Bytes, BrokerError> {
-    let mut cur = req_bytes;
-    let req = DescribeTopicFreezesRequest::decode(&mut cur, version)?;
+wire_handler!(
+    handle,
+    "handle_describe_topic_freezes",
+    "DescribeTopicFreezes",
+    "info",
+    DescribeTopicFreezesRequest,
+    |broker, version, req, ctx| {
+        let image = broker.controller.current_image();
+        if cluster_describe_denied(broker.config.authorizer.as_ref(), &image, ctx) {
+            return encode_response(
+                &DescribeTopicFreezesResponse {
+                    error_code: codes::CLUSTER_AUTHORIZATION_FAILED,
+                    error_message: Some("describe-topic-freezes denied".to_owned()),
+                    ..DescribeTopicFreezesResponse::default()
+                },
+                version,
+            );
+        }
 
-    let image = broker.controller.current_image();
-    if cluster_describe_denied(broker.config.authorizer.as_ref(), &image, ctx) {
-        return encode_response(
+        encode_response(
             &DescribeTopicFreezesResponse {
-                error_code: codes::CLUSTER_AUTHORIZATION_FAILED,
-                error_message: Some("describe-topic-freezes denied".to_owned()),
+                freezes: matching_freezes(
+                    &image,
+                    req.scope_filter.as_deref(),
+                    req.pattern_type_filter,
+                ),
                 ..DescribeTopicFreezesResponse::default()
             },
             version,
-        );
+        )
     }
-
-    encode_response(
-        &DescribeTopicFreezesResponse {
-            freezes: matching_freezes(&image, req.scope_filter.as_deref(), req.pattern_type_filter),
-            ..DescribeTopicFreezesResponse::default()
-        },
-        version,
-    )
-}
+);
 
 /// The live registry entries that the two filters select, in a stable order.
 ///

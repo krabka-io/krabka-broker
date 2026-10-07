@@ -55,6 +55,17 @@ pub(super) fn make_coordinator(
     (coord, log)
 }
 
+/// Ordinary share heartbeat for the test topic, with every other wire field defaulted.
+pub(super) fn subscribed_request(member_id: &str, member_epoch: i32) -> ShareGroupHeartbeatRequest {
+    ShareGroupHeartbeatRequest {
+        group_id: "g".into(),
+        member_id: member_id.into(),
+        member_epoch,
+        subscribed_topic_names: Some(vec!["t".into()]),
+        ..Default::default()
+    }
+}
+
 pub(super) async fn heartbeat(
     handle: &ShareGroupActorHandle,
     req: ShareGroupHeartbeatRequest,

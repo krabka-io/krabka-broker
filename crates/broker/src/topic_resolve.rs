@@ -36,18 +36,15 @@ pub(crate) fn resolve<'a>(
 #[cfg(test)]
 mod tests {
     use assert2::assert;
-    use krabka_metadata::{MetadataRecord, TopicRecord};
+    use krabka_metadata::MetadataRecord;
 
     use super::*;
 
     fn image_with(name: &str, id: uuid::Uuid) -> MetadataImage {
         let mut img = MetadataImage::new(uuid::Uuid::nil());
-        img.apply(&MetadataRecord::V1Topic(TopicRecord {
-            name: name.into(),
-            topic_id: id,
-            partitions: 1,
-            replication_factor: 1,
-        }));
+        img.apply(&MetadataRecord::V1Topic(
+            crate::test_support::single_partition_topic(name, id),
+        ));
         img
     }
 

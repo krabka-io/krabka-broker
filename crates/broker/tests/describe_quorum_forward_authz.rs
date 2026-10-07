@@ -16,16 +16,12 @@
 
 mod support;
 
-use assert2::{assert, check};
+use assert2::check;
 use krabka_broker::{
     BrokerConfig,
     authorizer::{AclSource, AuthorizationRequest, AuthorizationResult, Authorizer},
-    config::ListenerSpec,
 };
 use krabka_metadata::AclOperation;
-use krabka_protocol::owned::describe_quorum_request::{
-    DescribeQuorumRequest, PartitionData, TopicData,
-};
 use krabka_security::{ListenerProtocol, SaslMechanism};
 
 use crate::support::{sasl_client, start_n_node_with};
@@ -63,19 +59,7 @@ impl Authorizer for ClusterActionForEveryoneDescribeForAlice {
     }
 }
 
-fn describe_quorum_request() -> DescribeQuorumRequest {
-    DescribeQuorumRequest {
-        topics: vec![TopicData {
-            topic_name: "__cluster_metadata".into(),
-            partitions: vec![PartitionData {
-                partition_index: 0,
-                ..Default::default()
-            }],
-            ..Default::default()
-        }],
-        ..Default::default()
-    }
-}
+use crate::support::quorum::metadata_quorum_request as describe_quorum_request;
 
 /// A caller holding `Describe` succeeds even when the node it asks is not the
 /// active controller and has to forward the request: the forward carries
@@ -87,15 +71,11 @@ async fn a_describe_authorized_caller_succeeds_through_a_forwarding_follower() {
         // Replace the default plaintext data listener with SASL/PLAIN, bound
         // to the same address `start_n_node_with` already reserved, so alice
         // authenticates as herself rather than as `ANONYMOUS`.
-        cfg.listeners = vec![ListenerSpec {
-            name: "SASL_PLAINTEXT".to_owned(),
-            bind_addr: cfg.listen_addr,
-            advertised: cfg.listen_addr.to_string(),
-            protocol: ListenerProtocol::SaslPlaintext,
-            tls_config: None,
-            sasl_mechanisms: None,
-            principal_mapper: krabka_broker::SslPrincipalMapper::default(),
-        }];
+        cfg.listeners = vec![crate::support::listeners::listener(
+            "SASL_PLAINTEXT",
+            cfg.listen_addr,
+            ListenerProtocol::SaslPlaintext,
+        )];
         cfg.inter_broker_listener_name = "SASL_PLAINTEXT".to_owned();
         cfg.enabled_sasl_mechanisms = vec![SaslMechanism::Plain];
         cfg.plain_credentials
@@ -113,16 +93,8 @@ async fn a_describe_authorized_caller_succeeds_through_a_forwarding_follower() {
         .await
         .expect("describe_quorum from node 0");
     check!(first_resp.error_code == 0, "top-level error_code");
-    let leader_id = first_resp.topics[0].partitions[0].leader_id;
-    assert!(
-        leader_id == 1 || leader_id == 2,
-        "a 2-node cluster has an elected leader; got {leader_id}"
-    );
-
-    let (_, follower_cfg, _dir1) = cluster
-        .iter()
-        .find(|(_, cfg, _)| cfg.broker_id != leader_id)
-        .expect("the non-leader broker");
+    let leader_id = crate::support::quorum::two_node_leader(&first_resp, (1, 2));
+    let follower_cfg = crate::support::quorum::follower_config(&cluster, leader_id);
     let follower_client =
         sasl_client(&follower_cfg.listen_addr.to_string(), ALICE, ALICE_PASSWORD).await;
     let follower_resp = follower_client
@@ -140,7 +112,5 @@ async fn a_describe_authorized_caller_succeeds_through_a_forwarding_follower() {
     );
     check!(partition.leader_id == leader_id);
 
-    for (handle, _, _) in cluster {
-        handle.shutdown().await;
-    }
+    crate::support::shutdown_cluster(cluster).await;
 }

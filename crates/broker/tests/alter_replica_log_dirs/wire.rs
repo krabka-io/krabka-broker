@@ -7,7 +7,7 @@
 //! protocol versions the suite pins live here too, next to the encoders that
 //! read them.
 
-use std::{io, net::SocketAddr};
+use std::net::SocketAddr;
 
 use bytes::BytesMut;
 use krabka_protocol::{
@@ -23,23 +23,17 @@ use krabka_protocol::{
 };
 use tokio::net::TcpStream;
 
-use crate::kafka_wire;
+use crate::{
+    kafka_wire,
+    support::configs::{incremental_config, incremental_request, incremental_resource},
+};
 
 const CLIENT_ID: &str = "krabka-arld-test";
 const ALTER_VERSION: i16 = 2;
 const DESCRIBE_VERSION: i16 = 4;
 
-/// One length-prefixed request/response exchange on correlation id 1, with
-/// flexible headers because every API this suite sends is flexible; see
-/// [`kafka_wire::round_trip`].
-async fn round_trip(
-    stream: &mut TcpStream,
-    api_key: i16,
-    api_version: i16,
-    body: &[u8],
-) -> io::Result<Vec<u8>> {
-    kafka_wire::round_trip(stream, api_key, api_version, 1, CLIENT_ID, true, body).await
-}
+// Flexible headers and correlation ID 1 for every request in this suite.
+crate::flexible_round_trip_fixture!(round_trip, CLIENT_ID, 1);
 
 pub(crate) async fn create_topic(addr: SocketAddr, topic: &str, partitions: i32) {
     kafka_wire::create_topic_plaintext(addr, CLIENT_ID, kafka_wire::topic(topic, partitions, 1))
@@ -104,26 +98,22 @@ pub(crate) async fn set_broker_config(
     value: &str,
 ) -> (i16, Option<String>) {
     use krabka_protocol::owned::{
-        incremental_alter_configs_request::{
-            AlterConfigsResource, AlterableConfig, IncrementalAlterConfigsRequest,
-        },
+        incremental_alter_configs_request::IncrementalAlterConfigsRequest,
         incremental_alter_configs_response::IncrementalAlterConfigsResponse,
     };
     let version: i16 = 1;
-    let req = IncrementalAlterConfigsRequest {
-        resources: vec![AlterConfigsResource {
-            resource_type: 4,
-            resource_name: broker.to_string(),
-            configs: vec![AlterableConfig {
-                name: name.to_string(),
-                config_operation: 0,
-                value: Some(value.to_string()),
-                ..Default::default()
-            }],
-            ..Default::default()
-        }],
-        ..Default::default()
-    };
+    let req = incremental_request(
+        vec![incremental_resource(
+            4,
+            broker.to_string(),
+            vec![incremental_config(
+                name.to_string(),
+                Some(value.to_string()),
+                0,
+            )],
+        )],
+        IncrementalAlterConfigsRequest::default().validate_only,
+    );
     let mut stream = TcpStream::connect(addr).await.unwrap();
     let mut body = BytesMut::new();
     req.encode(&mut body, version).unwrap();

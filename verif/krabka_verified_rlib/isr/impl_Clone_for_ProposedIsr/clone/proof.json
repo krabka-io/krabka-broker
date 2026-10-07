@@ -2,7 +2,7 @@
   "profile": [],
   "proofs": {
     "Coma": {
-      "vc_clone_ProposedIsr": { "prover": "alt-ergo", "time": 0.019 }
+      "vc_clone_ProposedIsr": { "prover": "alt-ergo", "time": 0.014 }
     }
   }
 }

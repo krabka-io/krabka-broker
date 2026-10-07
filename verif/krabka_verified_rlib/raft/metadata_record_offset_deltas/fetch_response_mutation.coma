@@ -1,25 +1,25 @@
-(* #"/workspace/crates/verified/src/raft/metadata_record_offset_deltas.rs" 71 0 75 26 *)
+(* #"/workspace/crates/verified/src/raft/metadata_record_offset_deltas.rs" 67 0 71 26 *)
 
-let%span snum = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 27 28 27 33
-let%span soption = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/option.rs" 63 18 63 43
-let%span soption'0 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/option.rs" 40 18 40 43
-let%span soption'1 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/option.rs" 15 8 18 9
-let%span scmp = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 17 26 17 75
-let%span smetadata_record_offset_deltas = "/workspace/crates/verified/src/raft/metadata_record_offset_deltas.rs" 77 11 77 38
-let%span smetadata_record_offset_deltas'0 = "/workspace/crates/verified/src/raft/metadata_record_offset_deltas.rs" 78 11 78 41
-let%span smetadata_record_offset_deltas'1 = "/workspace/crates/verified/src/raft/metadata_record_offset_deltas.rs" 80 11 80 36
-let%span smetadata_record_offset_deltas'2 = "/workspace/crates/verified/src/raft/metadata_record_offset_deltas.rs" 83 14 83 54
-let%span smetadata_record_offset_deltas'3 = "/workspace/crates/verified/src/raft/metadata_record_offset_deltas.rs" 84 11 84 54
-let%span smetadata_record_offset_deltas'4 = "/workspace/crates/verified/src/raft/metadata_record_offset_deltas.rs" 85 11 85 49
-let%span smetadata_record_offset_deltas'5 = "/workspace/crates/verified/src/raft/metadata_record_offset_deltas.rs" 50 28 51 41
-let%span smetadata_record_offset_deltas'6 = "/workspace/crates/verified/src/raft/metadata_record_offset_deltas.rs" 52 28 53 84
-let%span smetadata_record_offset_deltas'7 = "/workspace/crates/verified/src/raft/metadata_record_offset_deltas.rs" 54 28 55 68
-let%span smetadata_record_offset_deltas'8 = "/workspace/crates/verified/src/raft/metadata_record_offset_deltas.rs" 56 28 59 34
-let%span smetadata_record_offset_deltas'9 = "/workspace/crates/verified/src/raft/metadata_record_offset_deltas.rs" 60 28 64 31
-let%span smetadata_record_offset_deltas'10 = "/workspace/crates/verified/src/raft/metadata_record_offset_deltas.rs" 65 28 69 32
-let%span smetadata_record_offset_deltas'11 = "/workspace/crates/verified/src/raft/metadata_record_offset_deltas.rs" 35 8 39 38
-let%span smetadata_record_offset_deltas'12 = "/workspace/crates/verified/src/raft/metadata_record_offset_deltas.rs" 16 8 20 34
-let%span smodel = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/model.rs" 37 8 37 28
+let%span snum = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 27 28 27 33
+let%span soption = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/option.rs" 63 18 63 43
+let%span soption'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/option.rs" 40 18 40 43
+let%span soption'1 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/option.rs" 15 8 18 9
+let%span scmp = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 17 26 17 75
+let%span smetadata_record_offset_deltas = "/workspace/crates/verified/src/raft/metadata_record_offset_deltas.rs" 73 11 73 38
+let%span smetadata_record_offset_deltas'0 = "/workspace/crates/verified/src/raft/metadata_record_offset_deltas.rs" 74 11 74 41
+let%span smetadata_record_offset_deltas'1 = "/workspace/crates/verified/src/raft/metadata_record_offset_deltas.rs" 76 11 76 36
+let%span smetadata_record_offset_deltas'2 = "/workspace/crates/verified/src/raft/metadata_record_offset_deltas.rs" 79 14 79 54
+let%span smetadata_record_offset_deltas'3 = "/workspace/crates/verified/src/raft/metadata_record_offset_deltas.rs" 80 11 80 54
+let%span smetadata_record_offset_deltas'4 = "/workspace/crates/verified/src/raft/metadata_record_offset_deltas.rs" 81 11 81 49
+let%span smetadata_record_offset_deltas'5 = "/workspace/crates/verified/src/raft/metadata_record_offset_deltas.rs" 46 28 47 41
+let%span smetadata_record_offset_deltas'6 = "/workspace/crates/verified/src/raft/metadata_record_offset_deltas.rs" 48 28 49 84
+let%span smetadata_record_offset_deltas'7 = "/workspace/crates/verified/src/raft/metadata_record_offset_deltas.rs" 50 28 51 68
+let%span smetadata_record_offset_deltas'8 = "/workspace/crates/verified/src/raft/metadata_record_offset_deltas.rs" 52 28 55 34
+let%span smetadata_record_offset_deltas'9 = "/workspace/crates/verified/src/raft/metadata_record_offset_deltas.rs" 56 28 60 31
+let%span smetadata_record_offset_deltas'10 = "/workspace/crates/verified/src/raft/metadata_record_offset_deltas.rs" 61 28 65 32
+let%span smetadata_record_offset_deltas'11 = "/workspace/crates/verified/src/raft/metadata_record_offset_deltas.rs" 30 8 34 38
+let%span smetadata_record_offset_deltas'12 = "/workspace/crates/verified/src/raft/metadata_record_offset_deltas.rs" 13 8 17 34
+let%span smodel = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/model.rs" 37 8 37 28
 
 use creusot.int.UInt64
 use creusot.int.UInt32
@@ -70,12 +70,12 @@ let ne_Option_u64 (self_: t_Option_u64) (rhs: t_Option_u64) (return (x: bool)) =
 
 type t_FetchContent = { has_snapshot: bool; has_divergence: bool; has_records: bool }
 
-predicate discovery_applies [#"/workspace/crates/verified/src/raft/metadata_record_offset_deltas.rs" 33 0 33 81] (fence: t_FetchFence) (response: t_FetchResponseFacts) =
+predicate discovery_applies [#"/workspace/crates/verified/src/raft/metadata_record_offset_deltas.rs" 28 0 28 81] (fence: t_FetchFence) (response: t_FetchResponseFacts) =
   [%#smetadata_record_offset_deltas'11] fence.discovering
   /\ fence.role_leader = None
   /\ fence.current_leader = None /\ response.epoch = fence.current_epoch /\ response.leader <> None
 
-predicate leader_fence_holds [#"/workspace/crates/verified/src/raft/metadata_record_offset_deltas.rs" 14 0 14 82] (fence: t_FetchFence) (response: t_FetchResponseFacts) =
+predicate leader_fence_holds [#"/workspace/crates/verified/src/raft/metadata_record_offset_deltas.rs" 11 0 11 82] (fence: t_FetchFence) (response: t_FetchResponseFacts) =
   [%#smetadata_record_offset_deltas'12] fence.role_leader = Some (response.from)
   /\ fence.current_leader = Some (response.from)
   /\ response.leader = Some (response.from) /\ response.epoch = fence.current_epoch /\ response.error_none
@@ -84,7 +84,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let fetch_response_mutation [#"/workspace/crates/verified/src/raft/metadata_record_offset_deltas.rs" 71 0 75 26]
+let fetch_response_mutation [#"/workspace/crates/verified/src/raft/metadata_record_offset_deltas.rs" 67 0 71 26]
   (fence: t_FetchFence) (response: t_FetchResponseFacts) (content: t_FetchContent)
   (return (x: t_FetchResponseMutation)) = (! bb0
   [ bb0 = any [ br0 -> {fence.discovering = false} (! bb13) | br1 -> {fence.discovering} (! bb1) ]

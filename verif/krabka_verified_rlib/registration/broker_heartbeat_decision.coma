@@ -1,7 +1,7 @@
-(* #"/workspace/crates/verified/src/registration.rs" 41 0 45 28 *)
+(* #"/workspace/crates/verified/src/registration.rs" 37 0 41 28 *)
 
 let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
-let%span sregistration = "/workspace/crates/verified/src/registration.rs" 31 10 39 1
+let%span sregistration = "/workspace/crates/verified/src/registration.rs" 27 10 35 1
 
 use creusot.int.Int64
 use creusot.prelude.Any
@@ -27,7 +27,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let broker_heartbeat_decision [#"/workspace/crates/verified/src/registration.rs" 41 0 45 28]
+let broker_heartbeat_decision [#"/workspace/crates/verified/src/registration.rs" 37 0 41 28]
   (registered_epoch: t_Option_i64) (request_epoch: Int64.t) (metadata_offset: Int64.t)
   (return (x: t_BrokerHeartbeatDecision)) = (! bb0
   [ bb0 = any [ br0 -> {registered_epoch = None} (! bb6) | br1 (x0: Int64.t) -> {registered_epoch = Some x0} (! bb5) ]

@@ -1,11 +1,11 @@
-(* #"/workspace/crates/verified/src/freeze/mutation_decision.rs" 197 0 201 27 *)
+(* #"/workspace/crates/verified/src/freeze/mutation_decision.rs" 192 0 196 27 *)
 
-let%span smutation_decision = "/workspace/crates/verified/src/freeze/mutation_decision.rs" 204 24 204 44
-let%span smutation_decision'0 = "/workspace/crates/verified/src/freeze/mutation_decision.rs" 189 10 189 80
-let%span smutation_decision'1 = "/workspace/crates/verified/src/freeze/mutation_decision.rs" 190 10 192 1
-let%span smutation_decision'2 = "/workspace/crates/verified/src/freeze/mutation_decision.rs" 193 10 195 1
-let%span smutation_decision'3 = "/workspace/crates/verified/src/freeze/mutation_decision.rs" 144 10 144 46
-let%span smutation_decision'4 = "/workspace/crates/verified/src/freeze/mutation_decision.rs" 170 4 184 5
+let%span smutation_decision = "/workspace/crates/verified/src/freeze/mutation_decision.rs" 199 24 199 44
+let%span smutation_decision'0 = "/workspace/crates/verified/src/freeze/mutation_decision.rs" 184 10 184 80
+let%span smutation_decision'1 = "/workspace/crates/verified/src/freeze/mutation_decision.rs" 185 10 187 1
+let%span smutation_decision'2 = "/workspace/crates/verified/src/freeze/mutation_decision.rs" 188 10 190 1
+let%span smutation_decision'3 = "/workspace/crates/verified/src/freeze/mutation_decision.rs" 168 10 168 46
+let%span smutation_decision'4 = "/workspace/crates/verified/src/freeze/mutation_decision.rs" 147 12 161 13
 
 use creusot.prelude.Any
 
@@ -24,7 +24,7 @@ type t_FreezeMutationKind =
   | BarrierMarker
   | TieringCopy
 
-predicate freeze_refusal_model [#"/workspace/crates/verified/src/freeze/mutation_decision.rs" 169 0 169 57] (kind: t_FreezeMutationKind) =
+predicate freeze_refusal_model [#"/workspace/crates/verified/src/freeze/mutation_decision.rs" 146 18 162 9] (kind: t_FreezeMutationKind) =
   [%#smutation_decision'4] match kind with
     | Produce | TransactionEnlistment | DeleteRecords | DeleteTopic | ReassignmentAlter | Compaction | Retention -> true
     | TransactionCompletion | ReassignmentCompletion | OffsetCommit | Replication | BarrierMarker | TieringCopy -> false
@@ -41,7 +41,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let freeze_mutation_decision [#"/workspace/crates/verified/src/freeze/mutation_decision.rs" 197 0 201 27]
+let freeze_mutation_decision [#"/workspace/crates/verified/src/freeze/mutation_decision.rs" 192 0 196 27]
   (authorized: bool) (frozen: bool) (kind: t_FreezeMutationKind) (return (x: t_FreezeMutationDecision)) = (! bb0
   [ bb0 = any [ br0 -> {authorized = false} (! bb1) | br1 -> {authorized} (! bb2) ]
   | bb2 = any [ br0 -> {frozen = false} (! bb7) | br1 -> {frozen} (! bb3) ]

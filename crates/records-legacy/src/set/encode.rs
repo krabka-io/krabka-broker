@@ -17,6 +17,19 @@ use crate::{
     message::{Magic, Message, attrs_with_compression},
 };
 
+fn message_for_record(record: ParsedRecord, magic: Magic) -> Message {
+    Message {
+        magic,
+        attributes: 0,
+        timestamp: match magic {
+            Magic::V0 => None,
+            Magic::V1 => Some(record.timestamp.unwrap_or(-1)),
+        },
+        key: record.key,
+        value: record.value,
+    }
+}
+
 /// Encode a flat `MessageSet` of magic `magic` into `buf`.
 ///
 /// This function writes one outer message per record. Use it to emit an
@@ -27,18 +40,10 @@ pub fn encode_flat_message_set<B: BufMut, I: IntoIterator<Item = ParsedRecord>>(
     buf: &mut B,
 ) {
     for r in records {
-        let msg = Message {
-            magic,
-            attributes: 0,
-            timestamp: match magic {
-                Magic::V0 => None,
-                Magic::V1 => Some(r.timestamp.unwrap_or(-1)),
-            },
-            key: r.key,
-            value: r.value,
-        };
+        let offset = r.offset;
+        let msg = message_for_record(r, magic);
         let msg_len = msg.encoded_len();
-        buf.put_i64(r.offset.0);
+        buf.put_i64(offset.0);
         // Safe: legacy messages are well-bounded; capping at i32::MAX is
         // sufficient for any realistic batch.
         buf.put_i32(i32::try_from(msg_len).unwrap_or(i32::MAX));
@@ -84,16 +89,7 @@ pub fn encode_compressed_message_set<B: BufMut>(
             // v1: relative 0..count-1
             Magic::V1 => i64::try_from(i).unwrap_or(i64::MAX),
         };
-        let msg = Message {
-            magic,
-            attributes: 0,
-            timestamp: match magic {
-                Magic::V0 => None,
-                Magic::V1 => Some(r.timestamp.unwrap_or(-1)),
-            },
-            key: r.key.clone(),
-            value: r.value.clone(),
-        };
+        let msg = message_for_record(r.clone(), magic);
         let msg_len = msg.encoded_len();
         inner.put_i64(inner_offset);
         inner.put_i32(i32::try_from(msg_len).unwrap_or(i32::MAX));
@@ -183,8 +179,7 @@ mod tests {
         }];
         let mut buf = BytesMut::new();
         encode_flat_message_set(recs, Magic::V1, &mut buf);
-        let mut cur: &[u8] = &buf[..];
-        let decoded = decode_message_set(&mut cur, buf.len()).unwrap();
+        let decoded = crate::set::test_support::decode_bytes(&buf);
         assert2::assert!(
             decoded
                 == vec![ParsedRecord {
@@ -206,8 +201,8 @@ mod tests {
             key: None,
             value: Some(Bytes::from_static(b"v")),
         }];
-        let mut buf = BytesMut::new();
-        encode_compressed_message_set(&recs, Magic::V1, CompressionType::Gzip, &mut buf).unwrap();
+        let buf =
+            crate::set::test_support::compressed_bytes(&recs, Magic::V1, CompressionType::Gzip);
 
         // Inspect the raw wrapper message's own timestamp before unwrapping.
         let mut cur: &[u8] = &buf[..];
@@ -215,8 +210,7 @@ mod tests {
         let wrapper_size = usize::try_from(cur.get_i32()).unwrap();
         let wrapper = Message::decode_from(&mut cur, wrapper_size).unwrap();
         // The inner record's timestamp survives the unwrap as -1.
-        let mut c2: &[u8] = &buf[..];
-        let decoded = decode_message_set(&mut c2, buf.len()).unwrap();
+        let decoded = crate::set::test_support::decode_bytes(&buf);
         assert2::assert!(wrapper.timestamp == Some(-1));
         assert2::assert!(decoded[0].timestamp == Some(-1));
     }

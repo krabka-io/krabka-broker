@@ -140,9 +140,11 @@ mod tests {
     use assert2::assert;
 
     use super::*;
-    use crate::coordinator::unified::streams::persistence::{
-        KEY_STREAMS_GROUP_METADATA, KEY_STREAMS_TARGET_ASSIGNMENT_METADATA, StreamsGroupKey,
-        encode_group_metadata_key, encode_target_assignment_metadata_key, parse_streams_key,
+    use crate::coordinator::unified::{
+        streams::persistence::{
+            KEY_STREAMS_GROUP_METADATA, KEY_STREAMS_TARGET_ASSIGNMENT_METADATA, StreamsGroupKey,
+            encode_group_metadata_key, encode_target_assignment_metadata_key, parse_streams_key,
+        },
         test_support::peek_version,
     };
 

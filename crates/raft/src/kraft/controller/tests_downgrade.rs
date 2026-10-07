@@ -3,71 +3,47 @@
 //! boundary, and a restart finishes it before the image is exposed.
 
 use assert2::assert;
+use krabka_metadata::{FeatureLevelRecord, MetadataRecord};
 
 use super::*;
-use crate::kraft::{
-    controller::{
-        checkpoint::{load_latest_checkpoint, write_checkpoint},
-        recovery::replay_committed,
-        test_support::{
-            TEST_ELECTION_TIMEOUT, build_engine_only, elect_single_voter_engine, test_metadata_log,
-            topic_record, voter_set,
-        },
+use crate::kraft::controller::{
+    checkpoint::{load_latest_checkpoint, write_checkpoint},
+    recovery::replay_committed,
+    test_support::{
+        build_engine_only, elect_single_voter_engine, open_test_controller, topic_record, voter_set,
     },
-    transport::NullPeerSender,
 };
 
+fn metadata_version_update(level: i16) -> Vec<MetadataRecord> {
+    vec![MetadataRecord::V1FeatureLevel(FeatureLevelRecord {
+        name: krabka_metadata::metadata_version::METADATA_VERSION_FEATURE.into(),
+        level,
+    })]
+}
+
 fn reopen_single_voter(data_dir: std::path::PathBuf) -> Result<KraftController, RaftError> {
-    KraftController::open(
-        data_dir,
-        NodeId(1),
-        uuid::Uuid::nil(),
-        uuid::Uuid::nil(),
-        voter_set(&[NodeId(1)]),
-        TEST_ELECTION_TIMEOUT,
-        None,
-        ControllerFetchMissLimit::default(),
-        MetadataRaftCommandQueueCapacity::default(),
-        MetadataRaftFetchMax::default(),
-        Arc::new(NullPeerSender),
-        0,
-        krabka_units::prelude::bytes(0),
-        krabka_units::prelude::millis(0),
-        MetadataSnapshotFetchMax::default(),
-        test_metadata_log(),
-        crate::kraft::Activation::default(),
-    )
+    open_test_controller(data_dir, uuid::Uuid::nil(), voter_set(&[NodeId(1)]))
 }
 
 fn uncheckpointed_downgrade() -> (Engine, tempfile::TempDir) {
-    use krabka_metadata::{FeatureLevelRecord, MetadataRecord};
     let (mut engine, dir) = build_engine_only(NodeId(1), &[NodeId(1)]);
     elect_single_voter_engine(&mut engine);
-    let update = |level| {
-        vec![MetadataRecord::V1FeatureLevel(FeatureLevelRecord {
-            name: krabka_metadata::metadata_version::METADATA_VERSION_FEATURE.into(),
-            level,
-        })]
-    };
-    let (reply, mut rx) = oneshot::channel();
-    engine.on_submit_change(&update(25), reply);
+
+    let mut rx = super::test_support::submit_on_engine(&mut engine, &metadata_version_update(25));
     assert2::assert!(matches!(rx.try_recv(), Ok(Ok(_))));
     engine.downgrade_snapshot_failures_remaining = usize::MAX;
-    let (reply, mut rx) = oneshot::channel();
-    engine.on_submit_change(&update(16), reply);
+    let mut rx = super::test_support::submit_on_engine(&mut engine, &metadata_version_update(16));
     assert2::assert!(matches!(rx.try_recv(), Ok(Ok(_))));
     (engine, dir)
 }
 
 #[test]
 fn metadata_version_downgrade_retries_mandatory_snapshot_and_prune() {
-    use krabka_metadata::{FeatureLevelRecord, MetadataRecord};
-
     let (mut engine, _dir) = build_engine_only(NodeId(1), &[NodeId(1)]);
     let published_image = engine.image_tx.subscribe();
     elect_single_voter_engine(&mut engine);
-    let (reply, mut rx) = oneshot::channel();
-    engine.on_submit_change(&topic_record("snapshot-reload"), reply);
+    let mut rx =
+        super::test_support::submit_on_engine(&mut engine, &topic_record("snapshot-reload"));
     assert2::assert!(matches!(rx.try_recv(), Ok(Ok(_))));
     // Plant an in-memory-only sentinel in a TopicRecord field that the
     // KIP-631 wire shape does not carry. Snapshot decode reconstructs RF
@@ -84,20 +60,13 @@ fn metadata_version_downgrade_retries_mandatory_snapshot_and_prune() {
             .replication_factor
             == 99
     );
-    let update = |level| {
-        vec![MetadataRecord::V1FeatureLevel(FeatureLevelRecord {
-            name: krabka_metadata::metadata_version::METADATA_VERSION_FEATURE.into(),
-            level,
-        })]
-    };
-    let (reply, mut rx) = oneshot::channel();
-    engine.on_submit_change(&update(25), reply);
+
+    let mut rx = super::test_support::submit_on_engine(&mut engine, &metadata_version_update(25));
     assert2::assert!(matches!(rx.try_recv(), Ok(Ok(_))));
     assert2::assert!(engine.latest_snapshot_id().is_none());
 
     engine.downgrade_snapshot_failures_remaining = 1;
-    let (reply, mut rx) = oneshot::channel();
-    engine.on_submit_change(&update(16), reply);
+    let mut rx = super::test_support::submit_on_engine(&mut engine, &metadata_version_update(16));
 
     assert2::assert!(matches!(rx.try_recv(), Ok(Ok(_))));
     assert2::assert!(engine.image.finalized_metadata_version() == Some(16));
@@ -118,11 +87,10 @@ fn metadata_version_downgrade_retries_mandatory_snapshot_and_prune() {
     // remain unpublished, and the retry must checkpoint level 16 at its
     // exact boundary before replaying either suffix record.
     engine.downgrade_snapshot_failures_remaining = 2;
-    let (reply, mut rx) = oneshot::channel();
-    engine.on_submit_change(&update(20), reply);
+    let mut rx = super::test_support::submit_on_engine(&mut engine, &metadata_version_update(20));
     assert2::assert!(matches!(rx.try_recv(), Ok(Ok(_))));
-    let (reply, mut rx) = oneshot::channel();
-    engine.on_submit_change(&topic_record("after-downgrade"), reply);
+    let mut rx =
+        super::test_support::submit_on_engine(&mut engine, &topic_record("after-downgrade"));
     assert2::assert!(matches!(rx.try_recv(), Ok(Ok(_))));
     assert2::assert!(engine.image.finalized_metadata_version() == Some(20));
     assert2::assert!(engine.image.topic("after-downgrade").is_some());
@@ -178,25 +146,16 @@ fn metadata_version_downgrade_retries_mandatory_snapshot_and_prune() {
 
 #[tokio::test]
 async fn restart_finishes_downgrade_checkpoint_before_exposing_the_image() {
-    use krabka_metadata::{FeatureLevelRecord, MetadataRecord};
-
     let (mut engine, dir) = build_engine_only(NodeId(1), &[NodeId(1)]);
     let data_dir = dir.path().to_path_buf();
     elect_single_voter_engine(&mut engine);
-    let update = |level| {
-        vec![MetadataRecord::V1FeatureLevel(FeatureLevelRecord {
-            name: krabka_metadata::metadata_version::METADATA_VERSION_FEATURE.into(),
-            level,
-        })]
-    };
 
     for records in [
-        update(25),
-        update(16),
+        metadata_version_update(25),
+        metadata_version_update(16),
         topic_record("committed-after-downgrade"),
     ] {
-        let (reply, mut rx) = oneshot::channel();
-        engine.on_submit_change(&records, reply);
+        let mut rx = super::test_support::submit_on_engine(&mut engine, &records);
         assert2::assert!(matches!(rx.try_recv(), Ok(Ok(_))));
         if engine.image.finalized_metadata_version() == Some(25) {
             engine.downgrade_snapshot_failures_remaining = usize::MAX;

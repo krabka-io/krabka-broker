@@ -40,7 +40,6 @@ use std::sync::Arc;
 
 use krabka_metadata::NodeId;
 use krabka_units::{Time, convert::TimeExt as _};
-use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
 
 use super::{
@@ -99,11 +98,7 @@ pub(crate) async fn sweep(
     retention_ms: i64,
     empty_grace_ms: i64,
 ) -> Vec<(String, ReapOutcome)> {
-    let group_ids: Vec<String> = coordinator
-        .groups
-        .iter()
-        .map(|entry| entry.key().clone())
-        .collect();
+    let group_ids = coordinator.group_ids();
     let mut changed = Vec::new();
     for group_id in group_ids {
         if !sweepable(coordinator, &group_id) || !owned(&group_id) {
@@ -112,21 +107,15 @@ pub(crate) async fn sweep(
         let Some(handle) = coordinator.find(&group_id) else {
             continue;
         };
-        let (reply, outcome) = oneshot::channel();
-        if handle
-            .tx
-            .send(GroupActorMessage::ReapExpiredOffsets {
+        let Ok(outcome) =
+            crate::task_util::ask(&handle.tx, |reply| GroupActorMessage::ReapExpiredOffsets {
                 now_ms,
                 retention_ms,
                 empty_grace_ms,
                 reply,
             })
             .await
-            .is_err()
-        {
-            continue;
-        }
-        let Ok(outcome) = outcome.await else {
+        else {
             continue;
         };
         if outcome.group_deleted {

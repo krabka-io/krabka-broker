@@ -8,8 +8,10 @@
 
 use bytes::Bytes;
 use krabka_log::DeliveryPolicy;
-use krabka_protocol::records::{Record, RecordBatch};
+use krabka_protocol::records::RecordBatch;
 use qubit_clock::{StdWallClock, WallClock as _};
+
+use crate::support::records::value_record;
 
 /// How far ahead of produce time a record that must activate during a case is
 /// stamped.
@@ -90,11 +92,10 @@ pub fn batch_at(delivery_ms: i64, values: &[&str]) -> RecordBatch {
         ..RecordBatch::default()
     };
     for (index, value) in values.iter().enumerate() {
-        batch.records.push(Record {
-            offset_delta: i32::try_from(index).expect("a test batch is small"),
-            value: Some(Bytes::from((*value).to_owned())),
-            ..Record::default()
-        });
+        batch.records.push(value_record(
+            i32::try_from(index).expect("a test batch is small"),
+            Some(Bytes::from((*value).to_owned())),
+        ));
     }
     batch
 }

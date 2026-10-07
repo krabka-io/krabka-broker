@@ -2,10 +2,10 @@
   "profile": [],
   "proofs": {
     "Coma": {
-      "vc_elim_Some": { "prover": "alt-ergo", "time": 0.004 },
+      "vc_elim_Some": { "prover": "alt-ergo", "time": 0.01 },
       "vc_remote_partition_delete_transition": {
         "prover": "alt-ergo",
-        "time": 0.014
+        "time": 0.03
       }
     }
   }

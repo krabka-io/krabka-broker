@@ -9,26 +9,16 @@ use std::time::Duration;
 use krabka_raft::kraft::NodeId;
 use krabka_units::prelude::millis;
 
-use crate::{
-    harness::{STAGGERED_TIMEOUTS, await_single_leader, build_engine},
-    sim_net::SimNet,
-};
+use crate::harness::{STAGGERED_TIMEOUTS, await_single_leader, build_engine, start_engines};
 
 /// 1. Three engines elect exactly one leader and agree on the epoch.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn three_engines_elect_one_leader() {
-    let net = SimNet::new();
-    let ids = [NodeId(1), NodeId(2), NodeId(3)];
+    let (net, ids) = crate::harness::three_voter_network();
     let cid = uuid::Uuid::from_u128(100);
 
     // Staggered election timeouts so one node reliably wins the first round.
-    let timeouts = STAGGERED_TIMEOUTS;
-    let mut dirs = Vec::new();
-    for (i, &id) in ids.iter().enumerate() {
-        let (ctrl, dir) = build_engine(id, &ids, cid, timeouts[i], &net);
-        net.register(id, ctrl);
-        dirs.push(dir);
-    }
+    let _dirs = start_engines(&net, &ids, cid, &STAGGERED_TIMEOUTS);
 
     let (leader, epoch) = await_single_leader(&net, &ids, Duration::from_secs(10)).await;
     assert2::assert!(epoch >= 1);
@@ -59,8 +49,7 @@ async fn three_engines_elect_one_leader() {
 ///     The mixed JVM and Krabka quorum did, because the JVM boots slowly.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn bare_majority_two_of_three_elects_with_uniform_timeouts() {
-    let net = SimNet::new();
-    let ids = [NodeId(1), NodeId(2), NodeId(3)];
+    let (net, ids) = crate::harness::three_voter_network();
     let cid = uuid::Uuid::from_u128(150);
 
     // UNIFORM timeout for both live voters (no manual stagger) — the production

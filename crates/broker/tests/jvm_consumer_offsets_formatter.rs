@@ -68,7 +68,7 @@ mod support;
 use std::process::Command;
 
 use assert2::assert;
-use krabka_broker::{Broker, BrokerConfig, BrokerHandle};
+use krabka_broker::BrokerHandle;
 
 /// The pinned release whose tools decode the topic.
 const KAFKA_IMAGE: &str = "mirror.gcr.io/apache/kafka:4.3.1";
@@ -368,29 +368,8 @@ impl Cluster {
     async fn start() -> Self {
         support::init_tracing();
         let dir = tempfile::tempdir().expect("log dir");
-        // Hold both listeners until `start_with_listeners` adopts them, so a
-        // concurrent test binary cannot take the port in between.
-        let data_plane = tokio::net::TcpListener::bind("0.0.0.0:0")
-            .await
-            .expect("bind data plane");
-        let controller = tokio::net::TcpListener::bind("127.0.0.1:0")
-            .await
-            .expect("bind controller");
-        let port = data_plane.local_addr().expect("data plane addr").port();
-        // The containers reach the broker through this name, and CI maps it to
-        // loopback in `/etc/hosts` so the broker's own advertised endpoint
-        // resolves too.
-        let bootstrap = format!("host.docker.internal:{port}");
-        let controller_addr = controller.local_addr().expect("controller addr");
-        let mut config = BrokerConfig::for_tests(dir.path().to_path_buf());
-        config.listen_addr = data_plane.local_addr().expect("data plane addr");
-        config.advertised_listener = bootstrap.clone();
-        config.controller_listen_addr = controller_addr;
-        config.controller_quorum_voters = vec![(config.node_id, controller_addr.to_string())];
-        let handle = Broker::start_with_listeners(config, Some(controller), [data_plane])
-            .await
-            .expect("broker start");
-        handle.wait_until_controller_leader().await;
+        // Adopt bound listeners so concurrent test binaries cannot take the ports.
+        let (handle, bootstrap) = support::start_jvm_bound(dir.path().to_path_buf(), |_| {}).await;
 
         let cluster = Self {
             handle,

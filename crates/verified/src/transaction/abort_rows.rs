@@ -7,8 +7,7 @@ use creusot_std::prelude::*;
     ==> exists<j: Int> 0 <= j && j < rows@.len() && result@[i] == rows@[j])]
 #[ensures(forall<i: Int> 0 <= i && i < rows@.len()
     ==> exists<j: Int> 0 <= j && j < result@.len() && rows@[i] == result@[j])]
-#[ensures(forall<i: Int, j: Int> 0 <= i && i < j && j < result@.len()
-    ==> result@[i] != result@[j])]
+#[ensures(crate::sequence::distinct(result@))]
 #[must_use]
 pub fn unique_aborted_transaction_rows(rows: &[(i64, i64)]) -> Vec<(i64, i64)> {
     let mut selected: Vec<(i64, i64)> = Vec::new();
@@ -18,8 +17,7 @@ pub fn unique_aborted_transaction_rows(rows: &[(i64, i64)]) -> Vec<(i64, i64)> {
         ==> exists<j: Int> 0 <= j && j < index@ && selected@[i] == rows@[j])]
     #[invariant(forall<i: Int> 0 <= i && i < index@
         ==> exists<j: Int> 0 <= j && j < selected@.len() && rows@[i] == selected@[j])]
-    #[invariant(forall<i: Int, j: Int> 0 <= i && i < j && j < selected@.len()
-        ==> selected@[i] != selected@[j])]
+    #[invariant(crate::sequence::distinct(selected@))]
     #[variant(rows@.len() - index@)]
     while index < rows.len() {
         let row = rows[index];

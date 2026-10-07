@@ -3,7 +3,6 @@
 //! built over a temporary log dir.
 
 use std::{
-    net::SocketAddr,
     path::PathBuf,
     sync::{
         Arc,
@@ -17,6 +16,7 @@ use krabka_metadata::{
     BrokerEndpoint, BrokerRegistrationRecord, MetadataImage, MetadataRecord, PartitionRecord,
     TopicRecord,
 };
+use krabka_protocol::owned::assign_replicas_to_dirs_request::AssignReplicasToDirsRequest;
 use krabka_raft::NodeId;
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
@@ -25,23 +25,12 @@ use super::{
     ReplicatorSupervisor, ReplicatorSupervisorConfig, dir_assignments::AssignDirsReporter,
     materialize::MaterializePartitionConfig,
 };
+pub(super) use crate::test_support::await_until;
 use crate::{
-    config::ReplicationRuntimeConfig, partition_registry::PartitionRegistry,
-    test_support::FakeMetadataSource, throttle::ThrottleState,
+    config::ReplicationRuntimeConfig, metadata_source::MetadataSource,
+    partition_registry::PartitionRegistry, test_support::FakeMetadataSource,
+    throttle::ThrottleState,
 };
-
-/// Yield-poll until `cond` holds, with a bounded hang-guard. A real
-/// stall then fails the test deterministically instead of spinning
-/// forever.
-pub(super) async fn await_until(what: &str, mut cond: impl FnMut() -> bool) {
-    for _ in 0..200_000 {
-        if cond() {
-            return;
-        }
-        tokio::task::yield_now().await;
-    }
-    panic!("condition never held: {what}");
-}
 
 pub(super) fn image_with(records: &[MetadataRecord]) -> MetadataImage {
     let mut img = MetadataImage::new(Uuid::nil());
@@ -74,6 +63,24 @@ pub(super) fn single_partition_image(topic: &str, topic_id: Uuid, leader: NodeId
         topic_record_with_id(topic, topic_id, 1, 1),
         partition_record(topic, 0, leader, vec![leader], 0),
     ])
+}
+
+/// One rf=3 topic and its partition, with the caller's exact replica list and epoch.
+pub(super) fn replicated_partition_image(
+    topic: &str,
+    leader: NodeId,
+    replicas: &[NodeId],
+    epoch: i32,
+) -> MetadataImage {
+    image_with(&[
+        topic_record(topic, 1),
+        partition_record(topic, 0, leader, replicas.to_vec(), epoch),
+    ])
+}
+
+/// The supervisor tests' rf=3 topic, with all three brokers as replicas.
+pub(super) fn three_replica_image(leader: NodeId, epoch: i32) -> MetadataImage {
+    replicated_partition_image("t", leader, &[NodeId(1), NodeId(2), NodeId(3)], epoch)
 }
 
 pub(super) fn follower_promotion_images() -> (MetadataImage, MetadataImage) {
@@ -111,15 +118,41 @@ impl MaterializeFixture {
             log_config,
             log_dir_status: &self.log_dir_status,
             producer_state: &self.producer_state,
-            max_produce_group: 1_024,
-            partition_writer_queue_depth: 64,
-            diskless_wal_local_replica_count: 3,
-            diskless: false,
-            hot_tail: None,
-            wal_shards: None,
-            sequencer: None,
+            runtime: crate::partition::PartitionRuntimeConfig::new(
+                (1_024, 64, 3),
+                false,
+                (None, None, None),
+            ),
         }
     }
+
+    pub(super) fn materialize(
+        &self,
+        partitions: &PartitionRegistry,
+        topic: &str,
+        log_dirs: &[PathBuf],
+        log_config: &LogConfig,
+        context: &str,
+    ) {
+        super::materialize::materialize_partition(
+            self.config(partitions, topic, log_dirs, log_config),
+        )
+        .expect(context);
+    }
+}
+
+/// Materialize `t-0` with the usual config, retaining its directory and registry.
+pub(super) fn materialized_partition() -> (tempfile::TempDir, Arc<PartitionRegistry>) {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let partitions = Arc::new(PartitionRegistry::new());
+    MaterializeFixture::default().materialize(
+        &partitions,
+        "t",
+        &[dir.path().to_path_buf()],
+        &LogConfig::default(),
+        "materialize",
+    );
+    (dir, partitions)
 }
 
 pub(super) fn partition_record(
@@ -161,10 +194,7 @@ pub(super) fn broker_record(node_id: NodeId) -> BrokerRegistrationRecord {
 /// loopback controller listener for the assign-dirs reporter to resolve
 /// against.
 pub(super) fn static_source(image: MetadataImage) -> FakeMetadataSource {
-    FakeMetadataSource::builder()
-        .image(image)
-        .controller_bound_addr(SocketAddr::from(([127, 0, 0, 1], 0)))
-        .build()
+    FakeMetadataSource::static_image(image)
 }
 
 #[derive(Default)]
@@ -176,9 +206,9 @@ pub(super) struct CountingAssignDirsReporter {
 impl AssignDirsReporter for CountingAssignDirsReporter {
     async fn send(
         &self,
-        _controller: &Arc<dyn crate::metadata_source::MetadataSource>,
+        _controller: &Arc<dyn MetadataSource>,
         _client_id: &str,
-        req: krabka_protocol::owned::assign_replicas_to_dirs_request::AssignReplicasToDirsRequest,
+        req: AssignReplicasToDirsRequest,
     ) -> Result<(), String> {
         assert!(!req.directories.is_empty());
         self.calls.fetch_add(1, Ordering::SeqCst);
@@ -186,14 +216,34 @@ impl AssignDirsReporter for CountingAssignDirsReporter {
     }
 }
 
-pub(super) fn supervisor_fixture(
-    image: MetadataImage,
-) -> (
+pub(super) type SupervisorFixture = (
     ReplicatorSupervisor,
     Arc<PartitionRegistry>,
     Arc<CountingAssignDirsReporter>,
     tempfile::TempDir,
-) {
+);
+
+/// Reconcile once and retrieve `t-0`, retaining every supervisor fixture guard.
+pub(super) async fn reconciled_partition(
+    image: &MetadataImage,
+    context: &str,
+) -> (SupervisorFixture, Arc<crate::partition::Partition>) {
+    let fixture = reconciled_supervisor(image).await;
+    let partition = fixture
+        .1
+        .get("t", krabka_ids::PartitionIndex(0))
+        .expect(context);
+    (fixture, partition)
+}
+
+/// A supervisor fixture after the first metadata reconciliation, with every guard retained.
+pub(super) async fn reconciled_supervisor(image: &MetadataImage) -> SupervisorFixture {
+    let fixture = supervisor_fixture(image.clone());
+    fixture.0.reconcile(image).await;
+    fixture
+}
+
+pub(super) fn supervisor_fixture(image: MetadataImage) -> SupervisorFixture {
     let dir = tempfile::tempdir().expect("tempdir");
     let partitions = Arc::new(PartitionRegistry::new());
     let reporter = Arc::new(CountingAssignDirsReporter::default());

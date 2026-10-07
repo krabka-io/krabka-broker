@@ -1,17 +1,17 @@
-(* #"/workspace/crates/verified/src/quorum_state.rs" 115 0 122 28 *)
+(* #"/workspace/crates/verified/src/quorum_state.rs" 114 0 121 28 *)
 
 let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
-let%span squorum_state = "/workspace/crates/verified/src/quorum_state.rs" 123 24 123 25
-let%span squorum_state'0 = "/workspace/crates/verified/src/quorum_state.rs" 123 45 123 46
-let%span squorum_state'1 = "/workspace/crates/verified/src/quorum_state.rs" 124 26 124 27
-let%span squorum_state'2 = "/workspace/crates/verified/src/quorum_state.rs" 125 22 125 24
-let%span squorum_state'3 = "/workspace/crates/verified/src/quorum_state.rs" 127 28 127 29
-let%span squorum_state'4 = "/workspace/crates/verified/src/quorum_state.rs" 128 28 128 29
-let%span squorum_state'5 = "/workspace/crates/verified/src/quorum_state.rs" 128 45 128 47
-let%span squorum_state'6 = "/workspace/crates/verified/src/quorum_state.rs" 131 26 131 28
-let%span squorum_state'7 = "/workspace/crates/verified/src/quorum_state.rs" 92 10 99 1
-let%span squorum_state'8 = "/workspace/crates/verified/src/quorum_state.rs" 100 10 106 1
-let%span squorum_state'9 = "/workspace/crates/verified/src/quorum_state.rs" 107 10 113 1
+let%span squorum_state = "/workspace/crates/verified/src/quorum_state.rs" 122 24 122 25
+let%span squorum_state'0 = "/workspace/crates/verified/src/quorum_state.rs" 122 45 122 46
+let%span squorum_state'1 = "/workspace/crates/verified/src/quorum_state.rs" 123 26 123 27
+let%span squorum_state'2 = "/workspace/crates/verified/src/quorum_state.rs" 124 22 124 24
+let%span squorum_state'3 = "/workspace/crates/verified/src/quorum_state.rs" 126 28 126 29
+let%span squorum_state'4 = "/workspace/crates/verified/src/quorum_state.rs" 127 28 127 29
+let%span squorum_state'5 = "/workspace/crates/verified/src/quorum_state.rs" 127 45 127 47
+let%span squorum_state'6 = "/workspace/crates/verified/src/quorum_state.rs" 130 26 130 28
+let%span squorum_state'7 = "/workspace/crates/verified/src/quorum_state.rs" 91 10 98 1
+let%span squorum_state'8 = "/workspace/crates/verified/src/quorum_state.rs" 99 10 105 1
+let%span squorum_state'9 = "/workspace/crates/verified/src/quorum_state.rs" 106 10 112 1
 
 use creusot.int.Int32
 use creusot.prelude.Any
@@ -27,7 +27,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let quorum_state_load_decision [#"/workspace/crates/verified/src/quorum_state.rs" 115 0 122 28] (data_version: Int32.t)
+let quorum_state_load_decision [#"/workspace/crates/verified/src/quorum_state.rs" 114 0 121 28] (data_version: Int32.t)
   (leader_epoch: Int32.t) (voted_id: Int32.t) (version_fields_valid: bool) (voted_directory_valid: bool)
   (voted_directory_nil: bool) (return (x: t_QuorumStateLoadDecision)) = (! bb0
   [ bb0 = s0

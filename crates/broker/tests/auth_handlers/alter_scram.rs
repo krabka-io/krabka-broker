@@ -9,21 +9,12 @@
 use std::{io, net::SocketAddr};
 
 use assert2::{assert, check};
-use bytes::BytesMut;
-use krabka_broker::{Broker, authorizer::SimpleAclAuthorizer};
-use krabka_protocol::{
-    Decode, Encode,
-    owned::{
-        alter_user_scram_credentials_request::{
-            AlterUserScramCredentialsRequest, ScramCredentialUpsertion,
-        },
-        alter_user_scram_credentials_response::AlterUserScramCredentialsResponse,
-        api_versions_request::ApiVersionsRequest,
-        sasl_authenticate_request::SaslAuthenticateRequest,
-        sasl_authenticate_response::SaslAuthenticateResponse,
-        sasl_handshake_request::SaslHandshakeRequest,
-        sasl_handshake_response::SaslHandshakeResponse,
-    },
+use krabka_broker::Broker;
+use krabka_protocol::owned::{
+    alter_user_scram_credentials_request::AlterUserScramCredentialsRequest,
+    alter_user_scram_credentials_response::AlterUserScramCredentialsResponse,
+    api_versions_request::ApiVersionsRequest, sasl_authenticate_request::SaslAuthenticateRequest,
+    sasl_authenticate_response::SaslAuthenticateResponse,
 };
 use krabka_security::SaslMechanism;
 use tokio::net::TcpStream;
@@ -31,6 +22,7 @@ use tokio::net::TcpStream;
 use crate::{
     harness::{admin_plain_password, alice_password, round_trip, wrong_scram_password},
     scram::drive_sasl_scram_session,
+    support::sasl::scram_upsertion,
 };
 
 /// SCRAM mechanism byte on the `AlterUserScramCredentials` wire, from
@@ -50,34 +42,13 @@ pub const KAFKA_MAX_SCRAM_ITERATIONS: i32 = 16_384;
 /// that the upsertion wrote a valid credential to the metadata image.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn alter_scram_creds_super_user_can_provision() {
-    let log_dir = tempfile::tempdir().unwrap();
-    let (handle, addr) = crate::harness::start_scram_admin(
-        log_dir.path(),
-        &admin_plain_password(),
-        vec![SaslMechanism::Plain, SaslMechanism::ScramSha512],
-    )
-    .await;
+    let (_log_dir, handle, addr) =
+        crate::harness::scram_admin_fixture(vec![SaslMechanism::Plain, SaslMechanism::ScramSha512])
+            .await;
 
-    let (salt, salted) = pbkdf2_salt_and_salted(alice_password().as_bytes(), 4096);
-    let req = AlterUserScramCredentialsRequest {
-        upsertions: vec![ScramCredentialUpsertion {
-            name: "alice".to_string(),
-            mechanism: WIRE_MECH_SCRAM_SHA_512,
-            iterations: 4096,
-            salt: bytes::Bytes::from(salt),
-            salted_password: bytes::Bytes::from(salted.to_vec()),
-            ..Default::default()
-        }],
-        ..Default::default()
-    };
-    let resp = drive_alter_user_scram_credentials_as_plain(
-        addr,
-        "admin",
-        admin_plain_password().as_bytes(),
-        req,
-    )
-    .await
-    .expect("PLAIN auth + AUSCR upsertion");
+    let req = alice_sha512_request();
+    let resp =
+        crate::alter_scram::provision_as_admin(addr, req, "PLAIN auth + AUSCR upsertion").await;
     assert!(resp.results.len() == 1, "one result row per upsertion");
     check!(
         resp.results[0].error_code == 0,
@@ -89,15 +60,7 @@ async fn alter_scram_creds_super_user_can_provision() {
     // Round-trip: now log in as `alice` over SCRAM, proving the upserted
     // credential actually reached the metadata image. Wait for the raft
     // commit to land the credential in the committed image, then auth.
-    handle
-        .wait_for_image(|img| {
-            img.scram_credential("alice", SaslMechanism::ScramSha512)
-                .is_some()
-        })
-        .await;
-    let result =
-        drive_sasl_scram_session(addr, "alice", &alice_password(), SaslMechanism::ScramSha512)
-            .await;
+    let result = post_upsertion_auth(&handle, addr, SaslMechanism::ScramSha512).await;
     handle.shutdown().await;
     result.expect("post-upsertion SCRAM auth must succeed");
 }
@@ -110,34 +73,26 @@ async fn alter_scram_creds_super_user_can_provision() {
 /// uses the SHA-256 wire byte and a 32-byte `salted_password` payload.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn alter_scram_creds_super_user_can_provision_sha256() {
-    let log_dir = tempfile::tempdir().unwrap();
-    let (handle, addr) = crate::harness::start_scram_admin(
-        log_dir.path(),
-        &admin_plain_password(),
-        vec![SaslMechanism::Plain, SaslMechanism::ScramSha256],
-    )
-    .await;
+    let (_log_dir, handle, addr) =
+        crate::harness::scram_admin_fixture(vec![SaslMechanism::Plain, SaslMechanism::ScramSha256])
+            .await;
 
     let (salt, salted) = pbkdf2_salt_and_salted_sha256(alice_password().as_bytes(), 4096);
     let req = AlterUserScramCredentialsRequest {
-        upsertions: vec![ScramCredentialUpsertion {
-            name: "alice".to_string(),
-            mechanism: WIRE_MECH_SCRAM_SHA_256,
-            iterations: 4096,
-            salt: bytes::Bytes::from(salt),
-            salted_password: bytes::Bytes::from(salted.to_vec()),
-            ..Default::default()
-        }],
+        upsertions: vec![scram_upsertion(
+            "alice".to_string(),
+            WIRE_MECH_SCRAM_SHA_256,
+            4096,
+            (
+                bytes::Bytes::from(salt),
+                bytes::Bytes::from(salted.to_vec()),
+            ),
+        )],
         ..Default::default()
     };
-    let resp = drive_alter_user_scram_credentials_as_plain(
-        addr,
-        "admin",
-        admin_plain_password().as_bytes(),
-        req,
-    )
-    .await
-    .expect("PLAIN auth + AUSCR upsertion (SHA-256)");
+    let resp =
+        crate::alter_scram::provision_as_admin(addr, req, "PLAIN auth + AUSCR upsertion (SHA-256)")
+            .await;
     assert!(resp.results.len() == 1);
     check!(
         resp.results[0].error_code == 0,
@@ -148,15 +103,7 @@ async fn alter_scram_creds_super_user_can_provision_sha256() {
 
     // Wait for the upserted credential to reach the committed metadata
     // image, then authenticate as `alice` over SHA-256 SCRAM.
-    handle
-        .wait_for_image(|img| {
-            img.scram_credential("alice", SaslMechanism::ScramSha256)
-                .is_some()
-        })
-        .await;
-    let result =
-        drive_sasl_scram_session(addr, "alice", &alice_password(), SaslMechanism::ScramSha256)
-            .await;
+    let result = post_upsertion_auth(&handle, addr, SaslMechanism::ScramSha256).await;
     handle.shutdown().await;
     result.expect("post-upsertion SHA-256 SCRAM auth must succeed");
 }
@@ -168,32 +115,19 @@ async fn alter_scram_creds_super_user_can_provision_sha256() {
 /// broker makes no metadata change.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn alter_scram_creds_non_super_user_rejected() {
-    let log_dir = tempfile::tempdir().unwrap();
-    let mut cfg = crate::support::sasl_plaintext_config(log_dir.path().to_path_buf());
-    cfg.enabled_sasl_mechanisms = vec![SaslMechanism::Plain];
+    let (_log_dir, mut cfg) = crate::support::sasl::sasl_temp_config(vec![SaslMechanism::Plain]);
     cfg.plain_credentials
         .insert("bob".to_string(), wrong_scram_password());
     cfg.super_users = maplit::hashset! {"admin".to_string()};
     // Install `SimpleAclAuthorizer` so the cluster-Alter gate
     // fires for non-super principals; the default `AllowAllAuthorizer`
     // would let alice through.
-    cfg.authorizer = std::sync::Arc::new(SimpleAclAuthorizer::new(cfg.super_users.clone()));
+    crate::support::acl::use_simple_acl_authorizer(&mut cfg);
 
     let handle = Broker::start(cfg).await.expect("broker must start");
     let addr = handle.listen_addr();
 
-    let (salt, salted) = pbkdf2_salt_and_salted(alice_password().as_bytes(), 4096);
-    let req = AlterUserScramCredentialsRequest {
-        upsertions: vec![ScramCredentialUpsertion {
-            name: "alice".to_string(),
-            mechanism: WIRE_MECH_SCRAM_SHA_512,
-            iterations: 4096,
-            salt: bytes::Bytes::from(salt),
-            salted_password: bytes::Bytes::from(salted.to_vec()),
-            ..Default::default()
-        }],
-        ..Default::default()
-    };
+    let req = alice_sha512_request();
     let resp = drive_alter_user_scram_credentials_as_plain(
         addr,
         "bob",
@@ -226,50 +160,27 @@ pub async fn drive_alter_user_scram_credentials_as_plain(
 
     // ── 1. ApiVersions (v0, non-flexible).
     let av_req = ApiVersionsRequest::default();
-    let mut av_body = BytesMut::new();
-    av_req
-        .encode(&mut av_body, 0)
-        .map_err(|e| io::Error::other(format!("ApiVersions encode: {e}")))?;
+    let av_body = crate::kafka_wire::encode_named(&av_req, 0, "ApiVersions")?;
     let _ = round_trip(&mut stream, 18, 0, 1, false, &av_body).await?;
 
     // ── 2. SaslHandshake v1.
-    let sh_resp: SaslHandshakeResponse = crate::kafka_wire::exchange(
-        &mut stream,
-        &SaslHandshakeRequest {
-            mechanism: "PLAIN".to_string(),
-            ..Default::default()
-        },
-        17,
-        1,
-        2,
-        "krabka-sasl-test",
-        false,
-    )
-    .await?;
-    if sh_resp.error_code != 0 {
-        return Err(io::Error::other(format!(
-            "SaslHandshake failed: error_code={}",
-            sh_resp.error_code
-        )));
-    }
+    crate::kafka_wire::sasl_handshake_on(&mut stream, "krabka-sasl-test", 2, "PLAIN").await?;
 
     // ── 3. SaslAuthenticate v2 (flexible). auth_bytes = \0user\0password.
-    let mut payload = Vec::with_capacity(2 + user.len() + password.len());
-    payload.push(0);
-    payload.extend_from_slice(user.as_bytes());
-    payload.push(0);
-    payload.extend_from_slice(password);
-    let mut auth_body = BytesMut::new();
-    SaslAuthenticateRequest {
-        auth_bytes: bytes::Bytes::from(payload),
-        ..Default::default()
-    }
-    .encode(&mut auth_body, 2)
-    .map_err(|e| io::Error::other(format!("SaslAuthenticate encode: {e}")))?;
+    let auth_body = crate::kafka_wire::encode_named(
+        &SaslAuthenticateRequest {
+            auth_bytes: crate::kafka_wire::plain_payload(user, password),
+            ..Default::default()
+        },
+        2,
+        "SaslAuthenticate",
+    )?;
     let auth_resp_bytes = round_trip(&mut stream, 36, 2, 3, true, &auth_body).await?;
-    let mut cur: &[u8] = &auth_resp_bytes;
-    let auth_resp = SaslAuthenticateResponse::decode(&mut cur, 2)
-        .map_err(|e| io::Error::other(format!("SaslAuthenticate decode: {e}")))?;
+    let auth_resp = crate::kafka_wire::decode_named::<SaslAuthenticateResponse>(
+        &auth_resp_bytes,
+        2,
+        "SaslAuthenticate",
+    )?;
     if auth_resp.error_code != 0 {
         return Err(io::Error::other(format!(
             "SaslAuthenticate failed: error_code={}",
@@ -278,13 +189,13 @@ pub async fn drive_alter_user_scram_credentials_as_plain(
     }
 
     // ── 4. AlterUserScramCredentials v0 (api_key 51, flexible from v0).
-    let mut auscr_body = BytesMut::new();
-    req.encode(&mut auscr_body, 0)
-        .map_err(|e| io::Error::other(format!("AUSCR encode: {e}")))?;
+    let auscr_body = crate::kafka_wire::encode_named(&req, 0, "AUSCR")?;
     let auscr_resp_bytes = round_trip(&mut stream, 51, 0, 4, true, &auscr_body).await?;
-    let mut cur: &[u8] = &auscr_resp_bytes;
-    AlterUserScramCredentialsResponse::decode(&mut cur, 0)
-        .map_err(|e| io::Error::other(format!("AUSCR decode: {e}")))
+    crate::kafka_wire::decode_named::<AlterUserScramCredentialsResponse>(
+        &auscr_resp_bytes,
+        0,
+        "AUSCR",
+    )
 }
 
 /// Compute `(salt, salted_password)` for a SCRAM-SHA-512 wire upsertion.
@@ -307,4 +218,48 @@ fn pbkdf2_salt_and_salted_sha256(password: &[u8], iterations: u32) -> (Vec<u8>, 
     let salted: [u8; 32] =
         pbkdf2::pbkdf2_hmac_array::<sha2::Sha256, 32>(password, &salt, iterations);
     (salt, salted)
+}
+
+/// The same deterministic Alice credential for the allow and deny provisioning paths.
+fn alice_sha512_request() -> AlterUserScramCredentialsRequest {
+    let (salt, salted) = pbkdf2_salt_and_salted(alice_password().as_bytes(), 4096);
+    AlterUserScramCredentialsRequest {
+        upsertions: vec![scram_upsertion(
+            "alice".to_string(),
+            WIRE_MECH_SCRAM_SHA_512,
+            4096,
+            (
+                bytes::Bytes::from(salt),
+                bytes::Bytes::from(salted.to_vec()),
+            ),
+        )],
+        ..Default::default()
+    }
+}
+
+/// Send an upsertion as the fixture's PLAIN super-user.
+pub async fn provision_as_admin(
+    addr: SocketAddr,
+    request: AlterUserScramCredentialsRequest,
+    context: &str,
+) -> AlterUserScramCredentialsResponse {
+    drive_alter_user_scram_credentials_as_plain(
+        addr,
+        "admin",
+        admin_plain_password().as_bytes(),
+        request,
+    )
+    .await
+    .expect(context)
+}
+
+async fn post_upsertion_auth(
+    broker: &krabka_broker::BrokerHandle,
+    addr: SocketAddr,
+    mechanism: SaslMechanism,
+) -> io::Result<()> {
+    broker
+        .wait_for_image(|image| image.scram_credential("alice", mechanism).is_some())
+        .await;
+    drive_sasl_scram_session(addr, "alice", &alice_password(), mechanism).await
 }

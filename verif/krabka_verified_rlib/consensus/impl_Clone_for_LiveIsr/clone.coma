@@ -1,4 +1,4 @@
-(* #"/workspace/crates/verified/src/consensus.rs" 40 27 40 32 *)
+(* #"/workspace/crates/verified/src/consensus.rs" 10 19 10 36 *)
 
 (* <consensus::LiveIsr as std::clone::Clone> *)
 
@@ -10,7 +10,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let clone_LiveIsr [#"/workspace/crates/verified/src/consensus.rs" 40 27 40 32] (self: t_LiveIsr)
+let clone_LiveIsr [#"/workspace/crates/verified/src/consensus.rs" 10 19 10 36] (self: t_LiveIsr)
   (return (x: t_LiveIsr)) = (! bb0
   [ bb0 = s0 [ s0 = [ &_ret <- self ] s1 | s1 = return {_ret} ] ]
   [ & _ret: t_LiveIsr = Any.any_l () | & self: t_LiveIsr = self ]) [ return (result: t_LiveIsr) -> (! return {result}) ]

@@ -2,14 +2,10 @@ use creusot_std::prelude::*;
 
 use super::constructed_voter_reconfiguration;
 #[cfg(creusot)]
-use super::spec::single_change_shape;
-#[cfg(creusot)]
 use super::spec::{
-    adjacent_majorities_exceed_union, expected_member, grant_count, has_node, membership_coherent,
-    valid_old,
+    adjacent_majorities_exceed_union, admitted_membership, grant_count, has_node,
+    reconfiguration_admitted, single_change_shape,
 };
-#[cfg(creusot)]
-use crate::reconfiguration::{admitted_plan, may_reconfigure, voter_reconfiguration_rejection};
 use crate::{
     consensus::election_has_quorum,
     reconfiguration::{
@@ -32,15 +28,9 @@ type QuorumOverlap = Option<(
 /// common voter. This is logical single-step overlap, not a durable Raft proof.
 #[requires(context.voter_count@ == old@.len())]
 #[requires(votes@.len() == old@.len() + 1)]
-#[ensures((match result { None => false, Some(_) => true }) == (valid_old(old@)
-    && membership_coherent(old@, node, target.membership, request.kind)
-    && match voter_reconfiguration_rejection(leadership, context, request, target) {
-        None => true, Some(_) => false,
-    }))]
+#[ensures((result != None) == (reconfiguration_admitted(old@, node, leadership, context, request, target)))]
 #[ensures(match result { None => true, Some((plan, next, counts, quorums, common)) =>
-    admitted_plan(context, request.kind, plan) && may_reconfigure(leadership, context)
-    &&
-    next@.len() == plan.next_voter_count@ && next@.len() > 0
+    admitted_membership(context, request.kind, plan, leadership, next@)
     && counts.0@ <= old@.len() && counts.1@ <= next@.len()
     && counts.0@ == grant_count(old@, next@, votes@, node, false, votes@.len())
     && counts.1@ == grant_count(old@, next@, votes@, node, true, votes@.len())

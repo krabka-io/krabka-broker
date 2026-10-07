@@ -1,13 +1,13 @@
-(* #"/workspace/crates/verified/src/directory.rs" 55 0 59 30 *)
+(* #"/workspace/crates/verified/src/directory.rs" 52 0 56 30 *)
 
-let%span snum = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 27 28 27 33
-let%span soption = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/option.rs" 15 8 18 9
-let%span scmp = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 17 26 17 75
-let%span sdirectory = "/workspace/crates/verified/src/directory.rs" 62 14 62 57
-let%span sdirectory'0 = "/workspace/crates/verified/src/directory.rs" 49 10 49 80
-let%span sdirectory'1 = "/workspace/crates/verified/src/directory.rs" 50 10 51 64
-let%span sdirectory'2 = "/workspace/crates/verified/src/directory.rs" 52 10 53 64
-let%span smodel = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/model.rs" 37 8 37 28
+let%span snum = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 27 28 27 33
+let%span soption = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/option.rs" 15 8 18 9
+let%span scmp = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 17 26 17 75
+let%span sdirectory = "/workspace/crates/verified/src/directory.rs" 59 14 59 57
+let%span sdirectory'0 = "/workspace/crates/verified/src/directory.rs" 46 10 46 80
+let%span sdirectory'1 = "/workspace/crates/verified/src/directory.rs" 47 10 48 64
+let%span sdirectory'2 = "/workspace/crates/verified/src/directory.rs" 49 10 50 64
+let%span smodel = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/model.rs" 37 8 37 28
 
 use creusot.int.UInt64
 use creusot.prelude.Any
@@ -43,7 +43,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let directory_response_decision [#"/workspace/crates/verified/src/directory.rs" 55 0 59 30] (response_ok: bool)
+let directory_response_decision [#"/workspace/crates/verified/src/directory.rs" 52 0 56 30] (response_ok: bool)
   (sent_controller: UInt64.t) (current_controller: t_Option_u64) (return (x: t_DirectoryResponseDecision)) = (! bb0
   [ bb0 = any [ br0 -> {response_ok = false} (! bb1) | br1 -> {response_ok} (! bb2) ]
   | bb2 = s0

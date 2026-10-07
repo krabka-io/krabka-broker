@@ -2,14 +2,14 @@
   "profile": [],
   "proofs": {
     "Coma": {
-      "vc_identity": { "prover": "alt-ergo", "time": 0.005 },
+      "vc_identity": { "prover": "alt-ergo", "time": 0.01 },
       "vc_transaction_completion_decision": {
         "prover": "alt-ergo",
-        "time": 0.008
+        "time": 0.011
       },
       "vc_transaction_reaper_completion_decision": {
         "prover": "alt-ergo",
-        "time": 0.036
+        "time": 0.067
       }
     }
   }

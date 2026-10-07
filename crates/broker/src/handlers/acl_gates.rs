@@ -6,139 +6,169 @@
 
 use std::collections::{HashMap, HashSet};
 
+use krabka_metadata::{AclOperation, ResourceType};
+
 use super::{RequestContext, acl_wire};
-use crate::authorizer::{AuthorizationResult, authorize_topics};
+use crate::{
+    authorizer::{AuthorizationResult, authorize_topics},
+    codes,
+    handlers::describe_configs::{
+        RESOURCE_TYPE_BROKER, RESOURCE_TYPE_BROKER_LOGGER, RESOURCE_TYPE_CLIENT_METRICS,
+        RESOURCE_TYPE_GROUP, RESOURCE_TYPE_TOPIC,
+    },
+};
 
-pub(crate) fn acl_denied(
+/// Kafka's resource-specific refusal for the two config mutation APIs.
+/// Legacy `AlterConfigs` does not support broker logger resources.
+pub(crate) fn config_resource_refusal(
     authorizer: &dyn crate::authorizer::Authorizer,
     image: &krabka_metadata::MetadataImage,
     ctx: &RequestContext<'_>,
-    resource_type: krabka_metadata::ResourceType,
-    resource_name: &str,
-    operation: krabka_metadata::AclOperation,
-) -> bool {
-    authorizer.authorize(
-        image,
-        &crate::authorizer::AuthorizationRequest {
-            principal: ctx.principal,
-            host: ctx.peer,
-            resource_type,
-            resource_name,
-            operation,
-        },
-    ) == crate::authorizer::AuthorizationResult::Deny
-}
-
-pub(crate) fn group_read_denied(
-    authorizer: &dyn crate::authorizer::Authorizer,
-    image: &krabka_metadata::MetadataImage,
-    ctx: &RequestContext<'_>,
-    group_id: &str,
-) -> bool {
+    (kind, name): (i8, &str),
+    broker_logger_supported: bool,
+) -> Option<(i16, String)> {
+    let (resource_type, resource_name, code, message) = match kind {
+        RESOURCE_TYPE_TOPIC => (
+            ResourceType::Topic,
+            name,
+            codes::TOPIC_AUTHORIZATION_FAILED,
+            "Topic authorization failed.",
+        ),
+        RESOURCE_TYPE_GROUP => (
+            ResourceType::Group,
+            name,
+            codes::GROUP_AUTHORIZATION_FAILED,
+            "Group authorization failed.",
+        ),
+        kind if matches!(kind, RESOURCE_TYPE_BROKER | RESOURCE_TYPE_CLIENT_METRICS)
+            || (broker_logger_supported && kind == RESOURCE_TYPE_BROKER_LOGGER) =>
+        {
+            (
+                ResourceType::Cluster,
+                acl_wire::CLUSTER_RESOURCE_NAME,
+                codes::CLUSTER_AUTHORIZATION_FAILED,
+                "Cluster authorization failed.",
+            )
+        }
+        other => {
+            return Some((
+                codes::INVALID_REQUEST,
+                format!("Unknown resource type {other}"),
+            ));
+        }
+    };
     acl_denied(
         authorizer,
         image,
         ctx,
-        krabka_metadata::ResourceType::Group,
-        group_id,
-        krabka_metadata::AclOperation::Read,
+        resource_type,
+        resource_name,
+        AclOperation::AlterConfigs,
     )
+    .then(|| (code, message.to_owned()))
 }
 
-/// The `Describe` gate on `Group(group_id)`, the twin of
-/// [`group_read_denied`].
-pub(crate) fn group_describe_denied(
-    authorizer: &dyn crate::authorizer::Authorizer,
-    image: &krabka_metadata::MetadataImage,
-    ctx: &RequestContext<'_>,
-    group_id: &str,
-) -> bool {
-    acl_denied(
-        authorizer,
-        image,
-        ctx,
-        krabka_metadata::ResourceType::Group,
-        group_id,
-        krabka_metadata::AclOperation::Describe,
-    )
+/// The request facts are identical for audited and quiet authorization.
+macro_rules! authorization_gates {
+    ($($name:ident => $method:ident),+ $(,)?) => {
+        $(pub(crate) fn $name(
+            authorizer: &dyn crate::authorizer::Authorizer,
+            image: &krabka_metadata::MetadataImage,
+            ctx: &RequestContext<'_>,
+            resource_type: ResourceType,
+            resource_name: &str,
+            operation: AclOperation,
+        ) -> bool {
+            authorizer.$method(
+                image,
+                &crate::authorizer::AuthorizationRequest {
+                    principal: ctx.principal,
+                    host: ctx.peer,
+                    resource_type,
+                    resource_name,
+                    operation,
+                },
+            ) == AuthorizationResult::Deny
+        })+
+    };
 }
 
-pub(crate) fn cluster_alter_denied(
-    authorizer: &dyn crate::authorizer::Authorizer,
+authorization_gates!(acl_denied => authorize, acl_denied_quiet => authorize_quiet);
+
+/// Resource and operation declarations for the common fixed ACL gates.
+macro_rules! named_acl_gates {
+    ($($(#[$doc:meta])* $name:ident: $resource:ident($operation:ident $(, $resource_name:ident)?)),+ $(,)?) => {
+        $($(#[$doc])* pub(crate) fn $name(
+            authorizer: &dyn crate::authorizer::Authorizer,
+            image: &krabka_metadata::MetadataImage,
+            ctx: &RequestContext<'_>,
+            $($resource_name: &str,)?
+        ) -> bool {
+            acl_denied(authorizer, image, ctx, ResourceType::$resource,
+                named_acl_gates!(@name $($resource_name)?), AclOperation::$operation)
+        })+
+    };
+    (@name $name:ident) => { $name };
+    (@name) => { acl_wire::CLUSTER_RESOURCE_NAME };
+}
+
+named_acl_gates!(
+    group_read_denied: Group(Read, group_id),
+    /// The `Describe` gate on `Group(group_id)`, the twin of [`group_read_denied`].
+    group_describe_denied: Group(Describe, group_id),
+    cluster_alter_denied: Cluster(Alter),
+    cluster_action_denied: Cluster(ClusterAction),
+    /// The `Describe` gate on `Cluster("kafka-cluster")`, the twin of [`cluster_alter_denied`].
+    /// The barrier, write-freeze and break-glass control planes all use this gate.
+    cluster_describe_denied: Cluster(Describe),
+);
+
+/// Kafka's cluster shortcut is quiet: a denial falls back to per-topic checks.
+pub(crate) fn cluster_shortcut_denied(
+    broker: &crate::broker::Broker,
     image: &krabka_metadata::MetadataImage,
     ctx: &RequestContext<'_>,
+    operation: AclOperation,
 ) -> bool {
-    acl_denied(
-        authorizer,
+    acl_denied_quiet(
+        broker.config.authorizer.as_ref(),
         image,
         ctx,
-        krabka_metadata::ResourceType::Cluster,
+        ResourceType::Cluster,
         acl_wire::CLUSTER_RESOURCE_NAME,
-        krabka_metadata::AclOperation::Alter,
+        operation,
     )
 }
 
-pub(crate) fn cluster_action_denied(
-    authorizer: &dyn crate::authorizer::Authorizer,
-    image: &krabka_metadata::MetadataImage,
-    ctx: &RequestContext<'_>,
-) -> bool {
-    acl_denied(
-        authorizer,
-        image,
-        ctx,
-        krabka_metadata::ResourceType::Cluster,
-        acl_wire::CLUSTER_RESOURCE_NAME,
-        krabka_metadata::AclOperation::ClusterAction,
-    )
+/// Topic gate signatures share the same caller facts and borrowed topic names.
+macro_rules! topic_authorization_functions {
+    ($lifetime:lifetime; ($authorizer:ident, $image:ident, $context:ident, $operation:ident, $names:ident);
+        $($(#[$doc:meta])* $visibility:vis fn $name:ident $(($extra:ident: $extra_type:ty))? -> $result:ty $body:block)+
+    ) => {
+        $($(#[$doc])* $visibility fn $name<$lifetime>(
+            $authorizer: &dyn crate::authorizer::Authorizer,
+            $image: &krabka_metadata::MetadataImage,
+            $context: &RequestContext<'_>,
+            $operation: krabka_metadata::AclOperation,
+            $names: impl IntoIterator<Item = &$lifetime str>,
+            $($extra: $extra_type,)?
+        ) -> $result $body)+
+    };
 }
 
-/// The `Describe` gate on `Cluster("kafka-cluster")`, the twin of
-/// [`cluster_alter_denied`].
-///
-/// It returns `true` when the authorizer denies the principal. The barrier,
-/// write-freeze, and break-glass control planes each read the cluster through
-/// this one gate, so a denial answers `CLUSTER_AUTHORIZATION_FAILED` (31)
-/// whichever private api key the caller reached.
-pub(crate) fn cluster_describe_denied(
-    authorizer: &dyn crate::authorizer::Authorizer,
-    image: &krabka_metadata::MetadataImage,
-    ctx: &RequestContext<'_>,
-) -> bool {
-    acl_denied(
-        authorizer,
-        image,
-        ctx,
-        krabka_metadata::ResourceType::Cluster,
-        acl_wire::CLUSTER_RESOURCE_NAME,
-        krabka_metadata::AclOperation::Describe,
-    )
-}
-
+topic_authorization_functions! {
+    'a; (authorizer, image, ctx, operation, names);
 /// The authorizer's decision on `operation` on `Topic(name)` for each of
 /// `names`, for `ctx`'s principal.
 ///
 /// Every name is authorized through [`authorize_topics`], so each denial is
 /// audited the way a per-topic refusal is.
-pub(crate) fn topic_decisions<'a>(
-    authorizer: &dyn crate::authorizer::Authorizer,
-    image: &krabka_metadata::MetadataImage,
-    ctx: &RequestContext<'_>,
-    operation: krabka_metadata::AclOperation,
-    names: impl IntoIterator<Item = &'a str>,
-) -> HashMap<&'a str, AuthorizationResult> {
+pub(crate) fn topic_decisions -> HashMap<&'a str, AuthorizationResult> {
     authorize_topics(authorizer, image, ctx.principal, ctx.peer, operation, names)
 }
 
 /// The names among `names` that [`topic_decisions`] decides `decision`.
-fn topics_decided<'a>(
-    authorizer: &dyn crate::authorizer::Authorizer,
-    image: &krabka_metadata::MetadataImage,
-    ctx: &RequestContext<'_>,
-    operation: krabka_metadata::AclOperation,
-    names: impl IntoIterator<Item = &'a str>,
-    decision: AuthorizationResult,
-) -> HashSet<String> {
+fn topics_decided (decision: AuthorizationResult) -> HashSet<String> {
     topic_decisions(authorizer, image, ctx, operation, names)
         .into_iter()
         .filter(|(_, result)| *result == decision)
@@ -150,13 +180,7 @@ fn topics_decided<'a>(
 /// denies to `ctx`'s principal.
 ///
 /// A name the caller never passed is absent, so a lookup reads it as allowed.
-pub(crate) fn denied_topics<'a>(
-    authorizer: &dyn crate::authorizer::Authorizer,
-    image: &krabka_metadata::MetadataImage,
-    ctx: &RequestContext<'_>,
-    operation: krabka_metadata::AclOperation,
-    names: impl IntoIterator<Item = &'a str>,
-) -> HashSet<String> {
+pub(crate) fn denied_topics -> HashSet<String> {
     topics_decided(
         authorizer,
         image,
@@ -171,13 +195,7 @@ pub(crate) fn denied_topics<'a>(
 /// allows to `ctx`'s principal, the twin of [`denied_topics`].
 ///
 /// A name the caller never passed is absent, so a lookup reads it as denied.
-pub(crate) fn allowed_topics<'a>(
-    authorizer: &dyn crate::authorizer::Authorizer,
-    image: &krabka_metadata::MetadataImage,
-    ctx: &RequestContext<'_>,
-    operation: krabka_metadata::AclOperation,
-    names: impl IntoIterator<Item = &'a str>,
-) -> HashSet<String> {
+pub(crate) fn allowed_topics -> HashSet<String> {
     topics_decided(
         authorizer,
         image,
@@ -186,6 +204,7 @@ pub(crate) fn allowed_topics<'a>(
         names,
         AuthorizationResult::Allow,
     )
+}
 }
 
 /// `true` when `names` is non-empty and at least one of its distinct names is
@@ -261,24 +280,50 @@ pub(crate) fn requested_topic_name(
     }
 }
 
+/// Protocol availability precedes the audited group-read authorization check.
+pub(crate) fn group_protocol_refusal(
+    enabled: bool,
+    broker: &crate::broker::Broker,
+    image: &krabka_metadata::MetadataImage,
+    ctx: &super::RequestContext<'_>,
+    group: &str,
+) -> Option<i16> {
+    if !enabled {
+        Some(crate::codes::UNSUPPORTED_VERSION)
+    } else if group_read_denied(broker.config.authorizer.as_ref(), image, ctx, group) {
+        Some(crate::codes::GROUP_AUTHORIZATION_FAILED)
+    } else {
+        None
+    }
+}
+
+/// Classic group calls authorize first, release the image, then validate and route.
+pub(crate) fn classic_group_refusal(
+    broker: &crate::broker::Broker,
+    ctx: &RequestContext<'_>,
+    group: &str,
+) -> Option<i16> {
+    {
+        let image = broker.controller.current_image();
+        if group_read_denied(broker.config.authorizer.as_ref(), &image, ctx, group) {
+            return Some(codes::GROUP_AUTHORIZATION_FAILED);
+        }
+    }
+    group
+        .is_empty()
+        .then_some(codes::INVALID_GROUP_ID)
+        .or_else(|| super::group_coordinator_error(broker, group))
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::HashSet;
 
     use assert2::{assert, check};
     use krabka_metadata::{AclOperation, MetadataImage, ResourceType};
-    use krabka_security::{AuthMethod, Principal};
 
     use super::*;
-    use crate::test_support::peer;
-
-    fn principal() -> Principal {
-        Principal {
-            name: "alice".to_string(),
-            auth_method: AuthMethod::SaslPlain,
-            groups: vec!["operators".to_string()],
-        }
-    }
+    use crate::{handlers::test_support::operators_principal as principal, test_support::peer};
 
     #[test]
     fn acl_denied_reports_simple_acl_denial() {

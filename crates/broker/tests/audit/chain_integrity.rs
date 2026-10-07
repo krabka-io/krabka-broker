@@ -7,9 +7,10 @@
 //! asserts that the second boot carried the sequence numbers on rather than
 //! resetting them to zero.
 
-use krabka_protocol::owned::create_topics_request::{CreatableTopic, CreateTopicsRequest};
-
-use crate::support;
+use crate::{
+    support,
+    support::topics::{creatable_topic, create_topic_request},
+};
 
 /// Verifies the checkpoint path. The broker is configured with an audit
 /// signing key and a checkpoint cadence of `every_n = 1`. A `CreateTopics`
@@ -33,16 +34,10 @@ async fn signed_checkpoints_appear_on_audit_topic() {
     let audit_before = p.broker.metrics().audit_events.get();
     let _ = p
         .client
-        .send(CreateTopicsRequest {
-            topics: vec![CreatableTopic {
-                name: "cp-topic".into(),
-                num_partitions: 1,
-                replication_factor: 1,
-                ..Default::default()
-            }],
-            timeout_ms: 5_000,
-            ..Default::default()
-        })
+        .send(create_topic_request(
+            creatable_topic("cp-topic", 1, 1),
+            5_000,
+        ))
         .await
         .unwrap();
 
@@ -79,16 +74,7 @@ async fn audit_chain_continues_across_restart() {
         let (broker, client) = support::start_with_dir(dir.path()).await;
         let audit_before = broker.metrics().audit_events.get();
         let _ = client
-            .send(CreateTopicsRequest {
-                topics: vec![CreatableTopic {
-                    name: "r1".into(),
-                    num_partitions: 1,
-                    replication_factor: 1,
-                    ..Default::default()
-                }],
-                timeout_ms: 5_000,
-                ..Default::default()
-            })
+            .send(create_topic_request(creatable_topic("r1", 1, 1), 5_000))
             .await
             .unwrap();
         // Ensure the r1 CreateTopics audit record is durable before shutdown.
@@ -104,16 +90,7 @@ async fn audit_chain_continues_across_restart() {
     let (broker, client) = support::start_with_dir(dir.path()).await;
     let audit_before = broker.metrics().audit_events.get();
     let _ = client
-        .send(CreateTopicsRequest {
-            topics: vec![CreatableTopic {
-                name: "r2".into(),
-                num_partitions: 1,
-                replication_factor: 1,
-                ..Default::default()
-            }],
-            timeout_ms: 5_000,
-            ..Default::default()
-        })
+        .send(create_topic_request(creatable_topic("r2", 1, 1), 5_000))
         .await
         .unwrap();
     // Ensure the r2 CreateTopics audit record is durable before consuming.

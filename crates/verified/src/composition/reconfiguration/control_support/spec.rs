@@ -1,12 +1,9 @@
 use creusot_std::prelude::*;
 
-use super::super::spec::{expected_member, grant_count, has_node};
+use super::super::spec::{expected_member, grant_count, has_node, membership_matches_change};
 use crate::reconfiguration::VoterChangeKind;
 
-// cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
-#[cfg(creusot)]
-#[cfg_attr(test, mutants::skip)]
-#[logic(open)]
+open_logic! {
 pub fn control_record_count(version: u16, kind: VoterChangeKind) -> Int {
     pearlite! { match kind {
         VoterChangeKind::FinalizeKraftVersion => 2,
@@ -14,21 +11,17 @@ pub fn control_record_count(version: u16, kind: VoterChangeKind) -> Int {
         VoterChangeKind::Add | VoterChangeKind::Remove => 1,
     } }
 }
+}
 
-// cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
-#[cfg(creusot)]
-#[cfg_attr(test, mutants::skip)]
-#[logic(open)]
+open_logic! {
 pub fn next_size(count: Int, kind: VoterChangeKind) -> Int {
     pearlite! { match kind { VoterChangeKind::Add => count + 1,
     VoterChangeKind::Remove => count - 1, _ => count } }
 }
+}
 
+open_logic! {
 /// Count reports reaching the actual exclusive batch end, only for real IDs.
-// cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
-#[cfg(creusot)]
-#[cfg_attr(test, mutants::skip)]
-#[logic(open)]
 #[variant(count)]
 pub fn prefix_count(
     old: Seq<u64>,
@@ -50,6 +43,23 @@ pub fn prefix_count(
             && expected_member(old, old.len(), kind, node, node) { 1 } else { 0 } }
     } }
 }
+}
+
+open_logic! {
+/// Both voter sets must report the actual exclusive control-batch end.
+pub(super) fn control_prefix_majorities(
+    old: Seq<u64>,
+    reports: Seq<(i64, i64)>,
+    kind: VoterChangeKind,
+    node: u64,
+    end: Int,
+) -> bool {
+    pearlite! {
+        prefix_count(old, reports, kind, node, end, false, reports.len()) >= old.len() / 2 + 1
+        && prefix_count(old, reports, kind, node, end, true, reports.len()) >= next_size(old.len(), kind) / 2 + 1
+    }
+}
+}
 
 /// Bridge actual prefix reports to the previous composition's grant ledger.
 // cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
@@ -59,8 +69,7 @@ pub fn prefix_count(
 #[requires(0 <= count && count <= votes.len() && votes.len() == reports.len())]
 #[requires(forall<i: Int> 0 <= i && i < votes.len() ==>
     votes[i].0 == (reports[i].0@ >= end) && votes[i].1 == (reports[i].1@ >= end))]
-#[requires(forall<id: u64> has_node(next, next.len(), id)
-    == expected_member(old, old.len(), kind, node, id))]
+#[requires(membership_matches_change(old, next, kind, node))]
 #[ensures(grant_count(old, next, votes, node, new, count)
     == prefix_count(old, reports, kind, node, end, new, count))]
 #[variant(count)]
@@ -83,10 +92,7 @@ pub fn prefix_grants_agree(
 #[logic(open)]
 pub(super) fn control_request_admitted(
     old: Seq<u64>,
-    state: (
-        crate::reconfiguration::ReconfigurationLeadership,
-        crate::reconfiguration::CurrentVoterSet,
-    ),
+    state: crate::reconfiguration::ReconfigurationState,
     request: crate::reconfiguration::VoterChangeRequest,
     node: u64,
     target: crate::reconfiguration::TargetVoter,
@@ -107,4 +113,19 @@ pub(super) fn control_inputs_coherent(
     reports: Seq<(i64, i64)>,
 ) -> bool {
     pearlite! { context.voter_count@ == old.len() && reports.len() == old.len() + 1 }
+}
+
+open_logic! {
+/// The common voter belongs to both sets and reports the actual control prefix.
+pub(super) fn common_prefix_reported(
+    old: Seq<u64>,
+    reports: Seq<(i64, i64)>,
+    next: Seq<u64>,
+    common: u64,
+    end: Int,
+) -> bool {
+    pearlite! { exists<i: Int> 0 <= i && i < old.len() && old[i] == common
+    && reports[i].0@ >= end && reports[i].1@ >= end
+    && has_node(next, next.len(), common) }
+}
 }

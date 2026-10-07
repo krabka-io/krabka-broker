@@ -112,6 +112,8 @@ mod retention;
 mod segment;
 mod stamp_index;
 mod stamp_source;
+#[cfg(test)]
+mod test_support;
 pub mod topic_name;
 mod txn_index;
 

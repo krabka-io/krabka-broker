@@ -6,7 +6,7 @@
 //! output streams, and each case decides what that means. The rest of the
 //! module is the argument list of each tool the suite drives.
 
-use std::process::{Command, ExitStatus, Output, Stdio};
+use std::process::{ExitStatus, Output};
 
 use crate::{
     jvm_acceptance::{ClientPropsFile, KAFKA_IMAGE_TXN},
@@ -33,8 +33,7 @@ impl ToolRun {
     /// Merge one finished `docker run` into a run, and echo it for
     /// `--nocapture`.
     fn from_output(out: &Output, args: &[&str]) -> Self {
-        let mut output = String::from_utf8_lossy(&out.stdout).into_owned();
-        output.push_str(&String::from_utf8_lossy(&out.stderr));
+        let output = crate::jvm_acceptance::tool_output(out);
         let status = out.status;
         eprintln!("KRABKA[test] jvm tool {args:?} status={status}\n{output}");
         Self { status, output }
@@ -71,20 +70,17 @@ pub(super) fn run_tool(
     args: &[&str],
 ) -> ToolRun {
     let name = support::unique_container_name("kfc9-jvm");
-    let mut command = Command::new("docker");
-    command.args(["run", "--rm", "--name", &name]);
+    let mount = props.map(ClientPropsFile::mount_str);
+    let mut options = vec!["--name", name.as_str()];
     if stdin.is_some() {
-        command.arg("-i");
+        options.push("-i");
     }
-    command.arg("--add-host=host.docker.internal:host-gateway");
-    if let Some(props) = props {
-        command.arg("-v").arg(props.mount_str());
+    options.push("--add-host=host.docker.internal:host-gateway");
+    if let Some(mount) = mount.as_deref() {
+        options.extend(["-v", mount]);
     }
-    command
-        .arg(KAFKA_IMAGE_TXN)
-        .args(args)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
+    let mut command = support::docker_tool_command(KAFKA_IMAGE_TXN, &options);
+    command.args(args);
 
     let out = support::docker_output(&mut command, stdin, "write the record to the tool's stdin");
     ToolRun::from_output(&out, args)

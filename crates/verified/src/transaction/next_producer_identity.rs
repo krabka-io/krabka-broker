@@ -1,5 +1,7 @@
 use creusot_std::prelude::*;
 
+#[cfg(creusot)]
+use super::first_unstable_frontier;
 use super::{IdleTransactionState, NO_TRANSACTION_TIMEOUT_MS};
 
 /// Select the first unstable transaction offset, or the log end when no
@@ -8,12 +10,7 @@ use super::{IdleTransactionState, NO_TRANSACTION_TIMEOUT_MS};
 /// `Some` and `None` partition the inputs: the result is `Some` exactly when
 /// every start is at or below the log end.
 #[ensures(match result {
-    Some(lso) => lso@ <= log_end@
-        && (forall<i: Int> 0 <= i && i < starts@.len() ==> starts@[i]@ <= log_end@)
-        && ((starts@.len() == 0 && lso@ == log_end@)
-            || (starts@.len() > 0
-                && (exists<i: Int> 0 <= i && i < starts@.len() && lso@ == starts@[i]@)
-                && (forall<i: Int> 0 <= i && i < starts@.len() ==> lso@ <= starts@[i]@))),
+    Some(lso) => first_unstable_frontier(starts@, log_end@, lso@),
     None => exists<i: Int> 0 <= i && i < starts@.len() && starts@[i]@ > log_end@,
 })]
 #[must_use]

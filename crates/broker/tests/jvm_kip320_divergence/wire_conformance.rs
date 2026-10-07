@@ -260,12 +260,12 @@ async fn kip320_wire_conformance_offset_for_leader_epoch() {
     // The helper image runs as a non-root uid, while `TempDir` is 0700.
     #[cfg(unix)]
     {
-        use std::os::unix::fs::PermissionsExt as _;
-
-        std::fs::set_permissions(helper_dir.path(), std::fs::Permissions::from_mode(0o755))
-            .expect("chmod Java helper directory");
-        std::fs::set_permissions(&helper_path, std::fs::Permissions::from_mode(0o644))
-            .expect("chmod Java helper source");
+        crate::support::chmod_for_container(
+            helper_dir.path(),
+            0o755,
+            "chmod Java helper directory",
+        );
+        crate::support::chmod_for_container(&helper_path, 0o644, "chmod Java helper source");
     }
     let entry = format!(
         "set -e; cp /helper/Kip320Probe.java /tmp/Kip320Probe.java; \

@@ -44,6 +44,49 @@ use krabka_protocol::{
 
 use crate::error::BrokerError;
 
+/// Writes a version-0 flexible record with no known message tags.
+pub(crate) fn encode_value(write: impl FnOnce(&mut BytesMut)) -> Bytes {
+    let mut buf = BytesMut::new();
+    buf.put_i16(0);
+    write(&mut buf);
+    put_empty_tagged_fields(&mut buf);
+    buf.freeze()
+}
+
+/// Reads the common version and tagged-field framing around a record's fields.
+///
+/// # Errors
+/// Returns the field reader's error, or an error when the version or trailer is truncated.
+pub(crate) fn decode_value<T>(
+    mut buf: &[u8],
+    read: impl FnOnce(&mut &[u8]) -> Result<T, BrokerError>,
+) -> Result<T, BrokerError> {
+    super::get_i16(&mut buf)?;
+    let value = read(&mut buf)?;
+    skip_tagged_fields(&mut buf)?;
+    Ok(value)
+}
+
+/// Defines field codecs within the shared version-0 flexible record framing.
+macro_rules! value_codec {
+    ($name:ident, encode($($receiver:tt)*) -> $writer:ident $write:block decode($reader:ident) $read:block) => {
+        impl $name {
+            #[must_use]
+            pub fn encode($($receiver)*) -> bytes::Bytes {
+                $crate::coordinator::unified::persistence::flex::encode_value(|$writer| $write)
+            }
+
+            /// # Errors
+            /// Returns an error when a field or the tagged-field trailer is truncated or invalid.
+            pub fn decode(buf: &[u8]) -> Result<Self, $crate::error::BrokerError> {
+                $crate::coordinator::unified::persistence::flex::decode_value(buf, |$reader| $read)
+            }
+        }
+    };
+}
+
+pub(crate) use value_codec;
+
 // The consumer, share and streams assignment epochs have the same Kafka
 // value layout. Keep their domain types distinct while sharing the codec.
 macro_rules! epoch_value {
@@ -54,23 +97,15 @@ macro_rules! epoch_value {
             pub $field: i32,
         }
 
-        impl $name {
-            #[must_use]
-            pub fn encode(self) -> bytes::Bytes {
-                let mut buf = bytes::BytesMut::new();
-                bytes::BufMut::put_i16(&mut buf, 0);
-                bytes::BufMut::put_i32(&mut buf, self.$field);
-                $crate::coordinator::unified::persistence::flex::put_empty_tagged_fields(&mut buf);
-                buf.freeze()
+        $crate::coordinator::unified::persistence::flex::value_codec! {
+            $name,
+            encode(self) -> buf {
+                bytes::BufMut::put_i32(buf, self.$field);
             }
-
-            /// # Errors
-            /// Returns an error when a field or the tagged-field trailer is truncated.
-            pub fn decode(mut buf: &[u8]) -> Result<Self, $crate::error::BrokerError> {
-                $crate::coordinator::unified::persistence::get_i16(&mut buf)?;
-                let $field = $crate::coordinator::unified::persistence::get_i32(&mut buf)?;
-                $crate::coordinator::unified::persistence::flex::skip_tagged_fields(&mut buf)?;
-                Ok(Self { $field })
+            decode(buf) {
+                Ok(Self {
+                    $field: $crate::coordinator::unified::persistence::get_i32(buf)?,
+                })
             }
         }
     };
@@ -81,23 +116,13 @@ pub(crate) use epoch_value;
 /// Implements a version-0 flexible value with one array-shaped field.
 macro_rules! array_value_codec {
     ($name:ident, $field:ident, $encode:path, $decode:path) => {
-        impl $name {
-            #[must_use]
-            pub fn encode(&self) -> bytes::Bytes {
-                let mut buf = bytes::BytesMut::new();
-                bytes::BufMut::put_i16(&mut buf, 0);
-                $encode(&mut buf, &self.$field);
-                $crate::coordinator::unified::persistence::flex::put_empty_tagged_fields(&mut buf);
-                buf.freeze()
+        $crate::coordinator::unified::persistence::flex::value_codec! {
+            $name,
+            encode(&self) -> buf {
+                $encode(buf, &self.$field);
             }
-
-            /// # Errors
-            /// Returns an error when a field or the tagged-field trailer is truncated.
-            pub fn decode(mut buf: &[u8]) -> Result<Self, $crate::error::BrokerError> {
-                $crate::coordinator::unified::persistence::get_i16(&mut buf)?;
-                let $field = $decode(&mut buf)?;
-                $crate::coordinator::unified::persistence::flex::skip_tagged_fields(&mut buf)?;
-                Ok(Self { $field })
+            decode(buf) {
+                Ok(Self { $field: $decode(buf)? })
             }
         }
     };
@@ -117,6 +142,13 @@ pub(crate) fn put_compact_string(buf: &mut BytesMut, s: &str) {
 
 pub(crate) fn put_compact_nullable_string(buf: &mut BytesMut, s: Option<&str>) {
     string_bytes::put_compact_nullable_string(buf, s);
+}
+
+/// The rack, client id and host fields common to all modern group members.
+pub(crate) fn put_member_client(buf: &mut BytesMut, rack: Option<&str>, id: &str, host: &str) {
+    put_compact_nullable_string(buf, rack);
+    put_compact_string(buf, id);
+    put_compact_string(buf, host);
 }
 
 pub(crate) fn put_compact_bytes(buf: &mut BytesMut, b: &[u8]) {
@@ -169,6 +201,20 @@ pub(crate) fn get_compact_string(buf: &mut &[u8]) -> Result<String, BrokerError>
 
 pub(crate) fn get_compact_nullable_string(buf: &mut &[u8]) -> Result<Option<String>, BrokerError> {
     string_bytes::get_compact_nullable_string_owned(buf).map_err(protocol)
+}
+
+/// Reads the rack and client identity written by [`put_member_client`].
+///
+/// # Errors
+/// Returns an error when a string field is truncated or invalid.
+pub(crate) fn get_member_client(
+    buf: &mut &[u8],
+) -> Result<(Option<String>, String, String), BrokerError> {
+    Ok((
+        get_compact_nullable_string(buf)?,
+        get_compact_string(buf)?,
+        get_compact_string(buf)?,
+    ))
 }
 
 pub(crate) fn get_compact_bytes(buf: &mut &[u8]) -> Result<Bytes, BrokerError> {
@@ -230,6 +276,36 @@ pub(crate) fn get_compact_array<T>(
         out.push(read(buf)?);
     }
     Ok(out)
+}
+
+/// Write topic-id/partition-list structs with empty nested tagged fields.
+pub(crate) fn put_assigned_topics<T>(
+    buf: &mut BytesMut,
+    items: &[T],
+    fields: impl Fn(&T) -> (&Uuid, &[i32]),
+) {
+    put_compact_array(buf, items.iter(), |buf, item| {
+        let (topic, partitions) = fields(item);
+        put_uuid(buf, topic.0);
+        put_i32_array(buf, partitions);
+        put_empty_tagged_fields(buf);
+    });
+}
+
+/// Read the topic-id/partition-list structs of target and share assignments.
+///
+/// # Errors
+/// Returns a protocol error for malformed fields or a missing nested trailer.
+pub(crate) fn get_assigned_topics<T>(
+    buf: &mut &[u8],
+    build: impl Fn(Uuid, Vec<i32>) -> T,
+) -> Result<Vec<T>, BrokerError> {
+    get_compact_array(buf, |buf| {
+        let topic = Uuid(get_uuid(buf)?);
+        let partitions = get_i32_array(buf)?;
+        skip_tagged_fields(buf)?;
+        Ok(build(topic, partitions))
+    })
 }
 
 /// Writes a compact array of `i32`, the `[]int32` of the schemas.

@@ -6,6 +6,13 @@ use super::{
     produce_durability_frontier, wal_batch_equal, wal_covering_batch_range,
 };
 
+open_logic! {
+/// Equality of decoded coordinates and the complete observed byte payload.
+pub fn copy_batch_equal(left: WalCopyBatch, right: WalCopyBatch) -> bool {
+    pearlite! { left.0 == right.0 && left.1 == right.1 && left.2@ == right.2@ }
+}
+}
+
 // cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
 #[cfg(creusot)]
 #[cfg_attr(test, mutants::skip)]
@@ -38,17 +45,15 @@ fn lemma_wal_copy_byte_count_monotone(batches: Seq<WalCopyBatch>, lower: Int, up
 /// length of copied prefix agree on both logical and byte extents. Metadata
 /// must faithfully decode the observed bytes; reads, copying, and fsync are
 /// host obligations. Admission completeness excludes an always-reject proof.
-#[ensures((match result { None => false, Some(_) => true }) == (
+#[ensures((result != None) == (
     start@ >= 0 && source@.len() == stored@.len() && position@ <= file_end@
     && position@ + wal_copy_byte_count(source@, source@.len()) <= file_end@
     && (forall<i: Int> 0 <= i && i < source@.len() ==>
-        source@[i].0@ >= 0 && source@[i].1@ >= 0
-        && source@[i].0@ + source@[i].1@ + 1 <= i64::MAX@
+        copy_batch_coordinates_valid(source@[i])
         && source@[i].0@ == (if i == 0 { start@ }
             else { source@[i - 1].0@ + source@[i - 1].1@ + 1 })
         && source@[i].2@.len() > 0
-        && source@[i].0 == stored@[i].0 && source@[i].1 == stored@[i].1
-        && source@[i].2@ == stored@[i].2@)
+        && copy_batch_equal(source@[i], stored@[i]))
     && target@ == (if source@.len() == 0 { start@ }
         else { source@[source@.len() - 1].0@ + source@[source@.len() - 1].1@ + 1 })
 ))]
@@ -63,8 +68,7 @@ fn lemma_wal_copy_byte_count_monotone(batches: Seq<WalCopyBatch>, lower: Int, up
     None => true,
     Some(_) => source@.len() == stored@.len()
         && forall<i: Int> 0 <= i && i < source@.len()
-            ==> source@[i].0 == stored@[i].0 && source@[i].1 == stored@[i].1
-                && source@[i].2@ == stored@[i].2@,
+            ==> copy_batch_equal(source@[i], stored@[i]),
 })]
 pub(super) fn checked_wal_copy_replays_exactly(
     source: &[WalCopyBatch],
@@ -88,13 +92,11 @@ pub(super) fn checked_wal_copy_replays_exactly(
     #[invariant(byte_cursor@ == position@ + wal_copy_byte_count(source@, i@))]
     #[invariant(position@ <= byte_cursor@ && byte_cursor@ <= file_end@)]
     #[invariant(forall<j: Int> 0 <= j && j < i@ ==>
-        source@[j].0@ >= 0 && source@[j].1@ >= 0
-        && source@[j].0@ + source@[j].1@ + 1 <= i64::MAX@
+        copy_batch_coordinates_valid(source@[j])
         && source@[j].0@ == (if j == 0 { start@ }
             else { source@[j - 1].0@ + source@[j - 1].1@ + 1 })
         && source@[j].2@.len() > 0
-        && source@[j].0 == stored@[j].0 && source@[j].1 == stored@[j].1
-        && source@[j].2@ == stored@[j].2@)]
+        && copy_batch_equal(source@[j], stored@[j]))]
     #[variant(source@.len() - i@)]
     while i < source.len() {
         #[cfg(creusot)]
@@ -142,7 +144,7 @@ pub(super) fn checked_wal_copy_replays_exactly(
 /// Every visible offset has a concrete byte-identical copied-batch witness;
 /// offsets before either retained floor have none. Metadata and host I/O must
 /// faithfully represent the compared bytes; this does not prove crash publication.
-#[ensures((match result { None => false, Some(_) => true }) == (
+#[ensures((result != None) == (
     0 <= floors.0@ && 0 <= floors.1@ && floors.0@ <= target@ && floors.1@ <= target@
     && source@.len() == stored@.len() && position@ <= file_end@
     && position@ + wal_copy_byte_count(source@, source@.len()) <= file_end@
@@ -152,12 +154,10 @@ pub(super) fn checked_wal_copy_replays_exactly(
         && target@ == source@[source@.len() - 1].0@ + source@[source@.len() - 1].1@ + 1
     })
     && (forall<i: Int> 0 <= i && i < source@.len() ==>
-        source@[i].0@ >= 0 && source@[i].1@ >= 0
-        && source@[i].0@ + source@[i].1@ + 1 <= i64::MAX@
+        copy_batch_coordinates_valid(source@[i])
         && (i > 0 ==> source@[i].0@ == source@[i - 1].0@ + source@[i - 1].1@ + 1)
         && source@[i].2@.len() > 0
-        && source@[i].0 == stored@[i].0 && source@[i].1 == stored@[i].1
-        && source@[i].2@ == stored@[i].2@)
+        && copy_batch_equal(source@[i], stored@[i]))
 ))]
 #[ensures(match result {
     None => true,
@@ -177,8 +177,7 @@ pub(super) fn checked_wal_copy_replays_exactly(
             Some(i) => i@ < source@.len() && i@ < stored@.len()
                 && source@[i@].0@ <= requested@
                 && requested@ < source@[i@].0@ + source@[i@].1@ + 1
-                && source@[i@].0 == stored@[i@].0 && source@[i@].1 == stored@[i@].1
-                && source@[i@].2@ == stored@[i@].2@,
+                && copy_batch_equal(source@[i@], stored@[i@]),
         }),
 })]
 pub(super) fn covering_copy_preserves_logical_fetch(
@@ -205,8 +204,7 @@ pub(super) fn covering_copy_preserves_logical_fetch(
     #[invariant(i@ <= source@.len() && bases@.len() == i@ && lasts@.len() == i@)]
     #[invariant(forall<j: Int> 0 <= j && j < i@ ==>
         bases@[j] == source@[j].0 && lasts@[j]@ == source@[j].0@ + source@[j].1@
-        && source@[j].0@ >= 0 && source@[j].1@ >= 0
-        && source@[j].0@ + source@[j].1@ + 1 <= i64::MAX@)]
+        && copy_batch_coordinates_valid(source@[j]))]
     #[variant(source@.len() - i@)]
     while i < source.len() {
         let (last, _) = local_append_coordinates(source[i].0, source[i].0, source[i].1)?;
@@ -245,4 +243,11 @@ pub(super) fn covering_copy_preserves_logical_fetch(
         j += 1;
     }
     Some((physical, bytes_end, None))
+}
+
+open_logic! {
+/// A copied data batch has a nonnegative base and representable exclusive end.
+fn copy_batch_coordinates_valid(batch: WalCopyBatch) -> bool {
+    pearlite! { batch.0@ >= 0 && batch.1@ >= 0 && batch.0@ + batch.1@ + 1 <= i64::MAX@ }
+}
 }

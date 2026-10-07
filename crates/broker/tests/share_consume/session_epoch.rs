@@ -5,21 +5,20 @@
 
 use assert2::assert;
 use krabka_protocol::owned::{
-    share_fetch_request::{ForgottenTopic, ShareFetchRequest},
-    share_fetch_response::ShareFetchResponse,
+    share_fetch_request::ForgottenTopic, share_fetch_response::ShareFetchResponse,
 };
 
 use crate::{
     ACCEPT, INVALID_SHARE_SESSION_EPOCH, NONE, ONE_MB, SHARE_SESSION_NOT_FOUND,
-    harness::{broker_test_permit, join, produce_n, wire},
+    harness::{join, produce_n, wire},
     share_rpc::{acquired_count, fetch_until_acquired, share_ack, share_fetch_req},
 };
 
 /// The share-session epoch state machine rejects stale and unknown epochs.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn session_epoch_validation() {
-    let _permit = broker_test_permit().await;
-    let (broker, client, _dir, tid) = crate::support::share::topic_fixture("t", 1, |_| {}).await;
+    let (_permit, broker, client, _dir, tid) =
+        crate::support::share::permitted_topic_fixture("t", 1, |_| {}).await;
     let (member, _) = crate::harness::initialize_consumption(&broker, &client, tid, 1).await;
 
     // Open (epoch 0) succeeds: top-level error_code 0.
@@ -64,8 +63,8 @@ async fn session_epoch_validation() {
 /// removed on later empty incremental requests.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn incremental_session_uses_cached_and_forgotten_partitions() {
-    let _permit = broker_test_permit().await;
-    let (broker, client, _dir, tid) = crate::support::share::topic_fixture("t", 1, |_| {}).await;
+    let (_permit, broker, client, _dir, tid) =
+        crate::support::share::permitted_topic_fixture("t", 1, |_| {}).await;
     let (member, _) = crate::harness::initialize_consumption(&broker, &client, tid, 1).await;
 
     let first = fetch_until_acquired(&client, "g1", &member, tid, 0, 0).await;
@@ -75,19 +74,13 @@ async fn incremental_session_uses_cached_and_forgotten_partitions() {
 
     produce_n(&client, "t", tid, 0, 1).await;
     let cached: ShareFetchResponse = client
-        .send(ShareFetchRequest {
-            group_id: Some("g1".into()),
-            member_id: Some(member.clone()),
-            share_session_epoch: 2,
-            max_wait_ms: 0,
-            min_bytes: 1,
-            max_bytes: ONE_MB,
-            max_records: 500,
-            batch_size: 500,
-            topics: vec![],
-            forgotten_topics_data: vec![],
-            ..Default::default()
-        })
+        .send(crate::support::share::empty_session_request(
+            "g1".into(),
+            member.clone(),
+            2,
+            ONE_MB,
+            vec![],
+        ))
         .await
         .expect("incremental ShareFetch");
     assert!(cached.error_code == NONE);
@@ -99,23 +92,17 @@ async fn incremental_session_uses_cached_and_forgotten_partitions() {
     assert!(second_ack.error_code == NONE);
 
     let forgotten: ShareFetchResponse = client
-        .send(ShareFetchRequest {
-            group_id: Some("g1".into()),
-            member_id: Some(member.clone()),
-            share_session_epoch: 4,
-            max_wait_ms: 0,
-            min_bytes: 1,
-            max_bytes: ONE_MB,
-            max_records: 500,
-            batch_size: 500,
-            topics: vec![],
-            forgotten_topics_data: vec![ForgottenTopic {
+        .send(crate::support::share::empty_session_request(
+            "g1".into(),
+            member.clone(),
+            4,
+            ONE_MB,
+            vec![ForgottenTopic {
                 topic_id: wire(tid),
                 partitions: vec![0],
                 ..Default::default()
             }],
-            ..Default::default()
-        })
+        ))
         .await
         .expect("forget partition");
     assert!(forgotten.error_code == NONE);
@@ -123,19 +110,13 @@ async fn incremental_session_uses_cached_and_forgotten_partitions() {
 
     produce_n(&client, "t", tid, 0, 1).await;
     let after_forget: ShareFetchResponse = client
-        .send(ShareFetchRequest {
-            group_id: Some("g1".into()),
-            member_id: Some(member),
-            share_session_epoch: 5,
-            max_wait_ms: 0,
-            min_bytes: 1,
-            max_bytes: ONE_MB,
-            max_records: 500,
-            batch_size: 500,
-            topics: vec![],
-            forgotten_topics_data: vec![],
-            ..Default::default()
-        })
+        .send(crate::support::share::empty_session_request(
+            "g1".into(),
+            member,
+            5,
+            ONE_MB,
+            vec![],
+        ))
         .await
         .expect("ShareFetch after forget");
     assert!(after_forget.error_code == NONE);

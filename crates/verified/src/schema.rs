@@ -1,30 +1,26 @@
 //! Schema-registry failure classification and fail-open admission.
 
-#[cfg(creusot)]
-use std::clone::Clone;
-
 use creusot_std::prelude::*;
 
-/// Security-relevant class of a failed schema-registry lookup.
-#[cfg_attr(creusot, derive(Clone, Copy, DeepModel))]
-#[cfg_attr(not(creusot), derive(Clone, Copy, Debug, PartialEq, Eq))]
-pub enum SchemaFailureKind {
-    /// The registry answered that the schema ID does not exist.
-    Unknown,
-    /// No authoritative answer is available yet: transport, throttling, or 5xx.
-    Transient,
-    /// The registry definitively rejected the request, such as with another 4xx.
-    Permanent,
-    /// A successful response could not be decoded into the required shape.
-    Malformed,
-}
+model_types! {
+    @proof (derive(std::clone::Clone, Copy, DeepModel));
+    /// Security-relevant class of a failed schema-registry lookup.
+    pub enum SchemaFailureKind {
+        /// The registry answered that the schema ID does not exist.
+        Unknown,
+        /// No authoritative answer is available yet: transport, throttling, or 5xx.
+        Transient,
+        /// The registry definitively rejected the request, such as with another 4xx.
+        Permanent,
+        /// A successful response could not be decoded into the required shape.
+        Malformed,
+    }
 
-/// Whether a failed lookup rejects the record or admits it without validation.
-#[cfg_attr(creusot, derive(Clone, Copy, DeepModel))]
-#[cfg_attr(not(creusot), derive(Clone, Copy, Debug, PartialEq, Eq))]
-pub enum SchemaFailureDecision {
-    Reject,
-    AllowUnvalidated,
+    /// Whether a failed lookup rejects the record or admits it without validation.
+    pub enum SchemaFailureDecision {
+        Reject,
+        AllowUnvalidated,
+    }
 }
 
 /// Apply the configured fail-open policy to a classified registry failure.
@@ -44,29 +40,26 @@ pub fn schema_failure_decision(
     }
 }
 
-/// A schema-validated record field's role in subject selection.
-#[cfg_attr(creusot, derive(Clone, Copy, DeepModel))]
-#[cfg_attr(not(creusot), derive(Clone, Copy, Debug, PartialEq, Eq))]
-pub enum SchemaFieldRole {
-    Key,
-    Value,
-}
+model_types! {
+    @proof (derive(std::clone::Clone, Copy, DeepModel));
+    /// A schema-validated record field's role in subject selection.
+    pub enum SchemaFieldRole {
+        Key,
+        Value,
+    }
 
-/// Whether the schema gate skips a field or validates it under one role.
-#[cfg_attr(creusot, derive(Clone, Copy, DeepModel))]
-#[cfg_attr(not(creusot), derive(Clone, Copy, Debug, PartialEq, Eq))]
-pub enum SchemaFieldAction {
-    Skip,
-    CheckKey,
-    CheckValue,
-}
+    /// Whether the schema gate skips a field or validates it under one role.
+    pub enum SchemaFieldAction {
+        Skip,
+        CheckKey,
+        CheckValue,
+    }
 
-/// Whether every applicable field in a record batch was admitted.
-#[cfg_attr(creusot, derive(Clone, Copy, DeepModel))]
-#[cfg_attr(not(creusot), derive(Clone, Copy, Debug, PartialEq, Eq))]
-pub enum SchemaBatchAdmission {
-    Admit,
-    Reject,
+    /// Whether every applicable field in a record batch was admitted.
+    pub enum SchemaBatchAdmission {
+        Admit,
+        Reject,
+    }
 }
 
 /// Decode the exact big-endian schema ID from a complete Confluent prefix.

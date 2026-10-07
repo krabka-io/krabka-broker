@@ -15,7 +15,7 @@ use crate::{
         ACTION_DELETE_TOPIC, approval_signing_bytes, approve, approve_signed, approve_with, open,
         stored,
     },
-    topics::{create_topic, delete_topic},
+    topics::delete_topic,
 };
 
 /// An action in `break_glass.signed_actions` takes a detached operator
@@ -30,11 +30,8 @@ use crate::{
 /// KFC-9 documents, so the pass also proves the broker rebuilds the same bytes.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_signed_action_takes_a_signature_on_every_approval() {
-    let cluster = boot_with_signed_actions(&["delete_topic"]).await;
-    let alice = cluster.client(ALICE).await;
-    let bob = cluster.client(BOB).await;
-    let carol = cluster.client(CAROL).await;
-    create_topic(&alice, "doomed", 1).await;
+    crate::cluster::client_fixture!(cluster = boot_with_signed_actions(&["delete_topic"]);
+        alice => ALICE, bob => BOB, carol => CAROL; topic(alice, "doomed", 1));
 
     let id = open(&alice, ACTION_DELETE_TOPIC, "doomed").await;
 

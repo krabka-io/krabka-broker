@@ -7,11 +7,10 @@ use std::{
     sync::{Arc, Mutex, atomic::Ordering},
 };
 
-use bytes::Bytes;
 use krabka_ids::{LeaderEpoch, PartitionIndex};
 use krabka_log::{Log, LogConfig, Offset, SegmentExport};
 use krabka_metadata::{MetadataImage, NodeId};
-use krabka_protocol::records::{Record, RecordBatch};
+use krabka_protocol::records::RecordBatch;
 use krabka_remote_storage::{
     CustomMetadata, IndexType, InmemoryRemoteLogMetadataManager, LocalTieredStorage,
     LogSegmentData, ObjectEntry, RemoteLogMetadataManager, RemoteLogSegmentId,
@@ -95,6 +94,15 @@ pub fn local_backends(
 /// Stand-in backends that never retain readable segment or index bytes.
 /// Copy and deletion behavior remain explicit in each implementation.
 macro_rules! missing_remote_reads {
+    (delete_ok) => {
+        crate::remote_log_manager::test_support::missing_remote_reads!();
+        fn delete_log_segment_data(
+            &self,
+            _metadata: &krabka_remote_storage::RemoteLogSegmentMetadata,
+        ) -> Result<(), krabka_remote_storage::RemoteStorageError> {
+            Ok(())
+        }
+    };
     () => {
         fn fetch_log_segment(
             &self,
@@ -269,19 +277,7 @@ pub fn tp() -> TopicIdPartition {
 }
 
 pub fn batch(n: i32) -> RecordBatch {
-    let mut b = RecordBatch {
-        last_offset_delta: n - 1,
-        ..RecordBatch::default()
-    };
-    for i in 0..n {
-        b.records.push(Record {
-            offset_delta: i,
-            key: Some(Bytes::from(format!("k{i}"))),
-            value: Some(Bytes::from(vec![b'x'; 64])),
-            ..Default::default()
-        });
-    }
-    b
+    crate::test_support::keyed_records_batch(n, 64)
 }
 
 /// Build a log rolled into several sealed segments under `dir`.
@@ -294,10 +290,7 @@ pub fn rolled_log(dir: &std::path::Path) -> Log {
         },
     )
     .unwrap();
-    for _ in 0..12 {
-        let mut b = batch(2);
-        log.append(&mut b).unwrap();
-    }
+    crate::remote_log_manager::test_support::append_fixture_batches(&mut log, 12);
     log.sync().unwrap();
     log
 }
@@ -319,13 +312,8 @@ pub fn rolled_tiered_partition_at(
     log_dir: &std::path::Path,
     config: LogConfig,
 ) -> Arc<Partition> {
-    let part_dir = crate::log_dir::partition_dir(log_dir, "orders", index.get());
-    std::fs::create_dir_all(&part_dir).unwrap();
-    let mut log = Log::open(&part_dir, config).unwrap();
-    for _ in 0..12 {
-        let mut b = batch(2);
-        log.append(&mut b).unwrap();
-    }
+    let mut log = crate::remote_log_manager::test_support::partition_log(log_dir, index, config);
+    crate::remote_log_manager::test_support::append_fixture_batches(&mut log, 12);
     log.sync().unwrap();
     leading_partition_over(index, log_dir, log)
 }
@@ -423,4 +411,316 @@ pub fn seed_finished_segments(rlmm: &Arc<dyn RemoteLogMetadataManager>, count: u
         })
         .unwrap();
     }
+}
+
+/// A rolled log and its sealed exports, retaining both directory guards in the caller.
+macro_rules! rolled_log_fixture {
+    ($local:ident, $remote:ident, $log:ident, $exports:ident) => {
+        let $local = tempfile::tempdir().unwrap();
+        let $remote = tempfile::tempdir().unwrap();
+        let $log = crate::remote_log_manager::test_support::rolled_log($local.path());
+        let $exports = $log.tierable_segments();
+    };
+}
+pub(crate) use rolled_log_fixture;
+
+/// The fixture's orders topic in metadata image 9, with an explicit partition count.
+pub fn orders_image(partitions: i32) -> MetadataImage {
+    let mut image = MetadataImage::new(Uuid::from_u128(9));
+    image.apply(&krabka_metadata::MetadataRecord::V1Topic(
+        krabka_metadata::TopicRecord {
+            name: "orders".into(),
+            topic_id: tp().topic_id,
+            partitions,
+            replication_factor: 1,
+        },
+    ));
+    image
+}
+
+/// The ordinary fixture copier: broker 1, epoch 0, and the caller's full export set.
+pub async fn copy_exports(tier: &RemoteTier<'_>, exports: Vec<SegmentExport>) -> usize {
+    super::copy_eligible(tier, &tp(), 1, LeaderEpoch(0), exports).await
+}
+
+/// Three consecutive ten-offset fixture segments, each with 64 bytes of data.
+pub fn three_exports() -> Vec<SegmentExport> {
+    vec![
+        synth_export(0, 9, 100, 64),
+        synth_export(10, 19, 200, 64),
+        synth_export(20, 29, 300, 64),
+    ]
+}
+
+/// Open the real orders-partition directory under the supplied log root.
+pub fn partition_log(log_dir: &std::path::Path, index: PartitionIndex, config: LogConfig) -> Log {
+    let part_dir = crate::log_dir::partition_dir(log_dir, "orders", index.get());
+    std::fs::create_dir_all(&part_dir).unwrap();
+    Log::open(&part_dir, config).unwrap()
+}
+
+/// Retain both temporary directories at the caller while opening its configured partition log.
+macro_rules! partition_log_fixture {
+    ($local:ident, $remote:ident, $log:ident, $config:expr) => {
+        let $local = tempfile::tempdir().unwrap();
+        let $remote = tempfile::tempdir().unwrap();
+        let mut $log = crate::remote_log_manager::test_support::partition_log(
+            $local.path(),
+            krabka_ids::PartitionIndex(0),
+            $config,
+        );
+    };
+}
+pub(crate) use partition_log_fixture;
+
+/// Bind a fixture partition to registry/metadata/storage without moving the caller's guards.
+macro_rules! register_fixture {
+    ($partitions:ident, $controller:ident, $rsm:ident, $rlmm:ident, $partition:expr, $remote:ident) => {
+        $partitions.insert("orders".into(), krabka_ids::PartitionIndex(0), $partition);
+        let $controller = crate::remote_log_manager::test_support::fixed_source(
+            crate::remote_log_manager::test_support::orders_image(1),
+        );
+        let ($rsm, $rlmm) = crate::remote_log_manager::test_support::local_backends($remote.path());
+    };
+}
+pub(crate) use register_fixture;
+
+/// A metadata backend and per-test metric/cache resources, in their original declaration order.
+macro_rules! owned_tier_resources {
+    ($rlmm:ident, $metrics:ident, $cache:ident) => {
+        let $rlmm: std::sync::Arc<dyn krabka_remote_storage::RemoteLogMetadataManager> =
+            std::sync::Arc::new(krabka_remote_storage::InmemoryRemoteLogMetadataManager::new());
+        let $metrics = crate::metrics::BrokerMetrics::new();
+        let $cache = std::sync::Arc::new(krabka_remote_storage::RemoteIndexCache::disabled());
+    };
+}
+pub(crate) use owned_tier_resources;
+
+/// Construct a tier over explicitly owned metrics and cache while retaining caller policies.
+pub fn tier_with_resources<'a>(
+    rsm: &'a Arc<dyn RemoteStorageManager>,
+    rlmm: &'a Arc<dyn RemoteLogMetadataManager>,
+    (metrics, index_cache): (
+        &'a BrokerMetrics,
+        &'a Arc<krabka_remote_storage::RemoteIndexCache>,
+    ),
+    archive: ArchiveMode,
+    copy_timeout: krabka_units::Time,
+) -> RemoteTier<'a> {
+    RemoteTier {
+        metrics,
+        index_cache,
+        ..tier_with_copy_timeout(archive, rsm, rlmm, copy_timeout)
+    }
+}
+
+/// The local and remote guards, declared in the same order as the fixture call sites.
+pub fn temporary_dirs() -> (tempfile::TempDir, tempfile::TempDir) {
+    let local = tempfile::tempdir().unwrap();
+    let remote = tempfile::tempdir().unwrap();
+    (local, remote)
+}
+
+pub fn orders_label() -> crate::metrics::TopicLabel {
+    crate::metrics::TopicLabel {
+        topic: Arc::from(tp().topic.as_str()),
+    }
+}
+
+pub fn append_fixture_batches(log: &mut Log, count: u32) {
+    for _ in 0..count {
+        let mut records = batch(2);
+        log.append(&mut records).unwrap();
+    }
+}
+
+pub fn multiple_segment_snapshot(partition: &Partition) -> (Vec<SegmentExport>, LogConfig) {
+    let snapshot = partition_snapshot(partition);
+    assert2::assert!(snapshot.0.len() >= 2, "test needs multiple sealed segments");
+    snapshot
+}
+
+pub fn partition_log_guard(partition: &Partition) -> std::sync::MutexGuard<'_, Log> {
+    partition.log.lock().expect("partition log mutex poisoned")
+}
+
+pub fn sealed_segment_count(partition: &Partition) -> usize {
+    partition_log_guard(partition).tierable_segments().len()
+}
+
+pub async fn local_retention_at(
+    partition: &Partition,
+    exports: &[SegmentExport],
+    config: &LogConfig,
+    rlmm: &Arc<dyn RemoteLogMetadataManager>,
+    policy: (crate::api_catalog::UnstableApiVersions, i64),
+) -> usize {
+    super::local_retention_pass(
+        &tp(),
+        partition,
+        exports,
+        config,
+        rlmm,
+        super::LocalRetentionBounds {
+            now_ms: policy.1,
+            high_watermark: partition.high_watermark().await,
+        },
+        policy.0,
+    )
+}
+
+pub async fn sweep_mutable(
+    partitions: &crate::partition_registry::PartitionRegistry,
+    controller: &dyn crate::metadata_source::MetadataSource,
+    rsm: &Arc<dyn RemoteStorageManager>,
+    rlmm: &Arc<dyn RemoteLogMetadataManager>,
+) {
+    sweep_once(
+        partitions,
+        controller,
+        &tier(ArchiveMode::Mutable, rsm, rlmm),
+    )
+    .await;
+}
+
+pub fn assert_finished_segments(rlmm: &Arc<dyn RemoteLogMetadataManager>, expected: usize) {
+    let listed = rlmm.list_remote_log_segments(&tp()).unwrap();
+    assert2::assert!(listed.len() == expected);
+    assert2::assert!(
+        listed
+            .iter()
+            .all(|metadata| metadata.state() == RemoteLogSegmentState::CopySegmentFinished)
+    );
+}
+
+pub fn check_partitions_copied(
+    rlmm: &Arc<dyn RemoteLogMetadataManager>,
+    partitions: impl IntoIterator<Item = i32>,
+) {
+    for index in partitions {
+        let listed = partition_segments(rlmm, index);
+        assert2::check!(
+            listed
+                .iter()
+                .any(|metadata| metadata.state() == RemoteLogSegmentState::CopySegmentFinished),
+            "partition {index} finished no copy"
+        );
+    }
+}
+
+pub fn write_once_backends() -> (
+    Arc<dyn RemoteStorageManager>,
+    Arc<dyn RemoteLogMetadataManager>,
+) {
+    (
+        Arc::new(FakeWormArchive::new()),
+        Arc::new(InmemoryRemoteLogMetadataManager::new()),
+    )
+}
+
+pub fn two_exports() -> Vec<SegmentExport> {
+    vec![synth_export(0, 9, 100, 64), synth_export(10, 19, 200, 64)]
+}
+
+pub fn partition_segments(
+    rlmm: &Arc<dyn RemoteLogMetadataManager>,
+    index: i32,
+) -> Vec<RemoteLogSegmentMetadata> {
+    rlmm.list_remote_log_segments(&TopicIdPartition::new(tp().topic_id, "orders", index))
+        .unwrap()
+}
+
+pub fn in_memory_metadata() -> Arc<dyn RemoteLogMetadataManager> {
+    Arc::new(InmemoryRemoteLogMetadataManager::new())
+}
+
+pub fn check_one_segment_state(
+    rlmm: &Arc<dyn RemoteLogMetadataManager>,
+    expected_state: RemoteLogSegmentState,
+) -> Vec<RemoteLogSegmentMetadata> {
+    let listed = rlmm.list_remote_log_segments(&tp()).unwrap();
+    assert2::check!(listed.len() == 1);
+    assert2::check!(listed[0].state() == expected_state);
+    listed
+}
+
+/// The default rolled topic retains records in both tiers without a time or size limit.
+pub fn rolled_partition_config() -> LogConfig {
+    LogConfig {
+        segment_size: krabka_units::bytes(256),
+        remote_storage_enable: true,
+        retention: None,
+        retention_size: None,
+        ..LogConfig::default()
+    }
+}
+
+/// Retain the log-directory guards while creating the registry and its partition.
+macro_rules! rolled_partition_fixture {
+    ($local:ident, $remote:ident, $registry:ident, $partition:ident) => {
+        crate::remote_log_manager::test_support::rolled_partition_fixture!(
+            $local,
+            $remote,
+            $registry,
+            $partition,
+            crate::remote_log_manager::test_support::rolled_partition_config()
+        );
+    };
+    ($local:ident, $remote:ident, $registry:ident, $partition:ident, $config:expr) => {
+        let ($local, $remote) = crate::remote_log_manager::test_support::temporary_dirs();
+        let $registry = crate::partition_registry::PartitionRegistry::new();
+        let $partition =
+            crate::remote_log_manager::test_support::rolled_tiered_partition_with_config(
+                $local.path(),
+                $config,
+            );
+    };
+}
+pub(crate) use rolled_partition_fixture;
+
+/// Register the caller's partition and run the first mutable-tier sweep.
+macro_rules! registered_sweep_fixture {
+    ($registry:ident, $controller:ident, $rsm:ident, $rlmm:ident, $partition:expr, $remote:ident) => {
+        crate::remote_log_manager::test_support::register_fixture!(
+            $registry,
+            $controller,
+            $rsm,
+            $rlmm,
+            $partition,
+            $remote
+        );
+        crate::remote_log_manager::test_support::sweep_mutable(
+            &$registry,
+            &$controller,
+            &$rsm,
+            &$rlmm,
+        )
+        .await;
+    };
+}
+pub(crate) use registered_sweep_fixture;
+
+/// Archive the current sealed segments, then run local retention at the future fixture clock.
+/// Backend guards and the original exports remain owned by the caller through its assertions.
+pub async fn archived_local_retention(
+    partition: &Partition,
+    remote_dir: &std::path::Path,
+    unstable: crate::api_catalog::UnstableApiVersions,
+) -> (
+    Vec<SegmentExport>,
+    Arc<dyn RemoteStorageManager>,
+    Arc<dyn RemoteLogMetadataManager>,
+    usize,
+) {
+    let (exports, config) = multiple_segment_snapshot(partition);
+    let (rsm, rlmm) = archived_backends(remote_dir, &exports).await;
+    let removed = local_retention_at(
+        partition,
+        &exports,
+        &config,
+        &rlmm,
+        (unstable, crate::time_util::now_ms() + 1_000_000),
+    )
+    .await;
+    (exports, rsm, rlmm, removed)
 }

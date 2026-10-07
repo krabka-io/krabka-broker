@@ -133,30 +133,30 @@ impl Model for RecoveryModel {
         }
     }
 
-    fn next_state(&self, last: &Self::State, action: Self::Action) -> Option<Self::State> {
-        let mut state = last.clone();
-        match action {
-            RecoveryAction::AddResponse {
-                node,
-                last_written_epoch,
-                leo,
-                current_epoch,
-            } => {
-                if state.responses.contains_key(&node) {
-                    return None;
-                }
-                state.responses.insert(
+    krabka_macros::model_transition!(last, action, state; {
+            match action {
+                RecoveryAction::AddResponse {
                     node,
-                    ReplicaLog {
-                        last_written_leader_epoch: last_written_epoch,
-                        log_end_offset: leo,
-                        current_leader_epoch: current_epoch,
-                    },
-                );
+                    last_written_epoch,
+                    leo,
+                    current_epoch,
+                } => {
+                    if state.responses.contains_key(&node) {
+                        return None;
+                    }
+                    state.responses.insert(
+                        node,
+                        ReplicaLog {
+                            last_written_leader_epoch: last_written_epoch,
+                            log_end_offset: leo,
+                            current_leader_epoch: current_epoch,
+                        },
+                    );
+                }
             }
-        }
-        Some(state)
-    }
+            Some(state)
+
+    });
 
     fn properties(&self) -> Vec<Property<Self>> {
         let mut props = vec![

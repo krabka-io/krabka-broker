@@ -11,52 +11,33 @@
 //! Each case stops or fails the marker fan-out with the broker's test gate,
 //! so the durable state is `Prepare*` at a known point.
 
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use assert2::assert;
-use bytes::Bytes;
-use krabka_broker::{BootstrapMode, Broker, BrokerConfig, BrokerHandle, MarkerFanoutMode};
+use krabka_broker::{BootstrapMode, Broker, BrokerHandle, MarkerFanoutMode};
 use krabka_client_core::Client;
-use krabka_protocol::{
-    owned::{
-        add_partitions_to_txn_request::{AddPartitionsToTxnRequest, AddPartitionsToTxnTransaction},
-        common::add_partitions_to_txn_request::add_partitions_to_txn_topic::AddPartitionsToTxnTopic,
-        end_txn_request::EndTxnRequest,
-        end_txn_response::EndTxnResponse,
-        find_coordinator_request::FindCoordinatorRequest,
-        init_producer_id_request::InitProducerIdRequest,
-        init_producer_id_response::InitProducerIdResponse,
-        metadata_request::{MetadataRequest, MetadataRequestTopic},
-        produce_request::{PartitionProduceData, ProduceRequest, TopicProduceData},
-    },
-    primitives::uuid::Uuid,
-    records::{Attributes, Record, RecordBatch},
+use krabka_protocol::owned::{
+    end_txn_request::EndTxnRequest, end_txn_response::EndTxnResponse,
+    init_producer_id_response::InitProducerIdResponse, produce_request::ProduceRequest,
 };
 use tempfile::TempDir;
 
-use crate::txnver_harness::{admin_client, create_topic, downgrade_transaction_version};
+use crate::{
+    support::{
+        produce::single_partition_produce,
+        transactions::{end_transaction_request, init_producer_request},
+    },
+    txnver_harness::{
+        admin_client, config, create_topic, downgrade_transaction_version, find_coordinator,
+        topic_id,
+    },
+};
 
-const NOT_LEADER_OR_FOLLOWER: i16 = 6;
-const UNKNOWN_TOPIC_OR_PARTITION: i16 = 3;
-const COORDINATOR_LOAD_IN_PROGRESS: i16 = 14;
-const COORDINATOR_NOT_AVAILABLE: i16 = 15;
-const NOT_COORDINATOR: i16 = 16;
 const CONCURRENT_TRANSACTIONS: i16 = 51;
 const PRODUCER_FENCED: i16 = 90;
-const UNKNOWN_TOPIC_ID: i16 = 100;
 
 /// The time a retried request may take to see a transaction complete.
 const SETTLE: Duration = Duration::from_secs(20);
-
-fn config(log_dir: std::path::PathBuf, bootstrap_mode: Option<BootstrapMode>) -> BrokerConfig {
-    let mut cfg = BrokerConfig::for_tests(log_dir);
-    cfg.transaction_state_num_partitions = 1;
-    cfg.transaction_state_replication_factor = 1;
-    if let Some(mode) = bootstrap_mode {
-        cfg.bootstrap_mode = mode;
-    }
-    cfg
-}
 
 #[derive(Debug, Clone, Copy)]
 struct Identity {
@@ -65,22 +46,7 @@ struct Identity {
 }
 
 fn coordinator_is_loading(code: i16) -> bool {
-    matches!(
-        code,
-        COORDINATOR_LOAD_IN_PROGRESS | COORDINATOR_NOT_AVAILABLE | NOT_COORDINATOR
-    )
-}
-
-async fn find_coordinator(client: &Client, transactional_id: &str) {
-    let _ = client
-        .send(FindCoordinatorRequest {
-            key: transactional_id.into(),
-            key_type: 1,
-            coordinator_keys: vec![transactional_id.into()],
-            ..Default::default()
-        })
-        .await
-        .expect("FindCoordinator");
+    crate::support::transaction_wire::coordinator_loading(code)
 }
 
 async fn init_producer_id(
@@ -89,83 +55,38 @@ async fn init_producer_id(
     identity: (i64, i16),
 ) -> InitProducerIdResponse {
     client
-        .send(InitProducerIdRequest {
-            transactional_id: Some(transactional_id.into()),
-            transaction_timeout_ms: 60_000,
-            producer_id: identity.0,
-            producer_epoch: identity.1,
-            ..Default::default()
-        })
+        .send(init_producer_request(
+            Some(transactional_id.into()),
+            60_000,
+            (identity.0, identity.1),
+        ))
         .await
         .expect("InitProducerId")
 }
 
 async fn init_producer(client: &Client, transactional_id: &str) -> Identity {
     find_coordinator(client, transactional_id).await;
-    let deadline = Instant::now() + SETTLE;
-    loop {
-        let response = init_producer_id(client, transactional_id, (-1, -1)).await;
-        if coordinator_is_loading(response.error_code) && Instant::now() < deadline {
-            // intentional: coordinator load has no awaiter; the answer is the signal.
-            tokio::time::sleep(Duration::from_millis(100)).await;
-            continue;
-        }
-        assert!(response.error_code == 0, "InitProducerId: {response:?}");
-        return Identity {
-            producer_id: response.producer_id,
-            epoch: response.producer_epoch,
-        };
+    let response = crate::support::transaction_wire::initialize_producer(
+        || init_producer_id(client, transactional_id, (-1, -1)),
+        coordinator_is_loading,
+        SETTLE,
+    )
+    .await;
+    Identity {
+        producer_id: response.producer_id,
+        epoch: response.producer_epoch,
     }
 }
 
 async fn add_partition(client: &Client, transactional_id: &str, producer: Identity, topic: &str) {
-    let added = AddPartitionsToTxnTopic {
-        name: topic.into(),
-        partitions: vec![0],
-        ..Default::default()
-    };
-    let response = client
-        .send(AddPartitionsToTxnRequest {
-            transactions: vec![AddPartitionsToTxnTransaction {
-                transactional_id: transactional_id.into(),
-                producer_id: producer.producer_id,
-                producer_epoch: producer.epoch,
-                topics: vec![added.clone()],
-                ..Default::default()
-            }],
-            v3_and_below_transactional_id: transactional_id.into(),
-            v3_and_below_producer_id: producer.producer_id,
-            v3_and_below_producer_epoch: producer.epoch,
-            v3_and_below_topics: vec![added],
-            ..Default::default()
-        })
-        .await
-        .expect("AddPartitionsToTxn");
-    let code = response
-        .results_by_transaction
-        .first()
-        .and_then(|transaction| transaction.topic_results.first())
-        .and_then(|row| row.results_by_partition.first())
-        .map_or(response.error_code, |row| row.partition_error_code);
-    assert!(code == 0, "AddPartitionsToTxn: {response:?}");
-}
-
-async fn topic_id(client: &Client, topic: &str) -> Uuid {
-    client
-        .send(MetadataRequest {
-            topics: Some(vec![MetadataRequestTopic {
-                name: Some(topic.into()),
-                ..Default::default()
-            }]),
-            ..Default::default()
-        })
-        .await
-        .expect("Metadata")
-        .topics
-        .iter()
-        .find(|row| row.name.as_deref() == Some(topic))
-        .map(|row| row.topic_id)
-        .expect("topic in metadata")
+    crate::support::transaction_wire::partition_added(client.send(
+        crate::support::transaction_wire::add_partition_request(
+            transactional_id,
+            topic,
+            (producer.producer_id, producer.epoch),
+        ),
+    ))
+    .await;
 }
 
 /// Produce `values` in one batch. `transaction` is `None` for a plain batch,
@@ -178,68 +99,31 @@ async fn produce(
     values: &[&'static str],
 ) {
     let producer = transaction.map(|(_, producer)| producer);
-    let records = i32::try_from(values.len()).expect("record count");
-    let batch = RecordBatch {
-        attributes: Attributes::default().with_transactional(producer.is_some()),
-        producer_id: producer.map_or(-1, |producer| producer.producer_id),
-        producer_epoch: producer.map_or(-1, |producer| producer.epoch),
-        base_sequence: if producer.is_some() { 0 } else { -1 },
-        last_offset_delta: records - 1,
-        max_timestamp: 1,
-        records: values
-            .iter()
-            .zip(0..)
-            .map(|(value, offset_delta)| Record {
-                offset_delta,
-                value: Some(Bytes::from_static(value.as_bytes())),
-                ..Record::default()
-            })
-            .collect(),
-        ..RecordBatch::default()
-    };
+    let batch = crate::support::transaction_wire::records_batch(
+        producer.map(|producer| (producer.producer_id, producer.epoch)),
+        values,
+    );
     let request = ProduceRequest {
         transactional_id: transaction.map(|(transactional_id, _)| transactional_id.to_owned()),
-        acks: -1,
-        timeout_ms: 5_000,
-        topic_data: vec![TopicProduceData {
-            name: topic.into(),
-            topic_id: topic_id(client, topic).await,
-            partition_data: vec![PartitionProduceData {
-                index: 0,
-                records: Some(batch.into()),
-                ..Default::default()
-            }],
-            ..Default::default()
-        }],
-        ..Default::default()
+        ..single_partition_produce(
+            topic,
+            topic_id(client, topic).await,
+            0,
+            Some(batch.into()),
+            (-1, 5_000),
+        )
     };
-    let deadline = Instant::now() + SETTLE;
-    loop {
-        let response = client.send(request.clone()).await.expect("Produce");
-        let code = response.responses[0].partition_responses[0].error_code;
-        let settling = matches!(
-            code,
-            NOT_LEADER_OR_FOLLOWER | UNKNOWN_TOPIC_OR_PARTITION | UNKNOWN_TOPIC_ID
-        );
-        if settling && Instant::now() < deadline {
-            // intentional: partition leadership after a start has no awaiter
-            // reachable from this client; the produce answer is the signal.
-            tokio::time::sleep(Duration::from_millis(100)).await;
-            continue;
-        }
-        assert!(code == 0, "Produce: {response:?}");
-        return;
-    }
+    let response = crate::support::transaction_wire::settled_produce(client, request, SETTLE).await;
+    let code = response.responses[0].partition_responses[0].error_code;
+    assert!(code == 0, "Produce: {response:?}");
 }
 
 fn end_txn_request(transactional_id: &str, producer: Identity, committed: bool) -> EndTxnRequest {
-    EndTxnRequest {
-        transactional_id: transactional_id.into(),
-        producer_id: producer.producer_id,
-        producer_epoch: producer.epoch,
+    end_transaction_request(
+        transactional_id,
+        (producer.producer_id, producer.epoch),
         committed,
-        ..Default::default()
-    }
+    )
 }
 
 /// Retry `EndTxn` the way a Kafka producer does after a lost answer, until
@@ -251,27 +135,23 @@ async fn end_txn_until_answered(
     committed: bool,
 ) -> EndTxnResponse {
     find_coordinator(client, transactional_id).await;
-    let deadline = Instant::now() + SETTLE;
-    loop {
-        let response = client
-            .send(end_txn_request(transactional_id, producer, committed))
-            .await
-            .expect("EndTxn");
-        let retriable = coordinator_is_loading(response.error_code)
-            || response.error_code == CONCURRENT_TRANSACTIONS;
-        if retriable && Instant::now() < deadline {
-            // intentional: transaction completion has no awaiter reachable
-            // from this client; the EndTxn answer is the signal.
-            tokio::time::sleep(Duration::from_millis(100)).await;
-            continue;
-        }
-        return response;
-    }
+    crate::support::transaction_wire::retry_coordinator(
+        || async {
+            client
+                .send(end_txn_request(transactional_id, producer, committed))
+                .await
+                .expect("EndTxn")
+        },
+        |response| response.error_code,
+        |code| coordinator_is_loading(code) || code == CONCURRENT_TRANSACTIONS,
+        SETTLE,
+    )
+    .await
 }
 
 /// The values a `read_committed` consumer reads, up to and including `last`.
 async fn read_committed_through(bootstrap: &str, topic: &str, last: &str) -> Vec<String> {
-    crate::txn_consumer_fixture::read_committed_through(bootstrap, topic, last, SETTLE).await
+    crate::support::transaction_wire::read_committed_through(bootstrap, topic, last, SETTLE).await
 }
 
 struct Started {
@@ -317,6 +197,19 @@ async fn open_transaction(
     producer
 }
 
+async fn fanout_transaction(
+    log_dir: &std::path::Path,
+    transactional_id: &str,
+    topic: &str,
+    downgrade_to: Option<i16>,
+    mode: MarkerFanoutMode,
+) -> (Started, Identity) {
+    let started = start(log_dir, None).await;
+    let producer = open_transaction(&started.client, transactional_id, topic, downgrade_to).await;
+    started.broker.set_transaction_marker_fanout_for_test(mode);
+    (started, producer)
+}
+
 /// The `EndTxn` v5 answer for a completed transaction. A v5 request is a `TV_2`
 /// client whatever `transaction.version` the cluster finalized, so completion
 /// bumps the epoch (`epoch_bump` 1) at every level. A client below v5 would keep
@@ -344,12 +237,14 @@ struct CutCase {
 /// markers, start it again, and retry `EndTxn`.
 async fn end_txn_cut_by_shutdown(case: &CutCase) -> (Identity, EndTxnResponse, Vec<String>) {
     let directory = TempDir::new().expect("tempdir");
-    let first = start(directory.path(), None).await;
-    let producer = open_transaction(&first.client, case.name, case.topic, case.downgrade_to).await;
-
-    first
-        .broker
-        .set_transaction_marker_fanout_for_test(MarkerFanoutMode::Hold);
+    let (first, producer) = fanout_transaction(
+        directory.path(),
+        case.name,
+        case.topic,
+        case.downgrade_to,
+        MarkerFanoutMode::Hold,
+    )
+    .await;
     let cut_client = admin_client(&first.bootstrap).await;
     let request = end_txn_request(case.name, producer, case.committed);
     let cut = tokio::spawn(async move { cut_client.send(request).await });
@@ -412,17 +307,26 @@ async fn end_txn_cut_between_prepare_and_complete_completes_after_restart() {
     }
 }
 
+async fn assert_visible_suffix_and_shutdown(started: Started, topic: &str, expected: &[&str]) {
+    produce(&started.client, topic, None, &["z"]).await;
+    let seen = read_committed_through(&started.bootstrap, topic, "z").await;
+    assert!(seen == expected);
+    started.broker.shutdown().await;
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn init_producer_id_during_prepare_commit_is_concurrent_transactions() {
     let transactional_id = "init-during-prepare";
     let topic = "init-during-prepare";
     let directory = TempDir::new().expect("tempdir");
-    let started = start(directory.path(), None).await;
-    let producer = open_transaction(&started.client, transactional_id, topic, None).await;
-
-    started
-        .broker
-        .set_transaction_marker_fanout_for_test(MarkerFanoutMode::Hold);
+    let (started, producer) = fanout_transaction(
+        directory.path(),
+        transactional_id,
+        topic,
+        None,
+        MarkerFanoutMode::Hold,
+    )
+    .await;
     let end_client = admin_client(&started.bootstrap).await;
     let request = end_txn_request(transactional_id, producer, true);
     let end = tokio::spawn(async move { end_client.send(request).await });
@@ -462,10 +366,7 @@ async fn init_producer_id_during_prepare_commit_is_concurrent_transactions() {
         .set_transaction_marker_fanout_for_test(MarkerFanoutMode::Open);
     let answer = end.await.expect("EndTxn task").expect("EndTxn answer");
     assert!(answer == completed(producer, 1));
-    produce(&started.client, topic, None, &["z"]).await;
-    let seen = read_committed_through(&started.bootstrap, topic, "z").await;
-    assert!(seen == ["a", "b", "c", "z"]);
-    started.broker.shutdown().await;
+    assert_visible_suffix_and_shutdown(started, topic, &["a", "b", "c", "z"]).await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -473,12 +374,14 @@ async fn end_txn_with_a_failed_marker_fanout_answers_none_and_completes_later() 
     let transactional_id = "failed-fanout";
     let topic = "failed-fanout";
     let directory = TempDir::new().expect("tempdir");
-    let started = start(directory.path(), None).await;
-    let producer = open_transaction(&started.client, transactional_id, topic, None).await;
-
-    started
-        .broker
-        .set_transaction_marker_fanout_for_test(MarkerFanoutMode::Fail);
+    let (started, producer) = fanout_transaction(
+        directory.path(),
+        transactional_id,
+        topic,
+        None,
+        MarkerFanoutMode::Fail,
+    )
+    .await;
     let answer = started
         .client
         .send(end_txn_request(transactional_id, producer, true))
@@ -494,8 +397,5 @@ async fn end_txn_with_a_failed_marker_fanout_answers_none_and_completes_later() 
         .set_transaction_marker_fanout_for_test(MarkerFanoutMode::Open);
     let retried = end_txn_until_answered(&started.client, transactional_id, producer, true).await;
     assert!(retried == completed(producer, 1), "retried EndTxn");
-    produce(&started.client, topic, None, &["z"]).await;
-    let seen = read_committed_through(&started.bootstrap, topic, "z").await;
-    assert!(seen == ["a", "b", "c", "z"]);
-    started.broker.shutdown().await;
+    assert_visible_suffix_and_shutdown(started, topic, &["a", "b", "c", "z"]).await;
 }

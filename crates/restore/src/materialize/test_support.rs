@@ -6,12 +6,14 @@
 use bytes::{Bytes, BytesMut};
 use clap::Parser as _;
 use krabka_ids::Offset;
+use krabka_log::{Log, LogConfig, name};
 use krabka_protocol::records::{Attributes, RecordBatch};
 use krabka_remote_storage::TopicIdPartition;
 use uuid::Uuid;
 
 use crate::{
     args::RestoreArgs,
+    bound::Predicates,
     discover::PartitionInventory,
     verify::{SegmentFacts, VerifiedSegment},
 };
@@ -31,6 +33,22 @@ pub(super) fn args_from(extra: &[&str], log_dir: &std::path::Path) -> RestoreArg
     crate::Cli::try_parse_from(argv)
         .expect("valid command line")
         .args
+}
+
+/// A fresh orders partition and its bound predicates, with the target kept alive.
+pub(super) fn materialization_context(
+    extra: &[&str],
+) -> (tempfile::TempDir, RestoreArgs, TopicIdPartition, Predicates) {
+    let target = tempfile::tempdir().expect("tempdir");
+    let args = args_from(extra, target.path());
+    let partition = topic_id_partition("orders", 0);
+    let predicates = Predicates::from_args(&args).expect("predicates");
+    (target, args, partition, predicates)
+}
+
+pub(super) fn reopen_orders(args: &RestoreArgs) -> Log {
+    let dir = name::partition_dir(&args.target.log_dir, "orders", 0);
+    Log::open(&dir, LogConfig::default()).expect("reopen")
 }
 
 pub(super) fn topic_id_partition(topic: &str, partition: i32) -> TopicIdPartition {

@@ -8,7 +8,7 @@ use krabka_broker::{Broker, BrokerConfig};
 use krabka_log::LogConfig;
 
 use super::{
-    ports::{broker0_advertised, broker0_listen, controller_addr_0},
+    ports::{broker0_advertised, broker0_listen},
     tiered_workload::TIERED_SEGMENT_SIZE,
 };
 
@@ -36,9 +36,6 @@ pub(crate) fn start_host_broker_with_minio_tier(
 > {
     crate::support::init_jvm_tracing("krabka_broker=debug,info");
     let dir = tempfile::tempdir().expect("tempdir");
-    let listen_addr: std::net::SocketAddr = broker0_listen().parse().expect("static addr");
-    let controller_addr: std::net::SocketAddr =
-        controller_addr_0().parse().expect("allocated addr");
     let config = BrokerConfig {
         // The tiered topics these suites create override no segment size —
         // no old JVM `TopicCommand` can name a sub-1-MiB one — so they
@@ -52,14 +49,7 @@ pub(crate) fn start_host_broker_with_minio_tier(
         // local-retention pass evicts them) within the test's wall clock.
         remote_log_manager_interval: krabka_units::secs(1),
         remote_log_metadata: rlmm,
-        ..crate::support::jvm_broker_config(
-            1,
-            listen_addr,
-            controller_addr,
-            broker0_advertised(),
-            dir.path().to_path_buf(),
-            &[(1, controller_addr)],
-        )
+        ..crate::jvm_acceptance::host_broker_config(dir.path(), "static addr")
     };
     Box::pin(async move {
         let handle = Broker::start(config.clone()).await.expect("start broker");

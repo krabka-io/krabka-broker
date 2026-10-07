@@ -11,6 +11,7 @@
 //! `ListOffsets(EARLIEST_LOCAL_TIMESTAMP)` lookup and restarts the log at the
 //! leader's local log start.
 
+use krabka_client_core::Connection;
 use krabka_ids::LeaderEpoch;
 use krabka_log::Offset;
 use krabka_protocol::owned::{
@@ -27,7 +28,7 @@ use super::{
     Config, connection::connection_options, replication_target_changed, response::RowAction,
     task_replication_target,
 };
-use crate::codes;
+use crate::{codes, network::client::InterBrokerError};
 
 /// Where this follower truncates for a KIP-320 `diverging_epoch` row, as
 /// `AbstractFetcherThread.getOffsetTruncationState` computes it.
@@ -178,7 +179,7 @@ where
             %error,
             "replicator: could not read the leader's offsets after out_of_range; retrying"
         );
-        RowAction::Backoff(cfg.replication.unexpected_error_backoff)
+        RowAction::Backoff(cfg.connection.replication.unexpected_error_backoff)
     };
     let replica_end = partition.log_end_offset().0;
     let leader_end = match leader_offset(LATEST_TIMESTAMP).await {
@@ -213,17 +214,11 @@ where
             "replicator: skipping out_of_range recovery from stale target");
         return RowAction::Drop;
     }
-    let _target_guard = match partition
-        .lock_replication_target(task_replication_target(cfg))
-        .await
-    {
-        Ok(guard) => guard,
-        Err(error) => {
-            warn!(topic = %cfg.topic, partition = cfg.partition.get(), %error,
-                "replicator: skipping out_of_range recovery from stale local target");
-            return RowAction::Drop;
-        }
-    };
+    let _target_guard = lock_local_target!(
+        partition,
+        cfg,
+        "replicator: skipping out_of_range recovery from stale local target"
+    );
     warn!(
         topic = %cfg.topic,
         partition = cfg.partition.get(),
@@ -311,7 +306,7 @@ pub(super) async fn handle_offset_moved_to_tiered_storage(cfg: &Config) -> RowAc
                 %error,
                 "replicator: could not read the leader's local log start; retrying"
             );
-            return RowAction::Backoff(cfg.replication.unexpected_error_backoff);
+            return RowAction::Backoff(cfg.connection.replication.unexpected_error_backoff);
         }
     };
 
@@ -325,17 +320,11 @@ pub(super) async fn handle_offset_moved_to_tiered_storage(cfg: &Config) -> RowAc
             "replicator: skipping tiered-storage restart from stale target");
         return RowAction::Drop;
     }
-    let _target_guard = match partition
-        .lock_replication_target(task_replication_target(cfg))
-        .await
-    {
-        Ok(guard) => guard,
-        Err(error) => {
-            warn!(topic = %cfg.topic, partition = cfg.partition.get(), %error,
-                "replicator: skipping tiered-storage restart from stale local target");
-            return RowAction::Drop;
-        }
-    };
+    let _target_guard = lock_local_target!(
+        partition,
+        cfg,
+        "replicator: skipping tiered-storage restart from stale local target"
+    );
     match partition.reset_to(Offset(local_log_start)).await {
         Ok(()) => {
             cfg.producer_state
@@ -356,19 +345,25 @@ pub(super) async fn handle_offset_moved_to_tiered_storage(cfg: &Config) -> RowAc
     RowAction::Continue
 }
 
-/// Asks the leader for its offset at a `ListOffsets` sentinel `timestamp`,
-/// Kafka's `RemoteLeaderEndPoint.fetchOffset`.
-async fn leader_list_offset(cfg: &Config, our_epoch: i32, timestamp: i64) -> Result<i64, String> {
+/// Dial with the partition's unchanged identity and outbound policy, before its RPC.
+async fn leader_connection(cfg: &Config) -> Result<Connection, InterBrokerError> {
     let opts = connection_options(&cfg.client_id);
-    let client = cfg
+    cfg.connection
         .inter_broker_client
         .connect_as_connection(
             &cfg.leader_host,
             cfg.leader_port,
-            cfg.inter_broker_listener_protocol,
-            &cfg.inter_broker_server_name,
+            cfg.connection.inter_broker_listener_protocol,
+            &cfg.connection.inter_broker_server_name,
             opts,
         )
+        .await
+}
+
+/// Asks the leader for its offset at a `ListOffsets` sentinel `timestamp`,
+/// Kafka's `RemoteLeaderEndPoint.fetchOffset`.
+async fn leader_list_offset(cfg: &Config, our_epoch: i32, timestamp: i64) -> Result<i64, String> {
+    let client = leader_connection(cfg)
         .await
         .map_err(|e| format!("list_offsets({timestamp}): connect: {e}"))?;
     let response = client
@@ -470,16 +465,7 @@ pub(super) async fn handle_epoch_fence(cfg: &Config) -> Result<(), String> {
         .load(std::sync::atomic::Ordering::Acquire);
     drop(part);
 
-    let opts = connection_options(&cfg.client_id);
-    let client = cfg
-        .inter_broker_client
-        .connect_as_connection(
-            &cfg.leader_host,
-            cfg.leader_port,
-            cfg.inter_broker_listener_protocol,
-            &cfg.inter_broker_server_name,
-            opts,
-        )
+    let client = leader_connection(cfg)
         .await
         .map_err(|e| format!("handle_epoch_fence: connect: {e}"))?;
 
@@ -847,7 +833,7 @@ mod tests {
 
         let action = handle_offset_moved_to_tiered_storage(&cfg).await;
 
-        assert!(action == RowAction::Backoff(cfg.replication.unexpected_error_backoff));
+        assert!(action == RowAction::Backoff(cfg.connection.replication.unexpected_error_backoff));
         let after = cfg
             .partitions
             .get(&cfg.topic, cfg.partition)

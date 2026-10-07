@@ -304,33 +304,27 @@ mod tests {
 
     use super::*;
     use crate::schema_validation::validator::test_support::{
-        KNOWN_ID, framed, no_metrics, registry, unavailable_ttl_ms, validator,
+        KNOWN_ID, framed, no_metrics, registry, response_endpoint, unavailable_ttl_ms, validator,
+        value_check,
     };
 
     #[tokio::test]
     async fn an_unregistered_id_is_rejected_and_the_rejection_is_cached() {
         let server = MockServer::start().await;
-        Mock::given(method("GET"))
-            .and(path("/schemas/ids/99/versions"))
-            .respond_with(ResponseTemplate::new(404))
-            // One call for two checks: the negative answer is cached, so a
-            // produce storm against one bad id costs one registry call.
-            .expect(1)
-            .mount(&server)
-            .await;
+        // One call for two checks: the negative answer is cached, so a
+        // produce storm against one bad id costs one registry call.
+        response_endpoint(
+            &server,
+            "/schemas/ids/99/versions",
+            ResponseTemplate::new(404),
+            Some(1),
+        )
+        .await;
 
         let v = validator(server.uri());
         let field = framed(99, b"anything");
         for _ in 0..2 {
-            let got = v
-                .check(
-                    "orders",
-                    Role::Value,
-                    ValidationMode::Id,
-                    &field,
-                    &no_metrics(),
-                )
-                .await;
+            let got = value_check(&v, ValidationMode::Id, &field).await;
             assert!(let Err(reason) = got);
             check!(reason.label() == "unknown_id", "{reason}");
         }
@@ -343,17 +337,7 @@ mod tests {
         let v = validator(server.uri());
         let field = framed(KNOWN_ID, b"anything");
         for _ in 0..3 {
-            check!(
-                v.check(
-                    "orders",
-                    Role::Value,
-                    ValidationMode::Id,
-                    &field,
-                    &no_metrics()
-                )
-                .await
-                .is_ok()
-            );
+            check!(value_check(&v, ValidationMode::Id, &field).await.is_ok());
         }
     }
 
@@ -368,34 +352,14 @@ mod tests {
                 .expect("validator");
         let field = framed(KNOWN_ID, b"anything");
 
-        check!(
-            v.check(
-                "orders",
-                Role::Value,
-                ValidationMode::Id,
-                &field,
-                &no_metrics()
-            )
-            .await
-            .is_ok()
-        );
+        check!(value_check(&v, ValidationMode::Id, &field).await.is_ok());
         // Past the TTL on a controlled timeline, so the expiry is an assertion
         // and not a race against a real sleep. The wall clock is anchored to
         // that timeline, so advancing it moves the cache's stamp with it.
         timeline
             .advance(Duration::from_millis(50))
             .expect("manual time moves forward");
-        check!(
-            v.check(
-                "orders",
-                Role::Value,
-                ValidationMode::Id,
-                &field,
-                &no_metrics()
-            )
-            .await
-            .is_ok()
-        );
+        check!(value_check(&v, ValidationMode::Id, &field).await.is_ok());
     }
 
     #[tokio::test]
@@ -460,13 +424,15 @@ mod tests {
             .up_to_n_times(1)
             .mount(&server)
             .await;
-        Mock::given(method("GET"))
-            .and(path(format!("/schemas/ids/{KNOWN_ID}/versions")))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+        response_endpoint(
+            &server,
+            &format!("/schemas/ids/{KNOWN_ID}/versions"),
+            ResponseTemplate::new(200).set_body_json(serde_json::json!([
                 {"subject": "orders-value", "version": 1}
-            ])))
-            .mount(&server)
-            .await;
+            ])),
+            None,
+        )
+        .await;
 
         let timeline = ManualMonotonicClock::new_shared();
         let clock = timeline.new_wall_clock(SystemTime::now());
@@ -475,15 +441,7 @@ mod tests {
                 .expect("validator");
         let field = framed(KNOWN_ID, b"anything");
 
-        let got = v
-            .check(
-                "orders",
-                Role::Value,
-                ValidationMode::Id,
-                &field,
-                &no_metrics(),
-            )
-            .await;
+        let got = value_check(&v, ValidationMode::Id, &field).await;
         assert!(let Err(reason) = got);
         check!(reason.label() == "registry_unavailable", "{reason}");
 
@@ -491,15 +449,7 @@ mod tests {
             .advance(Duration::from_millis(unavailable_ttl_ms() + 1))
             .expect("manual time moves forward");
         check!(
-            v.check(
-                "orders",
-                Role::Value,
-                ValidationMode::Id,
-                &field,
-                &no_metrics()
-            )
-            .await
-            .is_ok(),
+            value_check(&v, ValidationMode::Id, &field).await.is_ok(),
             "the registry recovered, and the short negative TTL let the broker re-ask"
         );
     }
@@ -524,15 +474,7 @@ mod tests {
         let field = framed(KNOWN_ID, b"anything");
 
         for _ in 0..2 {
-            let got = v
-                .check(
-                    "orders",
-                    Role::Value,
-                    ValidationMode::Id,
-                    &field,
-                    &no_metrics(),
-                )
-                .await;
+            let got = value_check(&v, ValidationMode::Id, &field).await;
             assert!(let Err(reason) = got);
             check!(reason.label() == "unknown_id", "{reason}");
             timeline
@@ -555,18 +497,19 @@ mod tests {
                     "version": 1
                 }])
             };
-            Mock::given(method("GET"))
-                .and(path(format!("/subjects/subject-{index}/versions/1")))
-                .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            response_endpoint(
+                &server,
+                &format!("/subjects/subject-{index}/versions/1"),
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({
                     "subject": format!("subject-{index}"),
                     "version": 1,
                     "id": index,
                     "schema": r#"{"type":"record","name":"Leaf","fields":[]}"#,
                     "references": references
-                })))
-                .expect(1)
-                .mount(&server)
-                .await;
+                })),
+                Some(1),
+            )
+            .await;
         }
 
         let v = validator(server.uri());
@@ -593,17 +536,18 @@ mod tests {
                 subject: format!("subject-{index}"),
                 version: 1,
             });
-            Mock::given(method("GET"))
-                .and(path(format!("/subjects/subject-{index}/versions/1")))
-                .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            response_endpoint(
+                &server,
+                &format!("/subjects/subject-{index}/versions/1"),
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({
                     "subject": format!("subject-{index}"),
                     "version": 1,
                     "id": index,
                     "schema": r#"{"type":"record","name":"Leaf","fields":[]}"#
-                })))
-                .expect(u64::from(index < MAX_REFERENCE_SCHEMAS))
-                .mount(&server)
-                .await;
+                })),
+                Some(u64::from(index < MAX_REFERENCE_SCHEMAS)),
+            )
+            .await;
         }
 
         let result = validator(server.uri())
@@ -621,17 +565,18 @@ mod tests {
     #[tokio::test]
     async fn a_reference_closure_is_bounded_by_total_bytes() {
         let server = MockServer::start().await;
-        Mock::given(method("GET"))
-            .and(path("/subjects/large/versions/1"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+        response_endpoint(
+            &server,
+            "/subjects/large/versions/1",
+            ResponseTemplate::new(200).set_body_json(serde_json::json!({
                 "subject": "large",
                 "version": 1,
                 "id": 7,
                 "schema": "x".repeat(MAX_REFERENCE_BYTES + 1)
-            })))
-            .expect(1)
-            .mount(&server)
-            .await;
+            })),
+            Some(1),
+        )
+        .await;
         let root = [SchemaReference {
             name: "large".to_owned(),
             subject: "large".to_owned(),
@@ -653,40 +598,30 @@ mod tests {
     #[tokio::test]
     async fn one_deadline_bounds_the_whole_registry_operation() {
         let server = MockServer::start().await;
-        Mock::given(method("GET"))
-            .and(path(format!("/schemas/ids/{KNOWN_ID}/versions")))
-            .respond_with(
-                ResponseTemplate::new(200)
-                    .set_delay(Duration::from_millis(50))
-                    .set_body_json(serde_json::json!([
-                        {"subject": "orders-value", "version": 1}
-                    ])),
-            )
-            .expect(1)
-            .mount(&server)
-            .await;
-        Mock::given(method("GET"))
-            .and(path(format!("/schemas/ids/{KNOWN_ID}")))
-            .respond_with(
-                ResponseTemplate::new(200)
-                    .set_delay(Duration::from_millis(50))
-                    .set_body_json(serde_json::json!({"schema": r#""string""#})),
-            )
-            .expect(1)
-            .mount(&server)
-            .await;
+        response_endpoint(
+            &server,
+            &format!("/schemas/ids/{KNOWN_ID}/versions"),
+            ResponseTemplate::new(200)
+                .set_delay(Duration::from_millis(50))
+                .set_body_json(serde_json::json!([
+                    {"subject": "orders-value", "version": 1}
+                ])),
+            Some(1),
+        )
+        .await;
+        response_endpoint(
+            &server,
+            &format!("/schemas/ids/{KNOWN_ID}"),
+            ResponseTemplate::new(200)
+                .set_delay(Duration::from_millis(50))
+                .set_body_json(serde_json::json!({"schema": r#""string""#})),
+            Some(1),
+        )
+        .await;
         let v = SchemaValidator::new(server.uri(), false, 100, minutes(1), millis(80))
             .expect("validator");
 
-        let result = v
-            .check(
-                "orders",
-                Role::Value,
-                ValidationMode::Full,
-                &framed(KNOWN_ID, b"a"),
-                &no_metrics(),
-            )
-            .await;
+        let result = value_check(&v, ValidationMode::Full, &framed(KNOWN_ID, b"a")).await;
         assert!(let Err(reason) = result);
         check!(reason.label() == "registry_unavailable", "{reason}");
     }

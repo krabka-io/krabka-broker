@@ -7,6 +7,7 @@ use krabka_remote_storage::{RlmmCacheDump, TopicIdPartition};
 
 use super::*;
 use crate::{
+    args::RestoreArgs,
     backend::open_archive,
     discover::{
         inventory,
@@ -56,6 +57,52 @@ fn two_segment_archive() -> (tempfile::TempDir, Uuid, Uuid, Uuid) {
     (archive, topic, first, second)
 }
 
+fn two_segment_snapshot(
+    second_state: RemoteLogSegmentState,
+) -> (
+    tempfile::TempDir,
+    tempfile::TempDir,
+    std::path::PathBuf,
+    Uuid,
+) {
+    let (archive, topic_id, first, second) = two_segment_archive();
+    let snapshot_dir = tempfile::tempdir().expect("temp dir");
+    let snapshot = snapshot_dir.path().join("snapshot");
+    snapshot_of(
+        &snapshot,
+        "orders",
+        topic_id,
+        &[
+            (first, 0, RemoteLogSegmentState::CopySegmentFinished),
+            (second, 100, second_state),
+        ],
+    );
+    (archive, snapshot_dir, snapshot, first)
+}
+
+fn single_segment_archive() -> (tempfile::TempDir, Uuid, Uuid) {
+    let archive = tempfile::tempdir().expect("temp dir");
+    let topic_id = Uuid::from_u128(1);
+    let segment_id = Uuid::from_u128(10);
+    write_full_segment(archive.path(), "orders", 0, topic_id, 0, segment_id);
+    (archive, topic_id, segment_id)
+}
+
+fn authenticated_snapshot(
+    state: RemoteLogSegmentState,
+) -> (tempfile::TempDir, std::path::PathBuf, RestoreArgs) {
+    let (archive, topic_id, segment_id) = single_segment_archive();
+    let snapshot = archive.path().join("snapshot");
+    snapshot_of(&snapshot, "orders", topic_id, &[(segment_id, 0, state)]);
+    let mut args = args_from(
+        archive.path(),
+        &["--rlmm-snapshot", &snapshot.display().to_string()],
+    );
+    args.archive.worm_key_id.push("trusted".into());
+    args.archive.worm_public_key.push("unused.pub".into());
+    (archive, snapshot, args)
+}
+
 async fn snapshot_inventory(
     archive: &std::path::Path,
     snapshot: &std::path::Path,
@@ -76,19 +123,8 @@ fn check_orders_disagreement(error: RestoreError) {
 
 #[tokio::test]
 async fn a_snapshot_that_agrees_keeps_every_live_segment() {
-    let (archive, topic_id, seg_a, seg_b) = two_segment_archive();
-
-    let snap_dir = tempfile::tempdir().expect("temp dir");
-    let snap_path = snap_dir.path().join("snapshot");
-    snapshot_of(
-        &snap_path,
-        "orders",
-        topic_id,
-        &[
-            (seg_a, 0, RemoteLogSegmentState::CopySegmentFinished),
-            (seg_b, 100, RemoteLogSegmentState::CopySegmentFinished),
-        ],
-    );
+    let (archive, _snapshot_dir, snap_path, _) =
+        two_segment_snapshot(RemoteLogSegmentState::CopySegmentFinished);
 
     let result = snapshot_inventory(archive.path(), &snap_path)
         .await
@@ -100,22 +136,10 @@ async fn a_snapshot_that_agrees_keeps_every_live_segment() {
 
 #[tokio::test]
 async fn a_delete_started_segment_is_excluded_from_the_inventory_without_an_error() {
-    let (archive, topic_id, seg_a, seg_b) = two_segment_archive();
-
-    let snap_dir = tempfile::tempdir().expect("temp dir");
-    let snap_path = snap_dir.path().join("snapshot");
-    snapshot_of(
-        &snap_path,
-        "orders",
-        topic_id,
-        &[
-            (seg_a, 0, RemoteLogSegmentState::CopySegmentFinished),
-            // Deletion is in flight: the remote tier may not have caught up
-            // yet, so leftover bytes are expected and this must not be an
-            // error.
-            (seg_b, 100, RemoteLogSegmentState::DeleteSegmentStarted),
-        ],
-    );
+    // Deletion is in flight: leftover remote bytes are expected and must not
+    // make inventory fail while the remote tier catches up.
+    let (archive, _snapshot_dir, snap_path, seg_a) =
+        two_segment_snapshot(RemoteLogSegmentState::DeleteSegmentStarted);
 
     let result = snapshot_inventory(archive.path(), &snap_path)
         .await
@@ -128,24 +152,8 @@ async fn a_delete_started_segment_is_excluded_from_the_inventory_without_an_erro
 
 #[tokio::test]
 async fn authenticated_inventory_does_not_let_unsigned_rlmm_remove_a_segment() {
-    let archive = tempfile::tempdir().expect("temp dir");
-    let topic_id = Uuid::from_u128(1);
-    let segment_id = Uuid::from_u128(10);
-    write_full_segment(archive.path(), "orders", 0, topic_id, 0, segment_id);
-
-    let snap_path = archive.path().join("snapshot");
-    snapshot_of(
-        &snap_path,
-        "orders",
-        topic_id,
-        &[(segment_id, 0, RemoteLogSegmentState::DeleteSegmentStarted)],
-    );
-    let mut args = args_from(
-        archive.path(),
-        &["--rlmm-snapshot", &snap_path.display().to_string()],
-    );
-    args.archive.worm_key_id.push("trusted".into());
-    args.archive.worm_public_key.push("unused.pub".into());
+    let (_archive, _snapshot, args) =
+        authenticated_snapshot(RemoteLogSegmentState::DeleteSegmentStarted);
     let store = open_archive(&args).expect("store");
 
     let result = inventory(&store, &args).await.expect("inventory");
@@ -154,24 +162,8 @@ async fn authenticated_inventory_does_not_let_unsigned_rlmm_remove_a_segment() {
 
 #[tokio::test]
 async fn authenticated_rlmm_excludes_objects_retained_after_completed_deletion() {
-    let archive = tempfile::tempdir().expect("temp dir");
-    let topic_id = Uuid::from_u128(1);
-    let segment_id = Uuid::from_u128(10);
-    write_full_segment(archive.path(), "orders", 0, topic_id, 0, segment_id);
-
-    let snap_path = archive.path().join("snapshot");
-    snapshot_of(
-        &snap_path,
-        "orders",
-        topic_id,
-        &[(segment_id, 0, RemoteLogSegmentState::DeleteSegmentFinished)],
-    );
-    let mut args = args_from(
-        archive.path(),
-        &["--rlmm-snapshot", &snap_path.display().to_string()],
-    );
-    args.archive.worm_key_id.push("trusted".into());
-    args.archive.worm_public_key.push("unused.pub".into());
+    let (_archive, snap_path, args) =
+        authenticated_snapshot(RemoteLogSegmentState::DeleteSegmentFinished);
     let store = open_archive(&args).expect("store");
     let mut result = inventory(&store, &args).await.expect("inventory");
 
@@ -299,10 +291,7 @@ async fn a_missing_snapshot_file_is_reported_as_io_not_found() {
 
 #[tokio::test]
 async fn duplicate_segment_keys_in_the_snapshot_are_a_disagreement() {
-    let archive = tempfile::tempdir().expect("temp dir");
-    let topic_id = Uuid::from_u128(1);
-    let segment_id = Uuid::from_u128(10);
-    write_full_segment(archive.path(), "orders", 0, topic_id, 0, segment_id);
+    let (archive, topic_id, segment_id) = single_segment_archive();
 
     let snap_dir = tempfile::tempdir().expect("temp dir");
     let snap_path = snap_dir.path().join("snapshot");
@@ -324,10 +313,7 @@ async fn duplicate_segment_keys_in_the_snapshot_are_a_disagreement() {
 
 #[tokio::test]
 async fn duplicate_partition_keys_in_the_snapshot_are_a_disagreement() {
-    let archive = tempfile::tempdir().expect("temp dir");
-    let topic_id = Uuid::from_u128(1);
-    let segment_id = Uuid::from_u128(10);
-    write_full_segment(archive.path(), "orders", 0, topic_id, 0, segment_id);
+    let (archive, topic_id, segment_id) = single_segment_archive();
 
     let snap_dir = tempfile::tempdir().expect("temp dir");
     let snap_path = snap_dir.path().join("snapshot");

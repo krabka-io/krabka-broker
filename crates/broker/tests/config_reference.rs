@@ -7,29 +7,12 @@
 //! the schema itself is compared here: a `FileConfig` change that is not
 //! followed by a regeneration fails this suite.
 
-use std::path::PathBuf;
-
 use assert2::assert;
 use serde_json::Value;
 
-/// The repository root, under Cargo or under a Bazel test sandbox.
-fn repo_root() -> PathBuf {
-    if let Ok(dir) = std::env::var("CARGO_MANIFEST_DIR") {
-        return PathBuf::from(dir).join("../..");
-    }
-    let srcdir = std::env::var("TEST_SRCDIR")
-        .expect("CARGO_MANIFEST_DIR (cargo) or TEST_SRCDIR (bazel) must be set");
-    let workspace =
-        std::env::var("TEST_WORKSPACE").expect("TEST_WORKSPACE accompanies TEST_SRCDIR");
-    PathBuf::from(srcdir).join(workspace)
-}
-
-fn checked_in_schema() -> Value {
-    let path = repo_root().join("docs/config-schema.json");
-    let text = std::fs::read_to_string(&path)
-        .unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
-    serde_json::from_str(&text).expect("docs/config-schema.json is JSON")
-}
+#[path = "support/repository.rs"]
+mod repository;
+use repository::{checked_in_schema, repo_root};
 
 #[test]
 fn checked_in_schema_matches_file_config() {

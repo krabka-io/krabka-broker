@@ -16,7 +16,7 @@ use krabka_units::{ByteSize, Time, kibibytes};
 use super::{
     kerberos_name::{KerberosNameError, KerberosRule, short_name},
     response::{fail_authenticate, sasl_ok},
-    state::{ConnectionAuth, SaslExchange, begin_reauth, finish_reauth, session_expiry},
+    state::{ConnectionAuth, SaslExchange, session_expiry},
 };
 
 /// Broker-side SASL/GSSAPI configuration.
@@ -91,97 +91,83 @@ pub fn handle_authenticate_gssapi(
     config: &GssapiConfig,
     max_reauth: Option<Time>,
 ) -> SaslAuthenticateResponse {
-    let Some(previous) = begin_reauth(auth) else {
-        return authenticate_gssapi(req, auth, config, max_reauth);
-    };
-    let resp = authenticate_gssapi(req, auth, config, max_reauth);
-    finish_reauth(auth, previous, resp)
+    super::state::authenticate_with_reauth(auth, |auth| {
+        use krabka_security::gssapi::server::GssapiServerExchange;
+
+        // Round 1: still `GssapiPending` — build the acceptor-backed exchange now
+        // that the first client token (AP-REQ) has arrived.
+        if let ConnectionAuth::Negotiating {
+            exchange: SaslExchange::GssapiPending,
+            mechanism,
+            pending_token_expiry_ms: _,
+        } = auth
+        {
+            let mech = *mechanism;
+            let keytab = config.keytab_path.to_string_lossy();
+            let acceptor = match krabka_security::gssapi::provider::SspiAcceptor::new(
+                &keytab,
+                &config.service_name,
+                config.max_time_skew,
+            ) {
+                Ok(a) => a,
+                Err(e) => return fail_authenticate(&format!("GSSAPI acceptor init failed: {e}")),
+            };
+            let exchange = GssapiServerExchange::new(Box::new(acceptor), GSSAPI_MAX_RECV);
+            let step = match exchange.step(&req.auth_bytes) {
+                Ok(s) => s,
+                Err(e) => return fail_authenticate(&format!("GSSAPI accept failed: {e}")),
+            };
+            return gssapi_step_response(step, mech, config, auth, max_reauth);
+        }
+
+        // Subsequent rounds: the exchange already exists. `step` consumes it, so
+        // extract it by value (mirroring `handle_handshake`'s re-auth snapshot
+        // swap) before stepping it with the client's token.
+        if let ConnectionAuth::Negotiating {
+            exchange: SaslExchange::Gssapi(_),
+            ..
+        } = auth
+        {
+            let ConnectionAuth::Negotiating {
+                mechanism,
+                exchange: SaslExchange::Gssapi(exchange),
+                pending_token_expiry_ms: _,
+            } = std::mem::replace(auth, ConnectionAuth::Anonymous)
+            else {
+                unreachable!("matched Negotiating{{Gssapi}} above");
+            };
+            let step = match exchange.step(&req.auth_bytes) {
+                Ok(s) => s,
+                Err(e) => return fail_authenticate(&format!("GSSAPI step failed: {e}")),
+            };
+            return gssapi_step_response(step, mechanism, config, auth, max_reauth);
+        }
+
+        fail_authenticate("not in GSSAPI negotiation")
+    })
 }
 
-fn authenticate_gssapi(
-    req: &SaslAuthenticateRequest,
-    auth: &mut ConnectionAuth,
+fn gssapi_step_response(
+    step: krabka_security::gssapi::server::ServerStep,
+    mechanism: SaslMechanism,
     config: &GssapiConfig,
+    auth: &mut ConnectionAuth,
     max_reauth: Option<Time>,
 ) -> SaslAuthenticateResponse {
-    use krabka_security::gssapi::server::{GssapiServerExchange, ServerStep};
-
-    // Round 1: still `GssapiPending` — build the acceptor-backed exchange now
-    // that the first client token (AP-REQ) has arrived.
-    if let ConnectionAuth::Negotiating {
-        exchange: SaslExchange::GssapiPending,
-        mechanism,
-        pending_token_expiry_ms: _,
-    } = auth
-    {
-        let mech = *mechanism;
-        let keytab = config.keytab_path.to_string_lossy();
-        let acceptor = match krabka_security::gssapi::provider::SspiAcceptor::new(
-            &keytab,
-            &config.service_name,
-            config.max_time_skew,
-        ) {
-            Ok(a) => a,
-            Err(e) => return fail_authenticate(&format!("GSSAPI acceptor init failed: {e}")),
-        };
-        let exchange = GssapiServerExchange::new(Box::new(acceptor), GSSAPI_MAX_RECV);
-        let step = match exchange.step(&req.auth_bytes) {
-            Ok(s) => s,
-            Err(e) => return fail_authenticate(&format!("GSSAPI accept failed: {e}")),
-        };
-        return match step {
-            ServerStep::Challenge(token, next) => {
-                *auth = ConnectionAuth::Negotiating {
-                    mechanism: mech,
-                    exchange: SaslExchange::Gssapi(Box::new(next)),
-                    pending_token_expiry_ms: None,
-                };
-                sasl_ok(token, 0)
-            }
-            // GSSAPI always negotiates the security layer after context
-            // establishment, so round 1 never completes the exchange.
-            ServerStep::Done { principal } => {
-                finish_gssapi(&principal, mech, config, auth, max_reauth)
-            }
-        };
+    use krabka_security::gssapi::server::ServerStep;
+    match step {
+        ServerStep::Challenge(token, next) => {
+            *auth = ConnectionAuth::Negotiating {
+                mechanism,
+                exchange: SaslExchange::Gssapi(Box::new(next)),
+                pending_token_expiry_ms: None,
+            };
+            sasl_ok(token, 0)
+        }
+        ServerStep::Done { principal } => {
+            finish_gssapi(&principal, mechanism, config, auth, max_reauth)
+        }
     }
-
-    // Subsequent rounds: the exchange already exists. `step` consumes it, so
-    // extract it by value (mirroring `handle_handshake`'s re-auth snapshot
-    // swap) before stepping it with the client's token.
-    if let ConnectionAuth::Negotiating {
-        exchange: SaslExchange::Gssapi(_),
-        ..
-    } = auth
-    {
-        let ConnectionAuth::Negotiating {
-            mechanism,
-            exchange: SaslExchange::Gssapi(exchange),
-            pending_token_expiry_ms: _,
-        } = std::mem::replace(auth, ConnectionAuth::Anonymous)
-        else {
-            unreachable!("matched Negotiating{{Gssapi}} above");
-        };
-        let step = match exchange.step(&req.auth_bytes) {
-            Ok(s) => s,
-            Err(e) => return fail_authenticate(&format!("GSSAPI step failed: {e}")),
-        };
-        return match step {
-            ServerStep::Challenge(token, next) => {
-                *auth = ConnectionAuth::Negotiating {
-                    mechanism,
-                    exchange: SaslExchange::Gssapi(Box::new(next)),
-                    pending_token_expiry_ms: None,
-                };
-                sasl_ok(token, 0)
-            }
-            ServerStep::Done { principal } => {
-                finish_gssapi(&principal, mechanism, config, auth, max_reauth)
-            }
-        };
-    }
-
-    fail_authenticate("not in GSSAPI negotiation")
 }
 
 /// Maps the authenticated Kerberos principal through `auth_to_local` and, on
@@ -249,6 +235,42 @@ mod tests {
         assert_failed_authenticate_response, assert_success_authenticate_response,
     };
 
+    fn gssapi_config(
+        keytab: &str,
+        realm: Option<&str>,
+        principal_to_local_rules: Vec<KerberosRule>,
+    ) -> GssapiConfig {
+        GssapiConfig {
+            keytab_path: std::path::PathBuf::from(keytab),
+            service_name: "kafka".to_string(),
+            principal_to_local_rules,
+            realm: realm.map(str::to_owned),
+            kdc: None,
+            max_time_skew: krabka_security::gssapi::DEFAULT_GSSAPI_MAX_TIME_SKEW,
+        }
+    }
+
+    fn gssapi_pending() -> ConnectionAuth {
+        ConnectionAuth::Negotiating {
+            mechanism: SaslMechanism::Gssapi,
+            exchange: SaslExchange::GssapiPending,
+            pending_token_expiry_ms: None,
+        }
+    }
+
+    fn mapped_gssapi(realm: &str) -> (ConnectionAuth, SaslAuthenticateResponse) {
+        let config = gssapi_config("/unused.keytab", Some(realm), vec![KerberosRule::Default]);
+        let mut auth = gssapi_pending();
+        let response = finish_gssapi(
+            "alice@krabka.test",
+            SaslMechanism::Gssapi,
+            &config,
+            &mut auth,
+            None,
+        );
+        (auth, response)
+    }
+
     #[test]
     fn sasl_ok_challenge_carries_token_and_zero_lifetime() {
         let resp = sasl_ok(vec![1, 2, 3, 4], 0);
@@ -257,27 +279,7 @@ mod tests {
 
     #[test]
     fn finish_gssapi_maps_principal_and_returns_empty_success() {
-        let config = GssapiConfig {
-            keytab_path: std::path::PathBuf::from("/unused.keytab"),
-            service_name: "kafka".to_string(),
-            principal_to_local_rules: vec![KerberosRule::Default],
-            realm: Some("KRABKA.TEST".to_string()),
-            kdc: None,
-            max_time_skew: krabka_security::gssapi::DEFAULT_GSSAPI_MAX_TIME_SKEW,
-        };
-        let mut auth = ConnectionAuth::Negotiating {
-            mechanism: SaslMechanism::Gssapi,
-            exchange: SaslExchange::GssapiPending,
-            pending_token_expiry_ms: None,
-        };
-
-        let resp = finish_gssapi(
-            "alice@krabka.test",
-            SaslMechanism::Gssapi,
-            &config,
-            &mut auth,
-            None,
-        );
+        let (auth, resp) = mapped_gssapi("KRABKA.TEST");
 
         assert_success_authenticate_response(&resp, b"", 0);
         match auth {
@@ -299,27 +301,7 @@ mod tests {
 
     #[test]
     fn finish_gssapi_mapping_error_returns_auth_failure() {
-        let config = GssapiConfig {
-            keytab_path: std::path::PathBuf::from("/unused.keytab"),
-            service_name: "kafka".to_string(),
-            principal_to_local_rules: vec![KerberosRule::Default],
-            realm: Some("OTHER.REALM".to_string()),
-            kdc: None,
-            max_time_skew: krabka_security::gssapi::DEFAULT_GSSAPI_MAX_TIME_SKEW,
-        };
-        let mut auth = ConnectionAuth::Negotiating {
-            mechanism: SaslMechanism::Gssapi,
-            exchange: SaslExchange::GssapiPending,
-            pending_token_expiry_ms: None,
-        };
-
-        let resp = finish_gssapi(
-            "alice@krabka.test",
-            SaslMechanism::Gssapi,
-            &config,
-            &mut auth,
-            None,
-        );
+        let (auth, resp) = mapped_gssapi("OTHER.REALM");
 
         assert_failed_authenticate_response(&resp, None);
         assert!(matches!(auth, ConnectionAuth::Negotiating { .. }));
@@ -327,19 +309,12 @@ mod tests {
 
     #[test]
     fn handle_authenticate_gssapi_round1_bad_keytab_fails_and_leaves_state_untouched() {
-        let config = GssapiConfig {
-            keytab_path: std::path::PathBuf::from("/nonexistent.keytab"),
-            service_name: "kafka".to_string(),
-            principal_to_local_rules: vec![KerberosRule::Default],
-            realm: Some("KRABKA.TEST".to_string()),
-            kdc: None,
-            max_time_skew: krabka_security::gssapi::DEFAULT_GSSAPI_MAX_TIME_SKEW,
-        };
-        let mut auth = ConnectionAuth::Negotiating {
-            mechanism: SaslMechanism::Gssapi,
-            exchange: SaslExchange::GssapiPending,
-            pending_token_expiry_ms: None,
-        };
+        let config = gssapi_config(
+            "/nonexistent.keytab",
+            Some("KRABKA.TEST"),
+            vec![KerberosRule::Default],
+        );
+        let mut auth = gssapi_pending();
         let req = SaslAuthenticateRequest {
             auth_bytes: bytes::Bytes::from_static(b"AP-REQ"),
             ..Default::default()
@@ -389,14 +364,11 @@ mod tests {
     fn handle_authenticate_gssapi_subsequent_round_completes_and_authenticates() {
         use krabka_security::gssapi::server::{GssapiServerExchange, ServerStep};
 
-        let config = GssapiConfig {
-            keytab_path: std::path::PathBuf::from("/unused.keytab"),
-            service_name: "kafka".to_string(),
-            principal_to_local_rules: vec![KerberosRule::Default],
-            realm: Some("KRABKA.TEST".to_string()),
-            kdc: None,
-            max_time_skew: krabka_security::gssapi::DEFAULT_GSSAPI_MAX_TIME_SKEW,
-        };
+        let config = gssapi_config(
+            "/unused.keytab",
+            Some("KRABKA.TEST"),
+            vec![KerberosRule::Default],
+        );
 
         // Drive the exchange to `AwaitingChoice` up front (mirroring round
         // 1's work), so this test targets `handle_authenticate_gssapi`'s
@@ -441,16 +413,15 @@ mod tests {
     /// configured realm.
     #[test]
     fn map_gssapi_principal_follows_kafkas_short_namer() {
-        let config = |rules: &[&str], realm: Option<&str>| GssapiConfig {
-            keytab_path: std::path::PathBuf::from("/unused.keytab"),
-            service_name: "kafka".to_string(),
-            principal_to_local_rules: rules
-                .iter()
-                .map(|rule| KerberosRule::parse(rule).expect("rule parses"))
-                .collect(),
-            realm: realm.map(str::to_owned),
-            kdc: None,
-            max_time_skew: krabka_security::gssapi::DEFAULT_GSSAPI_MAX_TIME_SKEW,
+        let config = |rules: &[&str], realm: Option<&str>| {
+            gssapi_config(
+                "/unused.keytab",
+                realm,
+                rules
+                    .iter()
+                    .map(|rule| KerberosRule::parse(rule).expect("rule parses"))
+                    .collect(),
+            )
         };
         // (rules, configured realm, principal from sspi, short name)
         let cases = [
@@ -507,14 +478,11 @@ mod tests {
 
     #[test]
     fn map_gssapi_principal_uppercases_realm_before_default_rule() {
-        let config = GssapiConfig {
-            keytab_path: std::path::PathBuf::from("/unused.keytab"),
-            service_name: "kafka".to_string(),
-            principal_to_local_rules: vec![KerberosRule::Default],
-            realm: Some("KRABKA.TEST".to_string()),
-            kdc: None,
-            max_time_skew: krabka_security::gssapi::DEFAULT_GSSAPI_MAX_TIME_SKEW,
-        };
+        let config = gssapi_config(
+            "/unused.keytab",
+            Some("KRABKA.TEST"),
+            vec![KerberosRule::Default],
+        );
 
         let short = map_gssapi_principal("alice@krabka.test", &config).expect("map principal");
 

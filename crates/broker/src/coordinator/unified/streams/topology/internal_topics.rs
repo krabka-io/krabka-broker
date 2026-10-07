@@ -53,8 +53,11 @@ mod tests {
     use assert2::assert;
 
     use super::*;
-    use crate::coordinator::unified::streams::topology::configured::{
-        ConfiguredInternalTopic, ConfiguredSubtopology,
+    use crate::{
+        coordinator::unified::streams::topology::configured::{
+            ConfiguredInternalTopic, ConfiguredSubtopology,
+        },
+        test_support::string_pairs,
     };
 
     #[test]
@@ -64,10 +67,7 @@ mod tests {
                 name: name.into(),
                 partitions: 5,
                 replication_factor,
-                configs: configs
-                    .iter()
-                    .map(|(key, value)| ((*key).to_string(), (*value).to_string()))
-                    .collect(),
+                configs: string_pairs(configs),
             };
         let rp = topic("rp", Some(2), &[("cleanup.policy", "delete")]);
         let cl = topic("cl", None, &[]);

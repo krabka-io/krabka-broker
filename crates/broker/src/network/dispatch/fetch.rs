@@ -2,8 +2,6 @@
 //! per-connection principal and returns the response as an ordered write plan
 //! rather than one contiguous buffer, so that records regions stay zero-copy.
 
-use std::net::SocketAddr;
-
 use bytes::{BufMut, Bytes, BytesMut};
 use futures_util::SinkExt;
 use tokio::io::{AsyncRead, AsyncWrite};
@@ -12,7 +10,6 @@ use tracing::Instrument as _;
 
 use super::{AfterResponse, response::encode_response, session::principal_or_anonymous};
 use crate::{
-    broker::Broker,
     error::BrokerError,
     network::{codec::KafkaCodec, fetch_writer::WriteOp},
 };
@@ -27,11 +24,7 @@ struct FetchPlan {
 
 pub(super) async fn dispatch_fetch<S>(
     framed: &mut Framed<S, KafkaCodec>,
-    broker: &Broker,
-    parsed: &crate::network::request::ParsedRequest<'_>,
-    auth: &crate::network::auth::ConnectionAuth,
-    peer: &SocketAddr,
-    listener_name: &str,
+    context: super::registry::DispatchContext<'_, '_>,
     request_span: tracing::Span,
 ) -> AfterResponse
 where
@@ -39,16 +32,9 @@ where
 {
     let sendfile_capable =
         crate::network::fetch_writer::SendfileSink::is_sendfile_capable(framed.get_ref());
-    match handle_fetch_frame_from_parsed(
-        broker,
-        parsed,
-        auth,
-        peer,
-        listener_name,
-        sendfile_capable,
-    )
-    .instrument(request_span)
-    .await
+    match handle_fetch_frame_from_parsed(context, sendfile_capable)
+        .instrument(request_span)
+        .await
     {
         Ok(FetchPlan {
             operations,
@@ -61,7 +47,7 @@ where
             if let Err(error) = crate::network::fetch_writer::write_fetch_plan(
                 framed.get_mut(),
                 operations,
-                &broker.metrics,
+                &context.broker.metrics,
             )
             .await
             {
@@ -73,7 +59,10 @@ where
             AfterResponse::Mute(throttle)
         }
         Err(error) => {
-            broker.metrics.record_request_error(parsed.api_key);
+            context
+                .broker
+                .metrics
+                .record_request_error(context.parsed.api_key);
             tracing::warn!(%error, "Fetch dispatch error, closing connection");
             AfterResponse::Close
         }
@@ -106,14 +95,18 @@ where
 /// quotas charged, which the caller applies by muting the connection once the
 /// plan is written.
 async fn handle_fetch_frame_from_parsed(
-    broker: &Broker,
-    parsed: &crate::network::request::ParsedRequest<'_>,
-    auth: &crate::network::auth::ConnectionAuth,
-    peer: &SocketAddr,
-    listener_name: &str,
+    context: super::registry::DispatchContext<'_, '_>,
     sendfile_capable: bool,
 ) -> Result<FetchPlan, BrokerError> {
     use crate::network::fetch_writer::build_fetch_plan;
+    let super::registry::DispatchContext {
+        broker,
+        parsed,
+        auth,
+        peer,
+        listener_name,
+        ..
+    } = context;
 
     assert2::assert!((parsed.api_key) == (1));
 
@@ -165,29 +158,22 @@ async fn handle_fetch_frame_from_parsed(
     // else (TLS, Windows) use the portable vectored resolver. `do_read` only
     // ever emits `FileRegions` when `sendfile_capable`, so the resolver choice
     // and the payload kind stay in lock-step.
-    #[cfg(any(
-        target_os = "linux",
-        target_os = "macos",
-        target_os = "ios",
-        target_os = "tvos",
-        target_os = "watchos",
-        target_os = "freebsd",
-        target_os = "dragonfly",
-    ))]
-    {
-        if sendfile_capable && parsed.api_version >= 4 {
-            return build_fetch_plan(
-                &resp,
-                version,
-                parsed.correlation_id,
-                parsed.body_flexible,
-                crate::network::fetch_writer::resolve_records_sendfile,
-            )
-            .map(|operations| FetchPlan {
-                operations,
-                throttle,
-            });
-        }
+    krabka_macros::sendfile_platform! {
+        {
+            if sendfile_capable && parsed.api_version >= 4 {
+                return build_fetch_plan(
+                    &resp,
+                    version,
+                    parsed.correlation_id,
+                    parsed.body_flexible,
+                    crate::network::fetch_writer::resolve_records_sendfile,
+                )
+                .map(|operations| FetchPlan {
+                    operations,
+                    throttle,
+                });
+            }
+    }
     }
 
     build_fetch_plan(

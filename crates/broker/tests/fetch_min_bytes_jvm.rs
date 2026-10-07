@@ -33,9 +33,11 @@ use std::{
 use assert2::assert;
 use base64::Engine as _;
 use krabka_client_core::Client;
-use krabka_protocol::owned::metadata_request::MetadataRequest;
 
-use crate::wire::{HELD_AT_LEAST, min_bytes_exchange};
+use crate::{
+    support::discovery::topic_metadata_request,
+    wire::{HELD_AT_LEAST, min_bytes_exchange},
+};
 
 /// The Kafka release krabka is compared against: the newest image
 /// //bazel/images pins, and so the one whose Fetch purgatory is current.
@@ -92,12 +94,8 @@ impl Oracle {
         // otherwise present but unreadable.
         #[cfg(unix)]
         {
-            use std::os::unix::fs::PermissionsExt as _;
-
-            std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o755))
-                .expect("chmod properties directory");
-            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644))
-                .expect("chmod server.properties");
+            support::chmod_for_container(dir.path(), 0o755, "chmod properties directory");
+            support::chmod_for_container(&path, 0o644, "chmod server.properties");
         }
         let cluster_id = base64::engine::general_purpose::URL_SAFE_NO_PAD
             .encode(uuid::Uuid::from_u128(0x0FE7_C400_0000_0000_0000_0000_0000_0001).as_bytes());
@@ -163,10 +161,7 @@ impl Oracle {
             .build()
             .await?;
         let response = client
-            .send(MetadataRequest {
-                topics: Some(Vec::new()),
-                ..Default::default()
-            })
+            .send(topic_metadata_request(Some(Vec::new())))
             .await?;
         if response.brokers.is_empty() {
             return Err("the oracle advertised no broker yet".into());

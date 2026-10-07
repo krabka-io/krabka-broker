@@ -4,9 +4,8 @@
 //! before a classic `JoinGroup` may convert it.
 
 use krabka_client_core::Client;
-use krabka_protocol::owned::{
-    streams_group_heartbeat_request::{StreamsGroupHeartbeatRequest, Topology},
-    streams_group_heartbeat_response::StreamsGroupHeartbeatResponse,
+use krabka_protocol::owned::streams_group_heartbeat_request::{
+    StreamsGroupHeartbeatRequest, Topology,
 };
 
 pub(crate) fn topology(source_topic: &str) -> Topology {
@@ -16,23 +15,7 @@ pub(crate) fn topology(source_topic: &str) -> Topology {
 /// Drives one streams member to convergence, which means at least
 /// `want_active` active-task partitions. It returns
 /// `(member_id, last_response)`.
-pub(crate) async fn streams_join_and_converge(
-    client: &Client,
-    group: &str,
-    topo: Topology,
-    want_active: usize,
-    tries: usize,
-) -> (String, StreamsGroupHeartbeatResponse) {
-    crate::support::streams::streams_join_and_converge(
-        client,
-        group,
-        topo,
-        want_active,
-        tries,
-        false,
-    )
-    .await
-}
+pub use crate::support::streams::join_until_assigned as streams_join_and_converge;
 
 /// Sends a streams `LeaveGroup`, with `member_epoch` -1, so that the group
 /// drains.

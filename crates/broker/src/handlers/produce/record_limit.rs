@@ -82,10 +82,12 @@ fn has_oversized_record(
 #[cfg(test)]
 mod tests {
     use assert2::check;
-    use bytes::{Bytes, BytesMut};
-    use krabka_protocol::records::{Attributes, Record, RecordBatch, RecordHeader};
+    use bytes::BytesMut;
+    use krabka_protocol::records::{Attributes, RecordBatch};
 
     use super::*;
+
+    krabka_macros::record_limit_fixture!(record);
 
     /// A batch of one record with a `value_len`-byte value and a header, encoded
     /// under `codec`.
@@ -93,16 +95,7 @@ mod tests {
         RecordBatch {
             attributes: Attributes::default().with_compression(codec),
             last_offset_delta: 0,
-            records: vec![Record {
-                timestamp_delta: 300,
-                key: Some(Bytes::from_static(b"key")),
-                value: Some(Bytes::from(vec![7_u8; value_len])),
-                headers: vec![RecordHeader {
-                    key: "h".into(),
-                    value: None,
-                }],
-                ..Default::default()
-            }],
+            records: vec![record(value_len)],
             ..Default::default()
         }
     }

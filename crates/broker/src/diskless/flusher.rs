@@ -400,8 +400,125 @@ mod tests {
     use object_store::{ObjectStoreExt, PutPayload, memory::InMemory, path::Path};
     use tempfile::tempdir;
 
-    use super::{test_support::test_partition, *};
+    use super::{
+        test_support::{flush_record, orders_partition, test_index_log, test_partition},
+        *,
+    };
     use crate::diskless::index_log::test_support::{PacedReplayLog, ReplayPace};
+
+    // Keep field evaluation order, including metrics and readiness allocation.
+    macro_rules! test_context {
+        ($partitions:expr, $image_rx:expr, $store:expr, $index:expr $(,)?) => {
+            test_context!(
+                $partitions,
+                $image_rx,
+                $store,
+                $index,
+                Arc::new(AtomicBool::new(false))
+            )
+        };
+        ($partitions:expr, $image_rx:expr, $store:expr, $index:expr, $ready:expr $(,)?) => {
+            FlusherContext {
+                partitions: $partitions,
+                image_rx: $image_rx,
+                object_store: $store,
+                index_log: $index,
+                node_id: NodeId(1),
+                broker_id: 7,
+                metrics: crate::metrics::BrokerMetrics::new(),
+                ready: $ready,
+            }
+        };
+    }
+
+    // Bind owning fixtures in the original caller scope and declaration order.
+    macro_rules! memory_flusher_dependencies {
+        ($topic_id:ident, $image:ident, $image_rx:ident, $store:ident; $count:expr) => {
+            let ($topic_id, $image) = orders_image($count);
+            let (_, $image_rx) = tokio::sync::watch::channel(Arc::new($image));
+            let $store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        };
+    }
+
+    macro_rules! silent_replay_fixture {
+        ($dir:ident, $ready:ident, $context:ident, $store:ident) => {
+            let $dir = tempdir().unwrap();
+            let $ready = Arc::new(AtomicBool::new(false));
+            let ($context, $store) = silent_replay_flusher($dir.path(), Arc::clone(&$ready)).await;
+        };
+    }
+
+    macro_rules! lock_cache {
+        ($context:ident, $cache:ident) => {
+            let $cache = $context.index_log.cache();
+            let $cache = $cache.lock().await;
+        };
+    }
+
+    macro_rules! assert_cached_range {
+        ($context:ident, $topic_id:expr, $partition:expr, $offset:expr; $presence:ident) => {
+            assert!(
+                $context
+                    .index_log
+                    .cache()
+                    .lock()
+                    .await
+                    .lookup($topic_id, $partition, $offset)
+                    .$presence()
+            );
+        };
+    }
+
+    macro_rules! rotation_fixture {
+        ($dir:ident, $topic_id:ident, $context:ident, $cache:ident) => {
+            let $dir = tempdir().unwrap();
+            let ($topic_id, $context) = rotation_context($dir.path()).await;
+            let $cache = $context.index_log.cache();
+        };
+    }
+
+    macro_rules! retention_fixture {
+        ($dir:ident, $topic_id:ident, $context:ident, $store:ident, $handle:ident; $($image:tt)+) => {
+            let $dir = tempdir().unwrap();
+            let $topic_id = Uuid::from_u128(11);
+            let ($context, $store, $handle, $($image)+) =
+                seeded_retention_flusher($dir.path(), $topic_id, AGED_AND_FRESH_RANGES).await;
+        };
+    }
+
+    async fn assert_replay_unflushed(ready: &AtomicBool, store: &Arc<dyn ObjectStore>) {
+        assert!(!ready.load(Ordering::Acquire));
+        assert!(object_keys(store).await.is_empty());
+    }
+
+    async fn stop_worker(shutdown: &CancellationToken, task: tokio::task::JoinHandle<FlusherExit>) {
+        shutdown.cancel();
+        assert!(task.await.unwrap() == FlusherExit::ShutDown);
+    }
+
+    async fn wait_for_frontier(
+        cache: &Arc<tokio::sync::Mutex<crate::diskless::wal_index::WalIndexCache>>,
+        topic_id: Uuid,
+        partition: i32,
+        frontier: i64,
+    ) {
+        wait_for_cache(cache, |cache| {
+            cache.flushed_frontier(topic_id, partition) == Some(frontier)
+        })
+        .await;
+    }
+
+    async fn expire_and_reclaim(
+        context: &FlusherContext,
+        image: &MetadataImage,
+        partitions: &[FlushPartition],
+        now_ms: i64,
+    ) {
+        expire_retention_breached_ranges(context, image, partitions, now_ms)
+            .await
+            .unwrap();
+        Reclaimer::new(Duration::ZERO).sweep(context).await;
+    }
 
     fn orders_image(partitions: i32) -> (Uuid, MetadataImage) {
         let topic_id = Uuid::from_u128(11);
@@ -426,31 +543,16 @@ mod tests {
         }
         let (topic_id, image) = orders_image(2);
         let (_, image_rx) = tokio::sync::watch::channel(Arc::new(image));
-        let index_log = DisklessIndexLog::start(
-            krabka_remote_storage_topic::InProcessMetadataEventLog::new(1),
-        )
-        .await
-        .unwrap();
+        let index_log = test_index_log().await;
         (
             topic_id,
-            FlusherContext {
-                partitions,
-                image_rx,
-                object_store: Arc::new(InMemory::new()),
-                index_log,
-                node_id: NodeId(1),
-                broker_id: 7,
-                metrics: crate::metrics::BrokerMetrics::new(),
-                ready: Arc::new(AtomicBool::new(false)),
-            },
+            test_context!(partitions, image_rx, Arc::new(InMemory::new()), index_log),
         )
     }
 
     #[tokio::test]
     async fn tick_rotates_size_limited_flush_start() {
-        let dir = tempdir().unwrap();
-        let (topic_id, context) = rotation_context(dir.path()).await;
-        let cache = context.index_log.cache();
+        rotation_fixture!(dir, topic_id, context, cache);
 
         flush_tick(
             &context,
@@ -471,9 +573,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn worker_rotates_size_limited_flushes_without_starvation() {
-        let dir = tempdir().unwrap();
-        let (topic_id, context) = rotation_context(dir.path()).await;
-        let cache = context.index_log.cache();
+        rotation_fixture!(dir, topic_id, context, cache);
         let shutdown = CancellationToken::new();
         let task = tokio::spawn(run(
             context,
@@ -486,22 +586,12 @@ mod tests {
             shutdown.clone(),
         ));
 
-        tokio::time::timeout(Duration::from_secs(1), async {
-            loop {
-                let cache = cache.lock().await;
-                if cache.flushed_frontier(topic_id, 0) == Some(3)
-                    && cache.flushed_frontier(topic_id, 1) == Some(3)
-                {
-                    break;
-                }
-                drop(cache);
-                tokio::task::yield_now().await;
-            }
+        wait_for_cache(&cache, |cache| {
+            cache.flushed_frontier(topic_id, 0) == Some(3)
+                && cache.flushed_frontier(topic_id, 1) == Some(3)
         })
-        .await
-        .unwrap();
-        shutdown.cancel();
-        assert!(task.await.unwrap() == FlusherExit::ShutDown);
+        .await;
+        stop_worker(&shutdown, task).await;
     }
 
     /// Every object key the store holds, sorted.
@@ -518,19 +608,13 @@ mod tests {
         keys
     }
 
-    async fn wait_for_object(
+    async fn wait_for_cache(
         cache: &Arc<tokio::sync::Mutex<crate::diskless::wal_index::WalIndexCache>>,
-        topic_id: Uuid,
-        object_key: &str,
+        predicate: impl Fn(&crate::diskless::wal_index::WalIndexCache) -> bool,
     ) {
         tokio::time::timeout(Duration::from_secs(1), async {
             loop {
-                if cache
-                    .lock()
-                    .await
-                    .lookup(topic_id, 0, 0)
-                    .is_some_and(|(key, _, _)| key == object_key)
-                {
+                if predicate(&*cache.lock().await) {
                     break;
                 }
                 tokio::task::yield_now().await;
@@ -538,6 +622,19 @@ mod tests {
         })
         .await
         .unwrap();
+    }
+
+    async fn wait_for_object(
+        cache: &Arc<tokio::sync::Mutex<crate::diskless::wal_index::WalIndexCache>>,
+        topic_id: Uuid,
+        object_key: &str,
+    ) {
+        wait_for_cache(cache, |cache| {
+            cache
+                .lookup(topic_id, 0, 0)
+                .is_some_and(|(key, _, _)| key == object_key)
+        })
+        .await;
     }
 
     #[tokio::test]
@@ -550,42 +647,22 @@ mod tests {
                 .await
                 .unwrap();
         }
-        let index = DisklessIndexLog::start(
-            krabka_remote_storage_topic::InProcessMetadataEventLog::new(1),
-        )
-        .await
-        .unwrap();
+        let index = test_index_log().await;
         let cache = index.cache();
         for key in ["diskless-wal/9/old.ckwl", "diskless-wal/7/new.ckwl"] {
             index
-                .publish_flush(&WalFlushRecord {
-                    object_key: key.into(),
-                    format_version: WalFlushRecord::FORMAT_VERSION,
-                    entries: vec![crate::diskless::wal_index::WalIndexEntry {
-                        topic_id,
-                        partition: 0,
-                        first_offset: 0,
-                        last_offset: 2,
-                        byte_start: 0,
-                        byte_len: 6,
-                        max_timestamp_ms: 0,
-                    }],
-                })
+                .publish_flush(&flush_record(topic_id, key, (0, 2, 0), 6))
                 .await
                 .unwrap();
             wait_for_object(&cache, topic_id, key).await;
         }
         let (_, image_rx) = tokio::sync::watch::channel(Arc::new(MetadataImage::new(Uuid::nil())));
-        let context = FlusherContext {
-            partitions: Arc::new(PartitionRegistry::new()),
+        let context = test_context!(
+            Arc::new(PartitionRegistry::new()),
             image_rx,
-            object_store: Arc::clone(&store),
-            index_log: index,
-            node_id: NodeId(1),
-            broker_id: 7,
-            metrics: crate::metrics::BrokerMetrics::new(),
-            ready: Arc::new(AtomicBool::new(false)),
-        };
+            Arc::clone(&store),
+            index
+        );
 
         let mut reclaimer = Reclaimer::new(Duration::from_mins(1));
         let observed = Instant::now();
@@ -624,41 +701,21 @@ mod tests {
             .put(&Path::from(object_key), PutPayload::from_static(b"object"))
             .await
             .unwrap();
-        let index = DisklessIndexLog::start(
-            krabka_remote_storage_topic::InProcessMetadataEventLog::new(1),
-        )
-        .await
-        .unwrap();
+        let index = test_index_log().await;
         let cache = index.cache();
         index
-            .publish_flush(&WalFlushRecord {
-                object_key: object_key.into(),
-                format_version: WalFlushRecord::FORMAT_VERSION,
-                entries: vec![crate::diskless::wal_index::WalIndexEntry {
-                    topic_id,
-                    partition: 0,
-                    first_offset: 0,
-                    last_offset: 2,
-                    byte_start: 0,
-                    byte_len: 6,
-                    max_timestamp_ms: 0,
-                }],
-            })
+            .publish_flush(&flush_record(topic_id, object_key, (0, 2, 0), 6))
             .await
             .unwrap();
         wait_for_object(&cache, topic_id, object_key).await;
         let image = MetadataImage::new(Uuid::nil());
         let (_, image_rx) = tokio::sync::watch::channel(Arc::new(image.clone()));
-        let context = FlusherContext {
-            partitions: Arc::new(PartitionRegistry::new()),
+        let context = test_context!(
+            Arc::new(PartitionRegistry::new()),
             image_rx,
-            object_store: Arc::clone(&store),
-            index_log: index,
-            node_id: NodeId(1),
-            broker_id: 7,
-            metrics: crate::metrics::BrokerMetrics::new(),
-            ready: Arc::new(AtomicBool::new(false)),
-        };
+            Arc::clone(&store),
+            index
+        );
 
         tombstone_deleted_topics(&context, &image).await.unwrap();
         Reclaimer::new(Duration::ZERO).sweep(&context).await;
@@ -683,7 +740,7 @@ mod tests {
         Arc<Partition>,
         MetadataImage,
     ) {
-        let handle = test_partition(dir, "orders", 0, true, NodeId(1));
+        let handle = orders_partition(dir);
         let partitions = Arc::new(PartitionRegistry::new());
         partitions.insert(
             "orders".into(),
@@ -691,29 +748,18 @@ mod tests {
             Arc::clone(&handle),
         );
         let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
-        let index = DisklessIndexLog::start(
-            krabka_remote_storage_topic::InProcessMetadataEventLog::new(1),
-        )
-        .await
-        .unwrap();
+        let index = test_index_log().await;
         for (object_key, first_offset, last_offset, max_timestamp_ms) in ranges.iter().copied() {
             store
                 .put(&Path::from(object_key), PutPayload::from_static(b"object"))
                 .await
                 .unwrap();
-            let record = WalFlushRecord {
-                object_key: object_key.into(),
-                format_version: WalFlushRecord::FORMAT_VERSION,
-                entries: vec![crate::diskless::wal_index::WalIndexEntry {
-                    topic_id,
-                    partition: 0,
-                    first_offset,
-                    last_offset,
-                    byte_start: 0,
-                    byte_len: 6,
-                    max_timestamp_ms,
-                }],
-            };
+            let record = flush_record(
+                topic_id,
+                object_key,
+                (first_offset, last_offset, max_timestamp_ms),
+                6,
+            );
             index.publish_flush(&record).await.unwrap();
             assert!(
                 index
@@ -722,28 +768,37 @@ mod tests {
             );
         }
         let mut image = MetadataImage::new(Uuid::nil());
-        image.apply(&MetadataRecord::V1Topic(TopicRecord {
-            name: "orders".into(),
-            topic_id,
-            partitions: 1,
-            replication_factor: 1,
-        }));
+        image.apply(&MetadataRecord::V1Topic(
+            crate::test_support::single_partition_topic("orders", topic_id),
+        ));
         let (_, image_rx) = tokio::sync::watch::channel(Arc::new(image.clone()));
         (
-            FlusherContext {
-                partitions,
-                image_rx,
-                object_store: Arc::clone(&store),
-                index_log: index,
-                node_id: NodeId(1),
-                broker_id: 7,
-                metrics: crate::metrics::BrokerMetrics::new(),
-                ready: Arc::new(AtomicBool::new(false)),
-            },
+            test_context!(partitions, image_rx, Arc::clone(&store), index),
             store,
             handle,
             image,
         )
+    }
+
+    const AGED_AND_FRESH_RANGES: &[(&str, i64, i64, i64)] = &[
+        ("diskless-wal/7/aged.ckwl", 0, 2, 1_000),
+        ("diskless-wal/7/fresh.ckwl", 3, 5, 5_000),
+    ];
+
+    fn set_retention(handle: &Partition, retention: krabka_units::Time) {
+        let mut config = handle.log.lock().unwrap().config_snapshot();
+        config.retention = Some(retention);
+        handle.log.lock().unwrap().set_config(config);
+    }
+
+    fn led_orders_partition(dir: &std::path::Path) -> Arc<PartitionRegistry> {
+        let partitions = Arc::new(PartitionRegistry::new());
+        partitions.insert(
+            "orders".into(),
+            krabka_ids::PartitionIndex(0),
+            orders_partition(dir),
+        );
+        partitions
     }
 
     fn flush_partition(topic_id: Uuid, handle: &Arc<Partition>) -> FlushPartition {
@@ -756,31 +811,15 @@ mod tests {
 
     #[tokio::test]
     async fn retention_ms_expires_an_aged_range_and_frees_its_object() {
-        let dir = tempdir().unwrap();
-        let topic_id = Uuid::from_u128(11);
-        let (context, store, handle, image) = seeded_retention_flusher(
-            dir.path(),
-            topic_id,
-            &[
-                ("diskless-wal/7/aged.ckwl", 0, 2, 1_000),
-                ("diskless-wal/7/fresh.ckwl", 3, 5, 5_000),
-            ],
-        )
-        .await;
-        let mut config = handle.log.lock().unwrap().config_snapshot();
-        config.retention = Some(krabka_units::millis(1));
-        handle.log.lock().unwrap().set_config(config);
+        retention_fixture!(dir, topic_id, context, store, handle; image);
+        set_retention(&handle, krabka_units::millis(1));
         let partitions = [flush_partition(topic_id, &handle)];
 
         // Far enough past both batches that only the "keep the newest range"
         // rule stands between retention and an empty index.
-        expire_retention_breached_ranges(&context, &image, &partitions, 10_000)
-            .await
-            .unwrap();
-        Reclaimer::new(Duration::ZERO).sweep(&context).await;
+        expire_and_reclaim(&context, &image, &partitions, 10_000).await;
 
-        let cache = context.index_log.cache();
-        let cache = cache.lock().await;
+        lock_cache!(context, cache);
         assert!(cache.lookup(topic_id, 0, 0).is_none());
         assert!(cache.lookup(topic_id, 0, 3).is_some());
         drop(cache);
@@ -797,9 +836,7 @@ mod tests {
                 .is_ok()
         );
 
-        let mut body = String::new();
-        let registry = context.metrics.registry.lock().await;
-        prometheus_client::encoding::text::encode(&mut body, &registry).unwrap();
+        crate::metrics::test_support::render_registry!(context.metrics, body, registry; unwrap());
         assert!(body.contains("krabka_broker_diskless_wal_expired_ranges_total 1"));
     }
 
@@ -808,51 +845,23 @@ mod tests {
     /// place bytes can be removed from, so the same row binds here.
     #[tokio::test]
     async fn a_write_freeze_holds_the_retention_pass() {
-        let dir = tempdir().unwrap();
-        let topic_id = Uuid::from_u128(11);
-        let (context, store, handle, mut image) = seeded_retention_flusher(
-            dir.path(),
-            topic_id,
-            &[
-                ("diskless-wal/7/aged.ckwl", 0, 2, 1_000),
-                ("diskless-wal/7/fresh.ckwl", 3, 5, 5_000),
-            ],
-        )
-        .await;
-        let mut config = handle.log.lock().unwrap().config_snapshot();
-        config.retention = Some(krabka_units::millis(1));
-        handle.log.lock().unwrap().set_config(config);
+        retention_fixture!(dir, topic_id, context, store, handle; mut image);
+        set_retention(&handle, krabka_units::millis(1));
         image.apply(&MetadataRecord::V1TopicFreeze(
-            krabka_metadata::TopicFreezeRecord {
-                scope: "orders".to_owned(),
-                pattern_type: krabka_metadata::PatternType::Literal,
-                frozen: true,
-                reason: "a cutover is in flight".to_owned(),
-                set_by: "User:alice".to_owned(),
-                set_at_ms: 1_770_000_000_000,
-                proposal_id: Uuid::nil(),
-                key_id: String::new(),
-                signature: Vec::new(),
-            },
+            crate::test_support::topic_freeze_record(
+                "orders",
+                krabka_metadata::PatternType::Literal,
+                true,
+                "a cutover is in flight",
+            ),
         ));
         let partitions = [flush_partition(topic_id, &handle)];
 
         // The same clock and retention that expire the aged range in
         // `retention_ms_expires_an_aged_range_and_frees_its_object`.
-        expire_retention_breached_ranges(&context, &image, &partitions, 10_000)
-            .await
-            .unwrap();
-        Reclaimer::new(Duration::ZERO).sweep(&context).await;
+        expire_and_reclaim(&context, &image, &partitions, 10_000).await;
 
-        assert!(
-            context
-                .index_log
-                .cache()
-                .lock()
-                .await
-                .lookup(topic_id, 0, 0)
-                .is_some()
-        );
+        assert_cached_range!(context, topic_id, 0, 0; is_some);
         assert!(
             store
                 .head(&Path::from("diskless-wal/7/aged.ckwl"))
@@ -884,20 +893,9 @@ mod tests {
         handle.log.lock().unwrap().set_config(config);
         let partitions = [flush_partition(topic_id, &handle)];
 
-        expire_retention_breached_ranges(&context, &image, &partitions, i64::MAX)
-            .await
-            .unwrap();
-        Reclaimer::new(Duration::ZERO).sweep(&context).await;
+        expire_and_reclaim(&context, &image, &partitions, i64::MAX).await;
 
-        assert!(
-            context
-                .index_log
-                .cache()
-                .lock()
-                .await
-                .lookup(topic_id, 0, 0)
-                .is_some()
-        );
+        assert_cached_range!(context, topic_id, 0, 0; is_some);
         assert!(
             store
                 .head(&Path::from("diskless-wal/7/first.ckwl"))
@@ -930,13 +928,9 @@ mod tests {
             .raise_delete_floor(topic_id, 0, 3);
         let partitions = [flush_partition(topic_id, &handle)];
 
-        expire_retention_breached_ranges(&context, &image, &partitions, 1_000)
-            .await
-            .unwrap();
-        Reclaimer::new(Duration::ZERO).sweep(&context).await;
+        expire_and_reclaim(&context, &image, &partitions, 1_000).await;
 
-        let cache = context.index_log.cache();
-        let cache = cache.lock().await;
+        lock_cache!(context, cache);
         assert!(cache.lookup(topic_id, 0, 0).is_none());
         assert!(cache.earliest_covered(topic_id, 0) == Some(3));
         drop(cache);
@@ -951,16 +945,9 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn restarted_worker_does_not_reupload_an_already_flushed_range() {
         let dir = tempdir().unwrap();
-        let partitions = Arc::new(PartitionRegistry::new());
-        partitions.insert(
-            "orders".into(),
-            krabka_ids::PartitionIndex(0),
-            test_partition(dir.path(), "orders", 0, true, NodeId(1)),
-        );
+        let partitions = led_orders_partition(dir.path());
 
-        let (topic_id, image) = orders_image(1);
-        let (_, image_rx) = tokio::sync::watch::channel(Arc::new(image));
-        let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        memory_flusher_dependencies!(topic_id, image, image_rx, store; 1);
         let event_log: Arc<dyn krabka_remote_storage_topic::MetadataEventLog> =
             krabka_remote_storage_topic::InProcessMetadataEventLog::new(1);
         // Retain the flushed prefix locally, so a projection that has not
@@ -977,31 +964,17 @@ mod tests {
         let cache = index.cache();
         let shutdown = CancellationToken::new();
         let task = tokio::spawn(run(
-            FlusherContext {
-                partitions: Arc::clone(&partitions),
-                image_rx: image_rx.clone(),
-                object_store: Arc::clone(&store),
-                index_log: index,
-                node_id: NodeId(1),
-                broker_id: 7,
-                metrics: crate::metrics::BrokerMetrics::new(),
-                ready: Arc::new(AtomicBool::new(false)),
-            },
+            test_context!(
+                Arc::clone(&partitions),
+                image_rx.clone(),
+                Arc::clone(&store),
+                index
+            ),
             config.clone(),
             shutdown.clone(),
         ));
-        tokio::time::timeout(Duration::from_secs(1), async {
-            loop {
-                if cache.lock().await.flushed_frontier(topic_id, 0) == Some(3) {
-                    break;
-                }
-                tokio::task::yield_now().await;
-            }
-        })
-        .await
-        .unwrap();
-        shutdown.cancel();
-        assert!(task.await.unwrap() == FlusherExit::ShutDown);
+        wait_for_frontier(&cache, topic_id, 0, 3).await;
+        stop_worker(&shutdown, task).await;
         let flushed = object_keys(&store).await;
         assert!(flushed.len() == 1);
 
@@ -1017,16 +990,13 @@ mod tests {
         let ready = Arc::new(AtomicBool::new(false));
         let shutdown = CancellationToken::new();
         let task = tokio::spawn(run(
-            FlusherContext {
+            test_context!(
                 partitions,
                 image_rx,
-                object_store: Arc::clone(&store),
-                index_log: index,
-                node_id: NodeId(1),
-                broker_id: 7,
-                metrics: crate::metrics::BrokerMetrics::new(),
-                ready: Arc::clone(&ready),
-            },
+                Arc::clone(&store),
+                index,
+                Arc::clone(&ready)
+            ),
             config,
             shutdown.clone(),
         ));
@@ -1040,8 +1010,7 @@ mod tests {
         // Well inside the replay delay, so a flusher that ticked without
         // waiting has already landed its object by now.
         tokio::time::sleep(Duration::from_millis(50)).await;
-        shutdown.cancel();
-        assert!(task.await.unwrap() == FlusherExit::ShutDown);
+        stop_worker(&shutdown, task).await;
 
         // A tick during the replay re-uploads offsets 0..=2 under a second
         // key, orphaning the object the first incarnation wrote.
@@ -1059,34 +1028,20 @@ mod tests {
         dir: &std::path::Path,
         ready: Arc<AtomicBool>,
     ) -> (FlusherContext, Arc<dyn ObjectStore>) {
-        let partitions = Arc::new(PartitionRegistry::new());
-        partitions.insert(
-            "orders".into(),
-            krabka_ids::PartitionIndex(0),
-            test_partition(dir, "orders", 0, true, NodeId(1)),
-        );
+        let partitions = led_orders_partition(dir);
 
-        let (topic_id, image) = orders_image(1);
-        let (_, image_rx) = tokio::sync::watch::channel(Arc::new(image));
-        let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        memory_flusher_dependencies!(topic_id, image, image_rx, store; 1);
         let event_log: Arc<dyn krabka_remote_storage_topic::MetadataEventLog> =
             krabka_remote_storage_topic::InProcessMetadataEventLog::new(1);
         let seed = DisklessIndexLog::start(Arc::clone(&event_log))
             .await
             .unwrap();
-        seed.publish_flush(&WalFlushRecord {
-            object_key: "diskless-wal/7/seed.ckwl".into(),
-            format_version: WalFlushRecord::FORMAT_VERSION,
-            entries: vec![crate::diskless::wal_index::WalIndexEntry {
-                topic_id,
-                partition: 0,
-                first_offset: 0,
-                last_offset: 2,
-                byte_start: 0,
-                byte_len: 10,
-                max_timestamp_ms: 0,
-            }],
-        })
+        seed.publish_flush(&flush_record(
+            topic_id,
+            "diskless-wal/7/seed.ckwl",
+            (0, 2, 0),
+            10,
+        ))
         .await
         .unwrap();
 
@@ -1094,16 +1049,7 @@ mod tests {
             .await
             .unwrap();
         (
-            FlusherContext {
-                partitions,
-                image_rx,
-                object_store: Arc::clone(&store),
-                index_log: index,
-                node_id: NodeId(1),
-                broker_id: 7,
-                metrics: crate::metrics::BrokerMetrics::new(),
-                ready,
-            },
+            test_context!(partitions, image_rx, Arc::clone(&store), index, ready),
             store,
         )
     }
@@ -1127,16 +1073,13 @@ mod tests {
         let (_, image_rx) = tokio::sync::watch::channel(Arc::new(MetadataImage::new(Uuid::nil())));
         let ready = Arc::new(AtomicBool::new(false));
         let task = tokio::spawn(run(
-            FlusherContext {
-                partitions: Arc::new(PartitionRegistry::new()),
+            test_context!(
+                Arc::new(PartitionRegistry::new()),
                 image_rx,
-                object_store: Arc::new(InMemory::new()),
-                index_log: index,
-                node_id: NodeId(1),
-                broker_id: 7,
-                metrics: crate::metrics::BrokerMetrics::new(),
-                ready: Arc::clone(&ready),
-            },
+                Arc::new(InMemory::new()),
+                index,
+                Arc::clone(&ready)
+            ),
             FlushConfig {
                 interval: Duration::from_mins(1),
                 ..FlushConfig::default()
@@ -1165,9 +1108,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn worker_reports_a_stalled_replay_instead_of_flushing_or_hanging() {
-        let dir = tempdir().unwrap();
-        let ready = Arc::new(AtomicBool::new(false));
-        let (context, store) = silent_replay_flusher(dir.path(), Arc::clone(&ready)).await;
+        silent_replay_fixture!(dir, ready, context, store);
 
         let exit = tokio::time::timeout(
             Duration::from_secs(5),
@@ -1183,15 +1124,12 @@ mod tests {
         // The bootstrap needs this to rebuild the index log; a fetch loop that
         // died on connect never recovers on its own subscription.
         assert!(exit == FlusherExit::ReplayStalled);
-        assert!(!ready.load(Ordering::Acquire));
-        assert!(object_keys(&store).await.is_empty());
+        assert_replay_unflushed(&ready, &store).await;
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn worker_stops_at_shutdown_without_finishing_the_replay() {
-        let dir = tempdir().unwrap();
-        let ready = Arc::new(AtomicBool::new(false));
-        let (context, store) = silent_replay_flusher(dir.path(), Arc::clone(&ready)).await;
+        silent_replay_fixture!(dir, ready, context, store);
 
         // Shutdown during a replay must not wait it out: the stall window is
         // far longer than this test would tolerate.
@@ -1205,8 +1143,7 @@ mod tests {
         .expect("shutdown during a replay returns promptly");
 
         assert!(exit == FlusherExit::ShutDown);
-        assert!(!ready.load(Ordering::Acquire));
-        assert!(object_keys(&store).await.is_empty());
+        assert_replay_unflushed(&ready, &store).await;
     }
 
     /// A flush tick that is slower than the flush interval must not hide
@@ -1241,19 +1178,11 @@ mod tests {
         ];
         for (case, put_fault, puts_before_shutdown) in cases {
             let dir = tempdir().unwrap();
-            let partitions = Arc::new(PartitionRegistry::new());
-            partitions.insert(
-                "orders".into(),
-                krabka_ids::PartitionIndex(0),
-                test_partition(dir.path(), "orders", 0, true, NodeId(1)),
-            );
+            let partitions = led_orders_partition(dir.path());
             let mut image = MetadataImage::new(Uuid::nil());
-            image.apply(&MetadataRecord::V1Topic(TopicRecord {
-                name: "orders".into(),
-                topic_id: Uuid::from_u128(11),
-                partitions: 1,
-                replication_factor: 1,
-            }));
+            image.apply(&MetadataRecord::V1Topic(
+                crate::test_support::single_partition_topic("orders", Uuid::from_u128(11)),
+            ));
             let (_, image_rx) = tokio::sync::watch::channel(Arc::new(image));
             let store = Arc::new(FaultInjectingStore::new(
                 Arc::new(InMemory::new()),
@@ -1266,16 +1195,12 @@ mod tests {
             .unwrap();
             let shutdown = CancellationToken::new();
             let task = tokio::spawn(run(
-                FlusherContext {
+                test_context!(
                     partitions,
                     image_rx,
-                    object_store: Arc::clone(&store) as Arc<dyn ObjectStore>,
-                    index_log: index,
-                    node_id: NodeId(1),
-                    broker_id: 7,
-                    metrics: crate::metrics::BrokerMetrics::new(),
-                    ready: Arc::new(AtomicBool::new(false)),
-                },
+                    Arc::clone(&store) as Arc<dyn ObjectStore>,
+                    index
+                ),
                 FlushConfig {
                     interval: Duration::from_millis(1),
                     trim_safety_lag: None,
@@ -1303,7 +1228,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn worker_flushes_only_led_diskless_partitions_and_stops() {
         let dir = tempdir().unwrap();
-        let led = test_partition(dir.path(), "orders", 0, true, NodeId(1));
+        let led = orders_partition(dir.path());
         let follower = test_partition(dir.path(), "orders", 1, true, NodeId(2));
         let local = test_partition(dir.path(), "orders", 2, false, NodeId(1));
         let partitions = Arc::new(PartitionRegistry::new());
@@ -1311,27 +1236,12 @@ mod tests {
         partitions.insert("orders".into(), krabka_ids::PartitionIndex(1), follower);
         partitions.insert("orders".into(), krabka_ids::PartitionIndex(2), local);
 
-        let (topic_id, image) = orders_image(3);
-        let (_, image_rx) = tokio::sync::watch::channel(Arc::new(image));
-        let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
-        let index = DisklessIndexLog::start(
-            krabka_remote_storage_topic::InProcessMetadataEventLog::new(1),
-        )
-        .await
-        .unwrap();
+        memory_flusher_dependencies!(topic_id, image, image_rx, store; 3);
+        let index = test_index_log().await;
         let cache = index.cache();
         let shutdown = CancellationToken::new();
         let task = tokio::spawn(run(
-            FlusherContext {
-                partitions,
-                image_rx,
-                object_store: Arc::clone(&store),
-                index_log: index,
-                node_id: NodeId(1),
-                broker_id: 7,
-                metrics: crate::metrics::BrokerMetrics::new(),
-                ready: Arc::new(AtomicBool::new(false)),
-            },
+            test_context!(partitions, image_rx, Arc::clone(&store), index),
             FlushConfig {
                 interval: Duration::from_millis(1),
                 trim_safety_lag: None,
@@ -1340,18 +1250,8 @@ mod tests {
             shutdown.clone(),
         ));
 
-        tokio::time::timeout(Duration::from_secs(1), async {
-            loop {
-                if cache.lock().await.flushed_frontier(topic_id, 0) == Some(3) {
-                    break;
-                }
-                tokio::task::yield_now().await;
-            }
-        })
-        .await
-        .unwrap();
-        shutdown.cancel();
-        assert!(task.await.unwrap() == FlusherExit::ShutDown);
+        wait_for_frontier(&cache, topic_id, 0, 3).await;
+        stop_worker(&shutdown, task).await;
 
         assert!(cache.lock().await.flushed_frontier(topic_id, 1).is_none());
         assert!(cache.lock().await.flushed_frontier(topic_id, 2).is_none());

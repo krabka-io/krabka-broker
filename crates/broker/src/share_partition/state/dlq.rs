@@ -18,7 +18,7 @@
 
 use krabka_log::Offset;
 
-use super::{AcquisitionState, InFlightBatch, RecordState, clamp_i32};
+use super::{AcquisitionState, InFlightBatch, RecordState};
 
 /// Why a record goes to the dead-letter queue: Kafka's
 /// `ShareGroupDLQManager.CLIENT_REJECT` and `DELIVERY_COUNT_EXCEEDED`.
@@ -92,10 +92,7 @@ impl ArchiveSink<'_> {
                 cause: Some(cause),
             });
         } else {
-            batch.state = RecordState::Archived;
-            *self.delivery_complete_count = self
-                .delivery_complete_count
-                .saturating_add(clamp_i32(batch.len()));
+            batch.archive_terminal(self.delivery_complete_count);
         }
     }
 }
@@ -139,31 +136,17 @@ impl AcquisitionState {
     ///
     /// A record of the range that is no longer `Archiving` stays as it is.
     pub fn finish_archiving(&mut self, first: Offset, last: Offset) {
-        if first > last {
-            return;
-        }
-        self.split_at_offset(first);
-        self.split_at_offset(last + 1);
-        let mut changed = false;
-        for batch in &mut self.batches {
-            if batch.state != RecordState::Archiving
-                || batch.first_offset < first
-                || batch.last_offset > last
-            {
-                continue;
-            }
-            batch.state = RecordState::Archived;
-            self.delivery_complete_count = self
-                .delivery_complete_count
-                .saturating_add(clamp_i32(batch.len()));
-            changed = true;
-        }
-        if changed {
-            self.dirty = true;
-            self.advance_spso();
-        } else {
-            self.coalesce();
-        }
+        self.archive_range(
+            first,
+            last,
+            |batch| {
+                batch.state == RecordState::Archiving
+                    && batch.first_offset >= first
+                    && batch.last_offset <= last
+            },
+            false,
+            true,
+        );
     }
 }
 
@@ -173,28 +156,17 @@ mod tests {
 
     use super::*;
     use crate::{
-        share_coordinator::persistence::StateBatch,
+        share_coordinator::coordinator::test_support::state_batch as batch,
         share_partition::state::{
             AckType, AcquiredRange, DS_ARCHIVING,
-            test_support::{LOCK, t0},
+            test_support::{LOCK, acquire_window, dlq_range as range, t0},
         },
     };
 
     fn state_with_dlq(records: i64) -> AcquisitionState {
         let mut s = AcquisitionState::new(Offset(0));
-        s.set_dlq_enabled(true);
-        s.materialize(Offset(records), 100);
-        let _ = s.acquire("m1", 100, Offset(i64::MAX), t0(), LOCK, 5);
+        acquire_window(&mut s, records, 100, true);
         s
-    }
-
-    fn range(first: i64, last: i64, delivery_count: i16, cause: Option<DlqCause>) -> DlqRange {
-        DlqRange {
-            first: Offset(first),
-            last: Offset(last),
-            delivery_count,
-            cause,
-        }
     }
 
     /// Kafka's `recordStateWithDlq`: with a queue only `Reject` waits in
@@ -362,12 +334,6 @@ mod tests {
         s.acknowledge("m1", Offset(0), Offset(1), AckType::Reject, 5)
             .unwrap();
         let (start, _, batches) = s.to_persist_batches();
-        let batch = |first: i64, last: i64, delivery_state: i8, delivery_count: i16| StateBatch {
-            first_offset: Offset(first),
-            last_offset: Offset(last),
-            delivery_state,
-            delivery_count,
-        };
         assert!(
             batches
                 == vec![
@@ -398,17 +364,7 @@ mod tests {
     #[test]
     fn an_archiving_run_holds_the_spso() {
         let mut s = AcquisitionState::new(Offset(0));
-        s.load_from(
-            Offset(0),
-            1,
-            1,
-            &[StateBatch {
-                first_offset: Offset(0),
-                last_offset: Offset(0),
-                delivery_state: DS_ARCHIVING,
-                delivery_count: 5,
-            }],
-        );
+        s.load_from(Offset(0), 1, 1, &[batch(0, 0, DS_ARCHIVING, 5)]);
 
         assert!((s.start_offset, s.delivery_complete_count()) == (Offset(0), 0));
     }

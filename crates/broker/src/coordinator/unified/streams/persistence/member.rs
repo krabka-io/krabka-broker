@@ -19,19 +19,16 @@
 //! as one `int8`: -1 for null, or 1 followed by the struct and the struct's own
 //! tagged-field count. The port is a `uint16`, two bytes, not four.
 
-use bytes::{BufMut, Bytes, BytesMut};
+use bytes::BufMut;
 
 use super::codec::{decode_key_value_list, encode_key_value_list};
-use crate::{
-    coordinator::unified::persistence::{
-        flex::{
-            get_compact_nullable_string, get_compact_string, get_i8, get_u16,
-            put_compact_nullable_string, put_compact_string, put_empty_tagged_fields,
-            skip_tagged_fields,
-        },
-        get_i16, get_i32,
+use crate::coordinator::unified::persistence::{
+    flex::{
+        get_compact_nullable_string, get_compact_string, get_i8, get_member_client, get_u16,
+        put_compact_nullable_string, put_compact_string, put_empty_tagged_fields,
+        put_member_client, skip_tagged_fields, value_codec,
     },
-    error::BrokerError,
+    get_i32,
 };
 
 /// A member's advertised host and port endpoint, for interactive-query
@@ -58,53 +55,40 @@ pub struct StreamsGroupMemberMetadataValue {
     pub topology_epoch: i32,
 }
 
-impl StreamsGroupMemberMetadataValue {
-    #[must_use]
-    pub fn encode(&self) -> Bytes {
-        let mut buf = BytesMut::new();
-        buf.put_i16(0);
-        put_compact_nullable_string(&mut buf, self.instance_id.as_deref());
-        put_compact_nullable_string(&mut buf, self.rack_id.as_deref());
-        put_compact_string(&mut buf, &self.client_id);
-        put_compact_string(&mut buf, &self.client_host);
+value_codec! {
+    StreamsGroupMemberMetadataValue,
+    encode(&self) -> buf {
+        put_compact_nullable_string(buf, self.instance_id.as_deref());
+        put_member_client(buf, self.rack_id.as_deref(), &self.client_id, &self.client_host);
         buf.put_i32(self.rebalance_timeout_ms);
         buf.put_i32(self.topology_epoch);
-        put_compact_string(&mut buf, &self.process_id);
+        put_compact_string(buf, &self.process_id);
         match &self.user_endpoint {
             Some(ep) => {
                 buf.put_i8(1);
-                put_compact_string(&mut buf, &ep.host);
+                put_compact_string(buf, &ep.host);
                 buf.put_u16(ep.port);
-                put_empty_tagged_fields(&mut buf);
+                put_empty_tagged_fields(buf);
             }
             None => buf.put_i8(-1),
         }
-        encode_key_value_list(&mut buf, &self.client_tags);
-        put_empty_tagged_fields(&mut buf);
-        buf.freeze()
+        encode_key_value_list(buf, &self.client_tags);
     }
-
-    /// # Errors
-    /// Returns an error when log I/O fails, a record or index is corrupt, or the requested offset violates the segment state.
-    pub fn decode(mut buf: &[u8]) -> Result<Self, BrokerError> {
-        let _v = get_i16(&mut buf)?;
-        let instance_id = get_compact_nullable_string(&mut buf)?;
-        let rack_id = get_compact_nullable_string(&mut buf)?;
-        let client_id = get_compact_string(&mut buf)?;
-        let client_host = get_compact_string(&mut buf)?;
-        let rebalance_timeout_ms = get_i32(&mut buf)?;
-        let topology_epoch = get_i32(&mut buf)?;
-        let process_id = get_compact_string(&mut buf)?;
-        let user_endpoint = if get_i8(&mut buf)? < 0 {
+    decode(buf) {
+        let instance_id = get_compact_nullable_string(buf)?;
+        let (rack_id, client_id, client_host) = get_member_client(buf)?;
+        let rebalance_timeout_ms = get_i32(buf)?;
+        let topology_epoch = get_i32(buf)?;
+        let process_id = get_compact_string(buf)?;
+        let user_endpoint = if get_i8(buf)? < 0 {
             None
         } else {
-            let host = get_compact_string(&mut buf)?;
-            let port = get_u16(&mut buf)?;
-            skip_tagged_fields(&mut buf)?;
+            let host = get_compact_string(buf)?;
+            let port = get_u16(buf)?;
+            skip_tagged_fields(buf)?;
             Some(StreamsEndpoint { host, port })
         };
-        let client_tags = decode_key_value_list(&mut buf)?;
-        skip_tagged_fields(&mut buf)?;
+        let client_tags = decode_key_value_list(buf)?;
         Ok(Self {
             instance_id,
             rack_id,
@@ -124,9 +108,12 @@ mod tests {
     use assert2::assert;
 
     use super::*;
-    use crate::coordinator::unified::streams::persistence::{
-        KEY_STREAMS_MEMBER_METADATA, StreamsGroupKey, encode_member_metadata_key,
-        parse_streams_key, test_support::peek_version,
+    use crate::coordinator::unified::{
+        streams::persistence::{
+            KEY_STREAMS_MEMBER_METADATA, StreamsGroupKey, encode_member_metadata_key,
+            parse_streams_key,
+        },
+        test_support::{peek_version, wire_bytes},
     };
 
     fn sample() -> StreamsGroupMemberMetadataValue {
@@ -162,20 +149,20 @@ mod tests {
             rebalance_timeout_ms: 1,
             topology_epoch: 2,
         };
-        let mut want: Vec<u8> = vec![0x00, 0x00];
-        want.extend_from_slice(b"\x00\x00"); // InstanceId, RackId null
-        want.extend_from_slice(b"\x02c\x02h"); // ClientId, ClientHost
-        want.extend_from_slice(&1i32.to_be_bytes()); // RebalanceTimeoutMs
-        want.extend_from_slice(&2i32.to_be_bytes()); // TopologyEpoch
-        want.extend_from_slice(b"\x02p"); // ProcessId
-        want.push(0x01); // UserEndpoint present
-        want.extend_from_slice(b"\x02e"); // Host
-        want.extend_from_slice(&8080u16.to_be_bytes()); // Port, uint16
-        want.push(0x00); // Endpoint tagged fields
-        want.push(0x02); // one ClientTags entry
-        want.extend_from_slice(b"\x02k\x02v");
-        want.push(0x00); // KeyValue tagged fields
-        want.push(0x00); // message tagged fields
+        let want = wire_bytes(&[
+            "0000", "0000",     // InstanceId, RackId null
+            "02630268", // ClientId, ClientHost
+            "00000001", // RebalanceTimeoutMs
+            "00000002", // TopologyEpoch
+            "0270",     // ProcessId
+            "01",       // UserEndpoint present
+            "0265",     // Host
+            "1f90",     // Port, uint16
+            "00",       // Endpoint tagged fields
+            "02",       // one ClientTags entry
+            "026b0276", "00", // KeyValue tagged fields
+            "00", // message tagged fields
+        ]);
         assert!(&v.encode()[..] == &want[..]);
     }
 

@@ -17,7 +17,7 @@ use crate::{
     principals::{ALICE, BOB, CAROL, MALLORY, principal},
     proposals::{ACTION_DELETE_TOPIC, TTL_CONFIGURED, approve, open, propose, stored},
     support,
-    topics::{create_topic, delete_topic, topic_exists},
+    topics::{delete_topic, topic_exists},
 };
 
 /// The whole two-person loop: Alice opens a proposal, Bob and Carol approve it,
@@ -31,11 +31,8 @@ use crate::{
 /// stored nothing, would pass the rest of this file untouched.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_proposal_two_approvals_and_the_transition_they_authorize() {
-    let cluster = boot().await;
-    let alice = cluster.client(ALICE).await;
-    let bob = cluster.client(BOB).await;
-    let carol = cluster.client(CAROL).await;
-    create_topic(&alice, "doomed", 1).await;
+    crate::cluster::client_fixture!(cluster = boot();
+        alice => ALICE, bob => BOB, carol => CAROL; topic(alice, "doomed", 1));
 
     let id = open(&alice, ACTION_DELETE_TOPIC, "doomed").await;
 
@@ -110,10 +107,8 @@ async fn a_proposal_two_approvals_and_the_transition_they_authorize() {
 /// the consequence: the transition still refuses afterwards.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn one_principal_cannot_stand_in_for_two() {
-    let cluster = boot().await;
-    let alice = cluster.client(ALICE).await;
-    let bob = cluster.client(BOB).await;
-    create_topic(&alice, "doomed", 1).await;
+    crate::cluster::client_fixture!(cluster = boot();
+        alice => ALICE, bob => BOB; topic(alice, "doomed", 1));
 
     let id = open(&alice, ACTION_DELETE_TOPIC, "doomed").await;
     check!(approve(&bob, id).await.error_code == codes::NONE);
@@ -150,9 +145,8 @@ async fn one_principal_cannot_stand_in_for_two() {
 /// (1007), because the proposer already counts as one of the two people.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn the_proposer_cannot_approve_their_own_proposal() {
-    let cluster = boot().await;
-    let alice = cluster.client(ALICE).await;
-    create_topic(&alice, "doomed", 1).await;
+    crate::cluster::client_fixture!(cluster = boot();
+        alice => ALICE; topic(alice, "doomed", 1));
 
     let id = open(&alice, ACTION_DELETE_TOPIC, "doomed").await;
     let refused = approve(&alice, id).await;
@@ -180,10 +174,8 @@ async fn the_proposer_cannot_approve_their_own_proposal() {
 /// two people and a stranger.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_principal_outside_the_approver_set_is_refused() {
-    let cluster = boot().await;
-    let alice = cluster.client(ALICE).await;
-    let mallory = cluster.client(MALLORY).await;
-    create_topic(&alice, "doomed", 1).await;
+    crate::cluster::client_fixture!(cluster = boot();
+        alice => ALICE, mallory => MALLORY; topic(alice, "doomed", 1));
 
     let opened = propose(&mallory, ACTION_DELETE_TOPIC, "doomed", TTL_CONFIGURED).await;
     check!(
@@ -219,10 +211,8 @@ async fn a_principal_outside_the_approver_set_is_refused() {
 /// off the audit topic and then finds its login.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn an_approval_joins_to_the_login_that_made_it() {
-    let cluster = boot().await;
-    let alice = cluster.client(ALICE).await;
-    let bob = cluster.client(BOB).await;
-    create_topic(&alice, "doomed", 1).await;
+    crate::cluster::client_fixture!(cluster = boot();
+        alice => ALICE, bob => BOB; topic(alice, "doomed", 1));
 
     let id = open(&alice, ACTION_DELETE_TOPIC, "doomed").await;
     check!(approve(&bob, id).await.approvals_held == 1);

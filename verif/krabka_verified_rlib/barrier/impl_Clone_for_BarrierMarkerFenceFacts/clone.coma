@@ -1,4 +1,4 @@
-(* #"/workspace/crates/verified/src/barrier.rs" 19 27 19 32 *)
+(* #"/workspace/crates/verified/src/barrier.rs" 7 19 7 36 *)
 
 (* <barrier::BarrierMarkerFenceFacts as std::clone::Clone> *)
 
@@ -19,7 +19,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let clone_BarrierMarkerFenceFacts [#"/workspace/crates/verified/src/barrier.rs" 19 27 19 32]
+let clone_BarrierMarkerFenceFacts [#"/workspace/crates/verified/src/barrier.rs" 7 19 7 36]
   (self: t_BarrierMarkerFenceFacts) (return (x: t_BarrierMarkerFenceFacts)) = (! bb0
   [ bb0 = s0 [ s0 = [ &_ret <- self ] s1 | s1 = return {_ret} ] ]
   [ & _ret: t_BarrierMarkerFenceFacts = Any.any_l () | & self: t_BarrierMarkerFenceFacts = self ])

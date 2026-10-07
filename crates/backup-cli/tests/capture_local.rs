@@ -26,6 +26,8 @@ const RLMM_BYTES: &[u8] = b"rlmm snapshot bytes";
 /// The newest checkpoint's bytes.
 const NEWEST_CHECKPOINT_BYTES: &[u8] = b"the newest controller checkpoint";
 
+krabka_macros::snapshot_node_fixture!(node_with_rlmm);
+
 /// One broker log directory, with the two files a restore needs on it.
 struct FixtureNode {
     log_dir: tempfile::TempDir,
@@ -33,10 +35,7 @@ struct FixtureNode {
 
 impl FixtureNode {
     fn build() -> Self {
-        let log_dir = tempfile::tempdir().expect("log dir");
-        let rlmm = log_dir.path().join("remote-log-metadata");
-        std::fs::create_dir_all(&rlmm).expect("create the rlmm dir");
-        std::fs::write(rlmm.join("snapshot"), RLMM_BYTES).expect("write the rlmm snapshot");
+        let log_dir = node_with_rlmm();
 
         let metadata = log_dir.path().join("__cluster_metadata-0");
         std::fs::create_dir_all(&metadata).expect("create the metadata dir");
@@ -68,6 +67,16 @@ async fn read_manifest(archive_root: &std::path::Path, capture: &str) -> Manifes
         .await
         .expect("read the manifest");
     serde_json::from_slice(&bytes).expect("decode the manifest")
+}
+
+async fn captured_node() -> (FixtureNode, tempfile::TempDir, ArchiveArgs, String) {
+    let node = FixtureNode::build();
+    let archive_root = tempfile::tempdir().expect("archive root");
+    let args = archive_args(archive_root.path());
+    let capture = run::capture(Some(node.log_dir.path()), None, &args)
+        .await
+        .expect("capture the node");
+    (node, archive_root, args, capture)
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -127,13 +136,7 @@ async fn a_capture_copies_both_snapshots_and_records_what_it_wrote() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn verify_accepts_a_capture_it_just_wrote_and_list_names_it() {
-    let node = FixtureNode::build();
-    let archive_root = tempfile::tempdir().expect("archive root");
-    let args = archive_args(archive_root.path());
-
-    let capture = run::capture(Some(node.log_dir.path()), None, &args)
-        .await
-        .expect("capture the node");
+    let (_node, _archive_root, args, capture) = captured_node().await;
 
     check!(run::list(&args).await.expect("list the captures") == vec![capture.clone()]);
     check!(run::verify("latest", &args).await.is_ok());
@@ -142,13 +145,7 @@ async fn verify_accepts_a_capture_it_just_wrote_and_list_names_it() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn verify_reports_an_artifact_the_archive_no_longer_holds_whole() {
-    let node = FixtureNode::build();
-    let archive_root = tempfile::tempdir().expect("archive root");
-    let args = archive_args(archive_root.path());
-
-    let capture = run::capture(Some(node.log_dir.path()), None, &args)
-        .await
-        .expect("capture the node");
+    let (_node, archive_root, args, capture) = captured_node().await;
 
     // A truncated object is what a half-finished upload leaves behind, and it
     // is exactly what a restore must not be handed.

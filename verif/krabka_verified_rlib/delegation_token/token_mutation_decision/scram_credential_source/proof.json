@@ -2,7 +2,7 @@
   "profile": [],
   "proofs": {
     "Coma": {
-      "vc_scram_credential_source": { "prover": "alt-ergo", "time": 0.003 }
+      "vc_scram_credential_source": { "prover": "alt-ergo", "time": 0.015 }
     }
   }
 }

@@ -7,8 +7,6 @@
 
 #[cfg(not(target_family = "wasm"))]
 use krabka_units::{Time, secs};
-use schemars::JsonSchema;
-use serde::Deserialize;
 
 /// TOML shape of `[oauthbearer]`. Maps to
 /// [`krabka_security::OAuthBearerValidator`]. Setting `jwks_endpoint_uri`
@@ -18,7 +16,7 @@ use serde::Deserialize;
 /// exclusive. With neither set, the unsecured-JWS validator
 /// (development only) is used, and that fallback is rejected at
 /// config-load unless `allow_unsecured = true`.
-#[derive(Debug, Clone, Default, Deserialize, JsonSchema, PartialEq)]
+#[krabka_macros::config_table(open)]
 pub struct FileOAuthBearerConfig {
     /// Claim whose value becomes the principal name. Default `sub`.
     pub principal_claim_name: Option<String>,

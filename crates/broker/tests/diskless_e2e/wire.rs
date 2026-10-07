@@ -14,18 +14,25 @@ use bytes::{Bytes, BytesMut};
 use krabka_client_core::Client;
 use krabka_protocol::{
     owned::{
-        delete_records_request::{
-            DeleteRecordsPartition, DeleteRecordsRequest, DeleteRecordsTopic,
-        },
-        fetch_request::{FetchPartition, FetchRequest, FetchTopic},
-        list_offsets_request::{ListOffsetsPartition, ListOffsetsRequest, ListOffsetsTopic},
-        produce_request::{PartitionProduceData, ProduceRequest, TopicProduceData},
+        fetch_request::FetchRequest,
+        list_offsets_request::{ListOffsetsPartition, ListOffsetsRequest},
     },
     primitives::uuid::Uuid as WireUuid,
     records::{Record, RecordBatch},
 };
 
-use crate::{CLIENT_PRINCIPAL, PASSWORD, TOPIC, support};
+use crate::{
+    CLIENT_PRINCIPAL, PASSWORD, TOPIC, support,
+    support::{
+        fetch::{fetch_partition, single_partition_fetch},
+        offsets::{
+            delete_records_partition, delete_records_request, delete_records_topic,
+            list_offset_partition, single_partition_list_offsets,
+        },
+        produce::single_partition_produce,
+        records::batch_from_records,
+    },
+};
 
 /// Kafka `NOT_LEADER_OR_FOLLOWER`. The Produce handler returns it before it
 /// appends anything, so a retry cannot duplicate a record.
@@ -67,11 +74,10 @@ fn stamped_batch(value: Bytes) -> RecordBatch {
     RecordBatch {
         base_timestamp: now_ms,
         max_timestamp: now_ms,
-        records: vec![Record {
+        ..batch_from_records(vec![Record {
             value: Some(value),
             ..Record::default()
-        }],
-        ..RecordBatch::default()
+        }])
     }
 }
 
@@ -101,21 +107,13 @@ async fn produce_one(client: &Client, topic_id: WireUuid, value: Bytes, index: u
     loop {
         let batch = stamped_batch(value.clone());
         let response = client
-            .send(ProduceRequest {
-                acks: -1,
-                timeout_ms: 30_000,
-                topic_data: vec![TopicProduceData {
-                    name: TOPIC.into(),
-                    topic_id,
-                    partition_data: vec![PartitionProduceData {
-                        index: 0,
-                        records: Some(batch.into()),
-                        ..Default::default()
-                    }],
-                    ..Default::default()
-                }],
-                ..Default::default()
-            })
+            .send(single_partition_produce(
+                TOPIC,
+                topic_id,
+                0,
+                Some(batch.into()),
+                (-1, 30_000),
+            ))
             .await
             .expect("Produce");
         let partition = &response.responses[0].partition_responses[0];
@@ -156,22 +154,12 @@ pub(crate) async fn fetch_log(
 
     while records.len() < expected {
         let response = client
-            .send(FetchRequest {
-                max_wait_ms: 500,
-                min_bytes: 1,
-                topics: vec![FetchTopic {
-                    topic: TOPIC.into(),
-                    topic_id,
-                    partitions: vec![FetchPartition {
-                        partition: 0,
-                        fetch_offset: next,
-                        partition_max_bytes: 4 * 1024 * 1024,
-                        ..Default::default()
-                    }],
-                    ..Default::default()
-                }],
-                ..Default::default()
-            })
+            .send(single_partition_fetch(
+                TOPIC,
+                topic_id,
+                fetch_partition(0, next, 4 * 1024 * 1024),
+                (500, 1, FetchRequest::default().max_bytes),
+            ))
             .await
             .expect("Fetch");
         let partition = response
@@ -254,21 +242,13 @@ pub(crate) async fn produce_until_stopped(
     while !stop.is_cancelled() {
         let batch = stamped_batch(Bytes::from(format!("diskless-e2e-churn-{index:04}")));
         let _ = client
-            .send(ProduceRequest {
-                acks: -1,
-                timeout_ms: 5_000,
-                topic_data: vec![TopicProduceData {
-                    name: TOPIC.into(),
-                    topic_id,
-                    partition_data: vec![PartitionProduceData {
-                        index: 0,
-                        records: Some(batch.into()),
-                        ..Default::default()
-                    }],
-                    ..Default::default()
-                }],
-                ..Default::default()
-            })
+            .send(single_partition_produce(
+                TOPIC,
+                topic_id,
+                0,
+                Some(batch.into()),
+                (-1, 5_000),
+            ))
             .await;
         index += 1;
         tokio::time::sleep(Duration::from_millis(5)).await;
@@ -300,19 +280,13 @@ pub(crate) fn assert_matches_produced(log: &FetchedLog, start_offset: i64, expec
 pub(crate) async fn delete_records_below(bootstrap: &str, offset: i64) -> i64 {
     let client = support::sasl_client(bootstrap, CLIENT_PRINCIPAL, PASSWORD).await;
     let response = client
-        .send(DeleteRecordsRequest {
-            topics: vec![DeleteRecordsTopic {
-                name: TOPIC.into(),
-                partitions: vec![DeleteRecordsPartition {
-                    partition_index: 0,
-                    offset,
-                    ..Default::default()
-                }],
-                ..Default::default()
-            }],
-            timeout_ms: 10_000,
-            ..Default::default()
-        })
+        .send(delete_records_request(
+            vec![delete_records_topic(
+                TOPIC,
+                vec![delete_records_partition(0, offset)],
+            )],
+            10_000,
+        ))
         .await
         .expect("DeleteRecords");
     let partition = &response.topics[0].partitions[0];
@@ -329,17 +303,13 @@ pub(crate) async fn earliest_offset(bootstrap: &str) -> i64 {
     let response = client
         .send(ListOffsetsRequest {
             replica_id: -1,
-            topics: vec![ListOffsetsTopic {
-                name: TOPIC.into(),
-                partitions: vec![ListOffsetsPartition {
-                    partition_index: 0,
-                    timestamp: EARLIEST_TIMESTAMP,
+            ..single_partition_list_offsets(
+                TOPIC,
+                ListOffsetsPartition {
                     current_leader_epoch: -1,
-                    ..Default::default()
-                }],
-                ..Default::default()
-            }],
-            ..Default::default()
+                    ..list_offset_partition(0, EARLIEST_TIMESTAMP)
+                },
+            )
         })
         .await
         .expect("ListOffsets");
@@ -359,22 +329,12 @@ pub(crate) async fn earliest_offset(bootstrap: &str) -> i64 {
 pub(crate) async fn fetch_error_code(bootstrap: &str, topic_id: WireUuid, offset: i64) -> i16 {
     let client = support::sasl_client(bootstrap, CLIENT_PRINCIPAL, PASSWORD).await;
     let response = client
-        .send(FetchRequest {
-            max_wait_ms: 500,
-            min_bytes: 1,
-            topics: vec![FetchTopic {
-                topic: TOPIC.into(),
-                topic_id,
-                partitions: vec![FetchPartition {
-                    partition: 0,
-                    fetch_offset: offset,
-                    partition_max_bytes: 4 * 1024 * 1024,
-                    ..Default::default()
-                }],
-                ..Default::default()
-            }],
-            ..Default::default()
-        })
+        .send(single_partition_fetch(
+            TOPIC,
+            topic_id,
+            fetch_partition(0, offset, 4 * 1024 * 1024),
+            (500, 1, FetchRequest::default().max_bytes),
+        ))
         .await
         .expect("Fetch");
     response.responses[0].partitions[0].error_code

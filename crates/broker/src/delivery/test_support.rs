@@ -24,7 +24,9 @@ use tokio::sync::{Notify, mpsc};
 
 use crate::{
     delivery::{DeliveryHandles, PartitionDelivery, metrics::DeliveryMetrics},
-    partition::{Partition, WriterMessage, initial_replication_target},
+    partition::{
+        Partition, WriterMessage, empty_marker_materialization, initial_replication_target,
+    },
     partition_registry::PartitionRegistry,
 };
 
@@ -135,9 +137,7 @@ pub(crate) fn partition_with_batches(
         log_dir: Arc::new(ArcSwap::from_pointee(dir.path().to_path_buf())),
         log,
         writer_tx: tx,
-        marker_materialization: Arc::new(tokio::sync::Mutex::new(
-            std::collections::HashMap::default(),
-        )),
+        marker_materialization: empty_marker_materialization(),
         append_notify: Arc::new(Notify::new()),
         replica_state: Arc::new(tokio::sync::Mutex::new(replica_state)),
         hw_advance_notify: Arc::new(Notify::new()),

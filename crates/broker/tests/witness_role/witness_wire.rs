@@ -12,15 +12,17 @@ use std::collections::BTreeSet;
 use krabka_client_core::Client;
 use krabka_protocol::{
     owned::{
-        fetch_request::{FetchPartition, FetchRequest, FetchTopic},
-        metadata_request::{MetadataRequest, MetadataRequestTopic},
-        produce_request::{PartitionProduceData, ProduceRequest, TopicProduceData},
+        fetch_request::{FetchPartition, FetchRequest},
+        produce_request::ProduceRequest,
         produce_response::ProduceResponse,
     },
     primitives::uuid::Uuid as WireUuid,
 };
 
-use crate::TOPIC;
+use crate::{
+    TOPIC,
+    support::{fetch::fetch_topic_row, produce::single_partition_produce},
+};
 
 /// Create `TOPIC` with one partition and rf=3, and return its id.
 pub(crate) async fn create_topic(client: &Client) -> WireUuid {
@@ -28,21 +30,13 @@ pub(crate) async fn create_topic(client: &Client) -> WireUuid {
 }
 
 fn produce_request(topic_id: WireUuid, n: i32) -> ProduceRequest {
-    ProduceRequest {
-        acks: -1,
-        timeout_ms: 10_000,
-        topic_data: vec![TopicProduceData {
-            name: TOPIC.into(),
-            topic_id,
-            partition_data: vec![PartitionProduceData {
-                index: 0,
-                records: Some(crate::support::client::value_batch(n).into()),
-                ..Default::default()
-            }],
-            ..Default::default()
-        }],
-        ..Default::default()
-    }
+    single_partition_produce(
+        TOPIC,
+        topic_id,
+        0,
+        Some(crate::support::client::value_batch(n).into()),
+        (-1, 10_000),
+    )
 }
 
 /// The whole response to an `acks=all` produce of `n` records. The KIP-951
@@ -74,18 +68,17 @@ pub(crate) fn consumer_fetch(topic_id: WireUuid, rack: &str) -> FetchRequest {
         session_id: 0,
         session_epoch: -1, // sessionless full fetch
         rack_id: rack.to_string(),
-        topics: vec![FetchTopic {
-            topic: TOPIC.into(),
+        topics: vec![fetch_topic_row(
+            TOPIC,
             topic_id,
-            partitions: vec![FetchPartition {
+            vec![FetchPartition {
                 partition: 0,
                 fetch_offset: 0,
                 current_leader_epoch: -1,
                 partition_max_bytes: 1_048_576,
                 ..Default::default()
             }],
-            ..Default::default()
-        }],
+        )],
         ..Default::default()
     }
 }
@@ -103,20 +96,10 @@ pub(crate) struct PartitionView {
 
 pub(crate) async fn partition_view(client: &Client) -> PartitionView {
     let resp = client
-        .send(MetadataRequest {
-            topics: Some(vec![MetadataRequestTopic {
-                name: Some(TOPIC.into()),
-                ..Default::default()
-            }]),
-            ..Default::default()
-        })
+        .send(crate::support::discovery::named_topic_metadata(TOPIC))
         .await
         .expect("Metadata for the topic");
-    let partition = resp
-        .topics
-        .iter()
-        .find(|t| t.name.as_deref() == Some(TOPIC))
-        .and_then(|t| t.partitions.first())
+    let partition = crate::support::discovery::metadata_first_partition(&resp, TOPIC)
         .expect("the topic has partition 0");
     // Placement starts at a random site, as Kafka's does, so the order of the
     // replicas after the first one, the preferred leader, is not fixed.

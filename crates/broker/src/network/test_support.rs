@@ -1,35 +1,10 @@
 //! Wire and socket fixtures shared by network unit tests.
 
-use bytes::{BufMut, BytesMut};
 use tokio::net::{TcpListener, TcpStream};
 
-/// Build request headers independently of the parser under test. Arbitrary
-/// tagged bytes let malformed-header cases exercise the same path.
-pub(crate) fn request_frame(
-    api_key: i16,
-    api_version: i16,
-    correlation_id: i32,
-    client_id: Option<&[u8]>,
-    tagged: Option<&[u8]>,
-    body: &[u8],
-) -> BytesMut {
-    let mut buf = BytesMut::new();
-    buf.put_i16(api_key);
-    buf.put_i16(api_version);
-    buf.put_i32(correlation_id);
-    match client_id {
-        Some(id) => {
-            buf.put_i16(i16::try_from(id.len()).expect("client id length"));
-            buf.put_slice(id);
-        }
-        None => buf.put_i16(-1),
-    }
-    if let Some(tagged) = tagged {
-        buf.put_slice(tagged);
-    }
-    buf.put_slice(body);
-    buf
-}
+// Build request headers independently of the parser under test. Arbitrary
+// tagged bytes let malformed-header cases exercise the same path.
+krabka_macros::request_frame_fixture!(request_frame);
 
 pub(crate) async fn tcp_pair() -> (TcpStream, TcpStream) {
     let listener = TcpListener::bind("127.0.0.1:0")
@@ -62,4 +37,42 @@ pub(crate) fn check_socket_tuning(socket: &TcpStream, tune: impl FnOnce(&TcpStre
     assert2::assert!(send_after > send_before);
     assert2::assert!(recv_after > recv_before);
     assert2::assert!(recv_after > send_after);
+}
+
+/// Check every authentication field; only the event's clock value is supplied by the event.
+pub(crate) fn assert_authentication_event(
+    event: &krabka_audit::AuditEvent,
+    outcome: krabka_audit::AuditOutcome,
+    mechanism: &str,
+    principal: (&str, &str),
+    source: (&str, u16),
+    reason: Option<String>,
+) {
+    let krabka_audit::AuditEvent::Authentication { time_ms, .. } = event else {
+        panic!("expected an Authentication event, got {event:?}");
+    };
+    assert2::assert!(
+        event
+            == &krabka_audit::AuditEvent::Authentication {
+                outcome,
+                mechanism: mechanism.to_owned(),
+                principal: krabka_audit::AuditPrincipal {
+                    name: principal.0.to_owned(),
+                    auth_method: principal.1.to_owned()
+                },
+                source: krabka_audit::AuditEndpoint {
+                    ip: source.0.to_owned(),
+                    port: source.1
+                },
+                reason,
+                time_ms: *time_ms,
+            }
+    );
+}
+
+/// The unchanged default config and its directory guard, before caller-specific edits.
+pub(crate) fn broker_config() -> (tempfile::TempDir, crate::config::BrokerConfig) {
+    let dir = tempfile::TempDir::new().expect("tempdir");
+    let cfg = crate::config::BrokerConfig::for_tests(dir.path().to_path_buf());
+    (dir, cfg)
 }

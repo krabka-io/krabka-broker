@@ -13,9 +13,9 @@ use std::time::{Duration, Instant};
 
 use assert2::assert;
 use krabka_client_core::Client;
-use krabka_protocol::owned::{
-    find_coordinator_request::FindCoordinatorRequest, find_coordinator_response::Coordinator,
-};
+use krabka_protocol::owned::find_coordinator_response::Coordinator;
+
+use crate::support::discovery::coordinator_lookup_request;
 
 /// `FindCoordinator` key type of a consumer group.
 pub const KEY_TYPE_GROUP: i8 = 0;
@@ -43,12 +43,7 @@ pub async fn find_coordinator(client: &Client, key_type: i8, key: &str) -> Coord
     let deadline = Instant::now() + DEADLINE;
     loop {
         let response = client
-            .send(FindCoordinatorRequest {
-                key: key.into(),
-                key_type,
-                coordinator_keys: vec![key.into()],
-                ..Default::default()
-            })
+            .send(coordinator_lookup_request(key, key_type, vec![key.into()]))
             .await
             .expect("FindCoordinator");
         let [row] = response.coordinators.as_slice() else {

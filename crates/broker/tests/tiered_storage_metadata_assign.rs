@@ -15,12 +15,14 @@ use std::time::{Duration, Instant};
 
 use bytes::Bytes;
 use futures_util::StreamExt;
-use krabka_broker::{Broker, BrokerConfig, BrokerHandle};
+use krabka_broker::BrokerHandle;
 use krabka_remote_storage_topic::{
     kafka_log::{KafkaMetadataEventLog, KafkaMetadataLogConfig},
     log::{MetadataEventLog, PartitionStart},
 };
 use tempfile::TempDir;
+
+krabka_macros::bound_start_fixture!(config, bare_config, ::krabka_broker);
 
 /// Boot a bare loopback broker with the pinned-port pattern from
 /// `tiered_storage_topic_rlmm.rs::start_broker_with_topic_rlmm`. This
@@ -38,18 +40,11 @@ async fn start_bare_broker() -> (BrokerHandle, TempDir) {
 
     let log_dir = TempDir::new().expect("log tempdir");
 
-    let mut cfg = BrokerConfig::for_tests(log_dir.path().to_path_buf());
-    cfg.listen_addr = listen;
-    cfg.advertised_listener = listen.to_string();
-    cfg.controller_listen_addr = controller_addrs[0];
-    cfg.controller_quorum_voters =
-        vec![(krabka_broker::NodeId(1), controller_addrs[0].to_string())];
+    let cfg = bare_config(log_dir.path(), listen, controller_addrs[0]);
 
-    let data_listener = client_listeners.into_iter().next().unwrap();
-    let controller_listener = controller_listeners.into_iter().next().unwrap();
-    let broker = Broker::start_with_listeners(cfg, Some(controller_listener), Some(data_listener))
-        .await
-        .expect("broker start");
+    let broker =
+        support::start_first_held(cfg, client_listeners, controller_listeners, "broker start")
+            .await;
     (broker, log_dir)
 }
 

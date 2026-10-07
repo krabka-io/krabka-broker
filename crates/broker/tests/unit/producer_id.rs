@@ -7,27 +7,15 @@
 //! a broker. A repeated transactional id bumps the epoch.
 
 use assert2::{assert, check};
-use krabka_protocol::owned::{
-    find_coordinator_request::FindCoordinatorRequest,
-    find_coordinator_response::{Coordinator, FindCoordinatorResponse},
-    init_producer_id_request::InitProducerIdRequest,
-};
+use krabka_protocol::owned::find_coordinator_request::FindCoordinatorRequest;
 
 use crate::support;
 
 #[tokio::test]
 async fn init_producer_id_returns_fresh_pid() {
     let p = support::start().await;
-    let r = p
-        .client
-        // A null transactional id asks for an idempotent producer; the schema
-        // default is an empty string.
-        .send(InitProducerIdRequest {
-            transactional_id: None,
-            ..Default::default()
-        })
-        .await
-        .expect("InitProducerId");
+    // A null transactional id asks for an idempotent producer; the schema default is empty.
+    let r = crate::support::transactions::claim_idempotent_producer(&p.client).await;
     check!(r.error_code == 0);
     check!(r.producer_id == 0);
     check!(r.producer_epoch == 0);
@@ -47,11 +35,10 @@ async fn init_producer_id_without_coordinator_bootstrap_returns_not_coordinator(
     let p = support::start().await;
     let r = p
         .client
-        .send(InitProducerIdRequest {
-            transactional_id: Some("tx-1".into()),
-            transaction_timeout_ms: 60_000,
-            ..Default::default()
-        })
+        .send(crate::support::transactions::new_producer_request(
+            Some("tx-1".into()),
+            60_000,
+        ))
         .await
         .expect("InitProducerId");
     assert!(r.error_code == 16); // NOT_COORDINATOR
@@ -75,39 +62,14 @@ async fn find_coordinator_txn_creates_topic_then_returns_local_broker() {
     // Kafka's `KafkaApis.getCoordinator`: the lookup finds no
     // __transaction_state, asks for it, and answers COORDINATOR_NOT_AVAILABLE
     // (15) with `Node.noNode()`.
-    check!(
-        first
-            == FindCoordinatorResponse {
-                coordinators: vec![Coordinator {
-                    key: "my-tid".into(),
-                    node_id: -1,
-                    host: String::new(),
-                    port: -1,
-                    error_code: 15,
-                    error_message: None,
-                    ..Default::default()
-                }],
-                ..Default::default()
-            }
-    );
+    crate::check_expected_coordinator!(response, first => ("my-tid", -1, String::new(), -1, 15, None));
 
     // The retried lookup resolves the partition leader, which is this broker
     // (the only broker in the cluster).
     let retried =
         support::find_coordinator(&p.client, support::KEY_TYPE_TRANSACTION, "my-tid").await;
     let listen = p.broker.listen_addr();
-    check!(
-        retried
-            == Coordinator {
-                key: "my-tid".into(),
-                node_id: 1,
-                host: listen.ip().to_string(),
-                port: i32::from(listen.port()),
-                error_code: 0,
-                error_message: None,
-                ..Default::default()
-            }
-    );
+    crate::check_expected_coordinator!(row, retried => ("my-tid", 1, listen.ip().to_string(), i32::from(listen.port()), 0, None));
     p.broker.shutdown().await;
 }
 
@@ -120,11 +82,10 @@ async fn init_producer_id_with_transactional_id_returns_real_pid() {
 
     let r = p
         .client
-        .send(InitProducerIdRequest {
-            transactional_id: Some("my-tid".into()),
-            transaction_timeout_ms: 60_000,
-            ..Default::default()
-        })
+        .send(crate::support::transactions::new_producer_request(
+            Some("my-tid".into()),
+            60_000,
+        ))
         .await
         .expect("InitProducerId");
     check!(r.error_code == 0, "error_code should be NONE");
@@ -145,22 +106,20 @@ async fn init_producer_id_with_same_tid_bumps_epoch() {
 
     let r1 = p
         .client
-        .send(InitProducerIdRequest {
-            transactional_id: Some("stable-tid".into()),
-            transaction_timeout_ms: 60_000,
-            ..Default::default()
-        })
+        .send(crate::support::transactions::new_producer_request(
+            Some("stable-tid".into()),
+            60_000,
+        ))
         .await
         .expect("InitProducerId 1");
     assert!(r1.error_code == 0, "r1 error_code");
 
     let r2 = p
         .client
-        .send(InitProducerIdRequest {
-            transactional_id: Some("stable-tid".into()),
-            transaction_timeout_ms: 60_000,
-            ..Default::default()
-        })
+        .send(crate::support::transactions::new_producer_request(
+            Some("stable-tid".into()),
+            60_000,
+        ))
         .await
         .expect("InitProducerId 2");
     check!(r2.error_code == 0, "r2 error_code");

@@ -34,9 +34,10 @@ use crate::{
     coordinator::unified::persistence::{
         flex::{
             get_compact_array, get_compact_bytes, get_compact_nullable_string, get_compact_string,
-            get_string_array, put_compact_array, put_compact_bytes, put_compact_nullable_string,
-            put_compact_string, put_empty_tagged_fields, put_string_array, put_tagged_fields,
-            read_tagged, skip_tagged_fields,
+            get_member_client, get_string_array, put_compact_array, put_compact_bytes,
+            put_compact_nullable_string, put_compact_string, put_empty_tagged_fields,
+            put_member_client, put_string_array, put_tagged_fields, read_tagged,
+            skip_tagged_fields,
         },
         get_i16, get_i32,
     },
@@ -117,9 +118,12 @@ impl MemberMetadataValue {
         let mut buf = BytesMut::new();
         buf.put_i16(0);
         put_compact_nullable_string(&mut buf, self.instance_id.as_deref());
-        put_compact_nullable_string(&mut buf, self.rack_id.as_deref());
-        put_compact_string(&mut buf, &self.client_id);
-        put_compact_string(&mut buf, &self.client_host);
+        put_member_client(
+            &mut buf,
+            self.rack_id.as_deref(),
+            &self.client_id,
+            &self.client_host,
+        );
         put_string_array(&mut buf, &self.subscribed_topic_names);
         put_compact_nullable_string(&mut buf, self.subscribed_topic_regex.as_deref());
         buf.put_i32(self.rebalance_timeout_ms);
@@ -137,9 +141,7 @@ impl MemberMetadataValue {
     pub fn decode(mut buf: &[u8]) -> Result<Self, BrokerError> {
         let _v = get_i16(&mut buf)?;
         let instance_id = get_compact_nullable_string(&mut buf)?;
-        let rack_id = get_compact_nullable_string(&mut buf)?;
-        let client_id = get_compact_string(&mut buf)?;
-        let client_host = get_compact_string(&mut buf)?;
+        let (rack_id, client_id, client_host) = get_member_client(&mut buf)?;
         let subscribed_topic_names = get_string_array(&mut buf)?;
         let subscribed_topic_regex = get_compact_nullable_string(&mut buf)?;
         let rebalance_timeout_ms = get_i32(&mut buf)?;
@@ -183,6 +185,7 @@ mod tests {
     use assert2::assert;
 
     use super::*;
+    use crate::coordinator::unified::test_support::wire_bytes;
 
     fn native() -> MemberMetadataValue {
         MemberMetadataValue {
@@ -200,17 +203,18 @@ mod tests {
 
     #[test]
     fn member_metadata_bytes_match_kafka_schema() {
-        let mut want: Vec<u8> = Vec::new();
-        want.extend_from_slice(b"\x00\x00"); // value version 0
-        want.extend_from_slice(b"\x03i1"); // InstanceId, compact string
-        want.push(0x00); // RackId, compact null
-        want.extend_from_slice(b"\x03c1"); // ClientId
-        want.extend_from_slice(b"\x0b/127.0.0.1"); // ClientHost
-        want.extend_from_slice(b"\x03\x02a\x02b"); // SubscribedTopicNames
-        want.push(0x00); // SubscribedTopicRegex, null
-        want.extend_from_slice(&60_000i32.to_be_bytes()); // RebalanceTimeoutMs
-        want.extend_from_slice(b"\x08uniform"); // ServerAssignor
-        want.push(0x00); // no tagged fields
+        let want = wire_bytes(&[
+            "0000",                   // value version 0
+            "036931",                 // InstanceId, compact string
+            "00",                     // RackId, compact null
+            "036331",                 // ClientId
+            "0b2f3132372e302e302e31", // ClientHost
+            "0302610262",             // SubscribedTopicNames
+            "00",                     // SubscribedTopicRegex, null
+            "0000ea60",               // RebalanceTimeoutMs
+            "08756e69666f726d",       // ServerAssignor
+            "00",                     // no tagged fields
+        ]);
         assert!(&native().encode()[..] == &want[..]);
     }
 
@@ -250,26 +254,22 @@ mod tests {
                 supported_protocols: vec![("range".into(), Bytes::from_static(b"m"))],
             }),
         };
-        let mut want: Vec<u8> = Vec::new();
-        want.extend_from_slice(b"\x00\x00"); // version
-        want.extend_from_slice(b"\x00\x00"); // InstanceId, RackId null
-        want.extend_from_slice(b"\x02c\x02h"); // ClientId, ClientHost
-        want.push(0x01); // empty SubscribedTopicNames
-        want.push(0x00); // SubscribedTopicRegex null
-        want.extend_from_slice(&1i32.to_be_bytes()); // RebalanceTimeoutMs
-        want.push(0x00); // ServerAssignor null
-        // One tagged field: tag 0, then the payload length, then the struct.
-        let mut payload: Vec<u8> = Vec::new();
-        payload.extend_from_slice(&2i32.to_be_bytes()); // SessionTimeoutMs
-        payload.push(0x02); // one supported protocol
-        payload.extend_from_slice(b"\x06range"); // Name
-        payload.extend_from_slice(b"\x02m"); // Metadata, compact bytes
-        payload.push(0x00); // ClassicProtocol tagged fields
-        payload.push(0x00); // ClassicMemberMetadata tagged fields
-        want.push(0x01); // one tagged field
-        want.push(0x00); // tag 0
-        want.push(u8::try_from(payload.len()).unwrap());
-        want.extend_from_slice(&payload);
+        let want = wire_bytes(&[
+            "0000",         // version
+            "0000",         // InstanceId, RackId null
+            "02630268",     // ClientId, ClientHost
+            "01",           // empty SubscribedTopicNames
+            "00",           // SubscribedTopicRegex null
+            "00000001",     // RebalanceTimeoutMs
+            "00",           // ServerAssignor null
+            "01000f",       // one tagged field: tag 0, payload length 15
+            "00000002",     // SessionTimeoutMs
+            "02",           // one supported protocol
+            "0672616e6765", // Name "range"
+            "026d",         // Metadata "m", compact bytes
+            "00",           // ClassicProtocol tagged fields
+            "00",           // ClassicMemberMetadata tagged fields
+        ]);
         assert!(&v.encode()[..] == &want[..]);
     }
 

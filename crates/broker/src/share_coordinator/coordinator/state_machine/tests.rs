@@ -8,8 +8,8 @@ use super::*;
 use crate::share_coordinator::{
     config::ShareCoordinatorConfig,
     coordinator::test_support::{
-        Logged, NOW_MS, batch, configured_coordinator, coordinator, image_with_topic, lead_all,
-        logged_records, share_write,
+        Logged, NOW_MS, batch, configured_coordinator, coordinator, image_with_topic,
+        initialize_led_group, lead_all, logged_records, share_write,
     },
 };
 
@@ -550,12 +550,7 @@ async fn writes_append_updates_then_one_snapshot_at_the_threshold() {
         ..ShareCoordinatorConfig::default()
     };
     let (coord, _reg, _clock) = configured_coordinator(dir.path(), config);
-    lead_all(&coord).await;
-    let image = image_with_topic(TOPIC, 1);
-    coord
-        .initialize(&image, "g", TOPIC, 0, 1, Offset(0))
-        .await
-        .unwrap();
+    let image = initialize_led_group(&coord, TOPIC, 1, Offset(0)).await;
     let writes = [
         (0, 1, vec![batch(0, 9), batch(5, 14)]),
         (10, 2, vec![batch(0, 19)]),
@@ -674,12 +669,7 @@ async fn an_operation_answers_only_when_its_record_commits_in_the_term() {
                 ..ShareCoordinatorConfig::default()
             };
             let (coord, reg, _clock) = configured_coordinator(dir.path(), config);
-            lead_all(&coord).await;
-            let image = image_with_topic(TOPIC, 1);
-            coord
-                .initialize(&image, "g", TOPIC, 0, 1, Offset(0))
-                .await
-                .unwrap();
+            let image = initialize_led_group(&coord, TOPIC, 1, Offset(0)).await;
             let state_partition = coord.state_partition_for("g", &TOPIC, 0);
             let part = reg
                 .get(crate::share_coordinator::bootstrap::TOPIC, state_partition)

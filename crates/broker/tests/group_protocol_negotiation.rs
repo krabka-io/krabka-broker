@@ -5,15 +5,20 @@
 
 //! KIP-429 batch-4 T4A: broker-side `JoinGroup` protocol-set negotiation tests.
 
+mod support;
+
 use std::time::Duration;
 
 use assert2::assert;
 use bytes::Bytes;
-use krabka_broker::{Broker, BrokerConfig};
 use krabka_client_core::Client;
 use krabka_protocol::owned::{
-    join_group_request::{JoinGroupRequest, JoinGroupRequestProtocol},
-    join_group_response::JoinGroupResponse,
+    join_group_request::JoinGroupRequest, join_group_response::JoinGroupResponse,
+};
+
+use crate::support::{
+    classic::{classic_join_request, join_protocol},
+    client::connect_owned,
 };
 
 // Kafka error codes consumed by these tests.
@@ -28,24 +33,12 @@ const ERR_MEMBER_ID_REQUIRED: i16 = 79;
 /// processes the requests on one TCP connection in sequence. Two concurrent
 /// `JoinGroup` waits over one `Client` would deadlock the second member behind
 /// the first member's `INITIAL_REBALANCE_DELAY` wait.
-async fn start_broker() -> (krabka_broker::BrokerHandle, String, tempfile::TempDir) {
-    let tempdir = tempfile::tempdir().expect("tempdir");
-    let config = BrokerConfig::for_tests(tempdir.path().to_path_buf());
-    let handle = Broker::start(config).await.expect("broker must start");
-    handle.wait_until_group_coordinator_ready().await;
-    let bootstrap = handle.listen_addr().to_string();
-    (handle, bootstrap, tempdir)
-}
+use crate::support::start_group_coordinator as start_broker;
 
 /// Builds a fresh `Client`, and therefore a fresh TCP connection, against
 /// `bootstrap`. Each member in a concurrent test gets its own client.
 async fn connect_client(bootstrap: &str, client_id: &str) -> Client {
-    Client::builder()
-        .bootstrap(bootstrap)
-        .client_id(client_id)
-        .build()
-        .await
-        .expect("client build")
+    connect_owned(bootstrap, client_id, "client build").await
 }
 
 /// Builds a `JoinGroup` request that proposes `protocols` in caller order,
@@ -59,21 +52,19 @@ fn join_group_request(
     protocols: &[(&str, &[u8])],
 ) -> JoinGroupRequest {
     JoinGroupRequest {
-        group_id: group_id.to_string(),
-        session_timeout_ms: 30_000,
-        rebalance_timeout_ms: 60_000,
-        member_id: member_id.to_string(),
         group_instance_id: None,
-        protocol_type: protocol_type.to_string(),
-        protocols: protocols
-            .iter()
-            .map(|(name, meta)| JoinGroupRequestProtocol {
-                name: (*name).to_string(),
-                metadata: Bytes::copy_from_slice(meta),
-                ..Default::default()
-            })
-            .collect(),
-        ..Default::default()
+        ..classic_join_request(
+            group_id.to_string(),
+            member_id.to_string(),
+            (30_000, 60_000),
+            protocol_type.to_string(),
+            protocols
+                .iter()
+                .map(|(name, meta)| {
+                    join_protocol((*name).to_string(), Bytes::copy_from_slice(meta))
+                })
+                .collect(),
+        )
     }
 }
 
@@ -145,57 +136,25 @@ async fn empty_intersection_returns_inconsistent_group_protocol() {
     let (handle, bootstrap, _tempdir) = start_broker().await;
     let group_id = "cg-empty-intersection";
 
-    // One TCP connection per racing member — see `start_broker` doc.
-    let client_a = connect_client(&bootstrap, "member-a").await;
-    let client_b = connect_client(&bootstrap, "member-b").await;
-
-    // Bootstrap both member ids serially — these calls short-circuit on
-    // MEMBER_ID_REQUIRED before any rebalance wait, so they're effectively
-    // instantaneous.
-    let member_a = bootstrap_member_id(&client_a, group_id, "consumer", &[("range", b"")]).await;
-    let member_b = bootstrap_member_id(
-        &client_b,
+    let [resp_a, resp_b] = race_consumer_joins(
+        &bootstrap,
         group_id,
-        "consumer",
-        &[("cooperative-sticky", b"")],
+        [
+            (
+                "member-a",
+                RANGE_ONLY,
+                "member A second JoinGroup timed out",
+                "member A task panic",
+            ),
+            (
+                "member-b",
+                COOPERATIVE_ONLY,
+                "member B second JoinGroup timed out",
+                "member B task panic",
+            ),
+        ],
     )
     .await;
-
-    // Race the two second-round joins. Whichever joins second is turned
-    // away at once; the first completes after the initial rebalance delay.
-    let group_a = group_id.to_string();
-    let group_b = group_id.to_string();
-    let join_a = tokio::spawn(async move {
-        tokio::time::timeout(
-            Duration::from_secs(10),
-            second_join(
-                &client_a,
-                &group_a,
-                &member_a,
-                "consumer",
-                &[("range", b"")],
-            ),
-        )
-        .await
-        .expect("member A second JoinGroup timed out")
-    });
-    let join_b = tokio::spawn(async move {
-        tokio::time::timeout(
-            Duration::from_secs(10),
-            second_join(
-                &client_b,
-                &group_b,
-                &member_b,
-                "consumer",
-                &[("cooperative-sticky", b"")],
-            ),
-        )
-        .await
-        .expect("member B second JoinGroup timed out")
-    });
-
-    let resp_a = join_a.await.expect("member A task panic");
-    let resp_b = join_b.await.expect("member B task panic");
     handle.shutdown().await;
 
     let mut codes = [resp_a.error_code, resp_b.error_code];
@@ -215,87 +174,31 @@ async fn vote_picks_cooperative_when_majority() {
     let (handle, bootstrap, _tempdir) = start_broker().await;
     let group_id = "cg-vote-cooperative";
 
-    // One TCP connection per racing member.
-    let client_a = connect_client(&bootstrap, "member-a").await;
-    let client_b = connect_client(&bootstrap, "member-b").await;
-    let client_c = connect_client(&bootstrap, "member-c").await;
-
-    // Bootstrap all three member ids serially (fast, no waits).
-    let member_a = bootstrap_member_id(
-        &client_a,
+    let [resp_a, resp_b, resp_c] = race_consumer_joins(
+        &bootstrap,
         group_id,
-        "consumer",
-        &[("cooperative-sticky", b""), ("range", b"")],
+        [
+            (
+                "member-a",
+                COOPERATIVE_FIRST,
+                "member A second JoinGroup timed out",
+                "member A task panic",
+            ),
+            (
+                "member-b",
+                COOPERATIVE_FIRST,
+                "member B second JoinGroup timed out",
+                "member B task panic",
+            ),
+            (
+                "member-c",
+                RANGE_FIRST,
+                "member C second JoinGroup timed out",
+                "member C task panic",
+            ),
+        ],
     )
     .await;
-    let member_b = bootstrap_member_id(
-        &client_b,
-        group_id,
-        "consumer",
-        &[("cooperative-sticky", b""), ("range", b"")],
-    )
-    .await;
-    let member_c = bootstrap_member_id(
-        &client_c,
-        group_id,
-        "consumer",
-        &[("range", b""), ("cooperative-sticky", b"")],
-    )
-    .await;
-
-    // Race the three second-round joins. They all need to land inside the
-    // 3-s initial-rebalance-delay window of the first one so the broker
-    // votes over the full membership. `tokio::spawn` + no inter-spawn
-    // delay easily clears that bar.
-    let g_a = group_id.to_string();
-    let g_b = group_id.to_string();
-    let g_c = group_id.to_string();
-    let join_a = tokio::spawn(async move {
-        tokio::time::timeout(
-            Duration::from_secs(10),
-            second_join(
-                &client_a,
-                &g_a,
-                &member_a,
-                "consumer",
-                &[("cooperative-sticky", b""), ("range", b"")],
-            ),
-        )
-        .await
-        .expect("member A second JoinGroup timed out")
-    });
-    let join_b = tokio::spawn(async move {
-        tokio::time::timeout(
-            Duration::from_secs(10),
-            second_join(
-                &client_b,
-                &g_b,
-                &member_b,
-                "consumer",
-                &[("cooperative-sticky", b""), ("range", b"")],
-            ),
-        )
-        .await
-        .expect("member B second JoinGroup timed out")
-    });
-    let join_c = tokio::spawn(async move {
-        tokio::time::timeout(
-            Duration::from_secs(10),
-            second_join(
-                &client_c,
-                &g_c,
-                &member_c,
-                "consumer",
-                &[("range", b""), ("cooperative-sticky", b"")],
-            ),
-        )
-        .await
-        .expect("member C second JoinGroup timed out")
-    });
-
-    let resp_a = join_a.await.expect("member A task panic");
-    let resp_b = join_b.await.expect("member B task panic");
-    let resp_c = join_c.await.expect("member C task panic");
     handle.shutdown().await;
 
     for (label, resp) in [("A", &resp_a), ("B", &resp_b), ("C", &resp_c)] {
@@ -319,57 +222,25 @@ async fn vote_ties_broken_lexicographically() {
     let group_id = "cg-tie";
 
     // One TCP connection per racing member.
-    let client_a = connect_client(&bootstrap, "member-a").await;
-    let client_b = connect_client(&bootstrap, "member-b").await;
-
-    let member_a = bootstrap_member_id(
-        &client_a,
+    let [resp_a, resp_b] = race_consumer_joins(
+        &bootstrap,
         group_id,
-        "consumer",
-        &[("range", b""), ("cooperative-sticky", b"")],
+        [
+            (
+                "member-a",
+                RANGE_FIRST,
+                "member A second JoinGroup timed out",
+                "member A task panic",
+            ),
+            (
+                "member-b",
+                COOPERATIVE_FIRST,
+                "member B second JoinGroup timed out",
+                "member B task panic",
+            ),
+        ],
     )
     .await;
-    let member_b = bootstrap_member_id(
-        &client_b,
-        group_id,
-        "consumer",
-        &[("cooperative-sticky", b""), ("range", b"")],
-    )
-    .await;
-
-    let g_a = group_id.to_string();
-    let g_b = group_id.to_string();
-    let join_a = tokio::spawn(async move {
-        tokio::time::timeout(
-            Duration::from_secs(10),
-            second_join(
-                &client_a,
-                &g_a,
-                &member_a,
-                "consumer",
-                &[("range", b""), ("cooperative-sticky", b"")],
-            ),
-        )
-        .await
-        .expect("member A second JoinGroup timed out")
-    });
-    let join_b = tokio::spawn(async move {
-        tokio::time::timeout(
-            Duration::from_secs(10),
-            second_join(
-                &client_b,
-                &g_b,
-                &member_b,
-                "consumer",
-                &[("cooperative-sticky", b""), ("range", b"")],
-            ),
-        )
-        .await
-        .expect("member B second JoinGroup timed out")
-    });
-
-    let resp_a = join_a.await.expect("member A task panic");
-    let resp_b = join_b.await.expect("member B task panic");
     handle.shutdown().await;
 
     for (label, resp) in [("A", &resp_a), ("B", &resp_b)] {
@@ -447,4 +318,51 @@ async fn protocol_type_mismatch_rejected() {
             },
         "member B with protocol_type=stream must hit INCONSISTENT_GROUP_PROTOCOL on a consumer group, got {resp_b:?}"
     );
+}
+
+type Protocols = &'static [(&'static str, &'static [u8])];
+type RacingMember = (&'static str, Protocols, &'static str, &'static str);
+
+const RANGE_ONLY: Protocols = &[("range", b"")];
+const COOPERATIVE_ONLY: Protocols = &[("cooperative-sticky", b"")];
+const RANGE_FIRST: Protocols = &[("range", b""), ("cooperative-sticky", b"")];
+const COOPERATIVE_FIRST: Protocols = &[("cooperative-sticky", b""), ("range", b"")];
+
+// Connect every member, then bootstrap every id, then spawn every second join.
+// Awaiting the tasks in input order preserves the original racing window.
+async fn race_consumer_joins<const N: usize>(
+    bootstrap: &str,
+    group: &str,
+    members: [RacingMember; N],
+) -> [JoinGroupResponse; N] {
+    let mut clients = Vec::with_capacity(N);
+    for (client_id, _, _, _) in &members {
+        clients.push(connect_client(bootstrap, client_id).await);
+    }
+    let mut member_ids = Vec::with_capacity(N);
+    for (client, (_, protocols, _, _)) in clients.iter().zip(&members) {
+        member_ids.push(bootstrap_member_id(client, group, "consumer", protocols).await);
+    }
+    let groups: Vec<_> = (0..N).map(|_| group.to_owned()).collect();
+    let mut joins = Vec::with_capacity(N);
+    for (((client, member_id), group), (_, protocols, timeout_context, join_context)) in
+        clients.into_iter().zip(member_ids).zip(groups).zip(members)
+    {
+        let task = tokio::spawn(async move {
+            tokio::time::timeout(
+                Duration::from_secs(10),
+                second_join(&client, &group, &member_id, "consumer", protocols),
+            )
+            .await
+            .expect(timeout_context)
+        });
+        joins.push((task, join_context));
+    }
+    let mut responses = Vec::with_capacity(N);
+    for (join, context) in joins {
+        responses.push(join.await.expect(context));
+    }
+    responses
+        .try_into()
+        .expect("one response per joining member")
 }

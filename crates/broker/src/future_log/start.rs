@@ -216,6 +216,23 @@ mod tests {
     use super::*;
     use crate::future_log::test_support::{append_records, fixture_partition, test_policy};
 
+    // Move t-0 using the common log config and policy, with caller-owned registries/status.
+    macro_rules! move_with_defaults {
+        ($partitions:expr, $future_logs:expr, $dirs:expr, $status:expr, $topic_id:expr, $target:expr $(,)?) => {
+            start_move(
+                $partitions,
+                $future_logs,
+                $dirs,
+                $status,
+                &LogConfig::default(),
+                ("t", PartitionIndex(0)),
+                $topic_id,
+                $target,
+                test_policy(),
+            )
+        };
+    }
+
     type MoveRegistries = (
         Vec<PathBuf>,
         Arc<PartitionRegistry>,
@@ -245,16 +262,13 @@ mod tests {
         let future_logs = Arc::new(DashMap::new());
         let log_dirs: Vec<PathBuf> = vec![];
         let bogus = tempdir().unwrap();
-        let err = start_move(
+        let err = move_with_defaults!(
             &partitions,
             &future_logs,
             &log_dirs,
             &crate::log_dir_status::LogDirRegistry::default(),
-            &LogConfig::default(),
-            ("t", PartitionIndex(0)),
             None,
-            bogus.path(),
-            test_policy(),
+            bogus.path()
         )
         .await
         .expect_err("expected LogDirNotFound");
@@ -266,16 +280,13 @@ mod tests {
         let partitions = Arc::new(PartitionRegistry::new());
         let future_logs = Arc::new(DashMap::new());
         let dir = tempdir().unwrap();
-        let err = start_move(
+        let err = move_with_defaults!(
             &partitions,
             &future_logs,
             &[dir.path().to_path_buf()],
             &crate::log_dir_status::LogDirRegistry::default(),
-            &LogConfig::default(),
-            ("t", PartitionIndex(0)),
             Some(uuid::Uuid::from_u128(1)),
-            dir.path(),
-            test_policy(),
+            dir.path()
         )
         .await
         .expect_err("expected ReplicaNotAvailable");
@@ -298,16 +309,13 @@ mod tests {
             valid.path().to_path_buf(),
         );
 
-        let err = start_move(
+        let err = move_with_defaults!(
             &partitions,
             &future_logs,
             &[valid.path().to_path_buf()],
             &crate::log_dir_status::LogDirRegistry::default(),
-            &LogConfig::default(),
-            ("t", PartitionIndex(0)),
             Some(uuid::Uuid::from_u128(1)),
-            invalid.path(),
-            test_policy(),
+            invalid.path()
         )
         .await
         .expect_err("invalid target");
@@ -328,16 +336,13 @@ mod tests {
         let log_dirs = [first.path().to_path_buf(), second.path().to_path_buf()];
 
         for target in [&log_dirs[0], &log_dirs[1]] {
-            let error = start_move(
+            let error = move_with_defaults!(
                 &partitions,
                 &future_logs,
                 &log_dirs,
                 &crate::log_dir_status::LogDirRegistry::default(),
-                &LogConfig::default(),
-                ("t", PartitionIndex(0)),
                 Some(uuid::Uuid::from_u128(1)),
-                target,
-                test_policy(),
+                target
             )
             .await
             .expect_err("the replica is not created yet");
@@ -364,16 +369,13 @@ mod tests {
             first.path().to_path_buf(),
         );
 
-        let error = start_move(
+        let error = move_with_defaults!(
             &partitions,
             &future_logs,
             &[first.path().to_path_buf(), offline.path().to_path_buf()],
             &status,
-            &LogConfig::default(),
-            ("t", PartitionIndex(0)),
             Some(uuid::Uuid::from_u128(1)),
-            offline.path(),
-            test_policy(),
+            offline.path()
         )
         .await
         .expect_err("offline target");
@@ -393,16 +395,13 @@ mod tests {
         let extra = tempdir().unwrap();
         let (log_dirs, partitions, future_logs) = registered_move(primary.path(), extra.path());
 
-        start_move(
+        move_with_defaults!(
             &partitions,
             &future_logs,
             &log_dirs,
             &crate::log_dir_status::LogDirRegistry::default(),
-            &LogConfig::default(),
-            ("t", PartitionIndex(0)),
             None,
-            primary.path(),
-            test_policy(),
+            primary.path()
         )
         .await
         .expect("noop should succeed");
@@ -458,16 +457,13 @@ mod tests {
             }),
         );
 
-        start_move(
+        move_with_defaults!(
             &partitions,
             &future_logs,
             &log_dirs,
             &crate::log_dir_status::LogDirRegistry::default(),
-            &LogConfig::default(),
-            ("t", PartitionIndex(0)),
             None,
-            extra.path(),
-            test_policy(),
+            extra.path()
         )
         .await
         .expect("same-target alter must be idempotent");
@@ -507,16 +503,13 @@ mod tests {
             }),
         );
 
-        start_move(
+        move_with_defaults!(
             &partitions,
             &future_logs,
             &log_dirs,
             &crate::log_dir_status::LogDirRegistry::default(),
-            &LogConfig::default(),
-            ("t", PartitionIndex(0)),
             None,
-            third.path(),
-            test_policy(),
+            third.path()
         )
         .await
         .expect("conflicting-target alter must redirect");

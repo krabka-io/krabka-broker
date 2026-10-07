@@ -217,6 +217,21 @@ fn columns(response: &MetadataResponse, version: i16) -> Vec<Columns> {
         .collect()
 }
 
+fn expected_plaintext_columns(listener_error: i16) -> Vec<Columns> {
+    vec![
+        (codes::NONE, 2, vec![2, 1], vec![2, 1], vec![]),
+        (
+            codes::LEADER_NOT_AVAILABLE,
+            -1,
+            vec![9, 2],
+            vec![9, 2],
+            vec![9],
+        ),
+        (listener_error, -1, vec![4, 2], vec![4, 2], vec![4]),
+        (codes::NONE, 2, vec![2, 3], vec![2, 3], vec![3]),
+    ]
+}
+
 /// `KRaftMetadataCache.partitionMetadata`, per version and listener. A leader
 /// that has no registration answers `LEADER_NOT_AVAILABLE`, and one that is
 /// registered without the listener answers `LISTENER_NOT_FOUND` from version
@@ -233,29 +248,13 @@ async fn a_leader_without_an_endpoint_on_the_listener_answers_no_leader_and_an_e
             "the current version",
             12,
             "PLAINTEXT",
-            vec![
-                (none, 2, vec![2, 1], vec![2, 1], vec![]),
-                (no_leader, -1, vec![9, 2], vec![9, 2], vec![9]),
-                (
-                    codes::LISTENER_NOT_FOUND,
-                    -1,
-                    vec![4, 2],
-                    vec![4, 2],
-                    vec![4],
-                ),
-                (none, 2, vec![2, 3], vec![2, 3], vec![3]),
-            ],
+            expected_plaintext_columns(codes::LISTENER_NOT_FOUND),
         ),
         (
             "before LISTENER_NOT_FOUND",
             5,
             "PLAINTEXT",
-            vec![
-                (none, 2, vec![2, 1], vec![2, 1], vec![]),
-                (no_leader, -1, vec![9, 2], vec![9, 2], vec![9]),
-                (no_leader, -1, vec![4, 2], vec![4, 2], vec![4]),
-                (none, 2, vec![2, 3], vec![2, 3], vec![3]),
-            ],
+            expected_plaintext_columns(no_leader),
         ),
         (
             "version 0 drops the replicas that are not alive",

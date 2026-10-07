@@ -126,17 +126,28 @@ mod tests {
     use krabka_metadata::{GroupConfigRecord, MetadataRecord};
 
     use super::*;
+    use crate::test_support::string_pairs;
 
     fn image(configs: &[(&str, &str)]) -> MetadataImage {
         let mut image = MetadataImage::new(uuid::Uuid::nil());
         image.apply(&MetadataRecord::V1GroupConfig(GroupConfigRecord {
             group_id: "g".into(),
-            configs: configs
-                .iter()
-                .map(|(key, value)| ((*key).to_owned(), (*value).to_owned()))
-                .collect(),
+            configs: string_pairs(configs),
         }));
         image
+    }
+
+    fn check_settings_rows(
+        defaults: &ShareGroupConfig,
+        rows: Vec<(&[(&str, &str)], GroupShareSettings)>,
+    ) {
+        let mut actual = Vec::new();
+        let mut expected = Vec::new();
+        for (configs, settings) in rows {
+            actual.push(GroupShareSettings::resolve(&image(configs), "g", defaults));
+            expected.push(settings);
+        }
+        assert!(actual == expected);
     }
 
     #[test]
@@ -189,13 +200,7 @@ mod tests {
             ),
             (&[(KEY_DELIVERY_COUNT_LIMIT, "many")], broker),
         ];
-        let mut actual = Vec::new();
-        let mut expected = Vec::new();
-        for (configs, settings) in rows {
-            actual.push(GroupShareSettings::resolve(&image(configs), "g", &defaults));
-            expected.push(settings);
-        }
-        assert!(actual == expected);
+        check_settings_rows(&defaults, rows);
     }
 
     /// Kafka's `GroupConfig.evaluate` caps a stored value to the broker's
@@ -257,13 +262,7 @@ mod tests {
                 },
             ),
         ];
-        let mut actual = Vec::new();
-        let mut expected = Vec::new();
-        for (configs, settings) in rows {
-            actual.push(GroupShareSettings::resolve(&image(configs), "g", &defaults));
-            expected.push(settings);
-        }
-        assert!(actual == expected);
+        check_settings_rows(&defaults, rows);
     }
 
     /// Kafka's `isDLQEnabledForGroup`: the group has a queue when the finalized

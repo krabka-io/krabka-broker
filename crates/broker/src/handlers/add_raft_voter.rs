@@ -17,8 +17,6 @@
 //! cover the finalized version is `INVALID_REQUEST (42)`, and a candidate that
 //! is not caught up is `REQUEST_TIMED_OUT (7)`.
 
-use std::ops::ControlFlow;
-
 use krabka_metadata::{Voter, VoterEndpoint};
 use krabka_protocol::owned::{
     add_raft_voter_request::AddRaftVoterRequest, add_raft_voter_response::AddRaftVoterResponse,
@@ -30,41 +28,24 @@ use crate::{
     broker::Broker,
     codes,
     handlers::{
-        ErrorResponse as _, cluster_alter_denied,
-        raft_voter::{Admitted, Refusals, prelude, respond},
+        cluster_alter_denied,
+        raft_voter::{Admitted, Refusals, respond},
     },
 };
 
 crate::handlers::raft_voter::handler!(broker, version, req_bytes, ctx, {
     // Cluster:Alter gate — KIP-853 reconfiguration is a cluster-wide
     // mutation, same gate as UnregisterBroker.
-    let Admitted { req, image, quorum } = match prelude::<AddRaftVoterRequest, _>(
-        broker,
-        version,
-        req_bytes,
-        ctx,
+    let Admitted { req, image, quorum } = crate::handlers::raft_voter::admit!(
+        AddRaftVoterRequest,
+        (broker, version, req_bytes, ctx),
         80,
         cluster_alter_denied,
-        Refusals {
-            denied: AddRaftVoterResponse::error(
-                codes::CLUSTER_AUTHORIZATION_FAILED,
-                Some("add-raft-voter denied".into()),
-            ),
-            // Kafka's `KafkaRaftClient.handleAddVoterRequest` answers a failed
-            // `validateLeaderOnlyRequest` with only the error code set, so the
-            // nullable message stays at the generated empty-string default, not
-            // null and not `Errors.message()`.
-            not_leader: AddRaftVoterResponse::error(
-                voter_requests::NOT_LEADER_OR_FOLLOWER,
-                Some(String::new()),
-            ),
-        },
-    )
-    .await?
-    {
-        ControlFlow::Break(answer) => return Ok(answer),
-        ControlFlow::Continue(admitted) => admitted,
-    };
+        Refusals::<AddRaftVoterResponse>::messages(
+            Some("add-raft-voter denied".into()),
+            Some(String::new()),
+        )
+    );
     let (voter_id, directory_id) = (req.voter_id, req.voter_directory_id);
     let id = u64::try_from(voter_id).unwrap_or_default();
     let voter = Voter {
@@ -254,46 +235,34 @@ mod tests {
     #[tokio::test]
     async fn handle_denies_cluster_alter_without_calling_reconfig() {
         let version = 1;
-        let (broker_handle, _dir) = start_broker(Arc::new(DenyAll)).await;
-        let broker = broker_handle.broker_arc_for_test();
-        test_ctx!(ctx, "alice");
-        let resp = answer(&broker, version, &request(2), &ctx).await;
-
-        assert!(resp.error_code == codes::CLUSTER_AUTHORIZATION_FAILED);
-        assert!(resp.error_message.as_deref() == Some("add-raft-voter denied"));
-        broker_handle.shutdown().await;
+        crate::handlers::raft_voter::check_denied_reconfiguration!(
+            (broker_handle, _dir, broker, ctx, resp),
+            version,
+            "add-raft-voter denied"
+        );
     }
 
     #[tokio::test]
     async fn handle_rejects_negative_voter_id_before_reconfig() {
         let version = 1;
-        let (broker_handle, _dir) =
-            start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
-        let broker = broker_handle.broker_arc_for_test();
-        test_ctx!(ctx, "admin");
-        let mut request = request(-7);
-        request.cluster_id = Some(broker.controller.current_image().cluster_id().to_string());
-        let resp = answer(&broker, version, &request, &ctx).await;
-
-        assert!(
-            resp == AddRaftVoterResponse {
-                error_code: codes::INVALID_REQUEST,
-                error_message: Some("Add voter request didn't include a valid voter".into()),
-                ..Default::default()
-            }
+        crate::handlers::raft_voter::check_invalid_voter!(
+            (broker_handle, _dir, broker, ctx, request, resp),
+            version,
+            AddRaftVoterResponse,
+            "Add voter request didn't include a valid voter"
         );
-        broker_handle.shutdown().await;
     }
 
     #[tokio::test]
     async fn handle_reports_reconfig_error_from_controller() {
         let version = 1;
-        let (broker_handle, _dir) =
-            start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
-        let broker = broker_handle.broker_arc_for_test();
-        test_ctx!(ctx, "admin");
+        broker_fixture!(
+            (broker_handle, _dir, broker),
+            allow_all,
+            context(ctx, "admin")
+        );
         let mut request = request(2);
-        request.cluster_id = Some(broker.controller.current_image().cluster_id().to_string());
+        stamp_voter_request!(request, broker);
         let resp = answer(&broker, version, &request, &ctx).await;
 
         assert!(

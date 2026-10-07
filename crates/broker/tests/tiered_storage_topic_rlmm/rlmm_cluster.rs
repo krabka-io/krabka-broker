@@ -12,7 +12,7 @@ use std::time::{Duration, Instant};
 
 use assert2::assert;
 use krabka_broker::{
-    Broker, BrokerConfig, BrokerHandle, KafkaRlmmConfig, RemoteStorageBackend, RlmmKind,
+    BrokerConfig, BrokerHandle, KafkaRlmmConfig, RemoteStorageBackend, RlmmKind,
     config::{InterBrokerCredentials, ListenerSpec},
 };
 use krabka_client_core::Client;
@@ -20,6 +20,8 @@ use krabka_security::{ListenerProtocol, SaslMechanism};
 use tempfile::TempDir;
 
 use crate::support;
+
+krabka_macros::bound_start_fixture!(config, bare_config, ::krabka_broker);
 
 /// Boot a single broker with the `Local` tiered-storage backend and the
 /// topic-backed RLMM pointed at its own loopback listener. Returns the
@@ -46,12 +48,7 @@ pub(crate) async fn start_configured_topic_rlmm(
     let log_dir = TempDir::new().expect("log tempdir");
     let remote_dir = TempDir::new().expect("remote tempdir");
 
-    let mut cfg = BrokerConfig::for_tests(log_dir.path().to_path_buf());
-    cfg.listen_addr = listen;
-    cfg.advertised_listener = listen.to_string();
-    cfg.controller_listen_addr = controller_addrs[0];
-    cfg.controller_quorum_voters =
-        vec![(krabka_broker::NodeId(1), controller_addrs[0].to_string())];
+    let mut cfg = bare_config(log_dir.path(), listen, controller_addrs[0]);
     cfg.remote_storage_backend = Some(RemoteStorageBackend::Local {
         dir: remote_dir.path().to_path_buf(),
     });
@@ -69,11 +66,9 @@ pub(crate) async fn start_configured_topic_rlmm(
 
     configure(&mut cfg, log_dir.path());
 
-    let data_listener = client_listeners.into_iter().next().unwrap();
-    let controller_listener = controller_listeners.into_iter().next().unwrap();
-    let broker = Broker::start_with_listeners(cfg, Some(controller_listener), Some(data_listener))
-        .await
-        .expect("broker start");
+    let broker =
+        support::start_first_held(cfg, client_listeners, controller_listeners, "broker start")
+            .await;
     (broker, log_dir, remote_dir)
 }
 

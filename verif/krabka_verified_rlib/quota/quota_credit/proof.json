@@ -2,9 +2,9 @@
   "profile": [],
   "proofs": {
     "Coma": {
-      "vc_min_u64": { "prover": "alt-ergo", "time": 0.01 },
+      "vc_min_u64": { "prover": "alt-ergo", "time": 0.013 },
       "vc_plan_consume": { "prover": "alt-ergo", "time": 0.01 },
-      "vc_quota_credit": { "prover": "alt-ergo", "time": 0.022 }
+      "vc_quota_credit": { "prover": "alt-ergo", "time": 0.03 }
     }
   }
 }

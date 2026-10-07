@@ -23,9 +23,7 @@ type ControllerSessionTrace = (Option<i64>, Vec<bool>, (u64, u64));
 /// host obligations; this does not promise that an admitted operation finishes
 /// before credential expiry or that idle connections close at the deadline.
 #[requires(initial_session_input_valid(facts, cache, completed_ms@))]
-#[ensures((result.0 == None) == (result.2.1@ > 0
-    || (begin_unfinished_writer && cache.generation_before@ < u64::MAX@ - 1)
-    || (cache.expiry_enabled && completed_ms@ - cache.last_successful_fetch_ms@ > cache.expiry_ms@)))]
+#[ensures((result.0 == None) == (super::jwks_publication::publication_invalidates_credential(cache, completed_ms@, result.2.1@, begin_unfinished_writer)))]
 #[ensures(match result.0 {
     None => result.1@.len() == 0,
     Some(expiry) => expiry == facts.token_expires_at_ms && expiry@ > completed_ms@

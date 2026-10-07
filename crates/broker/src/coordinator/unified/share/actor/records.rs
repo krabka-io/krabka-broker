@@ -6,25 +6,17 @@
 
 use std::collections::HashMap;
 
-use krabka_protocol::{primitives::uuid::Uuid, records::RecordBatch};
+use krabka_protocol::primitives::uuid::Uuid;
 
 use super::seed::snapshot_seed;
-use crate::{
-    coordinator::unified::{
-        GroupCoordinator, OffsetRecordBatchBuilder,
-        offsets_log::OffsetsLog,
-        share::{
-            persistence::{
-                ShareGroupCurrentMemberAssignmentValue, ShareGroupKey,
-                ShareGroupMemberMetadataValue, ShareGroupMetadataValue,
-                ShareGroupStatePartitionMetadataValue, ShareGroupTargetAssignmentMemberValue,
-                ShareGroupTargetAssignmentMetadataValue, TopicPartitionsInfo, UNKNOWN_TOPIC_NAME,
-                encode_share_key,
-            },
-            state::ShareGroupState,
-        },
+use crate::coordinator::unified::share::{
+    persistence::{
+        ShareGroupCurrentMemberAssignmentValue, ShareGroupKey, ShareGroupMemberMetadataValue,
+        ShareGroupMetadataValue, ShareGroupStatePartitionMetadataValue,
+        ShareGroupTargetAssignmentMemberValue, ShareGroupTargetAssignmentMetadataValue,
+        TopicPartitionsInfo, UNKNOWN_TOPIC_NAME, encode_share_key,
     },
-    error::BrokerError,
+    state::{ShareGroupState, ShareMemberState},
 };
 
 #[derive(Debug, Default)]
@@ -51,68 +43,29 @@ impl PendingShareRecords {
             && self.state_partition_metadata.is_none()
     }
 
-    /// Encodes the delta as the one batch that `OffsetsLog::append` takes.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`BrokerError::Protocol`] when the group id or a member id is
-    /// longer than 32767 bytes, which a non-flexible key string cannot carry.
-    pub fn into_batch(self, group_id: &str, now_ms: i64) -> Result<RecordBatch, BrokerError> {
-        let mut batch = OffsetRecordBatchBuilder::default();
-
-        if let Some(v) = self.group_metadata {
-            batch.push(
-                encode_share_key(&ShareGroupKey::GroupMetadata {
-                    group_id: group_id.into(),
-                })?,
-                Some(v.encode()),
-            );
-        }
-        for (member_id, v) in self.member_metadata {
-            batch.push(
-                encode_share_key(&ShareGroupKey::MemberMetadata {
-                    group_id: group_id.into(),
-                    member_id,
-                })?,
-                v.map(|x| x.encode()),
-            );
-        }
-        if let Some(v) = self.target_metadata {
-            batch.push(
-                encode_share_key(&ShareGroupKey::TargetAssignmentMetadata {
-                    group_id: group_id.into(),
-                })?,
-                Some(v.encode()),
-            );
-        }
-        for (member_id, v) in self.target_per_member {
-            batch.push(
-                encode_share_key(&ShareGroupKey::TargetAssignmentMember {
-                    group_id: group_id.into(),
-                    member_id,
-                })?,
-                v.map(|x| x.encode()),
-            );
-        }
-        for (member_id, v) in self.current_per_member {
-            batch.push(
-                encode_share_key(&ShareGroupKey::CurrentMemberAssignment {
-                    group_id: group_id.into(),
-                    member_id,
-                })?,
-                v.map(|x| x.encode()),
-            );
-        }
-        if let Some(v) = self.state_partition_metadata {
-            batch.push(
-                encode_share_key(&ShareGroupKey::StatePartitionMetadata {
-                    group_id: group_id.into(),
-                })?,
-                Some(v.encode()),
-            );
-        }
-
-        Ok(batch.finish(now_ms))
+    crate::coordinator::unified::persistence::encode_membership_records! {
+        @method
+        /// Encodes the delta as the one batch that `OffsetsLog::append` takes.
+        ///
+        /// # Errors
+        ///
+        /// Returns [`crate::error::BrokerError::Protocol`] when the group id or a member id is
+        /// longer than 32767 bytes, which a non-flexible key string cannot carry.
+        fn into_batch(self);
+        batch, self, group_id, now_ms, owned;
+            (typed, encode_share_key, ShareGroupKey);
+            before_members {}
+            before_target {}
+            after_members {
+                if let Some(v) = self.state_partition_metadata {
+                    batch.push(
+                        encode_share_key(&ShareGroupKey::StatePartitionMetadata {
+                            group_id: group_id.into(),
+                        })?,
+                        Some(v.encode()),
+                    );
+                }
+            }
     }
 }
 
@@ -134,43 +87,50 @@ pub(super) fn snapshot_pending_after_change(
             assignment_epoch: state.target.epoch,
         });
     }
-    for mid in affected_members {
-        if let Some(m) = state.members.get(mid) {
-            pending.member_metadata.push((
-                mid.clone(),
-                Some(ShareGroupMemberMetadataValue {
-                    rack_id: m.rack_id.clone(),
-                    client_id: m.client_id.clone(),
-                    client_host: m.client_host.clone(),
-                    subscribed_topic_names: m.subscribed_topic_names.iter().cloned().collect(),
-                }),
-            ));
-            pending.current_per_member.push((
-                mid.clone(),
-                Some(ShareGroupCurrentMemberAssignmentValue {
-                    member_epoch: m.member_epoch,
-                    previous_member_epoch: m.previous_member_epoch,
-                    assigned_partitions: m
-                        .assigned_partitions
-                        .iter()
-                        .map(|(tid, parts)| (*tid, parts.clone()))
-                        .collect(),
-                }),
-            ));
+    crate::coordinator::unified::persistence::snapshot_members!(
+        pending, state, affected_members;
+        member_metadata_value, current_assignment_value;
+        |mid, member| {
             if let Some(target) = state.target.per_member.get(mid) {
-                pending.target_per_member.push((
-                    mid.clone(),
-                    Some(ShareGroupTargetAssignmentMemberValue {
-                        topic_partitions: target
-                            .iter()
-                            .map(|(tid, parts)| (*tid, parts.clone()))
-                            .collect(),
-                    }),
-                ));
+                pending.target_per_member.push((mid.clone(), Some(target_assignment_value(target))));
             }
         }
-    }
+    );
     pending
+}
+
+pub(super) fn member_metadata_value(member: &ShareMemberState) -> ShareGroupMemberMetadataValue {
+    ShareGroupMemberMetadataValue {
+        rack_id: member.rack_id.clone(),
+        client_id: member.client_id.clone(),
+        client_host: member.client_host.clone(),
+        subscribed_topic_names: member.subscribed_topic_names.iter().cloned().collect(),
+    }
+}
+
+pub(super) fn current_assignment_value(
+    member: &ShareMemberState,
+) -> ShareGroupCurrentMemberAssignmentValue {
+    ShareGroupCurrentMemberAssignmentValue {
+        member_epoch: member.member_epoch,
+        previous_member_epoch: member.previous_member_epoch,
+        assigned_partitions: member
+            .assigned_partitions
+            .iter()
+            .map(|(topic, parts)| (*topic, parts.clone()))
+            .collect(),
+    }
+}
+
+pub(super) fn target_assignment_value(
+    target: &HashMap<Uuid, Vec<i32>>,
+) -> ShareGroupTargetAssignmentMemberValue {
+    ShareGroupTargetAssignmentMemberValue {
+        topic_partitions: target
+            .iter()
+            .map(|(topic, parts)| (*topic, parts.clone()))
+            .collect(),
+    }
 }
 
 /// Build the `ShareGroupStatePartitionMetadata` (key v15) value from the live
@@ -221,20 +181,12 @@ fn topic_partitions_infos<'a>(
     topics
 }
 
-pub(super) async fn flush_pending(
-    state: &ShareGroupState,
-    pending: PendingShareRecords,
-    offsets_log: &dyn OffsetsLog,
-    coordinator: &GroupCoordinator,
-    now_ms: i64,
-) -> Result<(), crate::error::BrokerError> {
-    if pending.is_empty() {
-        return Ok(());
-    }
-    let batch = pending.into_batch(&state.group_id, now_ms)?;
-    offsets_log.append(&state.group_id, batch).await?;
-    coordinator.update_share_cache(&state.group_id, snapshot_seed(state));
-    Ok(())
+crate::coordinator::unified::persistence::flush_pending_records! {
+    state: ShareGroupState, pending: PendingShareRecords;
+    offsets_log, coordinator, now_ms;
+    group &state.group_id;
+    encode pending.into_batch(&state.group_id, now_ms);
+    cache coordinator.update_share_cache(&state.group_id, snapshot_seed(state));
 }
 
 /// The wall-clock reading this actor stamps share-group records with, in
@@ -245,12 +197,7 @@ pub(super) async fn flush_pending(
 /// its twin in [`crate::coordinator::unified::actor`] gives: the two disagree
 /// on the `i64`-overflow arm, which saturates to `i64::MAX` in the shared
 /// helper and to `0` here.
-pub(super) fn chrono_now_ms() -> i64 {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(0))
-}
+pub(super) use crate::txn::util::now_millis as chrono_now_ms;
 
 #[cfg(test)]
 mod tests {

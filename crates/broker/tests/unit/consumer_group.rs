@@ -7,44 +7,26 @@
 use assert2::{assert, check};
 use krabka_protocol::owned::{
     heartbeat_request::HeartbeatRequest,
-    join_group_request::{JoinGroupRequest, JoinGroupRequestProtocol},
     leave_group_request::LeaveGroupRequest,
-    offset_commit_request::{
-        OffsetCommitRequest, OffsetCommitRequestPartition, OffsetCommitRequestTopic,
-    },
-    offset_fetch_request::{OffsetFetchRequest, OffsetFetchRequestGroup, OffsetFetchRequestTopics},
-    sync_group_request::{SyncGroupRequest, SyncGroupRequestAssignment},
+    offset_commit_request::{OffsetCommitRequest, OffsetCommitRequestPartition},
 };
 
 use crate::{
     harness::{create_topic, topic_id_for},
-    support,
+    support::{
+        classic::{classic_sync_request, sync_assignment},
+        offsets::{
+            offset_commit_partition, offset_commit_topic, offset_fetch_group, offset_fetch_request,
+            offset_fetch_topic,
+        },
+        start_ready_group as start,
+    },
 };
-
-/// Boots one broker and waits until its group coordinator serves
-/// `__consumer_offsets`. No broker creates that topic when it starts.
-async fn start() -> support::InProcess {
-    let p = support::start().await;
-    p.broker.wait_until_group_coordinator_ready().await;
-    p
-}
 
 #[tokio::test]
 async fn join_group_with_empty_member_returns_member_id_required() {
     let p = start().await;
-    let req = JoinGroupRequest {
-        group_id: "g".into(),
-        protocol_type: "consumer".into(),
-        member_id: String::new(),
-        session_timeout_ms: 30_000,
-        rebalance_timeout_ms: 2_000,
-        protocols: vec![JoinGroupRequestProtocol {
-            name: "range".into(),
-            metadata: bytes::Bytes::from_static(b""),
-            ..Default::default()
-        }],
-        ..Default::default()
-    };
+    let req = crate::support::classic::empty_range_join("g", String::new(), (30_000, 2_000));
     let r = p.client.send(req).await.expect("JoinGroup");
     assert!(r.error_code == 79); // MEMBER_ID_REQUIRED
     assert!(!r.member_id.is_empty());
@@ -57,38 +39,22 @@ async fn join_group_single_member_completes_after_deadline() {
     // First call to obtain a server-assigned member_id.
     let r1 = p
         .client
-        .send(JoinGroupRequest {
-            group_id: "g".into(),
-            protocol_type: "consumer".into(),
-            member_id: String::new(),
-            session_timeout_ms: 30_000,
-            rebalance_timeout_ms: 1_500,
-            protocols: vec![JoinGroupRequestProtocol {
-                name: "range".into(),
-                metadata: bytes::Bytes::new(),
-                ..Default::default()
-            }],
-            ..Default::default()
-        })
+        .send(crate::support::classic::empty_range_join(
+            "g",
+            String::new(),
+            (30_000, 1_500),
+        ))
         .await
         .expect("JoinGroup1");
     // Retry with the assigned member_id. The handler will block ~1.5s
     // waiting for the rebalance deadline.
     let r2 = p
         .client
-        .send(JoinGroupRequest {
-            group_id: "g".into(),
-            protocol_type: "consumer".into(),
-            member_id: r1.member_id.clone(),
-            session_timeout_ms: 30_000,
-            rebalance_timeout_ms: 1_500,
-            protocols: vec![JoinGroupRequestProtocol {
-                name: "range".into(),
-                metadata: bytes::Bytes::new(),
-                ..Default::default()
-            }],
-            ..Default::default()
-        })
+        .send(crate::support::classic::empty_range_join(
+            "g",
+            r1.member_id.clone(),
+            (30_000, 1_500),
+        ))
         .await
         .expect("JoinGroup2");
     check!(r2.error_code == 0);
@@ -110,19 +76,11 @@ async fn full_group_flow_join_sync_heartbeat_commit_fetch_leave() {
     // Step 1: empty member_id → broker returns one.
     let r1 = p
         .client
-        .send(JoinGroupRequest {
-            group_id: "g".into(),
-            protocol_type: "consumer".into(),
-            member_id: String::new(),
-            session_timeout_ms: 30_000,
-            rebalance_timeout_ms: 1_500,
-            protocols: vec![JoinGroupRequestProtocol {
-                name: "range".into(),
-                metadata: bytes::Bytes::new(),
-                ..Default::default()
-            }],
-            ..Default::default()
-        })
+        .send(crate::support::classic::empty_range_join(
+            "g",
+            String::new(),
+            (30_000, 1_500),
+        ))
         .await
         .unwrap();
     assert!(r1.error_code == 79);
@@ -132,19 +90,11 @@ async fn full_group_flow_join_sync_heartbeat_commit_fetch_leave() {
     // Step 2: re-join with assigned member_id → wait for rebalance, become leader.
     let r2 = p
         .client
-        .send(JoinGroupRequest {
-            group_id: "g".into(),
-            protocol_type: "consumer".into(),
-            member_id: mid.clone(),
-            session_timeout_ms: 30_000,
-            rebalance_timeout_ms: 1_500,
-            protocols: vec![JoinGroupRequestProtocol {
-                name: "range".into(),
-                metadata: bytes::Bytes::new(),
-                ..Default::default()
-            }],
-            ..Default::default()
-        })
+        .send(crate::support::classic::empty_range_join(
+            "g",
+            mid.clone(),
+            (30_000, 1_500),
+        ))
         .await
         .unwrap();
     assert!(r2.error_code == 0);
@@ -154,19 +104,17 @@ async fn full_group_flow_join_sync_heartbeat_commit_fetch_leave() {
     // Step 3: leader SyncGroup with a single-member assignment.
     let r3 = p
         .client
-        .send(SyncGroupRequest {
-            group_id: "g".into(),
-            generation_id: generation,
-            member_id: mid.clone(),
-            protocol_type: Some("consumer".into()),
-            protocol_name: Some("range".into()),
-            assignments: vec![SyncGroupRequestAssignment {
-                member_id: mid.clone(),
-                assignment: bytes::Bytes::from_static(b"asgn"),
-                ..Default::default()
-            }],
-            ..Default::default()
-        })
+        .send(classic_sync_request(
+            "g",
+            generation,
+            mid.clone(),
+            Some("consumer".into()),
+            Some("range".into()),
+            vec![sync_assignment(
+                mid.clone(),
+                bytes::Bytes::from_static(b"asgn"),
+            )],
+        ))
         .await
         .unwrap();
     assert!(r3.error_code == 0);
@@ -192,18 +140,14 @@ async fn full_group_flow_join_sync_heartbeat_commit_fetch_leave() {
             group_id: "g".into(),
             generation_id_or_member_epoch: generation,
             member_id: mid.clone(),
-            topics: vec![OffsetCommitRequestTopic {
-                name: "t".into(),
-                topic_id: tid,
-                partitions: vec![OffsetCommitRequestPartition {
-                    partition_index: 0,
-                    committed_offset: 42,
+            topics: vec![offset_commit_topic(
+                "t",
+                tid,
+                vec![OffsetCommitRequestPartition {
                     committed_leader_epoch: 0,
-                    committed_metadata: Some(String::new()),
-                    ..Default::default()
+                    ..offset_commit_partition(0, 42, Some(String::new()))
                 }],
-                ..Default::default()
-            }],
+            )],
             ..Default::default()
         })
         .await
@@ -214,19 +158,10 @@ async fn full_group_flow_join_sync_heartbeat_commit_fetch_leave() {
     // shape, keyed by topic_id at v10.
     let r6 = p
         .client
-        .send(OffsetFetchRequest {
-            groups: vec![OffsetFetchRequestGroup {
-                group_id: "g".into(),
-                topics: Some(vec![OffsetFetchRequestTopics {
-                    name: "t".into(),
-                    topic_id: tid,
-                    partition_indexes: vec![0],
-                    ..Default::default()
-                }]),
-                ..Default::default()
-            }],
-            ..Default::default()
-        })
+        .send(offset_fetch_request(offset_fetch_group(
+            "g",
+            Some(vec![offset_fetch_topic("t", tid, vec![0])]),
+        )))
         .await
         .unwrap();
     assert!(r6.groups[0].topics[0].partitions[0].committed_offset == 42);

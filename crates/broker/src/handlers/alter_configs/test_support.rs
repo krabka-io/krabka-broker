@@ -22,16 +22,7 @@ use crate::{
 crate::test_support::context_helper!(client_id = "admin-client");
 
 pub(super) fn resource(resource_type: i8, resource_name: &str) -> AlterConfigsResource {
-    AlterConfigsResource {
-        resource_type,
-        resource_name: resource_name.into(),
-        configs: vec![AlterableConfig {
-            name: "retention.ms".into(),
-            value: Some("60000".into()),
-            ..Default::default()
-        }],
-        ..Default::default()
-    }
+    scoped_resource(resource_type, resource_name, &[("retention.ms", "60000")])
 }
 
 /// A metadata image that holds one registered broker and nothing else.
@@ -43,12 +34,13 @@ pub(super) fn image_with_broker(node_id: u64) -> krabka_metadata::MetadataImage 
     image
 }
 
-pub(super) fn topic_resource(
+fn scoped_resource(
+    resource_type: i8,
     resource_name: &str,
     configs: &[(&str, &str)],
 ) -> AlterConfigsResource {
     AlterConfigsResource {
-        resource_type: RESOURCE_TYPE_TOPIC,
+        resource_type,
         resource_name: resource_name.into(),
         configs: configs
             .iter()
@@ -60,6 +52,13 @@ pub(super) fn topic_resource(
             .collect(),
         ..Default::default()
     }
+}
+
+pub(super) fn topic_resource(
+    resource_name: &str,
+    configs: &[(&str, &str)],
+) -> AlterConfigsResource {
+    scoped_resource(RESOURCE_TYPE_TOPIC, resource_name, configs)
 }
 
 pub(super) fn image_with_topic(name: &str) -> krabka_metadata::MetadataImage {
@@ -73,119 +72,50 @@ pub(super) fn image_with_topic(name: &str) -> krabka_metadata::MetadataImage {
     image
 }
 
-/// A metadata image that holds one topic and the override map it was created
-/// with. `image_with_topic` covers the topics whose overrides do not matter.
-pub(super) fn image_with_topic_config(
-    name: &str,
-    overrides: &[(&str, &str)],
-) -> krabka_metadata::MetadataImage {
-    let mut image = image_with_topic(name);
-    image.apply(&MetadataRecord::V1TopicConfig(
-        krabka_metadata::TopicConfigRecord {
-            topic: name.into(),
-            overrides: overrides
-                .iter()
-                .map(|(key, value)| ((*key).to_string(), (*value).to_string()))
-                .collect(),
-        },
-    ));
-    image
+config_image_fixture! {
+    /// A metadata image that holds one topic and the override map it was created
+    /// with. `image_with_topic` covers the topics whose overrides do not matter.
+    pub(super) fn image_with_topic_config(name, overrides)
+    from image_with_topic(name);
+    V1TopicConfig(TopicConfigRecord { topic, overrides })
 }
 
-/// A metadata image that holds one group and the override map it was
-/// configured with, for the same "does a replacement audit the keys it
-/// deletes by omission" tests `image_with_topic_config` supports.
-pub(super) fn image_with_group_config(
-    group_id: &str,
-    overrides: &[(&str, &str)],
-) -> krabka_metadata::MetadataImage {
-    let mut image = krabka_metadata::MetadataImage::new(uuid::Uuid::nil());
-    image.apply(&MetadataRecord::V1GroupConfig(
-        krabka_metadata::GroupConfigRecord {
-            group_id: group_id.into(),
-            configs: overrides
-                .iter()
-                .map(|(key, value)| ((*key).to_string(), (*value).to_string()))
-                .collect(),
-        },
-    ));
-    image
+config_image_fixture! {
+    /// A metadata image that holds one group and the override map it was
+    /// configured with, for the same "does a replacement audit the keys it
+    /// deletes by omission" tests `image_with_topic_config` supports.
+    pub(super) fn image_with_group_config(group_id, overrides)
+    from krabka_metadata::MetadataImage::new(uuid::Uuid::nil());
+    V1GroupConfig(GroupConfigRecord { group_id, configs })
 }
 
-/// A metadata image that holds one client-metrics subscription and the
-/// override map it was configured with.
-pub(super) fn image_with_client_metrics_config(
-    name: &str,
-    overrides: &[(&str, &str)],
-) -> krabka_metadata::MetadataImage {
-    let mut image = krabka_metadata::MetadataImage::new(uuid::Uuid::nil());
-    image.apply(&MetadataRecord::V1ClientMetricsConfig(
-        krabka_metadata::ClientMetricsConfigRecord {
-            name: name.into(),
-            configs: overrides
-                .iter()
-                .map(|(key, value)| ((*key).to_string(), (*value).to_string()))
-                .collect(),
-        },
-    ));
-    image
+config_image_fixture! {
+    /// A metadata image that holds one client-metrics subscription and the
+    /// override map it was configured with.
+    pub(super) fn image_with_client_metrics_config(name, overrides)
+    from krabka_metadata::MetadataImage::new(uuid::Uuid::nil());
+    V1ClientMetricsConfig(ClientMetricsConfigRecord { name, configs })
 }
 
 pub(super) fn group_resource(
     resource_name: &str,
     configs: &[(&str, &str)],
 ) -> AlterConfigsResource {
-    AlterConfigsResource {
-        resource_type: super::RESOURCE_TYPE_GROUP,
-        resource_name: resource_name.into(),
-        configs: configs
-            .iter()
-            .map(|(name, value)| AlterableConfig {
-                name: (*name).into(),
-                value: Some((*value).into()),
-                ..Default::default()
-            })
-            .collect(),
-        ..Default::default()
-    }
+    scoped_resource(super::RESOURCE_TYPE_GROUP, resource_name, configs)
 }
 
 pub(super) fn client_metrics_resource(
     resource_name: &str,
     configs: &[(&str, &str)],
 ) -> AlterConfigsResource {
-    AlterConfigsResource {
-        resource_type: super::RESOURCE_TYPE_CLIENT_METRICS,
-        resource_name: resource_name.into(),
-        configs: configs
-            .iter()
-            .map(|(name, value)| AlterableConfig {
-                name: (*name).into(),
-                value: Some((*value).into()),
-                ..Default::default()
-            })
-            .collect(),
-        ..Default::default()
-    }
+    scoped_resource(super::RESOURCE_TYPE_CLIENT_METRICS, resource_name, configs)
 }
 
 pub(super) fn broker_resource(
     resource_name: &str,
     configs: &[(&str, &str)],
 ) -> AlterConfigsResource {
-    AlterConfigsResource {
-        resource_type: RESOURCE_TYPE_BROKER,
-        resource_name: resource_name.into(),
-        configs: configs
-            .iter()
-            .map(|(name, value)| AlterableConfig {
-                name: (*name).into(),
-                value: Some((*value).into()),
-                ..Default::default()
-            })
-            .collect(),
-        ..Default::default()
-    }
+    scoped_resource(RESOURCE_TYPE_BROKER, resource_name, configs)
 }
 
 pub(super) async fn drive_one(

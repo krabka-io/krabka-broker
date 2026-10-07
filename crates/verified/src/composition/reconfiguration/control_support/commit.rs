@@ -1,33 +1,4 @@
-use creusot_std::prelude::*;
-
-use super::reconfiguration_control_prefix_support;
-#[cfg(creusot)]
-use super::spec::{control_inputs_coherent, control_request_admitted};
-#[cfg(creusot)]
-use super::{
-    super::spec::{expected_member, has_node},
-    spec::{control_record_count, next_size, prefix_count},
-};
-#[cfg(creusot)]
-use crate::reconfiguration::admitted_plan;
-use crate::{
-    raft::{
-        advance_high_watermark, control_history_frontier, frontier_reaches, in_half_open_window,
-    },
-    reconfiguration::{
-        CurrentVoterSet, ReconfigurationLeadership, TargetVoter, VoterChangeRequest,
-        VoterReconfigurationPlan,
-    },
-};
-
-// Rows carry (absolute offset, is KRaftVersion, committed). The frontier carries
-// (exclusive batch end, high watermark, committed row count, waiter ready, common voter).
-type CommittedControl = Option<(
-    VoterReconfigurationPlan,
-    Vec<u64>,
-    Vec<(i64, bool, bool)>,
-    Option<(i64, i64, usize, bool, u64)>,
-)>;
+use super::*;
 
 /// Commit the actual supported control rows with the controller's half-open
 /// history and waiter kernels. Equal old/new voter values cannot replace the
@@ -35,21 +6,16 @@ type CommittedControl = Option<(
 /// actual log end).
 /// No-append preflight consumes none of those coordinates.
 #[requires(control_inputs_coherent(old@, state.1, reports@))]
-#[ensures((match result { None => false, Some(_) => true }) == (control_request_admitted(old@, state, request, node, target)
+#[ensures((result != None) == (control_request_admitted(old@, state, request, node, target)
     && (control_record_count(state.1.kraft_version, request.kind) == 0
         || (progress.0@ >= 0 && 0 <= progress.1@ && progress.1@ <= progress.3@
             && progress.0@ + control_record_count(state.1.kraft_version, request.kind) <= progress.3@
-            && prefix_count(old@, reports@, request.kind, node,
-                progress.0@ + control_record_count(state.1.kraft_version, request.kind), false, reports@.len())
-                >= old@.len() / 2 + 1
-            && prefix_count(old@, reports@, request.kind, node,
-                progress.0@ + control_record_count(state.1.kraft_version, request.kind), true, reports@.len())
-                >= next_size(old@.len(), request.kind) / 2 + 1))))]
+            && control_prefix_majorities(old@, reports@, request.kind, node,
+                progress.0@ + control_record_count(state.1.kraft_version, request.kind))))))]
 #[ensures(match result { None => true, Some((plan, next, rows, frontier)) =>
     admitted_plan(state.1, request.kind, plan)
     && next@.len() == plan.next_voter_count@
-    && (forall<id: u64> has_node(next@, next@.len(), id)
-        == expected_member(old@, old@.len(), request.kind, node, id))
+    && (membership_matches_change(old@, next@, request.kind, node))
     && rows@.len() == control_record_count(state.1.kraft_version, request.kind)
     && (frontier == None) == plan.preflight_only
     && match frontier { None => rows@.len() == 0,
@@ -67,14 +33,12 @@ type CommittedControl = Option<(
                 && rows@[i].1 == (plan.write_kraft_version && i == 0)
                 && rows@[i].2 == (i < prefix@)
                 && rows@[i].2 == (rows@[i].0@ < hwm@))
-            && exists<i: Int> 0 <= i && i < old@.len() && old@[i] == common
-                && reports@[i].0@ >= end@ && reports@[i].1@ >= end@
-                && has_node(next@, next@.len(), common),
+            && common_prefix_reported(old@, reports@, next@, common, end@),
     },
 })]
 pub(crate) fn reconfiguration_control_commit_waiter(
     old: &[u64],
-    state: (ReconfigurationLeadership, CurrentVoterSet),
+    state: ReconfigurationState,
     request: VoterChangeRequest,
     node: u64,
     target: TargetVoter,

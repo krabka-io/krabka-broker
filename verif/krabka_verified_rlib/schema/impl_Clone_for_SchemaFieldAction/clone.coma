@@ -1,4 +1,4 @@
-(* #"/workspace/crates/verified/src/schema.rs" 56 27 56 32 *)
+(* #"/workspace/crates/verified/src/schema.rs" 44 19 44 36 *)
 
 (* <schema::SchemaFieldAction as std::clone::Clone> *)
 
@@ -10,7 +10,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let clone_SchemaFieldAction [#"/workspace/crates/verified/src/schema.rs" 56 27 56 32] (self: t_SchemaFieldAction)
+let clone_SchemaFieldAction [#"/workspace/crates/verified/src/schema.rs" 44 19 44 36] (self: t_SchemaFieldAction)
   (return (x: t_SchemaFieldAction)) = (! bb0
   [ bb0 = s0 [ s0 = [ &_ret <- self ] s1 | s1 = return {_ret} ] ]
   [ & _ret: t_SchemaFieldAction = Any.any_l () | & self: t_SchemaFieldAction = self ])

@@ -62,10 +62,7 @@ pub(super) fn publication_trace(initial: u64, fetches: &[bool]) -> (u64, u64) {
     (generation, published)
 }
 
-// cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
-#[cfg(creusot)]
-#[cfg_attr(test, mutants::skip)]
-#[logic(open)]
+open_logic! {
 pub(super) fn initial_session_input_valid(
     facts: OAuthSessionFacts,
     cache: JwksCacheFacts,
@@ -80,6 +77,7 @@ pub(super) fn initial_session_input_valid(
         && facts.authentication == OAuthAuthenticationKind::Initial && facts.cap == OAuthSessionCap::Disabled
     }
 }
+}
 
 /// For a valid initial controller credential and a stable starting generation,
 /// authenticate exactly when no keys were replaced, no writer is in flight,
@@ -90,9 +88,7 @@ pub(super) fn initial_session_input_valid(
 /// controller frame expiry enforcement or cryptographic correctness.
 #[requires(initial_session_input_valid(facts, cache, completed_ms@))]
 #[ensures(result.1.0@ >= cache.generation_before@ && result.1.1@ <= successful_fetches(fetches@, fetches@.len()))]
-#[ensures((result.0 == OAuthSessionDecision::Reject) == (result.1.1@ > 0
-    || (begin_unfinished_writer && cache.generation_before@ < u64::MAX@ - 1)
-    || (cache.expiry_enabled && completed_ms@ - cache.last_successful_fetch_ms@ > cache.expiry_ms@)))]
+#[ensures((result.0 == OAuthSessionDecision::Reject) == (publication_invalidates_credential(cache, completed_ms@, result.1.1@, begin_unfinished_writer)))]
 #[ensures(match result.0 {
     OAuthSessionDecision::Reject => true,
     OAuthSessionDecision::Admit { session_lifetime_ms, effective_expires_at_ms } =>
@@ -127,4 +123,17 @@ pub(super) fn published_keys_bound_oauth_session(
     }
     facts.now_ms = completed_ms;
     (oauth_session_admission(facts), trace)
+}
+
+open_logic! {
+/// Any key publication, unfinished writer or hard-expiry overrun invalidates this credential.
+pub(super) fn publication_invalidates_credential(
+    cache: JwksCacheFacts,
+    completed: Int,
+    published: Int,
+    writer_unfinished: bool,
+) -> bool {
+    pearlite! { published > 0 || (writer_unfinished && cache.generation_before@ < u64::MAX@ - 1)
+    || (cache.expiry_enabled && completed - cache.last_successful_fetch_ms@ > cache.expiry_ms@) }
+}
 }

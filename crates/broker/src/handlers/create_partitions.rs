@@ -36,10 +36,8 @@ use self::{
     assignment::resolve_new_partition_assignments, response::finish_response,
 };
 use crate::{
-    broker::Broker,
     codes,
     config_keys::resolve_preferred_leader_site,
-    error::BrokerError,
     handlers::{
         create_topics::{
             automatic_leaderships, automatic_placement_exclusions, diskless_wal_placement_error,
@@ -50,235 +48,227 @@ use crate::{
     site_placement::PlacementRng,
 };
 
-pub(crate) async fn handle(
-    broker: &Broker,
-    req: CreatePartitionsRequest,
-    version: i16,
-    ctx: &crate::handlers::RequestContext<'_>,
-) -> Result<CreatePartitionsResponse, BrokerError> {
-    let node_id = broker.config.node_id;
-    let log_dirs = broker.config.all_log_dirs();
+context_handler! {
+    CreatePartitionsRequest => CreatePartitionsResponse,
+    (broker, req, version, ctx),
+    {
+        let node_id = broker.config.node_id;
+        let log_dirs = broker.config.all_log_dirs();
 
-    let image = broker.controller.current_image();
+        let image = broker.controller.current_image();
 
-    // Kafka's `ControllerApis.createPartitions` answers each duplicated name
-    // once with INVALID_REQUEST and grows none of its rows. Growing the same
-    // topic twice from one image would write its new partitions twice.
-    let duplicates = duplicate_names(&req.topics);
-    let mut results: Vec<CreatePartitionsTopicResult> = duplicates
-        .iter()
-        .map(|name| CreatePartitionsTopicResult {
-            name: name.clone(),
-            error_code: codes::INVALID_REQUEST,
-            error_message: Some("Duplicate topic name.".into()),
-            ..Default::default()
-        })
-        .collect();
-
-    // ── ACL preamble ────────────────────────────────────────
-    // Batch-authorize every other topic name for `Alter`. Kafka answers the
-    // denied names next, with no message, and hands the rest to the
-    // controller, whose rows come last.
-    let names: Vec<&str> = req
-        .topics
-        .iter()
-        .map(|topic| topic.name.as_str())
-        .filter(|name| !duplicates.iter().any(|duplicate| duplicate == name))
-        .collect();
-    let denied_topics = crate::handlers::denied_topics(
-        broker.config.authorizer.as_ref(),
-        &image,
-        ctx,
-        krabka_metadata::AclOperation::Alter,
-        names.iter().copied(),
-    );
-    results.extend(
-        names
+        // Kafka's `ControllerApis.createPartitions` answers each duplicated name
+        // once with INVALID_REQUEST and grows none of its rows. Growing the same
+        // topic twice from one image would write its new partitions twice.
+        let duplicates = duplicate_names(&req.topics);
+        let mut results: Vec<CreatePartitionsTopicResult> = duplicates
             .iter()
-            .filter(|name| denied_topics.contains(**name))
             .map(|name| CreatePartitionsTopicResult {
-                name: (*name).to_owned(),
-                error_code: codes::TOPIC_AUTHORIZATION_FAILED,
+                name: name.clone(),
+                error_code: codes::INVALID_REQUEST,
+                error_message: Some("Duplicate topic name.".into()),
                 ..Default::default()
-            }),
-    );
+            })
+            .collect();
 
-    // KIP-599: Kafka's controller charges each topic with the partitions it
-    // adds, after the count checks on it pass (`createPartitions`). A strict
-    // version (v3+) refuses the topic that finds the bucket negative, and
-    // every topic after it.
-    let mut quota = crate::quota::ControllerMutationQuota::new(&crate::quota::QuotaRequest {
-        image: &image,
-        buckets: &broker.quota_buckets,
-        principal: ctx.principal.name.as_str(),
-        client_id: ctx.client_id,
-        window: broker.config.controller_mutation_quota_window,
-        strict: version >= 3,
-    });
-
-    let preferred_site = resolve_preferred_leader_site(&image);
-    let validate_only = req.validate_only;
-
-    for t in req.topics {
-        if duplicates.contains(&t.name) || denied_topics.contains(&t.name) {
-            continue;
-        }
-        let mut out = CreatePartitionsTopicResult {
-            name: t.name.clone(),
-            ..Default::default()
-        };
-
-        let topic_rec = match admit_growth(&t, &image, &mut quota) {
-            Ok(topic_rec) => topic_rec,
-            Err((error_code, error_message)) => {
-                out.error_code = error_code;
-                out.error_message = error_message;
-                results.push(out);
-                continue;
-            }
-        };
-        let existing = topic_rec.partitions;
-        let diskless = crate::config_keys::resolve_diskless(image.topic_config(&t.name));
-        let new_partition_indices: Vec<i32> = (existing..t.count).collect();
-        let new_partition_count = new_partition_indices.len();
-
-        // The automatic placement leaves out a broker that is in controlled
-        // shutdown and not fenced, and one whose log directories are all
-        // cordoned (KIP-1066). It takes a fenced broker only as a last resort,
-        // as Kafka's placer does. A broker that a controlled shutdown stopped
-        // is fenced, so it is such a last resort. The ISR below leaves that
-        // broker out. A manual assignment may name any registered broker,
-        // because Kafka 4.3.1 checks only that the broker is registered, and
-        // the ISR again leaves out the inactive ones.
-        let unavailable =
-            crate::handlers::offline_replicas::unavailable_brokers(broker, &image).await;
-        let inactive = inactive_brokers(&image, &unavailable);
-        let no_exclusion = std::collections::HashSet::new();
-        let unusable = automatic_placement_exclusions(&image, &unavailable);
-        let brokers = site_broker_views(
+        // ── ACL preamble ────────────────────────────────────────
+        // Batch-authorize every other topic name for `Alter`. Kafka answers the
+        // denied names next, with no message, and hands the rest to the
+        // controller, whose rows come last.
+        let names: Vec<&str> = req
+            .topics
+            .iter()
+            .map(|topic| topic.name.as_str())
+            .filter(|name| !duplicates.iter().any(|duplicate| duplicate == name))
+            .collect();
+        let denied_topics = crate::handlers::denied_topics(
+            broker.config.authorizer.as_ref(),
             &image,
-            broker.config.is_broker().then_some(node_id),
-            if t.assignments.is_some() {
-                &no_exclusion
-            } else {
-                &unusable
-            },
-            &unavailable,
+            ctx,
+            krabka_metadata::AclOperation::Alter,
+            names.iter().copied(),
         );
-        let rf = topic_rec.replication_factor;
-        let new_assignments = match resolve_new_partition_assignments(
-            t.assignments.as_ref(),
-            &brokers,
-            new_partition_count,
-            rf,
-            preferred_site,
-            &mut PlacementRng::from_entropy(),
-        ) {
-            Ok(a) => a,
-            Err((code, msg)) => {
-                out.error_code = code;
-                out.error_message = Some(msg);
-                results.push(out);
+        results.extend(
+            names
+                .iter()
+                .filter(|name| denied_topics.contains(**name))
+                .map(|name| CreatePartitionsTopicResult {
+                    name: (*name).to_owned(),
+                    error_code: codes::TOPIC_AUTHORIZATION_FAILED,
+                    ..Default::default()
+                }),
+        );
+
+        // KIP-599: Kafka's controller charges each topic with the partitions it
+        // adds, after the count checks on it pass (`createPartitions`). A strict
+        // version (v3+) refuses the topic that finds the bucket negative, and
+        // every topic after it.
+        let mut quota = ctx.controller_mutation_quota(broker, &image, version >= 3);
+
+        let preferred_site = resolve_preferred_leader_site(&image);
+        let validate_only = req.validate_only;
+
+        for t in req.topics {
+            if duplicates.contains(&t.name) || denied_topics.contains(&t.name) {
                 continue;
             }
-        };
+            let mut out = CreatePartitionsTopicResult {
+                name: t.name.clone(),
+                ..Default::default()
+            };
 
-        let leaderships = if t.assignments.is_some() {
-            match manual_leaderships(
-                &new_assignments,
-                &inactive,
-                &crate::config_keys::witness_node_ids(&image),
-                existing,
-            ) {
-                Ok(leaderships) => leaderships,
-                Err(message) => {
-                    out.error_code = codes::INVALID_REPLICA_ASSIGNMENT;
-                    out.error_message = Some(message);
+            let topic_rec = match admit_growth(&t, &image, &mut quota) {
+                Ok(topic_rec) => topic_rec,
+                Err((error_code, error_message)) => {
+                    out.error_code = error_code;
+                    out.error_message = error_message;
                     results.push(out);
                     continue;
                 }
-            }
-        } else {
-            automatic_leaderships(&new_assignments, &inactive)
-        };
+            };
+            let existing = topic_rec.partitions;
+            let diskless = crate::config_keys::resolve_diskless(image.topic_config(&t.name));
+            let new_partition_indices: Vec<i32> = (existing..t.count).collect();
+            let new_partition_count = new_partition_indices.len();
 
-        if diskless
-            && let Some(reason) =
-                diskless_wal_placement_error(&image, &broker.config, existing, &leaderships)
-        {
-            out.error_code = codes::INVALID_CONFIG;
-            out.error_message = Some(reason);
-            results.push(out);
-            continue;
-        }
-
-        if validate_only {
-            results.push(out);
-            continue;
-        }
-
-        // Build batch: one V1Partition per new index. Under KIP-631 framing the
-        // topic's partition count IS the number of PartitionRecords (the
-        // `TopicRecord` carries no count), so CreatePartitions appends only the
-        // new partition records — no `V1Topic` rewrite. The image derives the
-        // grown count from the partitions map as these apply. (Re-submitting a
-        // `V1Topic` would round-trip back to the pre-grow count and be rejected
-        // by the strict-expansion `validate` on the apply path.)
-        let records = partition_records(
-            &t.name,
-            &new_partition_indices,
-            &new_assignments,
-            &leaderships,
-        );
-
-        match broker.controller.submit_change(records).await {
-            Ok(_) => {
-                PartitionMaterialization {
-                    broker,
-                    log_dirs: &log_dirs,
-                    diskless,
-                    topic_id: topic_rec.topic_id,
+            // The automatic placement leaves out a broker that is in controlled
+            // shutdown and not fenced, and one whose log directories are all
+            // cordoned (KIP-1066). It takes a fenced broker only as a last resort,
+            // as Kafka's placer does. A broker that a controlled shutdown stopped
+            // is fenced, so it is such a last resort. The ISR below leaves that
+            // broker out. A manual assignment may name any registered broker,
+            // because Kafka 4.3.1 checks only that the broker is registered, and
+            // the ISR again leaves out the inactive ones.
+            let unavailable =
+                crate::handlers::offline_replicas::unavailable_brokers(broker, &image).await;
+            let inactive = inactive_brokers(&image, &unavailable);
+            let no_exclusion = std::collections::HashSet::new();
+            let unusable = automatic_placement_exclusions(&image, &unavailable);
+            let brokers = site_broker_views(
+                &image,
+                broker.config.is_broker().then_some(node_id),
+                if t.assignments.is_some() {
+                    &no_exclusion
+                } else {
+                    &unusable
+                },
+                &unavailable,
+            );
+            let rf = topic_rec.replication_factor;
+            let new_assignments = match resolve_new_partition_assignments(
+                t.assignments.as_ref(),
+                &brokers,
+                new_partition_count,
+                rf,
+                preferred_site,
+                &mut PlacementRng::from_entropy(),
+            ) {
+                Ok(a) => a,
+                Err((code, msg)) => {
+                    out.error_code = code;
+                    out.error_message = Some(msg);
+                    results.push(out);
+                    continue;
                 }
-                .materialize(
-                    "CreatePartitions",
-                    &t.name,
-                    new_partition_indices.iter().copied(),
+            };
+
+            let leaderships = if t.assignments.is_some() {
+                match manual_leaderships(
                     &new_assignments,
-                    &leaderships,
-                )
-                .await;
+                    &inactive,
+                    &crate::config_keys::witness_node_ids(&image),
+                    existing,
+                ) {
+                    Ok(leaderships) => leaderships,
+                    Err(message) => {
+                        out.error_code = codes::INVALID_REPLICA_ASSIGNMENT;
+                        out.error_message = Some(message);
+                        results.push(out);
+                        continue;
+                    }
+                }
+            } else {
+                automatic_leaderships(&new_assignments, &inactive)
+            };
+
+            if diskless
+                && let Some(reason) =
+                    diskless_wal_placement_error(&image, &broker.config, existing, &leaderships)
+            {
+                out.error_code = codes::INVALID_CONFIG;
+                out.error_message = Some(reason);
+                results.push(out);
+                continue;
             }
-            Err(RaftError::NotLeader { .. } | RaftError::LeaderUnknown) => {
-                out.error_code = codes::NOT_CONTROLLER;
+
+            if validate_only {
+                results.push(out);
+                continue;
             }
-            Err(e) => {
-                tracing::error!(topic = %t.name, error = %e,
-                    "CreatePartitions submit_change failed");
-                out.error_code = codes::UNKNOWN_SERVER_ERROR;
+
+            // Build batch: one V1Partition per new index. Under KIP-631 framing the
+            // topic's partition count IS the number of PartitionRecords (the
+            // `TopicRecord` carries no count), so CreatePartitions appends only the
+            // new partition records — no `V1Topic` rewrite. The image derives the
+            // grown count from the partitions map as these apply. (Re-submitting a
+            // `V1Topic` would round-trip back to the pre-grow count and be rejected
+            // by the strict-expansion `validate` on the apply path.)
+            let records = partition_records(
+                &t.name,
+                &new_partition_indices,
+                &new_assignments,
+                &leaderships,
+            );
+
+            match broker.controller.submit_change(records).await {
+                Ok(_) => {
+                    PartitionMaterialization {
+                        broker,
+                        log_dirs: &log_dirs,
+                        diskless,
+                        topic_id: topic_rec.topic_id,
+                    }
+                    .materialize(
+                        "CreatePartitions",
+                        &t.name,
+                        new_partition_indices.iter().copied(),
+                        &new_assignments,
+                        &leaderships,
+                    )
+                    .await;
+                }
+                Err(RaftError::NotLeader { .. } | RaftError::LeaderUnknown) => {
+                    out.error_code = codes::NOT_CONTROLLER;
+                }
+                Err(e) => {
+                    tracing::error!(topic = %t.name, error = %e,
+                        "CreatePartitions submit_change failed");
+                    out.error_code = codes::UNKNOWN_SERVER_ERROR;
+                }
             }
+
+            results.push(out);
         }
 
-        results.push(out);
-    }
+        // A `--dry-run` request grows nothing, so it changed no topic.
+        if !validate_only {
+            crate::handlers::audit_admin_success(
+                broker.audit_log.as_ref(),
+                ctx,
+                "CreatePartitions",
+                results
+                    .iter()
+                    .filter(|result| result.error_code == codes::NONE)
+                    .map(|result| crate::handlers::audit_resource("Topic", result.name.clone()))
+                    .collect(),
+            );
+        }
 
-    // A `--dry-run` request grows nothing, so it changed no topic.
-    if !validate_only {
-        crate::handlers::audit_admin_success(
-            broker.audit_log.as_ref(),
-            ctx,
-            "CreatePartitions",
-            results
-                .iter()
-                .filter(|result| result.error_code == codes::NONE)
-                .map(|result| crate::handlers::audit_resource("Topic", result.name.clone()))
-                .collect(),
-        );
+        // KIP-599: report the controller_mutation_rate throttle after response
+        // assembly. It sets throttle_time_ms and records the window for the
+        // connection loop's post-send mute (KIP-219).
+        Ok(finish_response(ctx, quota.delay(), results))
     }
-
-    // KIP-599: report the controller_mutation_rate throttle after response
-    // assembly. It sets throttle_time_ms and records the window for the
-    // connection loop's post-send mute (KIP-219).
-    Ok(finish_response(ctx, quota.delay(), results))
 }
 
 /// Kafka's `ReplicationControlManager.createPartitions` checks on one

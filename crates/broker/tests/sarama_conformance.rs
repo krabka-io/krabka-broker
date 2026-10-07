@@ -118,7 +118,7 @@ use std::{
 };
 
 use assert2::assert;
-use krabka_client_admin::{AdminClient, CreateTopicSpec};
+use krabka_client_admin::AdminClient;
 use krabka_client_core::Client;
 use krabka_protocol::owned::{
     describe_cluster_request::DescribeClusterRequest,
@@ -132,7 +132,10 @@ use krabka_protocol::owned::{
 };
 use tokio::time::Instant;
 
-use crate::jvm_acceptance::{broker0_advertised, start_host_broker};
+use crate::{
+    jvm_acceptance::{broker0_advertised, start_host_broker},
+    support::client::connect_owned,
+};
 
 /// The image, built here and named in the `sarama_conformance` entry of the
 /// `docker` map in `BUILD.bazel`.
@@ -825,23 +828,21 @@ async fn sarama_round_trip_and_cluster_views_agree_with_krabka() {
         .expect("admin client");
     admin
         .create_topics(
-            &[CreateTopicSpec {
-                name: TOPIC.to_string(),
-                partitions: PARTITIONS,
-                replicas: 1,
-                configs: BTreeMap::default(),
-                replica_assignments: BTreeMap::new(),
-            }],
+            &[crate::support::admin::topic_spec(
+                TOPIC.to_string(),
+                PARTITIONS,
+                1,
+            )],
             krabka_client_admin::TopicMutationOptions::with_timeout(krabka_units::secs(5)),
         )
         .await
         .expect("create conformance topic");
-    let client = Client::builder()
-        .bootstrap(broker.listen_addr().to_string())
-        .client_id("krabka-sarama-conformance")
-        .build()
-        .await
-        .expect("client build");
+    let client = connect_owned(
+        broker.listen_addr().to_string(),
+        "krabka-sarama-conformance",
+        "client build",
+    )
+    .await;
 
     metadata_lists_topic();
     produce_lands();

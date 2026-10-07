@@ -4,6 +4,17 @@ use std::collections::BTreeSet;
 
 use crate::{Action, Epoch, Event, LogEnd, NodeId, QuorumStateMachine, Role, SimInstant};
 
+/// Static simulator voters have no directory identity or network endpoints.
+#[must_use]
+pub fn voter_set(ids: &[NodeId]) -> krabka_voters::VoterSet {
+    krabka_voters::VoterSet::from_voters(ids.iter().map(|&id| krabka_voters::Voter {
+        id,
+        directory_id: uuid::Uuid::nil(),
+        endpoints: Vec::new(),
+        kraft_version: krabka_voters::KRaftVersionRange::default(),
+    }))
+}
+
 /// Translate the consensus actions that only send messages.
 /// `None` leaves local log and timer effects to the harness.
 #[must_use]

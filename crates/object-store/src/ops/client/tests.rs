@@ -11,6 +11,29 @@ fn client() -> ObjectStoreClient {
     ObjectStoreClient::new(Arc::new(object_store::memory::InMemory::new()))
 }
 
+fn local_file(contents: &[u8]) -> tempfile::NamedTempFile {
+    let mut file = tempfile::NamedTempFile::new().unwrap();
+    file.write_all(contents).unwrap();
+    file
+}
+
+fn counting_file(
+    contents: &[u8],
+) -> (
+    Arc<CountingStore>,
+    ObjectStoreClient,
+    tempfile::NamedTempFile,
+) {
+    let store = Arc::new(CountingStore::new());
+    let client = ObjectStoreClient::new(store.clone());
+    (store, client, local_file(contents))
+}
+
+fn check_upload_counts(store: &CountingStore, puts: usize, multiparts: usize) {
+    assert!(store.puts.load(std::sync::atomic::Ordering::SeqCst) == puts);
+    assert!(store.multiparts.load(std::sync::atomic::Ordering::SeqCst) == multiparts);
+}
+
 /// SHA-256 of `bytes`, computed independently of the upload path under
 /// test.
 fn sha256_of(bytes: &[u8]) -> [u8; 32] {
@@ -208,8 +231,7 @@ async fn put_create_mode_rejects_an_existing_key() {
 #[tokio::test]
 async fn put_from_path_single_put_below_threshold() {
     let c = client();
-    let mut f = tempfile::NamedTempFile::new().unwrap();
-    f.write_all(b"tiny").unwrap();
+    let f = local_file(b"tiny");
     let key = Path::from("seg/small");
     c.put_from_path(&key, f.path(), 8, 4, PutRequest::default())
         .await
@@ -221,8 +243,7 @@ async fn put_from_path_single_put_below_threshold() {
 async fn put_from_path_multipart_above_threshold() {
     let c = client();
     let payload = vec![7u8; 20]; // 20 bytes, threshold 8, chunk 4 -> multipart
-    let mut f = tempfile::NamedTempFile::new().unwrap();
-    f.write_all(&payload).unwrap();
+    let f = local_file(&payload);
     let key = Path::from("seg/big");
     c.put_from_path(&key, f.path(), 8, 4, PutRequest::default())
         .await
@@ -348,6 +369,7 @@ impl std::fmt::Display for CountingStore {
     }
 }
 
+#[krabka_macros::object_store_delegate(get_opts, delete_stream, list_with_delimiter, copy_opts)]
 #[async_trait::async_trait]
 impl object_store::ObjectStore for CountingStore {
     async fn put_opts(
@@ -378,21 +400,6 @@ impl object_store::ObjectStore for CountingStore {
         self.inner.put_multipart_opts(location, opts).await
     }
 
-    async fn get_opts(
-        &self,
-        location: &Path,
-        options: object_store::GetOptions,
-    ) -> object_store::Result<object_store::GetResult> {
-        self.inner.get_opts(location, options).await
-    }
-
-    fn delete_stream(
-        &self,
-        locations: futures_util::stream::BoxStream<'static, object_store::Result<Path>>,
-    ) -> futures_util::stream::BoxStream<'static, object_store::Result<Path>> {
-        self.inner.delete_stream(locations)
-    }
-
     fn list(
         &self,
         prefix: Option<&Path>,
@@ -409,32 +416,13 @@ impl object_store::ObjectStore for CountingStore {
         }
         self.inner.list(prefix)
     }
-
-    async fn list_with_delimiter(
-        &self,
-        prefix: Option<&Path>,
-    ) -> object_store::Result<object_store::ListResult> {
-        self.inner.list_with_delimiter(prefix).await
-    }
-
-    async fn copy_opts(
-        &self,
-        from: &Path,
-        to: &Path,
-        options: object_store::CopyOptions,
-    ) -> object_store::Result<()> {
-        self.inner.copy_opts(from, to, options).await
-    }
 }
 
 /// Pins the `len < threshold` boundary. One byte under the threshold must
 /// take the single-PUT path and must never take multipart.
 #[tokio::test]
 async fn put_from_path_at_threshold_minus_one_takes_single_put() {
-    let store = Arc::new(CountingStore::new());
-    let c = ObjectStoreClient::new(store.clone());
-    let mut f = tempfile::NamedTempFile::new().unwrap();
-    f.write_all(&[1u8; 7]).unwrap(); // len 7, threshold 8
+    let (store, c, f) = counting_file(&[1u8; 7]); // len 7, threshold 8
     c.put_from_path(
         &Path::from("b/under"),
         f.path(),
@@ -444,8 +432,7 @@ async fn put_from_path_at_threshold_minus_one_takes_single_put() {
     )
     .await
     .unwrap();
-    assert!(store.puts.load(std::sync::atomic::Ordering::SeqCst) == 1);
-    assert!(store.multiparts.load(std::sync::atomic::Ordering::SeqCst) == 0);
+    check_upload_counts(&store, 1, 0);
 }
 
 /// Pins the other side of the boundary. Exactly the threshold must take
@@ -453,23 +440,16 @@ async fn put_from_path_at_threshold_minus_one_takes_single_put() {
 /// `<=`.
 #[tokio::test]
 async fn put_from_path_at_exact_threshold_takes_multipart() {
-    let store = Arc::new(CountingStore::new());
-    let c = ObjectStoreClient::new(store.clone());
-    let mut f = tempfile::NamedTempFile::new().unwrap();
-    f.write_all(&[2u8; 8]).unwrap(); // len 8 == threshold 8
+    let (store, c, f) = counting_file(&[2u8; 8]); // len 8 == threshold 8
     c.put_from_path(&Path::from("b/at"), f.path(), 8, 4, PutRequest::default())
         .await
         .unwrap();
-    assert!(store.puts.load(std::sync::atomic::Ordering::SeqCst) == 0);
-    assert!(store.multiparts.load(std::sync::atomic::Ordering::SeqCst) == 1);
+    check_upload_counts(&store, 0, 1);
 }
 
 #[tokio::test]
 async fn multipart_create_atomically_reserves_the_key() {
-    let store = Arc::new(CountingStore::new());
-    let c = ObjectStoreClient::new(store.clone());
-    let mut f = tempfile::NamedTempFile::new().unwrap();
-    f.write_all(&[3u8; 8]).unwrap();
+    let (store, c, f) = counting_file(&[3u8; 8]);
 
     c.put_from_path(
         &Path::from("worm/segment"),
@@ -484,15 +464,13 @@ async fn multipart_create_atomically_reserves_the_key() {
     .await
     .unwrap();
 
-    assert!(store.puts.load(std::sync::atomic::Ordering::SeqCst) == 1);
-    assert!(store.multiparts.load(std::sync::atomic::Ordering::SeqCst) == 1);
+    check_upload_counts(&store, 1, 1);
 }
 
 #[tokio::test]
 async fn put_from_path_rejects_zero_chunk_size() {
     let c = client();
-    let mut f = tempfile::NamedTempFile::new().unwrap();
-    f.write_all(b"tiny").unwrap();
+    let f = local_file(b"tiny");
     let key = Path::from("seg/bad");
 
     let err = c
@@ -584,11 +562,26 @@ async fn wait_for_abort(store: &CountingStore) {
     .expect("multipart upload was not aborted");
 }
 
+async fn check_aborted_upload(store: &CountingStore) {
+    wait_for_abort(store).await;
+    assert!(store.parts.load(std::sync::atomic::Ordering::SeqCst) == 0);
+}
+
+async fn cancel_after_progress<T: std::fmt::Debug>(
+    task: tokio::task::JoinHandle<T>,
+    progress: &std::sync::atomic::AtomicUsize,
+) {
+    while progress.load(std::sync::atomic::Ordering::SeqCst) == 0 {
+        tokio::task::yield_now().await;
+    }
+    task.abort();
+    task.await.unwrap_err();
+}
+
 #[tokio::test]
 async fn put_from_path_aborts_after_a_part_failure() {
     let (client, store) = failing_client(false);
-    let mut file = tempfile::NamedTempFile::new().unwrap();
-    file.write_all(&[1; 12]).unwrap();
+    let file = local_file(&[1; 12]);
 
     client
         .put_from_path(
@@ -601,15 +594,13 @@ async fn put_from_path_aborts_after_a_part_failure() {
         .await
         .unwrap_err();
 
-    wait_for_abort(&store).await;
-    assert!(store.parts.load(std::sync::atomic::Ordering::SeqCst) == 0);
+    check_aborted_upload(&store).await;
 }
 
 #[tokio::test]
 async fn put_from_path_aborts_when_cancelled() {
     let (client, store) = failing_client(true);
-    let mut file = tempfile::NamedTempFile::new().unwrap();
-    file.write_all(&[1; 12]).unwrap();
+    let file = local_file(&[1; 12]);
     let task = tokio::spawn(async move {
         client
             .put_from_path(
@@ -621,14 +612,8 @@ async fn put_from_path_aborts_when_cancelled() {
             )
             .await
     });
-    while store.parts.load(std::sync::atomic::Ordering::SeqCst) == 0 {
-        tokio::task::yield_now().await;
-    }
-
-    task.abort();
-    task.await.unwrap_err();
-    wait_for_abort(&store).await;
-    assert!(store.parts.load(std::sync::atomic::Ordering::SeqCst) == 0);
+    cancel_after_progress(task, &store.parts).await;
+    check_aborted_upload(&store).await;
 }
 
 #[tokio::test]
@@ -646,12 +631,7 @@ async fn explicit_abort_survives_caller_cancellation() {
         &Path::from("seg/abort-cancelled"),
     );
     let task = tokio::spawn(async move { guard.abort().await });
-    while aborts.load(std::sync::atomic::Ordering::SeqCst) == 0 {
-        tokio::task::yield_now().await;
-    }
-
-    task.abort();
-    task.await.unwrap_err();
+    cancel_after_progress(task, &aborts).await;
     release.notify_one();
     tokio::time::timeout(std::time::Duration::from_secs(1), async {
         while parts.load(std::sync::atomic::Ordering::SeqCst) != 0 {

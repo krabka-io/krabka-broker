@@ -8,8 +8,8 @@
 use assert2::assert;
 
 use crate::jvm_acceptance::{
-    KAFKA_IMAGE_TXN, broker0_advertised, docker_run_kafka_tool_with_image_and_mount,
-    extract_jvm_kv, nc_check_connectivity,
+    ADMIN, ADMIN_PASS, KAFKA_IMAGE_TXN, broker0_advertised,
+    docker_run_kafka_tool_with_image_and_mount, extract_jvm_kv, nc_check_connectivity,
     start_three_broker_sasl_plaintext_jvm_cluster_with_delegation_tokens,
     wait_three_brokers_registered, write_client_props,
 };
@@ -38,8 +38,6 @@ use crate::jvm_acceptance::{
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "requires Docker"]
 async fn jvm_kafka_delegation_tokens_end_to_end() {
-    const ADMIN: &str = "admin";
-    const ADMIN_PASS: &str = "admin-secret";
     const TOPIC: &str = "krabka-deleg-token-itest";
     const SECRET: &[u8] = b"jvm-master-key";
 

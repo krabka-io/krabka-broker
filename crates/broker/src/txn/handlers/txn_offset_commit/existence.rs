@@ -81,16 +81,12 @@ mod tests {
         for partition in 0..partitions {
             image.apply(&krabka_metadata::MetadataRecord::V1Partition(
                 krabka_metadata::PartitionRecord {
-                    topic: name.to_owned(),
-                    partition,
                     leader,
-                    replicas: vec![NodeId(1)],
-                    isr: vec![NodeId(1)],
-                    leader_epoch: krabka_metadata::LeaderEpoch(0),
-                    adding_replicas: Vec::new(),
-                    removing_replicas: Vec::new(),
-                    directories: Vec::new(),
-                    partition_epoch: 0,
+                    ..crate::coordinator::test_support::single_replica_partition(
+                        name,
+                        partition,
+                        NodeId(1),
+                    )
                 },
             ));
         }

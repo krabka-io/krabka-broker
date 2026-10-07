@@ -14,7 +14,7 @@ use krabka_protocol::owned::share_group_heartbeat_request::ShareGroupHeartbeatRe
 
 pub use crate::support::share::{
     ShareAck, acquired_count, bootstrap_share_state, broker_config, broker_test_permit, connect,
-    create_topic, produce_n, share_ack, share_fetch_req,
+    create_topic, produce_n, share_ack,
 };
 
 pub const NONE: i16 = 0;
@@ -81,31 +81,26 @@ pub async fn leave(client: &Client, group: &str, member_id: &str) {
     assert!(resp.error_code == 0, "leave failed: {:?}", resp.error_code);
 }
 
-pub async fn fetch_until_acquired(
-    client: &Client,
-    group: &str,
-    member: &str,
-    tid: uuid::Uuid,
-    partition: i32,
-    epoch: i32,
-) -> krabka_protocol::owned::share_fetch_response::PartitionData {
-    crate::support::share::fetch_until_acquired(
-        client,
-        share_fetch_req(group, member, tid, partition, epoch, 0, vec![]),
-        false,
-    )
-    .await
-}
+crate::share_first_fetch_fixture!(fetch_until_acquired, false);
 
-pub async fn initialize_consumption(
-    broker: &krabka_broker::BrokerHandle,
-    client: &Client,
-    tid: uuid::Uuid,
+crate::share_consumption_fixture!(
+    initialize_consumption,
+    join,
+    |broker, client, member, epoch, tid| wait_for_share_init(broker, "g1", tid, 0)
+);
+
+/// Initialize the persisted topic/group fixture before a restart scenario.
+pub async fn initialized_topic(
+    log_dir: std::path::PathBuf,
     records: i64,
-) -> (String, i32) {
-    bootstrap_share_state(broker, client, "g1").await;
-    produce_n(client, "t", tid, 0, records).await;
-    let member = join(client, "g1", "t").await;
-    wait_for_share_init(broker, "g1", tid, 0).await;
-    member
+) -> (
+    krabka_broker::BrokerHandle,
+    std::sync::Arc<Client>,
+    uuid::Uuid,
+    String,
+) {
+    let (broker, client, tid) =
+        crate::support::share::start_topic(broker_config(log_dir), "t", 1).await;
+    let (member, _) = initialize_consumption(&broker, &client, tid, records).await;
+    (broker, client, tid, member)
 }

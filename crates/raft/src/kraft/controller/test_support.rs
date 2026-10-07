@@ -113,17 +113,10 @@ pub fn build_full_with_policy(
     })
 }
 
-fn spawn_test_controller(
-    me: NodeId,
-    ids: &[NodeId],
-    customize: impl FnOnce(&mut KraftConfig),
-) -> (KraftController, tempfile::TempDir) {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let log = KraftLog::open(dir.path(), &crate::MetadataLogConfig::default()).expect("open log");
-    let state = QuorumState::bootstrap(uuid::Uuid::nil(), voter_set(ids));
-    let mut config = KraftConfig {
+pub fn test_kraft_config(me: NodeId, cluster_id: uuid::Uuid, state: QuorumState) -> KraftConfig {
+    KraftConfig {
         me,
-        cluster_id: uuid::Uuid::nil(),
+        cluster_id,
         directory_id: uuid::Uuid::nil(),
         initial_state: state,
         election_timeout: TEST_ELECTION_TIMEOUT,
@@ -138,7 +131,44 @@ fn spawn_test_controller(
         metadata_snapshot_fetch_max: MetadataSnapshotFetchMax::default(),
         metadata_log: test_metadata_log(),
         activation: crate::kraft::Activation::default(),
-    };
+    }
+}
+
+pub fn open_test_controller(
+    data_dir: std::path::PathBuf,
+    cluster_id: uuid::Uuid,
+    voters: VoterSet,
+) -> Result<KraftController, RaftError> {
+    KraftController::open(
+        data_dir,
+        NodeId(1),
+        cluster_id,
+        uuid::Uuid::nil(),
+        voters,
+        TEST_ELECTION_TIMEOUT,
+        None,
+        ControllerFetchMissLimit::default(),
+        MetadataRaftCommandQueueCapacity::default(),
+        MetadataRaftFetchMax::default(),
+        Arc::new(NullPeerSender),
+        0,
+        krabka_units::prelude::bytes(0),
+        krabka_units::prelude::millis(0),
+        MetadataSnapshotFetchMax::default(),
+        test_metadata_log(),
+        crate::kraft::Activation::default(),
+    )
+}
+
+fn spawn_test_controller(
+    me: NodeId,
+    ids: &[NodeId],
+    customize: impl FnOnce(&mut KraftConfig),
+) -> (KraftController, tempfile::TempDir) {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let log = KraftLog::open(dir.path(), &crate::MetadataLogConfig::default()).expect("open log");
+    let state = QuorumState::bootstrap(uuid::Uuid::nil(), voter_set(ids));
+    let mut config = test_kraft_config(me, uuid::Uuid::nil(), state);
     customize(&mut config);
     let ctrl = KraftController::spawn(config, log, dir.path().to_path_buf());
     (ctrl, dir)
@@ -188,30 +218,7 @@ pub fn build_engine_only_with_metadata_log(
     let (image_tx, _image_rx) = watch::channel(Arc::new(image.clone()));
     let (leader_tx, _leader_rx) = watch::channel(core.quorum_state().leader_id);
     let log_hwm_at_open = log.hwm().0;
-    let initial_snapshot = QuorumStateSnapshot {
-        leader_id: core.quorum_state().leader_id,
-        leader_epoch: core.quorum_state().leader_epoch,
-        high_watermark: log_hwm_at_open,
-        quorum_high_watermark: log_hwm_at_open,
-        log_end_offset: log.log_end_offset().0,
-        log_start_offset: log.log_start_offset().0,
-        voters: core.quorum_state().voters.clone(),
-        voted_directory_id: core
-            .quorum_state()
-            .voted_key
-            .as_ref()
-            .map(|key| key.directory_id),
-        observers: Vec::new(),
-        per_replica_fetch_offset: std::collections::BTreeMap::new(),
-        per_replica_last_fetch_ms: std::collections::BTreeMap::new(),
-        per_replica_last_caught_up_ms: std::collections::BTreeMap::new(),
-        is_leader: core.role().is_leader(),
-        current_state: if core.role().is_leader() {
-            "leader"
-        } else {
-            "follower"
-        },
-    };
+    let initial_snapshot = super::queries::initial_quorum_snapshot(&core, &log, log_hwm_at_open);
     let (quorum_tx, _quorum_rx) = watch::channel(initial_snapshot);
     let (cmd_tx, _cmd_rx) = mpsc::channel(1);
     let held_epoch = core.quorum_state().leader_epoch;
@@ -369,24 +376,13 @@ pub fn topic_record(name: &str) -> Vec<krabka_metadata::MetadataRecord> {
 
 pub fn topic_record_named(name: &str, id: u128) -> Vec<krabka_metadata::MetadataRecord> {
     vec![
-        krabka_metadata::MetadataRecord::V1Topic(krabka_metadata::TopicRecord {
-            name: name.to_string(),
-            topic_id: uuid::Uuid::from_u128(id),
-            partitions: 1,
-            replication_factor: 1,
-        }),
-        krabka_metadata::MetadataRecord::V1Partition(krabka_metadata::PartitionRecord {
-            topic: name.to_string(),
-            partition: 0,
-            leader: NodeId(1),
-            replicas: vec![NodeId(1)],
-            isr: vec![NodeId(1)],
-            leader_epoch: krabka_metadata::LeaderEpoch(0),
-            adding_replicas: vec![],
-            removing_replicas: vec![],
-            directories: vec![],
-            partition_epoch: 0,
-        }),
+        krabka_metadata::MetadataRecord::V1Topic(crate::test_support::single_partition_topic(
+            name,
+            uuid::Uuid::from_u128(id),
+        )),
+        krabka_metadata::MetadataRecord::V1Partition(
+            crate::test_support::single_replica_partition(name, 0, NodeId(1)),
+        ),
     ]
 }
 
@@ -439,4 +435,52 @@ pub async fn submit_change_with_timeout(
         .await
         .unwrap_or_else(|_| panic!("{context} submit_change timed out"))
         .map(|_| ())
+}
+
+/// Commit the current tail by delivering a follower fetch at its end offset.
+pub async fn commit_pending(ctrl: &KraftController, follower: NodeId) {
+    let quorum = ctrl.quorum_state().await.unwrap();
+    ctrl.inject_event(Event::ReceiveFetch {
+        from: follower,
+        fetch_epoch: quorum.leader_epoch,
+        fetch_offset: quorum.log_end_offset,
+    })
+    .await
+    .unwrap();
+}
+
+pub fn single_voter_leader_engine() -> (Engine, tempfile::TempDir) {
+    let (mut engine, dir) = build_engine_only(NodeId(1), &[NodeId(1)]);
+    elect_single_voter_engine(&mut engine);
+    (engine, dir)
+}
+
+pub async fn single_voter_leader() -> (KraftController, tempfile::TempDir) {
+    let (ctrl, dir) = build(NodeId(1), &[NodeId(1)]);
+    ctrl.inject_event(Event::ElectionTimeout).await.unwrap();
+    await_leader(&ctrl, Some(NodeId(1))).await;
+    (ctrl, dir)
+}
+
+pub async fn three_voter_leader() -> (KraftController, tempfile::TempDir) {
+    let (ctrl, dir) = build(NodeId(1), &[NodeId(1), NodeId(2), NodeId(3)]);
+    elect_leader_with_helper(&ctrl, NodeId(1), NodeId(2)).await;
+    (ctrl, dir)
+}
+
+pub fn submit_on_engine(
+    engine: &mut Engine,
+    records: &[krabka_metadata::MetadataRecord],
+) -> oneshot::Receiver<Result<SubmitChangeResult, RaftError>> {
+    let (reply, receiver) = oneshot::channel();
+    engine.on_submit_change(records, reply);
+    receiver
+}
+
+pub fn spawn_submit(
+    ctrl: &KraftController,
+    records: Vec<krabka_metadata::MetadataRecord>,
+) -> tokio::task::JoinHandle<Result<SubmitChangeResult, RaftError>> {
+    let ctrl = ctrl.clone();
+    tokio::spawn(async move { ctrl.submit_change(records).await })
 }

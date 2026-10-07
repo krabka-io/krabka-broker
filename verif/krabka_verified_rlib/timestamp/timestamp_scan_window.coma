@@ -1,12 +1,12 @@
-(* #"/workspace/crates/verified/src/timestamp.rs" 109 0 109 56 *)
+(* #"/workspace/crates/verified/src/timestamp.rs" 122 0 122 56 *)
 
 let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
 let%span snum = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 328 20 329 89
 let%span snum'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 332 26 332 87
-let%span stimestamp = "/workspace/crates/verified/src/timestamp.rs" 110 17 110 18
-let%span stimestamp'0 = "/workspace/crates/verified/src/timestamp.rs" 113 23 113 24
-let%span stimestamp'1 = "/workspace/crates/verified/src/timestamp.rs" 113 4 113 25
-let%span stimestamp'2 = "/workspace/crates/verified/src/timestamp.rs" 104 10 107 1
+let%span stimestamp = "/workspace/crates/verified/src/timestamp.rs" 123 17 123 18
+let%span stimestamp'0 = "/workspace/crates/verified/src/timestamp.rs" 126 23 126 24
+let%span stimestamp'1 = "/workspace/crates/verified/src/timestamp.rs" 126 4 126 25
+let%span stimestamp'2 = "/workspace/crates/verified/src/timestamp.rs" 117 10 120 1
 
 use creusot.int.UInt32
 use creusot.prelude.Any
@@ -35,7 +35,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let timestamp_scan_window [#"/workspace/crates/verified/src/timestamp.rs" 109 0 109 56] (window: UInt32.t)
+let timestamp_scan_window [#"/workspace/crates/verified/src/timestamp.rs" 122 0 122 56] (window: UInt32.t)
   (return (x: t_Option_u32)) = (! bb0
   [ bb0 = s0
     [ s0 = [ &_5 <- window = ([%#stimestamp] (0: UInt32.t)) ] s1

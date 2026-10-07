@@ -353,6 +353,17 @@ mod tests {
     /// `acks=all` gate reads it off the partition's `LogConfig`, which
     /// `DynamicLogConfig` pushes the node's value into. A value set for another
     /// node is not this node's.
+    fn min_isr_image(topic_override: Option<i32>, cluster_default: Option<i32>) -> MetadataImage {
+        let mut image = image_with_topic("t", &[1, 2, 3]);
+        if let Some(value) = topic_override {
+            set_min_isr(&mut image, "t", value);
+        }
+        if let Some(value) = cluster_default {
+            set_cluster_default_min_isr(&mut image, value);
+        }
+        image
+    }
+
     #[test]
     fn the_gate_reads_this_nodes_own_dynamic_min_isr() {
         let other = krabka_metadata::NodeId(2);
@@ -398,13 +409,7 @@ mod tests {
                 1,
             ),
         ] {
-            let mut img = image_with_topic("t", &[1, 2, 3]);
-            if let Some(value) = topic_override {
-                set_min_isr(&mut img, "t", value);
-            }
-            if let Some(value) = cluster_default {
-                set_cluster_default_min_isr(&mut img, value);
-            }
+            let mut img = min_isr_image(topic_override, cluster_default);
             if let Some(value) = node_value {
                 set_node_min_isr(&mut img, NODE, value);
             }
@@ -461,13 +466,7 @@ mod tests {
             ),
             ("a topic override outranks both", Some(3), Some(2), 1, 3),
         ] {
-            let mut img = image_with_topic("t", &[1, 2, 3]);
-            if let Some(value) = topic_override {
-                set_min_isr(&mut img, "t", value);
-            }
-            if let Some(value) = cluster_default {
-                set_cluster_default_min_isr(&mut img, value);
-            }
+            let img = min_isr_image(topic_override, cluster_default);
 
             let gate = topic_min_insync_replicas(&img, NODE, "t", broker_default);
             let controller = crate::config_keys::effective_min_insync_replicas(&img, "t", 3);

@@ -23,13 +23,9 @@
 
 use std::slice;
 
-use bytes::Bytes;
-use krabka_protocol::{
-    Decode,
-    krabka::barrier::{
-        AlterBarrierGroupResult, AlterBarrierGroupsRequest, AlterBarrierGroupsResponse,
-        AlterableBarrierGroup,
-    },
+use krabka_protocol::krabka::barrier::{
+    AlterBarrierGroupResult, AlterBarrierGroupsRequest, AlterBarrierGroupsResponse,
+    AlterableBarrierGroup,
 };
 
 use crate::{
@@ -38,55 +34,44 @@ use crate::{
         handlers::{error_code, error_text, interval_from_wire},
         state::GroupSpec,
     },
-    broker::Broker,
     codes,
     coordinator::unified::persistence::MAX_STRING_BYTES,
-    error::BrokerError,
-    handlers::{RequestContext, cluster_alter_denied, encode_response},
+    handlers::{cluster_alter_denied, encode_response},
 };
 
-#[tracing::instrument(
-    name = "handle_alter_barrier_groups",
-    level = "info",
-    skip_all,
-    fields(api = "AlterBarrierGroups"),
-    err
-)]
-pub(crate) async fn handle(
-    broker: &Broker,
-    version: i16,
-    _correlation_id: i32,
-    req_bytes: &[u8],
-    ctx: &RequestContext<'_>,
-) -> Result<Bytes, BrokerError> {
-    let mut cur = req_bytes;
-    let req = AlterBarrierGroupsRequest::decode(&mut cur, version)?;
+wire_handler!(
+    handle,
+    "handle_alter_barrier_groups",
+    "AlterBarrierGroups",
+    "info",
+    AlterBarrierGroupsRequest,
+    |broker, version, req, ctx| {
+        let image = broker.controller.current_image();
+        let denied = cluster_alter_denied(broker.config.authorizer.as_ref(), &image, ctx);
 
-    let image = broker.controller.current_image();
-    let denied = cluster_alter_denied(broker.config.authorizer.as_ref(), &image, ctx);
-
-    let mut results = Vec::with_capacity(req.groups.len());
-    for entry in &req.groups {
-        if denied {
-            results.push(row(
-                &entry.group,
-                codes::CLUSTER_AUTHORIZATION_FAILED,
-                Some("alter-barrier-groups denied".to_owned()),
-            ));
-        } else {
-            results.push(apply(&broker.barrier_coordinator, entry).await);
+        let mut results = Vec::with_capacity(req.groups.len());
+        for entry in &req.groups {
+            if denied {
+                results.push(row(
+                    &entry.group,
+                    codes::CLUSTER_AUTHORIZATION_FAILED,
+                    Some("alter-barrier-groups denied".to_owned()),
+                ));
+            } else {
+                results.push(apply(&broker.barrier_coordinator, entry).await);
+            }
         }
-    }
 
-    encode_response(
-        &AlterBarrierGroupsResponse {
-            throttle_time_ms: 0,
-            results,
-            ..AlterBarrierGroupsResponse::default()
-        },
-        version,
-    )
-}
+        encode_response(
+            &AlterBarrierGroupsResponse {
+                throttle_time_ms: 0,
+                results,
+                ..AlterBarrierGroupsResponse::default()
+            },
+            version,
+        )
+    }
+);
 
 /// Apply one entry and build its result row.
 async fn apply(

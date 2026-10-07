@@ -4,10 +4,7 @@ use creusot_std::prelude::*;
 use super::offset_index::offset_archive_valid;
 use super::{first_timestamp_index, validated_index_bounds_lookup};
 
-// cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
-#[cfg(creusot)]
-#[cfg_attr(test, mutants::skip)]
-#[logic(open)]
+open_logic! {
 fn offset_seek_input_valid(
     rows: Seq<(u32, u32)>,
     batches: Seq<(u32, u32)>,
@@ -22,6 +19,7 @@ fn offset_seek_input_valid(
                 && forall<i: Int> 0 <= i && i < rows.len()
                     ==> exists<j: Int> 0 <= j && j < batches.len() && rows[i] == batches[j] }
     }
+}
 }
 
 /// Validate sparse rows against complete decoded (last-relative-offset, byte

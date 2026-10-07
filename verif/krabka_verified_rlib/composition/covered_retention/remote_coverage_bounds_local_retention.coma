@@ -1,13 +1,13 @@
 (* #"/workspace/crates/verified/src/composition/covered_retention.rs" 73 0 78 21 *)
 
-let%span sord = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
-let%span sord'0 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
-let%span swell_founded = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/well_founded.rs" 43 8 43 33
-let%span sslice = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 331 18 331 22
-let%span svec = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 104 18 104 36
-let%span svec'0 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 18 14 18 41
-let%span svec'1 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 118 18 118 48
-let%span svec'2 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 202 18 202 34
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span swell_founded = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/well_founded.rs" 43 8 43 33
+let%span sslice = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 331 18 331 22
+let%span svec = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 104 18 104 36
+let%span svec'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 18 14 18 41
+let%span svec'1 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 118 18 118 48
+let%span svec'2 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 202 18 202 34
 let%span scovered_retention = "/workspace/crates/verified/src/composition/covered_retention.rs" 79 23 79 34
 let%span scovered_retention'0 = "/workspace/crates/verified/src/composition/covered_retention.rs" 81 19 81 20
 let%span scovered_retention'1 = "/workspace/crates/verified/src/composition/covered_retention.rs" 81 13 81 21
@@ -61,26 +61,26 @@ let%span scovered_retention'48 = "/workspace/crates/verified/src/composition/cov
 let%span scovered_retention'49 = "/workspace/crates/verified/src/composition/covered_retention.rs" 61 10 61 65
 let%span scovered_retention'50 = "/workspace/crates/verified/src/composition/covered_retention.rs" 62 10 69 1
 let%span scovered_retention'51 = "/workspace/crates/verified/src/composition/covered_retention.rs" 70 10 72 45
-let%span scoverage = "/workspace/crates/verified/src/retention/coverage.rs" 23 11 24 38
-let%span scoverage'0 = "/workspace/crates/verified/src/retention/coverage.rs" 25 10 35 1
-let%span scoverage'1 = "/workspace/crates/verified/src/retention/coverage.rs" 8 16 8 90
-let%span scoverage'2 = "/workspace/crates/verified/src/retention/coverage.rs" 16 16 16 109
-let%span sremote_retention_model = "/workspace/crates/verified/src/retention/remote_retention_model.rs" 115 10 120 1
-let%span sremote_retention_model'0 = "/workspace/crates/verified/src/retention/remote_retention_model.rs" 121 10 121 36
-let%span sremote_retention_model'1 = "/workspace/crates/verified/src/retention/remote_retention_model.rs" 122 10 122 72
-let%span sremote_retention_model'2 = "/workspace/crates/verified/src/retention/remote_retention_model.rs" 123 10 124 33
-let%span sremote_retention_model'3 = "/workspace/crates/verified/src/retention/remote_retention_model.rs" 125 10 126 65
-let%span sremote_retention_model'4 = "/workspace/crates/verified/src/retention/remote_retention_model.rs" 127 10 128 101
-let%span sremote_retention_model'5 = "/workspace/crates/verified/src/retention/remote_retention_model.rs" 129 10 130 106
-let%span sremote_retention_model'6 = "/workspace/crates/verified/src/retention/remote_retention_model.rs" 71 10 71 19
-let%span sremote_retention_model'7 = "/workspace/crates/verified/src/retention/remote_retention_model.rs" 80 8 88 9
-let%span sremote_retention_model'8 = "/workspace/crates/verified/src/retention/remote_retention_model.rs" 38 8 42 9
-let%span slocal_bytes = "/workspace/crates/verified/src/retention/local_bytes.rs" 27 10 27 15
-let%span slocal_bytes'0 = "/workspace/crates/verified/src/retention/local_bytes.rs" 24 11 24 48
-let%span slocal_bytes'1 = "/workspace/crates/verified/src/retention/local_bytes.rs" 25 10 26 81
-let%span slocal_bytes'2 = "/workspace/crates/verified/src/retention/local_bytes.rs" 10 10 10 15
-let%span slocal_bytes'3 = "/workspace/crates/verified/src/retention/local_bytes.rs" 13 8 15 9
-let%span sdelete_target = "/workspace/crates/verified/src/retention/delete_target.rs" 78 10 82 1
+let%span scoverage = "/workspace/crates/verified/src/retention/coverage.rs" 19 11 20 38
+let%span scoverage'0 = "/workspace/crates/verified/src/retention/coverage.rs" 21 10 31 1
+let%span scoverage'1 = "/workspace/crates/verified/src/retention/coverage.rs" 5 16 5 90
+let%span scoverage'2 = "/workspace/crates/verified/src/retention/coverage.rs" 11 16 11 109
+let%span sremote_retention_model = "/workspace/crates/verified/src/retention/remote_retention_model.rs" 111 10 116 1
+let%span sremote_retention_model'0 = "/workspace/crates/verified/src/retention/remote_retention_model.rs" 117 10 117 36
+let%span sremote_retention_model'1 = "/workspace/crates/verified/src/retention/remote_retention_model.rs" 118 10 118 72
+let%span sremote_retention_model'2 = "/workspace/crates/verified/src/retention/remote_retention_model.rs" 119 10 120 33
+let%span sremote_retention_model'3 = "/workspace/crates/verified/src/retention/remote_retention_model.rs" 121 10 122 65
+let%span sremote_retention_model'4 = "/workspace/crates/verified/src/retention/remote_retention_model.rs" 123 10 124 101
+let%span sremote_retention_model'5 = "/workspace/crates/verified/src/retention/remote_retention_model.rs" 125 10 126 106
+let%span sremote_retention_model'6 = "/workspace/crates/verified/src/retention/remote_retention_model.rs" 66 10 66 19
+let%span sremote_retention_model'7 = "/workspace/crates/verified/src/retention/remote_retention_model.rs" 75 8 83 9
+let%span sremote_retention_model'8 = "/workspace/crates/verified/src/retention/remote_retention_model.rs" 35 8 39 9
+let%span slocal_bytes = "/workspace/crates/verified/src/retention/local_bytes.rs" 25 10 25 15
+let%span slocal_bytes'0 = "/workspace/crates/verified/src/retention/local_bytes.rs" 22 11 22 48
+let%span slocal_bytes'1 = "/workspace/crates/verified/src/retention/local_bytes.rs" 23 10 24 81
+let%span slocal_bytes'2 = "/workspace/crates/verified/src/retention/local_bytes.rs" 7 10 7 15
+let%span slocal_bytes'3 = "/workspace/crates/verified/src/retention/local_bytes.rs" 10 8 12 9
+let%span sdelete_target = "/workspace/crates/verified/src/retention/delete_target.rs" 72 10 76 1
 
 use creusot.slice.Slice64
 use creusot.int.Int64
@@ -101,11 +101,11 @@ type tup2_i64_i64 = { f0'0: Int64.t; f1'0: Int64.t }
 
 type t_Option_i64 = None | Some Int64.t
 
-predicate remote_ranges_valid [#"/workspace/crates/verified/src/retention/coverage.rs" 7 0 7 59] (ranges: Seq.seq tup2_i64_i64) =
+predicate remote_ranges_valid [#"/workspace/crates/verified/src/retention/coverage.rs" 4 0 4 59] (ranges: Seq.seq tup2_i64_i64) =
   [%#scoverage'1] forall i: int. 0 <= i /\ i < Seq.length ranges
     -> Int64.to_int (Seq.get ranges i).f0'0 <= Int64.to_int (Seq.get ranges i).f1'0
 
-predicate remote_covers_offset [#"/workspace/crates/verified/src/retention/coverage.rs" 15 0 15 73] (ranges: Seq.seq tup2_i64_i64) (offset: int) =
+predicate remote_covers_offset [#"/workspace/crates/verified/src/retention/coverage.rs" 10 0 10 73] (ranges: Seq.seq tup2_i64_i64) (offset: int) =
   [%#scoverage'2] exists i: int. 0 <= i
     /\ i < Seq.length ranges
     /\ Int64.to_int (Seq.get ranges i).f0'0 <= offset /\ offset <= Int64.to_int (Seq.get ranges i).f1'0
@@ -187,7 +187,7 @@ let deref_Vec_LocalRetentionSegment_Global (self_: t_Vec_LocalRetentionSegment_G
 
 type t_Option_u64 = None'0 | Some'0 UInt64.t
 
-function local_retention_model [#"/workspace/crates/verified/src/retention/remote_retention_model.rs" 72 0 78 8] (segments: Seq.seq t_LocalRetentionSegment) (limit: int) (i: int) (debt: int) (sizing: bool) : int
+function local_retention_model [#"/workspace/crates/verified/src/retention/remote_retention_model.rs" 67 0 73 8] (segments: Seq.seq t_LocalRetentionSegment) (limit: int) (i: int) (debt: int) (sizing: bool) : int
 
 axiom local_retention_model_def:
   forall segments: Seq.seq t_LocalRetentionSegment, limit: int, i: int, debt: int, sizing: bool [local_retention_model segments limit i debt sizing]. local_retention_model segments limit i debt sizing
@@ -202,7 +202,7 @@ axiom local_retention_model_def:
 
     )
 
-function local_retention_limit [#"/workspace/crates/verified/src/retention/remote_retention_model.rs" 36 0 36 73] (segments: Seq.seq t_LocalRetentionSegment) : int
+function local_retention_limit [#"/workspace/crates/verified/src/retention/remote_retention_model.rs" 33 0 33 73] (segments: Seq.seq t_LocalRetentionSegment) : int
  = [%#sremote_retention_model'8] if gt_log_Int (Seq.length segments) 0
   /\ UInt64.t'int (Seq.get segments (Seq.length segments - 1)).size = 0 then
     Seq.length segments - 1
@@ -210,7 +210,7 @@ function local_retention_limit [#"/workspace/crates/verified/src/retention/remot
     Seq.length segments
 
 
-function local_prefix_bytes [#"/workspace/crates/verified/src/retention/local_bytes.rs" 11 0 11 82] (segments: Seq.seq t_LocalRetentionSegment) (count: int) : int
+function local_prefix_bytes [#"/workspace/crates/verified/src/retention/local_bytes.rs" 8 0 8 82] (segments: Seq.seq t_LocalRetentionSegment) (count: int) : int
 
 axiom local_prefix_bytes_def:
   forall segments: Seq.seq t_LocalRetentionSegment, count: int [local_prefix_bytes segments count]. local_prefix_bytes segments count
@@ -256,7 +256,7 @@ let local_retention_prefix (segments: Slice64.slice t_LocalRetentionSegment) (si
       end)}
     (! return {result}) ]
 
-function local_prefix_bytes_monotone [#"/workspace/crates/verified/src/retention/local_bytes.rs" 28 0 28 84] (segments: Seq.seq t_LocalRetentionSegment) (limit: int) : ()
+function local_prefix_bytes_monotone [#"/workspace/crates/verified/src/retention/local_bytes.rs" 26 0 26 84] (segments: Seq.seq t_LocalRetentionSegment) (limit: int) : ()
 
 axiom local_prefix_bytes_monotone_spec:
   forall segments: Seq.seq t_LocalRetentionSegment, limit: int. ([%#slocal_bytes'0] 0 <= limit

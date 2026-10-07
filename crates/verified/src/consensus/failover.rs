@@ -167,22 +167,17 @@ pub fn select_best_recovery_replica(candidates: &[RecoveryCandidate]) -> Option<
     Some(best)
 }
 
+open_logic! {
 /// Members of `{log_end} U s` with value >= `v`. This is the
 /// majority-replication witness.
-// cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
-#[cfg(creusot)]
-#[cfg_attr(test, mutants::skip)]
-#[logic(open)]
 pub fn hwm_member_at(log_end: Int, s: Seq<i64>, k: Int) -> Int {
     pearlite! {
         if k == 0 { log_end } else { s[k - 1]@ }
     }
 }
+}
 
-// cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
-#[cfg(creusot)]
-#[cfg_attr(test, mutants::skip)]
-#[logic(open)]
+open_logic! {
 #[variant(limit)]
 pub fn count_ge_prefix(log_end: Int, s: Seq<i64>, v: Int, limit: Int, leader_counts: bool) -> Int {
     pearlite! {
@@ -195,14 +190,13 @@ pub fn count_ge_prefix(log_end: Int, s: Seq<i64>, v: Int, limit: Int, leader_cou
         }
     }
 }
+}
 
-// cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
-#[cfg(creusot)]
-#[cfg_attr(test, mutants::skip)]
-#[logic(open)]
+open_logic! {
 #[variant(s.len())]
 pub fn count_ge(log_end: Int, s: Seq<i64>, v: Int, leader_counts: bool) -> Int {
     pearlite! { count_ge_prefix(log_end, s, v, s.len() + 1, leader_counts) }
+}
 }
 
 // cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.

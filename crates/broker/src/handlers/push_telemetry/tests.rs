@@ -8,18 +8,20 @@
 use assert2::assert;
 use bytes::Bytes;
 use krabka_protocol::{owned::push_telemetry_response, primitives::uuid::Uuid as ProtoUuid};
-use opentelemetry_proto::tonic::metrics::v1::{Gauge, Metric, metric, number_data_point};
+use opentelemetry_proto::tonic::metrics::v1::number_data_point;
 use uuid::Uuid;
 
 use super::*;
 use crate::{
+    broker::Broker,
     client_metrics::{
         config::INTERVAL_MS_DEFAULT,
         manager::{
-            SubscriptionDecision, compute_subscription, subscription_id as compute_subscription_id,
+            ClientAttributes, SubscriptionDecision, compute_subscription,
+            subscription_id as compute_subscription_id,
         },
     },
-    handlers::push_telemetry::test_support::{metrics_data, number_point},
+    handlers::push_telemetry::test_support::{gauge_metric, metrics_data},
     test_support::peer,
 };
 
@@ -33,13 +35,10 @@ const GZIP: i8 = 1;
 const NONE: i8 = 0;
 
 fn otlp() -> Vec<u8> {
-    metrics_data(vec![Metric {
-        name: "cpu.utilization".into(),
-        data: Some(metric::Data::Gauge(Gauge {
-            data_points: vec![number_point(number_data_point::Value::AsDouble(0.75))],
-        })),
-        ..Default::default()
-    }])
+    metrics_data(vec![gauge_metric(
+        "cpu.utilization",
+        number_data_point::Value::AsDouble(0.75),
+    )])
     .encode_to_vec()
 }
 
@@ -223,8 +222,10 @@ async fn push_after_get_checks(unstable: UnstableApiVersions) {
 /// `INVALID_REQUEST` only for `Uuid.RESERVED` (#673).
 #[tokio::test]
 async fn push_without_a_get_builds_the_instance() {
-    let (broker_handle, _dir) = crate::test_support::start_broker_with(|_cfg| {}).await;
-    let broker = broker_handle.broker_arc_for_test();
+    broker_fixture!(
+        (broker_handle, _dir, broker),
+        crate::test_support::start_broker_with(|_cfg| {})
+    );
     let peer = peer();
     let client = Client {
         broker: &broker,

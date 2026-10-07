@@ -85,10 +85,7 @@ mod tests {
 
     #[test]
     fn includes_partition_where_self_is_follower() {
-        let img = image_with(&[
-            topic_record("t", 1),
-            partition_record("t", 0, NodeId(1), vec![NodeId(1), NodeId(2), NodeId(3)], 0),
-        ]);
+        let img = crate::replicator_supervisor::test_support::three_replica_image(NodeId(1), 0);
         let d = desired_follower_set(NodeId(2), &img);
         assert!(d.contains(&("t".into(), 0)));
         assert!(d.len() == 1);
@@ -96,10 +93,7 @@ mod tests {
 
     #[test]
     fn desired_follower_set_includes_followers_excludes_leader_and_non_replicas() {
-        let img = image_with(&[
-            topic_record("t", 1),
-            partition_record("t", 0, NodeId(1), vec![NodeId(1), NodeId(2), NodeId(3)], 0),
-        ]);
+        let img = crate::replicator_supervisor::test_support::three_replica_image(NodeId(1), 0);
         let cases = [
             // Self is a follower replica → included.
             (NodeId(2), HashSet::from_iter([("t".to_string(), 0)])),

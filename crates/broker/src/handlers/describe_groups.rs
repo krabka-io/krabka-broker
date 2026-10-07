@@ -40,7 +40,6 @@ use crate::{
         actor::{ClassicView, GroupActorMessage},
         classic_state::GroupState,
     },
-    error::BrokerError,
     handlers::authorized_operations::fill_group_authorized_operations,
     task_util::{AskError, ask},
 };
@@ -52,59 +51,58 @@ const GROUP_ID_NOT_FOUND_MIN_VERSION: i16 = 6;
 /// The first `DescribeGroups` version with `authorized_operations`.
 const AUTHORIZED_OPERATIONS_MIN_VERSION: i16 = 3;
 
-pub(crate) async fn handle(
-    broker: &Broker,
-    req: DescribeGroupsRequest,
-    version: i16,
-    ctx: &crate::handlers::RequestContext<'_>,
-) -> Result<DescribeGroupsResponse, BrokerError> {
-    let image = broker.controller.current_image();
+context_handler! {
+    DescribeGroupsRequest => DescribeGroupsResponse,
+    (broker, req, version, ctx),
+    {
+        let image = broker.controller.current_image();
 
-    // Kafka answers every GROUP_AUTHORIZATION_FAILED row first, then the
-    // coordinator results for the allowed groups in request order.
-    let mut denied: Vec<DescribedGroup> = Vec::new();
-    let mut groups: Vec<DescribedGroup> = Vec::with_capacity(req.groups.len());
-    for gid in req.groups {
-        if crate::handlers::group_describe_denied(
+        // Kafka answers every GROUP_AUTHORIZATION_FAILED row first, then the
+        // coordinator results for the allowed groups in request order.
+        let mut denied: Vec<DescribedGroup> = Vec::new();
+        let mut groups: Vec<DescribedGroup> = Vec::with_capacity(req.groups.len());
+        for gid in req.groups {
+            if crate::handlers::group_describe_denied(
+                broker.config.authorizer.as_ref(),
+                &image,
+                ctx,
+                gid.as_str(),
+            ) {
+                denied.push(DescribedGroup {
+                    group_id: gid,
+                    error_code: codes::GROUP_AUTHORIZATION_FAILED,
+                    ..Default::default()
+                });
+                continue;
+            }
+            if let Some(error_code) = crate::handlers::group_coordinator_error(broker, &gid) {
+                groups.push(DescribedGroup {
+                    group_id: gid,
+                    error_code,
+                    ..Default::default()
+                });
+                continue;
+            }
+            groups.push(describe_one(broker, gid, version).await);
+        }
+
+        // KIP-430: Kafka fills the bitfield for every coordinator row whose error
+        // is NONE, a below-v6 `Dead` row included.
+        fill_group_authorized_operations(
             broker.config.authorizer.as_ref(),
             &image,
             ctx,
-            gid.as_str(),
-        ) {
-            denied.push(DescribedGroup {
-                group_id: gid,
-                error_code: codes::GROUP_AUTHORIZATION_FAILED,
-                ..Default::default()
-            });
-            continue;
-        }
-        if let Some(error_code) = crate::handlers::group_coordinator_error(broker, &gid) {
-            groups.push(DescribedGroup {
-                group_id: gid,
-                error_code,
-                ..Default::default()
-            });
-            continue;
-        }
-        groups.push(describe_one(broker, gid, version).await);
+            version >= AUTHORIZED_OPERATIONS_MIN_VERSION && req.include_authorized_operations,
+            &mut groups,
+        );
+
+        denied.extend(groups);
+        Ok(DescribeGroupsResponse {
+            groups: denied,
+            throttle_time_ms: 0,
+            ..Default::default()
+        })
     }
-
-    // KIP-430: Kafka fills the bitfield for every coordinator row whose error
-    // is NONE, a below-v6 `Dead` row included.
-    fill_group_authorized_operations(
-        broker.config.authorizer.as_ref(),
-        &image,
-        ctx,
-        version >= AUTHORIZED_OPERATIONS_MIN_VERSION && req.include_authorized_operations,
-        &mut groups,
-    );
-
-    denied.extend(groups);
-    Ok(DescribeGroupsResponse {
-        groups: denied,
-        throttle_time_ms: 0,
-        ..Default::default()
-    })
 }
 
 /// Describes one allowed group the way `GroupMetadataManager.describeGroups`
@@ -225,7 +223,7 @@ mod tests {
     /// A `DescribedGroup` carrying only an error: every projection field keeps
     /// its wire default, `authorized_operations` included.
     fn error_row(group_id: &str, error_code: i16) -> DescribedGroup {
-        DescribedGroup {
+        tagged_wire!(DescribedGroup {
             error_code,
             error_message: None,
             group_id: group_id.to_string(),
@@ -234,8 +232,7 @@ mod tests {
             protocol_data: String::new(),
             members: vec![],
             authorized_operations: i32::MIN,
-            unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(vec![]),
-        }
+        })
     }
 
     async fn drive(
@@ -261,14 +258,12 @@ mod tests {
         let resp = drive(&broker, VERSION, &request(&["group-a", "group-b"], false)).await;
 
         assert!(
-            resp == DescribeGroupsResponse {
-                throttle_time_ms: 0,
+            resp == unthrottled_wire!(DescribeGroupsResponse {
                 groups: vec![
                     error_row("group-a", codes::GROUP_AUTHORIZATION_FAILED),
                     error_row("group-b", codes::GROUP_AUTHORIZATION_FAILED),
                 ],
-                unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(vec![]),
-            }
+            })
         );
         broker_handle.shutdown().await;
     }
@@ -343,22 +338,16 @@ mod tests {
                 ),
             ),
         ];
-        let (broker_handle, _dir) = crate::test_support::start_group_broker_no_audit(Arc::new(
-            crate::authorizer::AllowAllAuthorizer,
-        ))
-        .await;
-        let broker = broker_handle.broker_arc_for_test();
+        broker_fixture!((broker_handle, _dir, broker), group_allow_all);
         let _ = broker.group_coordinator.get_or_create_consumer("next-gen");
 
         for (version, group, include_ops, expected) in rows {
             let resp = drive(&broker, version, &request(&[group], include_ops)).await;
 
             assert!(
-                resp == DescribeGroupsResponse {
-                    throttle_time_ms: 0,
+                resp == unthrottled_wire!(DescribeGroupsResponse {
                     groups: vec![expected],
-                    unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(vec![]),
-                },
+                }),
                 "v{version} {group}"
             );
         }
@@ -392,14 +381,15 @@ mod tests {
     /// `ClassicGroupMember.describeNoMetadata` does.
     #[test]
     fn only_a_stable_group_carries_protocol_metadata() {
-        let member = |metadata: &'static [u8], assignment: &'static [u8]| DescribedGroupMember {
-            member_id: "m-1".into(),
-            group_instance_id: Some("instance-1".into()),
-            client_id: "client-1".into(),
-            client_host: "/10.0.0.1".into(),
-            member_metadata: Bytes::from_static(metadata),
-            member_assignment: Bytes::from_static(assignment),
-            unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(vec![]),
+        let member = |metadata: &'static [u8], assignment: &'static [u8]| {
+            tagged_wire!(DescribedGroupMember {
+                member_id: "m-1".into(),
+                group_instance_id: Some("instance-1".into()),
+                client_id: "client-1".into(),
+                client_host: "/10.0.0.1".into(),
+                member_metadata: Bytes::from_static(metadata),
+                member_assignment: Bytes::from_static(assignment),
+            })
         };
         let group = |state: &str, protocol_data: &str, m: DescribedGroupMember| DescribedGroup {
             group_state: state.into(),
@@ -436,19 +426,14 @@ mod tests {
     /// separates this row from `the_authorized_operations_bitfield_is_filled_only_on_opt_in`.
     #[tokio::test]
     async fn a_classic_group_is_projected_without_the_kip430_bitfield() {
-        let (broker_handle, _dir) = crate::test_support::start_group_broker_no_audit(Arc::new(
-            crate::authorizer::AllowAllAuthorizer,
-        ))
-        .await;
-        let broker = broker_handle.broker_arc_for_test();
+        broker_fixture!((broker_handle, _dir, broker), group_allow_all);
         let _ = broker.group_coordinator.get_or_create_classic("classic-a");
 
         let resp = drive(&broker, VERSION, &request(&["classic-a"], false)).await;
 
         assert!(
-            resp == DescribeGroupsResponse {
-                throttle_time_ms: 0,
-                groups: vec![DescribedGroup {
+            resp == unthrottled_wire!(DescribeGroupsResponse {
+                groups: vec![tagged_wire!(DescribedGroup {
                     error_code: codes::NONE,
                     error_message: None,
                     group_id: "classic-a".into(),
@@ -457,10 +442,8 @@ mod tests {
                     protocol_data: String::new(),
                     members: vec![],
                     authorized_operations: i32::MIN,
-                    unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(vec![]),
-                }],
-                unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(vec![]),
-            },
+                })],
+            }),
             "{resp:?}"
         );
         broker_handle.shutdown().await;
@@ -478,8 +461,7 @@ mod tests {
 
         let resp = drive(&broker, VERSION, &request(&["classic-a"], true)).await;
 
-        let p = principal("admin");
-        let peer = peer();
+        request_identity!((p, peer), principal("admin"));
         let expected = authorized_operations_bits(
             authorizer.as_ref(),
             &broker.controller.current_image(),
@@ -587,11 +569,7 @@ mod tests {
             .await;
 
             assert!(
-                resp == DescribeGroupsResponse {
-                    throttle_time_ms: 0,
-                    groups: expected,
-                    unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(vec![]),
-                },
+                resp == unthrottled_wire!(DescribeGroupsResponse { groups: expected }),
                 "{acls:?}"
             );
             broker_handle.shutdown().await;

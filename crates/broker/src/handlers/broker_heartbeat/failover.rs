@@ -94,12 +94,7 @@ mod tests {
         let bad = Uuid::from_u128(0xBAD);
         let good = Uuid::from_u128(0x600D);
         // leader=1, replicas=[1,2], isr=[1,2]; broker 1's dir is `bad`.
-        let img = image_with_dir_partition(
-            krabka_audit::NodeId(1),
-            &[krabka_audit::NodeId(1), krabka_audit::NodeId(2)],
-            &[krabka_audit::NodeId(1), krabka_audit::NodeId(2)],
-            &[bad, good],
-        );
+        let img = two_replica_image(&[bad, good]);
         let (source, recoveries) = run_failover(img, bad).await;
 
         // Exactly one change must have been submitted (the new leader record):
@@ -107,16 +102,16 @@ mod tests {
         // is dropped from the ISR, and both epochs are bumped.
         let changes = source.submitted_records();
         let expected_changes = vec![MetadataRecord::V1Partition(PartitionRecord {
-            topic: "t".into(),
-            partition: 0,
-            leader: krabka_audit::NodeId(2),
-            replicas: vec![krabka_audit::NodeId(1), krabka_audit::NodeId(2)],
             isr: vec![krabka_audit::NodeId(2)],
             leader_epoch: krabka_metadata::LeaderEpoch(6),
-            adding_replicas: vec![],
-            removing_replicas: vec![],
             directories: vec![bad, good],
             partition_epoch: 1,
+            ..crate::handlers::test_support::replicated_partition(
+                "t",
+                0,
+                krabka_audit::NodeId(2),
+                &[krabka_audit::NodeId(1), krabka_audit::NodeId(2)],
+            )
         })];
         assert!(changes == expected_changes);
         // No unclean recovery needed (broker 2 is alive and in ISR).
@@ -128,12 +123,7 @@ mod tests {
         let bad = Uuid::from_u128(0xBAD);
         let good = Uuid::from_u128(0x600D);
         // Both replicas are on `good` dir; reporting `bad` as offline is a no-op.
-        let img = image_with_dir_partition(
-            krabka_audit::NodeId(1),
-            &[krabka_audit::NodeId(1), krabka_audit::NodeId(2)],
-            &[krabka_audit::NodeId(1), krabka_audit::NodeId(2)],
-            &[good, good],
-        );
+        let img = two_replica_image(&[good, good]);
         let (source, recoveries) = run_failover(img, bad).await;
 
         // No change submitted and no recovery needed.
@@ -158,16 +148,7 @@ mod tests {
         let good = Uuid::from_u128(0x600D);
         // Both replicas sit on `good`, so no leadership moves: the registration
         // update is the only change the heartbeat produces.
-        let mut img = image_with_dir_partition(
-            krabka_audit::NodeId(1),
-            &[krabka_audit::NodeId(1), krabka_audit::NodeId(2)],
-            &[krabka_audit::NodeId(1), krabka_audit::NodeId(2)],
-            &[good, good],
-        );
-        img.apply(&MetadataRecord::V1BrokerRegistration(registration(
-            1,
-            &[good, bad],
-        )));
+        let img = registration_only_failover_image(good, &[good, bad]);
         let (source, _recoveries) = run_failover(img, bad).await;
 
         // Kafka's `handleDirectoriesOffline` change: the surviving dir, at the
@@ -189,22 +170,32 @@ mod tests {
     async fn failover_offline_dirs_does_not_rewrite_a_registration_twice() {
         let bad = Uuid::from_u128(0xBAD);
         let good = Uuid::from_u128(0x600D);
-        let mut img = image_with_dir_partition(
-            krabka_audit::NodeId(1),
-            &[krabka_audit::NodeId(1), krabka_audit::NodeId(2)],
-            &[krabka_audit::NodeId(1), krabka_audit::NodeId(2)],
-            &[good, good],
-        );
-        // The dead dir is already gone from the registration: a broker repeats
-        // its offline dirs on every heartbeat, and the repeats must be silent.
-        img.apply(&MetadataRecord::V1BrokerRegistration(registration(
-            1,
-            &[good],
-        )));
+        let img = registration_only_failover_image(good, &[good]);
         let (source, _recoveries) = run_failover(img, bad).await;
 
         assert!(source.submitted_records().is_empty());
     }
+    fn registration_only_failover_image(
+        good: Uuid,
+        registered_dirs: &[Uuid],
+    ) -> krabka_metadata::MetadataImage {
+        let mut image = two_replica_image(&[good, good]);
+        image.apply(&MetadataRecord::V1BrokerRegistration(registration(
+            1,
+            registered_dirs,
+        )));
+        image
+    }
+
+    fn two_replica_image(directories: &[Uuid]) -> krabka_metadata::MetadataImage {
+        image_with_dir_partition(
+            krabka_audit::NodeId(1),
+            &[krabka_audit::NodeId(1), krabka_audit::NodeId(2)],
+            &[krabka_audit::NodeId(1), krabka_audit::NodeId(2)],
+            directories,
+        )
+    }
+
     async fn run_failover(
         img: krabka_metadata::MetadataImage,
         bad: Uuid,

@@ -18,10 +18,14 @@ use assert2::{assert, check};
 use bytes::Bytes;
 use krabka_protocol::owned::{
     heartbeat_request::HeartbeatRequest,
-    join_group_request::{JoinGroupRequest, JoinGroupRequestProtocol},
+    join_group_request::JoinGroupRequest,
     join_group_response::{JoinGroupResponse, JoinGroupResponseMember},
     leave_group_request::{LeaveGroupRequest, MemberIdentity},
-    sync_group_request::{SyncGroupRequest, SyncGroupRequestAssignment},
+    sync_group_request::SyncGroupRequest,
+};
+
+use crate::support::classic::{
+    classic_join_request, classic_sync_request, join_protocol, sync_assignment,
 };
 
 mod support;
@@ -39,18 +43,14 @@ async fn start() -> support::InProcess {
 
 fn join_request(group_id: &str, member_id: &str, instance_id: Option<&str>) -> JoinGroupRequest {
     JoinGroupRequest {
-        group_id: group_id.into(),
-        protocol_type: "consumer".into(),
-        member_id: member_id.into(),
         group_instance_id: instance_id.map(str::to_string),
-        session_timeout_ms: 30_000,
-        rebalance_timeout_ms: 1_500,
-        protocols: vec![JoinGroupRequestProtocol {
-            name: "range".into(),
-            metadata: Bytes::new(),
-            ..Default::default()
-        }],
-        ..Default::default()
+        ..classic_join_request(
+            group_id,
+            member_id,
+            (30_000, 1_500),
+            "consumer",
+            vec![join_protocol("range", Bytes::new())],
+        )
     }
 }
 
@@ -78,18 +78,15 @@ async fn bootstrap_static_member(
     // 3. Leader SyncGroup installs an assignment for itself.
     let r3 = client
         .send(SyncGroupRequest {
-            group_id: group_id.into(),
-            generation_id: generation,
-            member_id: mid.clone(),
             group_instance_id: Some(instance_id.into()),
-            protocol_type: Some("consumer".into()),
-            protocol_name: Some("range".into()),
-            assignments: vec![SyncGroupRequestAssignment {
-                member_id: mid.clone(),
-                assignment: assignment.clone(),
-                ..Default::default()
-            }],
-            ..Default::default()
+            ..classic_sync_request(
+                group_id,
+                generation,
+                mid.clone(),
+                Some("consumer".into()),
+                Some("range".into()),
+                vec![sync_assignment(mid.clone(), assignment.clone())],
+            )
         })
         .await
         .expect("SyncGroup");

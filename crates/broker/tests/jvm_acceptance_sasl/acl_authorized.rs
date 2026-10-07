@@ -9,8 +9,8 @@
 use assert2::assert;
 
 use crate::jvm_acceptance::{
-    KAFKA_IMAGE_TXN, broker0_advertised, docker_run_kafka_tool_with_image_and_mount, plain_jaas,
-    write_client_props,
+    ALICE, ALICE_PASS, KAFKA_IMAGE_TXN, broker0_advertised,
+    docker_run_kafka_tool_with_image_and_mount, plain_jaas, write_client_props,
 };
 
 /// JVM acceptance: authorized produce + consume round-trip.
@@ -36,24 +36,15 @@ use crate::jvm_acceptance::{
 async fn jvm_authorized_produce_consume() {
     const TOPIC: &str = "foo";
     const GROUP: &str = "cg-foo";
-    const ALICE: &str = "alice";
-    const ALICE_PASS: &str = "alice-secret";
 
-    let (broker, _dir, admin_props) =
-        crate::jvm_acceptance::start_plain_acl_topic(TOPIC, ALICE, ALICE_PASS).await;
-    let admin_mount = admin_props.mount_str();
-
-    // Allow Read+Write on Topic foo for User:alice. ACL implications grant
-    // Describe from Read/Write on the same topic, so no explicit Describe
-    // ACL is required here.
-    crate::jvm_acceptance::add_console_acl(
-        KAFKA_IMAGE_TXN,
-        &[&admin_mount],
-        "User:alice",
-        &["Read", "Write"],
-        "--topic",
+    let (broker, _dir, admin_props) = crate::jvm_acceptance::start_plain_acl_topic_with_ops(
         TOPIC,
-    );
+        ALICE,
+        ALICE_PASS,
+        &["Read", "Write"],
+    )
+    .await;
+    let admin_mount = admin_props.mount_str();
 
     // Allow Read on Group cg-foo for User:alice. ACL implications grant Describe
     // from Read on the same group resource, so no explicit Describe is
@@ -95,12 +86,7 @@ async fn jvm_authorized_produce_consume() {
         false,
         payload.as_bytes(),
     );
-    assert!(
-        producer_out.status.success(),
-        "producer failed: stdout={} stderr={}",
-        String::from_utf8_lossy(&producer_out.stdout),
-        String::from_utf8_lossy(&producer_out.stderr)
-    );
+    crate::jvm_acceptance::assert_console_produced(&producer_out);
 
     // Consume via `--group cg-foo --from-beginning` (the group-coordinator
     // path; exercises JoinGroup/OffsetFetch/OffsetCommit authorize).

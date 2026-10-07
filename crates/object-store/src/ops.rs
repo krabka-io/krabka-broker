@@ -65,6 +65,7 @@ pub struct PutOutcome {
 /// upload as [`ObjectOps::put_from_path`] over a filesystem path, not over a
 /// generic reader. The trait thus mocks cleanly for mutation-testable IO
 /// decision logic.
+#[krabka_macros::object_ops]
 #[cfg_attr(test, mockall::automock)]
 #[async_trait::async_trait]
 pub trait ObjectOps: Send + Sync {
@@ -79,14 +80,7 @@ pub trait ObjectOps: Send + Sync {
     /// Upload a local file. The method uses single-PUT below `threshold`
     /// bytes, and streaming multipart in `chunk_size` parts at or above
     /// `threshold`.
-    async fn put_from_path(
-        &self,
-        key: &Path,
-        src: &std::path::Path,
-        threshold: u64,
-        chunk_size: usize,
-        req: PutRequest,
-    ) -> Result<PutOutcome, ObjectStoreError>;
+    put_from_path!();
 
     /// Fetch a whole object.
     async fn get(&self, key: &Path) -> Result<Bytes, ObjectStoreError>;

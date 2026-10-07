@@ -11,14 +11,32 @@ use std::sync::Arc;
 use bytes::Bytes;
 use krabka_ids::LeaderEpoch;
 use krabka_remote_storage::{
-    RemoteLogMetadataManager, RemoteLogSegmentMetadata, RemoteLogSegmentMetadataUpdate,
-    RemoteLogSegmentState, RemotePartitionDeleteMetadata, RemoteStorageError, TopicIdPartition,
+    InmemoryRemoteLogMetadataManager, RemoteLogMetadataManager, RemoteLogSegmentMetadata,
+    RemoteLogSegmentMetadataUpdate, RemoteLogSegmentState, RemotePartitionDeleteMetadata,
+    RemoteStorageError, TopicIdPartition,
 };
 
 use super::{TopicBasedRemoteLogMetadataManager, assignment::ReadGate};
 use crate::{error::MetadataLogError, partitioning::metadata_partition_for, serde::MetadataEvent};
 
 impl TopicBasedRemoteLogMetadataManager {
+    /// Apply the assignment/readiness gate before consulting cached metadata.
+    fn read_if_ready<T: Default>(
+        &self,
+        partition: &TopicIdPartition,
+        read: impl FnOnce(&InmemoryRemoteLogMetadataManager) -> Result<T, RemoteStorageError>,
+    ) -> Result<T, RemoteStorageError> {
+        let mp = metadata_partition_for(partition, self.log.partition_count());
+        match self.metadata_partition_gate(mp) {
+            // An unassigned partition is a genuine miss, even if the cache
+            // retains entries consumed under an earlier assignment.
+            ReadGate::Unassigned => Ok(T::default()),
+            // Catching up is retryable and must remain distinct from a miss.
+            ReadGate::NotReady => Err(RemoteStorageError::NotReady { partition: mp }),
+            ReadGate::Ready => read(&self.inner),
+        }
+    }
+
     async fn wait_for_offset(&self, partition: i32, offset: i64) {
         let idx = usize::try_from(partition).expect("partition non-negative");
         let mut rx = self.applied_tx.subscribe();
@@ -91,18 +109,9 @@ impl RemoteLogMetadataManager for TopicBasedRemoteLogMetadataManager {
         leader_epoch: LeaderEpoch,
         offset: i64,
     ) -> Result<Option<RemoteLogSegmentMetadata>, RemoteStorageError> {
-        let mp = metadata_partition_for(topic_id_partition, self.log.partition_count());
-        match self.metadata_partition_gate(mp) {
-            // Not this broker's partition → genuine miss, do NOT serve any
-            // stale cache.
-            ReadGate::Unassigned => Ok(None),
-            // Assigned but not caught up → retryable, distinct from a miss.
-            ReadGate::NotReady => Err(RemoteStorageError::NotReady { partition: mp }),
-            ReadGate::Ready => {
-                self.inner
-                    .remote_log_segment_metadata(topic_id_partition, leader_epoch, offset)
-            }
-        }
+        self.read_if_ready(topic_id_partition, |inner| {
+            inner.remote_log_segment_metadata(topic_id_partition, leader_epoch, offset)
+        })
     }
 
     fn highest_offset_for_epoch(
@@ -110,28 +119,18 @@ impl RemoteLogMetadataManager for TopicBasedRemoteLogMetadataManager {
         topic_id_partition: &TopicIdPartition,
         leader_epoch: LeaderEpoch,
     ) -> Result<Option<i64>, RemoteStorageError> {
-        let mp = metadata_partition_for(topic_id_partition, self.log.partition_count());
-        match self.metadata_partition_gate(mp) {
-            ReadGate::Unassigned => Ok(None),
-            ReadGate::NotReady => Err(RemoteStorageError::NotReady { partition: mp }),
-            ReadGate::Ready => self
-                .inner
-                .highest_offset_for_epoch(topic_id_partition, leader_epoch),
-        }
+        self.read_if_ready(topic_id_partition, |inner| {
+            inner.highest_offset_for_epoch(topic_id_partition, leader_epoch)
+        })
     }
 
     fn list_remote_log_segments(
         &self,
         topic_id_partition: &TopicIdPartition,
     ) -> Result<Vec<RemoteLogSegmentMetadata>, RemoteStorageError> {
-        let mp = metadata_partition_for(topic_id_partition, self.log.partition_count());
-        match self.metadata_partition_gate(mp) {
-            // Not this broker's partition → it does not own it, so it must
-            // not serve any stale segments it happened to consume earlier.
-            ReadGate::Unassigned => Ok(Vec::new()),
-            ReadGate::NotReady => Err(RemoteStorageError::NotReady { partition: mp }),
-            ReadGate::Ready => self.inner.list_remote_log_segments(topic_id_partition),
-        }
+        self.read_if_ready(topic_id_partition, |inner| {
+            inner.list_remote_log_segments(topic_id_partition)
+        })
     }
 
     fn list_remote_log_segments_by_epoch(
@@ -172,14 +171,7 @@ mod tests {
     async fn add_finish_query_round_trip() {
         let log: Arc<dyn MetadataEventLog> = InProcessMetadataEventLog::new(4);
         let m = start_manager_all(log).await;
-        let m2 = m.clone();
-        on_blocking(move || {
-            m2.add_remote_log_segment_metadata(started(10, 0, 99))
-                .unwrap();
-        })
-        .await;
-        let m2 = m.clone();
-        on_blocking(move || m2.update_remote_log_segment_metadata(finish(10)).unwrap()).await;
+        crate::manager::test_support::seed_finished(&m, &[(10, 0, 99)]).await;
 
         check_finished_segment(m.as_ref(), &tp());
         m.shutdown();

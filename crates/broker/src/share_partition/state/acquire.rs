@@ -12,9 +12,7 @@ use std::time::{Duration, Instant};
 
 use krabka_log::Offset;
 
-use super::{
-    AcquiredRange, AcquisitionState, InFlightBatch, RecordState, clamp_i32, dlq::DlqCause,
-};
+use super::{AcquiredRange, AcquisitionState, InFlightBatch, RecordState, dlq::DlqCause};
 
 /// The smallest delivery count at which Kafka throttles a run:
 /// `SharePartition.MINIMUM_THROTTLE_RECORDS_DELIVERY_LIMIT`.
@@ -102,34 +100,15 @@ impl AcquisitionState {
     /// window. Under `read_committed` it also calls it for the data batches
     /// of aborted transactions.
     pub fn archive_internal(&mut self, first: Offset, last: Offset) {
-        if first > last {
-            return;
-        }
-        self.split_at_offset(first);
-        self.split_at_offset(last + 1);
-        let mut changed = false;
-        for batch in &mut self.batches {
-            if batch.last_offset < first || batch.first_offset > last {
-                continue;
-            }
-            if matches!(
-                batch.state,
-                RecordState::Acknowledged | RecordState::Archived
-            ) {
-                continue;
-            }
-            self.delivery_complete_count = self
-                .delivery_complete_count
-                .saturating_add(clamp_i32(batch.len()));
-            batch.state = RecordState::Archived;
-            batch.acquired_by = None;
-            batch.lock_deadline = None;
-            changed = true;
-        }
-        if changed {
-            self.dirty = true;
-            self.advance_spso();
-        }
+        self.archive_range(
+            first,
+            last,
+            |batch| {
+                batch.last_offset >= first && batch.first_offset <= last && !batch.is_terminal()
+            },
+            true,
+            false,
+        );
     }
 
     /// Kafka's `SharePartition.updateCacheAndOffsets`, called when the log
@@ -157,10 +136,7 @@ impl AcquisitionState {
                 break;
             }
             if matches!(batch.state, RecordState::Available | RecordState::Deferred) {
-                self.delivery_complete_count = self
-                    .delivery_complete_count
-                    .saturating_add(clamp_i32(batch.len()));
-                batch.state = RecordState::Archived;
+                batch.archive_terminal(&mut self.delivery_complete_count);
                 batch.acquired_by = None;
                 batch.lock_deadline = None;
                 changed = true;

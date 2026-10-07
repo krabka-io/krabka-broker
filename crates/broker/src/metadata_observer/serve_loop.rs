@@ -506,18 +506,15 @@ mod tests {
     async fn run_loop_sleeps_after_empty_fetch() {
         let fetches = Arc::new(AtomicUsize::new(0));
         let fetches_for_mock = fetches.clone();
-        let mock =
-            krabka_client_core::MockBroker::start(move |api_key, _version, _corr_id, _body| {
-                if api_key == api_versions_request::API_KEY {
-                    return Some(api_versions_response_v0());
-                }
-                if api_key == krabka_raft::API_KEY_METADATA_FETCH {
-                    fetches_for_mock.fetch_add(1, Ordering::SeqCst);
-                    return Some(metadata_fetch_response_body(Bytes::new(), 0, 0));
-                }
-                None
-            })
-            .await;
+        let mock = crate::test_support::mock_request_broker(
+            krabka_raft::API_KEY_METADATA_FETCH,
+            move || {
+                fetches_for_mock.fetch_add(1, Ordering::SeqCst);
+                metadata_fetch_response_body(Bytes::new(), 0, 0)
+            },
+            api_versions_response_v0,
+        )
+        .await;
         let dial_count = Arc::new(AtomicUsize::new(0));
         let clock = ManualMonotonicClock::new_shared();
         let dir = tempfile::tempdir().unwrap();
@@ -621,12 +618,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let mut image = krabka_metadata::MetadataImage::new(Uuid::nil());
         image.apply(&krabka_metadata::MetadataRecord::V1Topic(
-            krabka_metadata::TopicRecord {
-                name: "survives-the-restart".into(),
-                topic_id: Uuid::new_v4(),
-                partitions: 1,
-                replication_factor: 1,
-            },
+            crate::test_support::single_partition_topic("survives-the-restart", Uuid::new_v4()),
         ));
         ObserverStore::open(dir.path(), 1).maybe_checkpoint(&image, 12);
 
@@ -697,17 +689,12 @@ mod tests {
         // is the third place the loop parks. The record of that answered fetch
         // — the applied offset and the leader hint — survives the shutdown,
         // which is what separates this exit from the unreachable-voter one.
-        let mock =
-            krabka_client_core::MockBroker::start(move |api_key, _version, _corr_id, _body| {
-                if api_key == api_versions_request::API_KEY {
-                    return Some(api_versions_response_v0());
-                }
-                if api_key == krabka_raft::API_KEY_METADATA_FETCH {
-                    return Some(metadata_fetch_response_body(Bytes::new(), 0, 0));
-                }
-                None
-            })
-            .await;
+        let mock = crate::test_support::mock_request_broker(
+            krabka_raft::API_KEY_METADATA_FETCH,
+            move || metadata_fetch_response_body(Bytes::new(), 0, 0),
+            api_versions_response_v0,
+        )
+        .await;
         let dir = tempfile::tempdir().unwrap();
         let timer = BrokenTimer::dead(TimerFailure::Registration);
         let observer = run_until_it_stops(config_on(
@@ -805,18 +792,15 @@ mod tests {
     /// records ahead.
     #[tokio::test]
     async fn the_quorums_committed_offset_is_read_past_a_lagging_responder() {
-        let mock =
-            krabka_client_core::MockBroker::start(move |api_key, _version, _corr_id, _body| {
-                if api_key == api_versions_request::API_KEY {
-                    return Some(api_versions_response_v0());
-                }
-                if api_key == krabka_raft::API_KEY_METADATA_FETCH {
-                    // A follower holding 5 of the quorum's 10 000 records.
-                    return Some(metadata_fetch_response_body(Bytes::new(), 5, 10_000));
-                }
-                None
-            })
-            .await;
+        let mock = crate::test_support::mock_request_broker(
+            krabka_raft::API_KEY_METADATA_FETCH,
+            move || {
+                // A follower holding 5 of the quorum's 10 000 records.
+                metadata_fetch_response_body(Bytes::new(), 5, 10_000)
+            },
+            api_versions_response_v0,
+        )
+        .await;
         let dir = tempfile::tempdir().unwrap();
         let observer = MetadataObserver::start(ObserverConfig {
             voters: vec![(krabka_raft::NodeId(1), mock.addr.to_string())],

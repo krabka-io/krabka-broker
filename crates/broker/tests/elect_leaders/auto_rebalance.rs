@@ -118,7 +118,7 @@ async fn auto_rebalance_restores_preferred_leader() {
     // ── Phase 2: create rf=2 topic via PLAINTEXT wire. ────────────────────
     // With 3 registered brokers sorted [1, 2, 3] and rf=2, the round-robin
     // assignment for partition 0 is replicas=[1, 2]. Broker 1 is preferred.
-    create_topic_plaintext(addr, topic, &[1, 2]).await;
+    create_topic_plaintext(addr, crate::wire::CLIENT_ID, topic, &[1, 2]).await;
 
     wait_partition_exists(&h0, topic, 0).await;
     wait_partition_exists(&h1, topic, 0).await;

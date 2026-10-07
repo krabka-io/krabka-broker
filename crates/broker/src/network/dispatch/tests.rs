@@ -112,10 +112,10 @@ async fn raft_voter_registry_routes_to_real_handlers() {
         body
     }
 
-    let dir = tempfile::TempDir::new().expect("tempdir");
-    let mut cfg = crate::config::BrokerConfig::for_tests(dir.path().to_path_buf());
-    cfg.authorizer = std::sync::Arc::new(DenyAll);
-    let handle = Broker::start(cfg).await.expect("start broker");
+    let (handle, _dir) = crate::test_support::start_broker_with(|cfg| {
+        cfg.authorizer = std::sync::Arc::new(DenyAll);
+    })
+    .await;
     let broker = handle.broker_arc_for_test();
 
     let (server, mut framed) = crate::network::dispatch::test_support::plaintext_loop(broker).await;
@@ -166,9 +166,7 @@ async fn inter_broker_only_apis_close_the_connection_on_a_client_listener() {
             .get(api_key)
             .unwrap_or_else(|| panic!("registry carries api_key {api_key}"));
 
-        let dir = tempfile::TempDir::new().expect("tempdir");
-        let cfg = crate::config::BrokerConfig::for_tests(dir.path().to_path_buf());
-        let handle = Broker::start(cfg).await.expect("start broker");
+        let (handle, _dir) = crate::test_support::start_broker_with(|_| {}).await;
         let broker = handle.broker_arc_for_test();
 
         let (addr, serve) = crate::network::dispatch::test_support::serve_loop(
@@ -182,8 +180,7 @@ async fn inter_broker_only_apis_close_the_connection_on_a_client_listener() {
         .await;
         let server = tokio::spawn(serve);
 
-        let client = TcpStream::connect(addr).await.expect("connect");
-        let mut framed = codec::frame(client, DEFAULT_MAX_FRAME_BYTES);
+        let mut framed = test_support::connect_framed(addr, "connect").await;
         let frame = request_frame(
             api_key,
             version,
@@ -246,8 +243,7 @@ async fn drive_one_frame_per_connection(
         let flexible = registry
             .get(api_key)
             .is_some_and(|entry| entry.body_flexible(version));
-        let client = TcpStream::connect(addr).await.expect("connect");
-        let mut framed = codec::frame(client, DEFAULT_MAX_FRAME_BYTES);
+        let mut framed = test_support::connect_framed(addr, "connect").await;
         let frame = request_frame(
             api_key,
             version,
@@ -326,8 +322,7 @@ async fn unsupported_versions_close_the_connection_except_api_versions() {
     }
     cases.push((i16::MAX, 0, Outcome::Closed));
 
-    let dir = tempfile::TempDir::new().expect("tempdir");
-    let cfg = crate::config::BrokerConfig::for_tests(dir.path().to_path_buf());
+    let (_dir, cfg) = crate::network::test_support::broker_config();
     let requests: Vec<(i16, i16)> = cases
         .iter()
         .map(|(key, version, _)| (*key, *version))
@@ -404,8 +399,7 @@ async fn a_gated_version_is_refused_unless_its_switch_is_on() {
         (2, "ListOffsets", 0, Strict, Legacy, false),
     ];
     for &(api_key, name, frame_version, unstable, legacy, refused) in cases {
-        let dir = tempfile::TempDir::new().expect("tempdir");
-        let mut cfg = crate::config::BrokerConfig::for_tests(dir.path().to_path_buf());
+        let (_dir, mut cfg) = crate::network::test_support::broker_config();
         cfg.features.unstable_api_versions = unstable;
         cfg.features.legacy_request_versions = legacy;
         let (outcomes, metrics) =
@@ -435,8 +429,7 @@ async fn a_gated_version_is_refused_unless_its_switch_is_on() {
 async fn api_versions_v5_is_unsupported_unless_unstable_api_versions_are_enabled() {
     use krabka_protocol::owned::api_versions_response::{ApiVersion, ApiVersionsResponse};
 
-    let dir = tempfile::TempDir::new().expect("tempdir");
-    let cfg = crate::config::BrokerConfig::for_tests(dir.path().to_path_buf());
+    let (_dir, cfg) = crate::network::test_support::broker_config();
     let (outcomes, _) = drive_one_frame_per_connection(cfg, &[(API_VERSIONS_KEY, 5)]).await;
     check!(
         outcomes
@@ -461,9 +454,7 @@ async fn serve_frames(
     mechanisms: Option<Vec<krabka_security::SaslMechanism>>,
     requests: Vec<bytes::Bytes>,
 ) -> crate::metrics::BrokerMetrics {
-    let dir = tempfile::TempDir::new().expect("tempdir");
-    let cfg = crate::config::BrokerConfig::for_tests(dir.path().to_path_buf());
-    let handle = Broker::start(cfg).await.expect("start broker");
+    let (handle, _dir) = crate::test_support::start_broker_with(|_| {}).await;
     let broker = handle.broker_arc_for_test();
     let metrics = broker.metrics.clone();
 
@@ -473,8 +464,7 @@ async fn serve_frames(
     .await;
     let server = tokio::spawn(serve);
 
-    let client = TcpStream::connect(addr).await.expect("connect");
-    let mut framed = codec::frame(client, DEFAULT_MAX_FRAME_BYTES);
+    let mut framed = test_support::connect_framed(addr, "connect").await;
     for request in requests {
         framed.send(request).await.expect("send frame");
     }
@@ -500,6 +490,13 @@ fn close_counts(metrics: &crate::metrics::BrokerMetrics) -> Vec<(&'static str, u
                     .get(),
             )
         })
+        .collect()
+}
+
+fn active_closes(metrics: &crate::metrics::BrokerMetrics) -> Vec<(&'static str, u64)> {
+    close_counts(metrics)
+        .into_iter()
+        .filter(|(_, count)| *count > 0)
         .collect()
 }
 
@@ -623,19 +620,13 @@ struct DenyCertificatePrincipal;
 /// The certificate principal that [`DenyCertificatePrincipal`] refuses.
 const DENIED_CERTIFICATE_PRINCIPAL: &str = "CN=bad";
 
-impl crate::authorizer::Authorizer for DenyCertificatePrincipal {
-    fn authorize(
-        &self,
-        _source: &dyn crate::authorizer::AclSource,
-        request: &crate::authorizer::AuthorizationRequest<'_>,
-    ) -> crate::authorizer::AuthorizationResult {
-        if request.principal.name == DENIED_CERTIFICATE_PRINCIPAL {
-            crate::authorizer::AuthorizationResult::Deny
-        } else {
-            crate::authorizer::AuthorizationResult::Allow
-        }
+krabka_macros::test_authorizer!(DenyCertificatePrincipal, request; {
+    if request.principal.name == DENIED_CERTIFICATE_PRINCIPAL {
+        crate::authorizer::AuthorizationResult::Deny
+    } else {
+        crate::authorizer::AuthorizationResult::Allow
     }
-}
+});
 
 /// Encodes one request frame: the request header and the encoded `body`.
 fn encoded_request_frame<T: krabka_protocol::Encode>(
@@ -780,12 +771,12 @@ async fn a_sasl_frame_on_a_non_sasl_listener_keeps_the_principal() {
         ),
     ];
 
-    let dir = tempfile::TempDir::new().expect("tempdir");
-    let mut cfg = crate::config::BrokerConfig::for_tests(dir.path().to_path_buf());
-    cfg.authorizer = std::sync::Arc::new(DenyCertificatePrincipal);
-    cfg.plain_credentials
-        .insert("alice".to_string(), "wonderland".to_string());
-    let handle = Broker::start(cfg).await.expect("start broker");
+    let (handle, _dir) = crate::test_support::start_broker_with(|cfg| {
+        cfg.authorizer = std::sync::Arc::new(DenyCertificatePrincipal);
+        cfg.plain_credentials
+            .insert("alice".to_string(), "wonderland".to_string());
+    })
+    .await;
 
     for (case, protocol, mtls_principal, sasl_frame, expected_answer, expected_topic_error) in cases
     {
@@ -800,8 +791,7 @@ async fn a_sasl_frame_on_a_non_sasl_listener_keeps_the_principal() {
         )
         .await;
         let server = tokio::spawn(serve);
-        let client = TcpStream::connect(addr).await.expect("connect");
-        let mut framed = codec::frame(client, DEFAULT_MAX_FRAME_BYTES);
+        let mut framed = test_support::connect_framed(addr, "connect").await;
 
         let sasl_key = i16::from_be_bytes([sasl_frame[0], sasl_frame[1]]);
         framed.send(sasl_frame).await.expect("send SASL frame");
@@ -876,7 +866,7 @@ mod request_budget {
     use assert2::{assert, check};
     use futures_util::{SinkExt as _, StreamExt as _};
 
-    use super::{KafkaCodec, close_counts, request_frame};
+    use super::{KafkaCodec, active_closes, request_frame};
     use crate::broker::Broker;
 
     /// One connection served by the loop, and the client end already framed.
@@ -912,14 +902,10 @@ mod request_budget {
         request_frame(18, 0, 1, None, None, &vec![0_u8; 2 * BUDGET_BYTES]).freeze()
     }
 
-    async fn broker_with(
-        configure: impl FnOnce(&mut crate::config::BrokerConfig),
-    ) -> (crate::BrokerHandle, tempfile::TempDir) {
-        let dir = tempfile::TempDir::new().expect("tempdir");
-        let mut cfg = crate::config::BrokerConfig::for_tests(dir.path().to_path_buf());
-        configure(&mut cfg);
-        let handle = Broker::start(cfg).await.expect("start broker");
-        (handle, dir)
+    use crate::test_support::start_broker_with as broker_with;
+
+    async fn byte_budget_broker() -> (crate::BrokerHandle, tempfile::TempDir) {
+        broker_with(|cfg| cfg.queued_max_request_bytes = Some(budget())).await
     }
 
     /// `queued.max.requests` bounds what the broker is *handling*, across every
@@ -984,10 +970,7 @@ mod request_budget {
     /// rather than test anything -- and the frame is deliberately bigger.
     #[tokio::test]
     async fn a_frame_over_the_whole_byte_budget_closes_the_connection() {
-        let (handle, _dir) = broker_with(|cfg| {
-            cfg.queued_max_request_bytes = Some(budget());
-        })
-        .await;
+        let (handle, _dir) = byte_budget_broker().await;
         let broker = handle.broker_arc_for_test();
 
         let mut served = serve(&broker).await;
@@ -1010,13 +993,7 @@ mod request_budget {
             .loop_task
             .await
             .expect("serve loop joins after the refusal");
-        check!(
-            close_counts(&broker.metrics)
-                .into_iter()
-                .filter(|(_, count)| *count > 0)
-                .collect::<Vec<_>>()
-                == vec![("decode_error", 1)]
-        );
+        check!(active_closes(&broker.metrics) == vec![("decode_error", 1)]);
         handle.shutdown().await;
     }
 
@@ -1024,10 +1001,7 @@ mod request_budget {
     /// once the response is written.
     #[tokio::test]
     async fn a_frame_within_the_byte_budget_is_served_and_gives_the_bytes_back() {
-        let (handle, _dir) = broker_with(|cfg| {
-            cfg.queued_max_request_bytes = Some(budget());
-        })
-        .await;
+        let (handle, _dir) = byte_budget_broker().await;
         let broker = handle.broker_arc_for_test();
         let broker_for_budget = std::sync::Arc::clone(&broker);
         let available = move || {
@@ -1067,13 +1041,7 @@ mod request_budget {
         .await
         .expect("every permit comes back once the requests are answered");
         // The client hung up; the budget refused nothing.
-        check!(
-            close_counts(&broker.metrics)
-                .into_iter()
-                .filter(|(_, count)| *count > 0)
-                .collect::<Vec<_>>()
-                == vec![("peer_closed", 1)]
-        );
+        check!(active_closes(&broker.metrics) == vec![("peer_closed", 1)]);
         handle.shutdown().await;
     }
 }
@@ -1105,8 +1073,7 @@ mod log_levels {
     // Serves one connection to `peer`, and returns what the dispatch module
     // logged at DEBUG or above about that connection.
     async fn logged_serving(peer: Peer) -> Vec<(Level, String)> {
-        let dir = tempfile::TempDir::new().expect("tempdir");
-        let mut cfg = crate::config::BrokerConfig::for_tests(dir.path().to_path_buf());
+        let (_dir, mut cfg) = crate::network::test_support::broker_config();
         if matches!(peer, Peer::Idle) {
             cfg.connections_max_idle = Some(krabka_units::millis(100));
         }
@@ -1257,8 +1224,7 @@ mod request_limit {
     /// [`LIMIT`], sends `request`, and returns the response frame, or `None`
     /// when the broker closed the connection instead.
     async fn answer_under_limit(request: bytes::BytesMut) -> Option<bytes::BytesMut> {
-        let dir = tempfile::TempDir::new().expect("tempdir");
-        let mut cfg = crate::config::BrokerConfig::for_tests(dir.path().to_path_buf());
+        let (_dir, mut cfg) = crate::network::test_support::broker_config();
         cfg.socket_request_max = krabka_units::bytes(u32::try_from(LIMIT).expect("limit"));
         let handle = Broker::start(cfg).await.expect("start broker");
         let broker = handle.broker_arc_for_test();

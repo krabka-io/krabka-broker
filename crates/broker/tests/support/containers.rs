@@ -137,6 +137,7 @@ pub fn jvm_client_addr() -> &'static str {
 }
 
 /// Read the finalized level from the named feature's own CLI output line.
+/// Returns `None` if the feature is absent or shows no finalized level.
 pub fn jvm_finalized_level(stdout: &str, feature: &str) -> Option<i64> {
     let line = stdout
         .lines()
@@ -172,13 +173,7 @@ pub async fn start_jvm_single(
 
 /// Initialize tracing with the suite's default filter.
 pub fn init_jvm_tracing(default_filter: &str) {
-    let _ = tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new(default_filter)),
-        )
-        .with_test_writer()
-        .try_init();
+    super::init_tracing_with(default_filter);
 }
 
 /// Common configuration for host brokers addressed by Kafka containers.
@@ -230,6 +225,20 @@ pub fn jvm_single_broker_config(
     )
 }
 
+/// Prepare a tool container with Docker options kept in the caller's order.
+pub fn docker_tool_command(image: &str, options: &[&str]) -> std::process::Command {
+    use std::process::{Command, Stdio};
+
+    let mut command = Command::new("docker");
+    command
+        .args(["run", "--rm"])
+        .args(options)
+        .arg(image)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    command
+}
+
 /// Prepare a disposable tool container that can reach the host broker.
 pub fn jvm_docker_command(
     image: &str,
@@ -237,26 +246,100 @@ pub fn jvm_docker_command(
     args: &[&str],
     interactive: bool,
 ) -> std::process::Command {
-    use std::process::{Command, Stdio};
-
-    let mut command = Command::new("docker");
-    command.args([
-        "run",
-        "--rm",
-        "--add-host=host.docker.internal:host-gateway",
-    ]);
+    let mut options = vec!["--add-host=host.docker.internal:host-gateway"];
     if interactive {
-        command.arg("-i");
+        options.push("-i");
     }
     for mount in mounts {
-        command.args(["-v", mount]);
+        options.extend(["-v", mount]);
     }
+    let mut command = docker_tool_command(image, &options);
+    command.args(args);
     command
-        .arg(image)
-        .args(args)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    command
+}
+
+/// Capture both log streams for a container-readiness diagnostic.
+pub fn docker_logs(name: &str) -> String {
+    let out = std::process::Command::new("docker")
+        .args(["logs", name])
+        .output()
+        .expect("spawn docker logs");
+    format!(
+        "stdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    )
+}
+
+/// Best-effort cleanup, including containers left by a failed test.
+pub fn remove_container(name: &str) {
+    let _ = std::process::Command::new("docker")
+        .args(["rm", "-f", name])
+        .output();
+}
+
+/// Best-effort cleanup of a container and its anonymous volumes.
+pub fn remove_container_with_volumes(name: &str) {
+    let _ = std::process::Command::new("docker")
+        .args(["rm", "--force", "--volumes", name])
+        .output();
+}
+
+/// Nonempty, trimmed CLI rows in their original order.
+pub fn jvm_output_lines(output: &std::process::Output) -> Vec<String> {
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(str::to_owned)
+        .collect()
+}
+
+/// A test-default voter in a named static quorum shared with a JVM node.
+pub fn jvm_static_voter_config(
+    index: usize,
+    listen: std::net::SocketAddr,
+    advertised: String,
+    controller: std::net::SocketAddr,
+    voters: &[(u64, std::net::SocketAddr)],
+    cluster_id: uuid::Uuid,
+    log_dir: &std::path::Path,
+) -> krabka_broker::BrokerConfig {
+    let mut config = crate::support::node_config(index, log_dir);
+    config.listen_addr = listen;
+    config.advertised_listener = advertised;
+    config.controller_listen_addr = controller;
+    // The lowest 100 directory ids are reserved by Kafka.
+    config.directory_id = uuid::Uuid::from_u64_pair(1, config.node_id.0);
+    config.bootstrap_mode = krabka_broker::BootstrapMode::Bootstrap;
+    config.controller_quorum_voters = crate::support::controller_voters(voters);
+    config.auto_join = false;
+    config.bootstrap_servers = vec![];
+    config.cluster_id = Some(cluster_id);
+    config
+}
+
+/// Format a voter at the Kafka release supported by the oldest quorum member.
+pub async fn format_jvm_voter(
+    log_dir: &std::path::Path,
+    cluster_id: &str,
+    node: &krabka_broker::BrokerConfig,
+) {
+    let argv = vec![
+        "krabka-format".to_string(),
+        "--log-dir".to_string(),
+        log_dir.to_str().unwrap().to_string(),
+        "--cluster-id".to_string(),
+        cluster_id.to_string(),
+        "--node-id".to_string(),
+        node.node_id.0.to_string(),
+        "--directory-id".to_string(),
+        node.directory_id.to_string(),
+        "--release-version".to_string(),
+        "4.0".to_string(),
+    ];
+    let code = krabka_format::run_from_args(argv).await;
+    assert2::assert!(code == 0, "krabka-format exited {code}");
 }
 
 /// Run a JVM tool while leaving success and output assertions to its caller.
@@ -412,4 +495,230 @@ pub fn fixture_cache_dir(prefix: &str, fixtures: &[&str]) -> std::path::PathBuf 
             .hash(&mut hasher);
     }
     std::env::temp_dir().join(format!("{prefix}-{:016x}", hasher.finish()))
+}
+
+/// Run a blocking container command without occupying a broker runtime worker.
+pub async fn docker_run_blocking(args: Vec<String>, context: &'static str) -> std::process::Output {
+    tokio::task::spawn_blocking(move || {
+        std::process::Command::new("docker")
+            .args(&args)
+            .output()
+            .unwrap_or_else(|error| panic!("{context}: {error}"))
+    })
+    .await
+    .expect("docker run task")
+}
+
+/// Command prefix for authenticated admin tools mounted at the shared config path.
+pub fn jvm_admin_args(image: &str, mount: &str, tool: &str, bootstrap: &str) -> Vec<String> {
+    [
+        "run",
+        "--rm",
+        "--add-host=host.docker.internal:host-gateway",
+        "-v",
+        mount,
+        image,
+        tool,
+        "--bootstrap-server",
+        bootstrap,
+        "--command-config",
+        "/krabka-config/admin.properties",
+    ]
+    .into_iter()
+    .map(str::to_owned)
+    .collect()
+}
+
+/// Last `count` diagnostic lines, printed in the same order as the process.
+pub fn print_log_tail(text: &str, count: usize) {
+    for line in text
+        .lines()
+        .rev()
+        .take(count)
+        .collect::<Vec<_>>()
+        .iter()
+        .rev()
+    {
+        eprintln!("{line}");
+    }
+}
+
+/// A finished process's stdout followed by stderr, including invalid UTF-8 replacement.
+pub fn combined_output(output: &std::process::Output) -> String {
+    let mut text = String::from_utf8_lossy(&output.stdout).into_owned();
+    text.push_str(&String::from_utf8_lossy(&output.stderr));
+    text
+}
+
+/// Host-bound listeners transferred directly into the broker to avoid port races.
+pub async fn start_jvm_bound(
+    log_dir: std::path::PathBuf,
+    customize: impl FnOnce(&mut krabka_broker::BrokerConfig),
+) -> (krabka_broker::BrokerHandle, String) {
+    let data_plane = tokio::net::TcpListener::bind("0.0.0.0:0")
+        .await
+        .expect("bind data plane");
+    let controller = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind controller");
+    let port = data_plane.local_addr().expect("data plane addr").port();
+    let bootstrap = format!("host.docker.internal:{port}");
+    let controller_addr = controller.local_addr().expect("controller addr");
+    let mut config = krabka_broker::BrokerConfig::for_tests(log_dir);
+    customize(&mut config);
+    config.listen_addr = data_plane.local_addr().expect("data plane addr");
+    config.advertised_listener = bootstrap.clone();
+    config.controller_listen_addr = controller_addr;
+    config.controller_quorum_voters = vec![(config.node_id, controller_addr.to_string())];
+    let handle =
+        krabka_broker::Broker::start_with_listeners(config, Some(controller), [data_plane])
+            .await
+            .expect("broker start");
+    handle.wait_until_controller_leader().await;
+    (handle, bootstrap)
+}
+
+/// The long admin timeouts shared by tools whose broker heartbeat must keep running.
+pub fn jvm_admin_config() -> &'static std::path::Path {
+    static CONFIG: std::sync::OnceLock<tempfile::TempDir> = std::sync::OnceLock::new();
+    CONFIG
+        .get_or_init(|| {
+            let dir = tempfile::tempdir().expect("tempdir for command config");
+            std::fs::write(
+                dir.path().join("admin.properties"),
+                "request.timeout.ms=120000\ndefault.api.timeout.ms=240000\n",
+            )
+            .expect("write command config");
+            dir
+        })
+        .path()
+}
+
+/// Allocate a broker set's client ports before allocating any controller ports.
+pub fn jvm_client_ports<const N: usize>() -> ([u16; N], [String; N], [String; N]) {
+    let ports: [u16; N] = std::array::from_fn(|_| free_port());
+    (
+        ports,
+        ports.map(|port| format!("0.0.0.0:{port}")),
+        ports.map(|port| format!("host.docker.internal:{port}")),
+    )
+}
+
+/// Container-reachable client endpoints, in the supplied broker order.
+pub fn jvm_bootstrap_servers(ports: &[u16]) -> String {
+    ports
+        .iter()
+        .map(|port| format!("host.docker.internal:{port}"))
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
+/// Parse the final field of a stock kafka-get-offsets row.
+pub fn jvm_parse_offset(line: &str) -> i64 {
+    line.rsplit(':')
+        .next()
+        .and_then(|offset| offset.parse::<i64>().ok())
+        .unwrap_or_else(|| panic!("kafka-get-offsets row is not an offset: {line}"))
+}
+
+/// Spawn an interactive JVM command with all three streams captured.
+pub fn jvm_spawn_piped(command: &mut std::process::Command, context: &str) -> std::process::Child {
+    use std::process::Stdio;
+    command
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect(context)
+}
+
+/// The shared acks-all console-producer command; callers retain their write/exit assertions.
+pub fn jvm_acks_all_producer(image: &str, bootstrap: &str, topic: &str) -> std::process::Child {
+    jvm_spawn_piped(
+        &mut jvm_docker_command(
+            image,
+            &[],
+            &[
+                "kafka-console-producer",
+                "--bootstrap-server",
+                bootstrap,
+                "--topic",
+                topic,
+                "--producer-property",
+                "acks=all",
+            ],
+            true,
+        ),
+        "spawn JVM producer",
+    )
+}
+
+/// Capture a plain JVM tool while retaining the suite-specific log prefix.
+pub fn jvm_tool_output(image: &str, args: &[&str], log_scope: &str) -> std::process::Output {
+    let out = jvm_docker_command(image, &[], args, false)
+        .output()
+        .expect("spawn docker run");
+    eprintln!(
+        "KRABKA[{log_scope}] docker_run image={image} {args:?} status={} stderr_len={}",
+        out.status,
+        out.stderr.len()
+    );
+    out
+}
+
+/// Controller logs concatenated in stdout/stderr order and saved for diagnosis.
+pub fn save_jvm_logs(container: &str, path: &str) -> String {
+    let logs = std::process::Command::new("docker")
+        .args(["logs", container])
+        .output()
+        .expect("docker logs");
+    let text = combined_output(&logs);
+    let _ = std::fs::write(path, &text);
+    text
+}
+
+/// Execute a tool inside an existing container, retaining its output for the caller's assertions.
+pub fn docker_exec(name: &str, args: &[&str]) -> std::process::Output {
+    let mut full = vec!["exec", name];
+    full.extend_from_slice(args);
+    std::process::Command::new("docker")
+        .args(&full)
+        .output()
+        .expect("spawn docker exec")
+}
+
+/// The ordered environment options for a single-node broker and controller oracle.
+pub fn kafka_single_node_env_args() -> &'static [&'static str] {
+    &[
+        "-e",
+        "KAFKA_NODE_ID=1",
+        "-e",
+        "KAFKA_PROCESS_ROLES=broker,controller",
+        "-e",
+        "KAFKA_LISTENERS=PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093",
+        "-e",
+        "KAFKA_ADVERTISED_LISTENERS=PLAINTEXT://localhost:9092",
+        "-e",
+        "KAFKA_CONTROLLER_LISTENER_NAMES=CONTROLLER",
+        "-e",
+        "KAFKA_INTER_BROKER_LISTENER_NAME=PLAINTEXT",
+        "-e",
+        "KAFKA_LISTENER_SECURITY_PROTOCOL_MAP=CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT",
+        "-e",
+        "KAFKA_CONTROLLER_QUORUM_VOTERS=1@localhost:9093",
+        "-e",
+        "KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR=1",
+        "-e",
+        "KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR=1",
+        "-e",
+        "KAFKA_TRANSACTION_STATE_LOG_MIN_ISR=1",
+    ]
+}
+
+/// Set the caller's exact Unix mode so a container user can access a mounted fixture.
+#[cfg(unix)]
+pub fn chmod_for_container(path: &std::path::Path, mode: u32, context: &str) {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).expect(context);
 }

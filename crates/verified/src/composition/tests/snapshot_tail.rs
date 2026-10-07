@@ -3,26 +3,11 @@ use proptest::prelude::*;
 
 use super::{
     ProducerDecision, ProducerReloadRange, ProducerSnapshotEntryFacts,
-    loaded_snapshot_bounds_truncated_retry, oracle_next_producer_decision,
+    loaded_snapshot_bounds_truncated_retry, oracle_next_producer_decision, oracle_retry_matches,
+    oracle_sequence as sequence, recovered_window_row as row,
 };
 
 type Row = ProducerSnapshotEntryFacts;
-
-fn sequence(value: i64) -> i32 {
-    i32::try_from(value.rem_euclid(1_i64 << 31)).unwrap()
-}
-
-fn row(base: i64, delta: i32, last_sequence: i32) -> Row {
-    Row {
-        producer_id: 42,
-        producer_epoch: 7,
-        last_sequence,
-        last_offset: base + i64::from(delta),
-        offset_delta: delta,
-        coordinator_epoch: -1,
-        current_txn_first_offset: -1,
-    }
-}
 
 fn check(
     ends: &[i64],
@@ -84,11 +69,11 @@ fn check(
         .take(5)
         .count();
     let first = rows.len() - width;
-    let found = rows.iter().enumerate().skip(first).find(|(_, row)| {
-        request.0 == row.producer_epoch
-            && request.1 == sequence(i64::from(row.last_sequence) - i64::from(row.offset_delta))
-            && row.last_sequence == sequence(i64::from(request.1) + i64::from(request.2))
-    });
+    let found = rows
+        .iter()
+        .enumerate()
+        .skip(first)
+        .find(|(_, row)| oracle_retry_matches(row, request));
     let decision = if let Some((index, _)) = found {
         ProducerDecision::Duplicate {
             retained: if index + 1 == rows.len() {

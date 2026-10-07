@@ -6,34 +6,29 @@
 use std::{fmt::Write as _, fs, path::PathBuf};
 
 use krabka_ids::{LeaderEpoch, Offset};
-use tracing::instrument;
 
 use super::{EpochEntry, LeaderEpochCheckpoint, is_strict_successor};
-use crate::{error::LogError, io::IoTarget};
+use crate::{error::LogError, index::open_index, io::IoTarget};
 
 impl LeaderEpochCheckpoint {
-    /// Open or recover the checkpoint at `path`. A missing file gives an
-    /// empty checkpoint.
-    #[instrument(
-        level = "debug",
-        skip_all,
-        fields(path = %path.display(), entries = tracing::field::Empty),
-        err,
-    )]
-    /// # Errors
-    /// Returns an error when log I/O fails, a record or index is corrupt, or the requested offset violates the segment state.
-    pub fn open(path: PathBuf) -> Result<Self, LogError> {
-        let entries = match fs::read_to_string(&path) {
-            Ok(s) => Self::parse(&s)?,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Vec::new(),
-            Err(e) => return Err(LogError::Io(e)),
-        };
-        tracing::Span::current().record("entries", entries.len());
-        Ok(Self {
-            path,
-            io: crate::io::file_io(),
-            entries,
-        })
+    open_index! {
+        /// Open or recover the checkpoint at `path`. A missing file gives an
+        /// empty checkpoint.
+        /// # Errors
+        /// Returns an error when log I/O fails, a record or index is corrupt, or the requested offset violates the segment state.
+        pub fn open(path: PathBuf) -> Result<Self, LogError> {
+            let entries = match fs::read_to_string(&path) {
+                Ok(s) => Self::parse(&s)?,
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+                Err(e) => return Err(LogError::Io(e)),
+            };
+            tracing::Span::current().record("entries", entries.len());
+            Ok(Self {
+                path,
+                io: crate::io::file_io(),
+                entries,
+            })
+        }
     }
 
     fn parse(s: &str) -> Result<Vec<EpochEntry>, LogError> {
@@ -52,14 +47,8 @@ impl LeaderEpochCheckpoint {
         let mut out: Vec<EpochEntry> = Vec::new();
         for line in lines.take(count) {
             let mut parts = line.split_whitespace();
-            let epoch: i32 = parts
-                .next()
-                .and_then(|t| t.parse().ok())
-                .ok_or_else(|| LogError::Corrupt(format!("bad checkpoint row: {line:?}")))?;
-            let start_offset: i64 = parts
-                .next()
-                .and_then(|t| t.parse().ok())
-                .ok_or_else(|| LogError::Corrupt(format!("bad checkpoint row: {line:?}")))?;
+            let epoch = parse_column(&mut parts, line)?;
+            let start_offset = parse_column(&mut parts, line)?;
             let entry = EpochEntry {
                 epoch: LeaderEpoch(epoch),
                 start_offset: Offset(start_offset),
@@ -100,20 +89,25 @@ impl LeaderEpochCheckpoint {
     }
 }
 
+fn parse_column<T: std::str::FromStr>(
+    parts: &mut std::str::SplitWhitespace<'_>,
+    line: &str,
+) -> Result<T, LogError> {
+    parts
+        .next()
+        .and_then(|token| token.parse().ok())
+        .ok_or_else(|| LogError::Corrupt(format!("bad checkpoint row: {line:?}")))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::leader_epoch_checkpoint::test_support::fresh;
+    use crate::leader_epoch_checkpoint::test_support::{checkpoint, fresh};
 
     #[test]
     fn round_trip_byte_compat_format() {
-        let (_d, path) = fresh();
-        let mut c = LeaderEpochCheckpoint::open(path.clone()).unwrap();
-        c.append(LeaderEpoch(0), Offset(0)).unwrap();
-        c.append(LeaderEpoch(1), Offset(50)).unwrap();
-        c.append(LeaderEpoch(2), Offset(100)).unwrap();
-
-        let s = std::fs::read_to_string(&path).unwrap();
+        let (_d, c) = checkpoint(&[(0, 0), (1, 50), (2, 100)]);
+        let s = std::fs::read_to_string(&c.path).unwrap();
         assert2::assert!(s == "0\n3\n0 0\n1 50\n2 100\n");
     }
 

@@ -2,10 +2,10 @@
   "profile": [],
   "proofs": {
     "Coma": {
-      "vc_elim_Present": { "prover": "alt-ergo", "time": 0.006 },
+      "vc_elim_Present": { "prover": "alt-ergo", "time": 0.014 },
       "vc_freeze_replacement_decision": {
         "prover": "alt-ergo",
-        "time": 0.012
+        "time": 0.027
       }
     }
   }

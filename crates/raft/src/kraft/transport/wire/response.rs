@@ -225,90 +225,63 @@ pub fn encode_vote_response(
     encode_body(&resp, version)
 }
 
-/// Encodes a `BeginQuorumEpoch` response body (api 53) at `version`, with the
-/// same shape rules as [`encode_vote_response`].
-#[must_use]
-pub fn encode_begin_quorum_epoch_response(
-    top_level_error: i16,
-    partition_error: i16,
-    leader: &QuorumLeader,
-    version: i16,
-) -> Bytes {
-    let resp = if top_level_error == 0 {
-        BeginQuorumEpochResponse {
-            topics: vec![bqe_resp::TopicData {
-                topic_name: METADATA_TOPIC.to_string(),
-                partitions: vec![bqe_resp::PartitionData {
-                    partition_index: METADATA_PARTITION,
-                    error_code: partition_error,
-                    leader_id: leader.leader_id_to_wire(),
-                    leader_epoch: epoch_to_wire(leader.epoch),
+// Begin/EndQuorumEpoch share Kafka's complete response layout.
+macro_rules! quorum_epoch_response_encoder {
+    ($(#[$attr:meta])* $name:ident, $response:ident, $wire:ident) => {
+        $(#[$attr])*
+        pub fn $name(
+            top_level_error: i16,
+            partition_error: i16,
+            leader: &QuorumLeader,
+            version: i16,
+        ) -> Bytes {
+            let response = if top_level_error == 0 {
+                $response {
+                    topics: vec![$wire::TopicData {
+                        topic_name: METADATA_TOPIC.to_string(),
+                        partitions: vec![$wire::PartitionData {
+                            partition_index: METADATA_PARTITION,
+                            error_code: partition_error,
+                            leader_id: leader.leader_id_to_wire(),
+                            leader_epoch: epoch_to_wire(leader.epoch),
+                            ..Default::default()
+                        }],
+                        ..Default::default()
+                    }],
+                    node_endpoints: leader
+                        .node_endpoint()
+                        .map(|(node_id, host, port)| $wire::NodeEndpoint {
+                            node_id,
+                            host,
+                            port,
+                            ..Default::default()
+                        })
+                        .into_iter()
+                        .collect(),
                     ..Default::default()
-                }],
-                ..Default::default()
-            }],
-            node_endpoints: leader
-                .node_endpoint()
-                .map(|(node_id, host, port)| bqe_resp::NodeEndpoint {
-                    node_id,
-                    host,
-                    port,
+                }
+            } else {
+                $response {
+                    error_code: top_level_error,
                     ..Default::default()
-                })
-                .into_iter()
-                .collect(),
-            ..Default::default()
-        }
-    } else {
-        BeginQuorumEpochResponse {
-            error_code: top_level_error,
-            ..Default::default()
+                }
+            };
+            encode_body(&response, version)
         }
     };
-    encode_body(&resp, version)
 }
 
-/// Encodes an `EndQuorumEpoch` response body (api 54) at `version`, with the
-/// same shape rules as [`encode_vote_response`].
-#[must_use]
-pub fn encode_end_quorum_epoch_response(
-    top_level_error: i16,
-    partition_error: i16,
-    leader: &QuorumLeader,
-    version: i16,
-) -> Bytes {
-    let resp = if top_level_error == 0 {
-        EndQuorumEpochResponse {
-            topics: vec![eqe_resp::TopicData {
-                topic_name: METADATA_TOPIC.to_string(),
-                partitions: vec![eqe_resp::PartitionData {
-                    partition_index: METADATA_PARTITION,
-                    error_code: partition_error,
-                    leader_id: leader.leader_id_to_wire(),
-                    leader_epoch: epoch_to_wire(leader.epoch),
-                    ..Default::default()
-                }],
-                ..Default::default()
-            }],
-            node_endpoints: leader
-                .node_endpoint()
-                .map(|(node_id, host, port)| eqe_resp::NodeEndpoint {
-                    node_id,
-                    host,
-                    port,
-                    ..Default::default()
-                })
-                .into_iter()
-                .collect(),
-            ..Default::default()
-        }
-    } else {
-        EndQuorumEpochResponse {
-            error_code: top_level_error,
-            ..Default::default()
-        }
-    };
-    encode_body(&resp, version)
+quorum_epoch_response_encoder! {
+    /// Encodes a `BeginQuorumEpoch` response body (api 53) at `version`, with the
+    /// same shape rules as [`encode_vote_response`].
+    #[must_use]
+    encode_begin_quorum_epoch_response, BeginQuorumEpochResponse, bqe_resp
+}
+quorum_epoch_response_encoder! {
+    /// Encodes an `EndQuorumEpoch` response body (api 54) at `version`, with the
+    /// same shape rules as [`encode_vote_response`].
+    #[must_use]
+    encode_end_quorum_epoch_response, EndQuorumEpochResponse, eqe_resp
 }
 
 /// The one partition of a `FetchSnapshot` answer that names a partition.

@@ -1,4 +1,4 @@
-(* #"/workspace/crates/verified/src/jwks.rs" 21 27 21 32 *)
+(* #"/workspace/crates/verified/src/jwks.rs" 10 19 10 36 *)
 
 (* <jwks::JwksCacheFacts as std::clone::Clone> *)
 
@@ -18,7 +18,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let clone_JwksCacheFacts [#"/workspace/crates/verified/src/jwks.rs" 21 27 21 32] (self: t_JwksCacheFacts)
+let clone_JwksCacheFacts [#"/workspace/crates/verified/src/jwks.rs" 10 19 10 36] (self: t_JwksCacheFacts)
   (return (x: t_JwksCacheFacts)) = (! bb0
   [ bb0 = s0 [ s0 = [ &_ret <- self ] s1 | s1 = return {_ret} ] ]
   [ & _ret: t_JwksCacheFacts = Any.any_l () | & self: t_JwksCacheFacts = self ])

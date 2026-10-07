@@ -60,66 +60,64 @@ async fn drive(
         .expect("handle")
 }
 
+macro_rules! pending_partition_fixture {
+    (($part:ident, $before:ident), $handle:expr, $broker:expr, $topic:expr, $context:expr) => {
+        topic_holding_a_pending_batch($handle, $broker, $topic, None, $context).await;
+        let $part = $broker
+            .partitions
+            .get($topic, krabka_ids::PartitionIndex(0))
+            .expect("the partition is local");
+        let $before = $part.log_start_offset();
+    };
+}
+
 #[tokio::test]
 async fn handle_denied_topic_returns_topic_auth_rows() {
-    let (broker_handle, _dir) = start_broker(Arc::new(DenyAll)).await;
-    let broker = broker_handle.broker_arc_for_test();
-    let p = principal("alice");
-    let peer = peer();
+    broker_fixture!((broker_handle, _dir, broker), deny_all);
+    request_identity!((p, peer), principal("alice"));
     let req = request("secret", &[(0, 3), (2, -1)]);
 
     let resp = drive(&broker, &req, &p, &peer).await;
 
-    let expected = DeleteRecordsResponse {
-        throttle_time_ms: 0,
-        topics: vec![DeleteRecordsTopicResult {
+    let expected = unthrottled_wire!(DeleteRecordsResponse {
+        topics: vec![tagged_wire!(DeleteRecordsTopicResult {
             name: "secret".into(),
             partitions: vec![
-                DeleteRecordsPartitionResult {
+                tagged_wire!(DeleteRecordsPartitionResult {
                     partition_index: 0,
                     low_watermark: -1,
                     error_code: codes::TOPIC_AUTHORIZATION_FAILED,
-                    unknown_tagged_fields: krabka_protocol::UnknownTaggedFields::default(),
-                },
-                DeleteRecordsPartitionResult {
+                }),
+                tagged_wire!(DeleteRecordsPartitionResult {
                     partition_index: 2,
                     low_watermark: -1,
                     error_code: codes::TOPIC_AUTHORIZATION_FAILED,
-                    unknown_tagged_fields: krabka_protocol::UnknownTaggedFields::default(),
-                },
+                }),
             ],
-            unknown_tagged_fields: krabka_protocol::UnknownTaggedFields::default(),
-        }],
-        unknown_tagged_fields: krabka_protocol::UnknownTaggedFields::default(),
-    };
+        })],
+    });
     assert!(resp == expected);
     broker_handle.shutdown().await;
 }
 
 #[tokio::test]
 async fn handle_unknown_partition_preserves_requested_index() {
-    let (broker_handle, _dir) = start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
-    let broker = broker_handle.broker_arc_for_test();
-    let p = principal("admin");
-    let peer = peer();
+    broker_fixture!((broker_handle, _dir, broker), allow_all);
+    request_identity!((p, peer), principal("admin"));
     let req = request("missing", &[(4, 0)]);
 
     let resp = drive(&broker, &req, &p, &peer).await;
 
-    let expected = DeleteRecordsResponse {
-        throttle_time_ms: 0,
-        topics: vec![DeleteRecordsTopicResult {
+    let expected = unthrottled_wire!(DeleteRecordsResponse {
+        topics: vec![tagged_wire!(DeleteRecordsTopicResult {
             name: "missing".into(),
-            partitions: vec![DeleteRecordsPartitionResult {
+            partitions: vec![tagged_wire!(DeleteRecordsPartitionResult {
                 partition_index: 4,
                 low_watermark: -1,
                 error_code: codes::UNKNOWN_TOPIC_OR_PARTITION,
-                unknown_tagged_fields: krabka_protocol::UnknownTaggedFields::default(),
-            }],
-            unknown_tagged_fields: krabka_protocol::UnknownTaggedFields::default(),
-        }],
-        unknown_tagged_fields: krabka_protocol::UnknownTaggedFields::default(),
-    };
+            })],
+        })],
+    });
     assert!(resp == expected);
     broker_handle.shutdown().await;
 }
@@ -167,10 +165,7 @@ async fn topic_with_configs_holding_a_pending_batch(
     configs: &[(&str, &str)],
     ctx: &crate::handlers::RequestContext<'_>,
 ) {
-    use krabka_protocol::owned::{
-        create_topics_request::{CreatableTopic, CreatableTopicConfig, CreateTopicsRequest},
-        create_topics_response,
-    };
+    use krabka_protocol::owned::create_topics_response;
 
     let config = |key: &str| {
         configs
@@ -184,24 +179,8 @@ async fn topic_with_configs_holding_a_pending_batch(
             crate::config_keys::parse_cleanup_policy(policy).expect("a valid cleanup.policy")
         });
     let version = create_topics_response::MAX_VERSION;
-    let create = CreateTopicsRequest {
-        topics: vec![CreatableTopic {
-            name: topic.to_owned(),
-            num_partitions: 1,
-            replication_factor: 1,
-            configs: configs
-                .iter()
-                .map(|(name, value)| CreatableTopicConfig {
-                    name: (*name).to_owned(),
-                    value: Some((*value).to_owned()),
-                    ..Default::default()
-                })
-                .collect(),
-            ..Default::default()
-        }],
-        timeout_ms: 5_000,
-        ..Default::default()
-    };
+    let create =
+        crate::handlers::test_support::configured_topic_request(topic, configs, 1, 1, 5_000);
     let created = crate::handlers::create_topics::handle(broker, create, version, ctx)
         .await
         .expect("CreateTopics");
@@ -258,31 +237,24 @@ async fn a_trim_stops_at_the_delivery_watermark_of_a_scheduled_topic() {
         ),
     ];
 
-    let (broker_handle, _dir) = start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
-    let broker = broker_handle.broker_arc_for_test();
-    let admin = principal("admin");
-    let peer = peer();
-    let ctx = test_context(&admin, &peer);
+    broker_fixture!((broker_handle, _dir, broker), allow_all);
+    request_identity!((admin, peer, ctx), principal("admin"), test_context);
 
     for (topic, delivery_mode, expected_low_watermark) in cases {
         topic_holding_a_pending_batch(&broker_handle, &broker, topic, delivery_mode, &ctx).await;
 
         let resp = drive(&broker, &request(topic, &[(0, -1)]), &admin, &peer).await;
 
-        let expected = DeleteRecordsResponse {
-            throttle_time_ms: 0,
-            topics: vec![DeleteRecordsTopicResult {
+        let expected = unthrottled_wire!(DeleteRecordsResponse {
+            topics: vec![tagged_wire!(DeleteRecordsTopicResult {
                 name: topic.into(),
-                partitions: vec![DeleteRecordsPartitionResult {
+                partitions: vec![tagged_wire!(DeleteRecordsPartitionResult {
                     partition_index: 0,
                     low_watermark: expected_low_watermark,
                     error_code: codes::NONE,
-                    unknown_tagged_fields: krabka_protocol::UnknownTaggedFields::default(),
-                }],
-                unknown_tagged_fields: krabka_protocol::UnknownTaggedFields::default(),
-            }],
-            unknown_tagged_fields: krabka_protocol::UnknownTaggedFields::default(),
-        };
+                })],
+            })],
+        });
         check!(resp == expected, "{topic}");
     }
 
@@ -293,15 +265,8 @@ async fn a_trim_stops_at_the_delivery_watermark_of_a_scheduled_topic() {
 
 #[tokio::test]
 async fn a_refused_trim_deletes_nothing() {
-    let (broker_handle, _dir) = crate::test_support::start_broker_no_audit_with(|cfg| {
-        cfg.authorizer = Arc::new(crate::authorizer::AllowAllAuthorizer);
-        cfg.break_glass = gated_config();
-    })
-    .await;
-    let broker = broker_handle.broker_arc_for_test();
-    let principal = principal("admin");
-    let peer = peer();
-    let ctx = test_context(&principal, &peer);
+    broker_fixture!((broker_handle, _dir, broker), break_glass(gated_config()));
+    request_identity!((principal, peer, ctx), principal("admin"), test_context);
     topic_holding_a_pending_batch(&broker_handle, &broker, "orders", None, &ctx).await;
     let part = broker
         .partitions
@@ -311,16 +276,14 @@ async fn a_refused_trim_deletes_nothing() {
 
     let resp = drive(&broker, &request("orders", &[(0, -1)]), &principal, &peer).await;
 
-    let expected = vec![DeleteRecordsTopicResult {
+    let expected = vec![tagged_wire!(DeleteRecordsTopicResult {
         name: "orders".to_owned(),
-        partitions: vec![DeleteRecordsPartitionResult {
+        partitions: vec![tagged_wire!(DeleteRecordsPartitionResult {
             partition_index: 0,
             low_watermark: -1,
             error_code: codes::POLICY_VIOLATION,
-            unknown_tagged_fields: krabka_protocol::UnknownTaggedFields::default(),
-        }],
-        unknown_tagged_fields: krabka_protocol::UnknownTaggedFields::default(),
-    }];
+        })],
+    })];
     assert!(resp.topics == expected, "{resp:?}");
     // The refusal refused: the log start offset did not move.
     check!(part.log_start_offset() == before);
@@ -331,16 +294,14 @@ async fn a_refused_trim_deletes_nothing() {
 
 /// The one row a `DeleteRecords` response carries for `topic-0`.
 fn one_row(topic: &str, low_watermark: i64, error_code: i16) -> Vec<DeleteRecordsTopicResult> {
-    vec![DeleteRecordsTopicResult {
+    vec![tagged_wire!(DeleteRecordsTopicResult {
         name: topic.to_owned(),
-        partitions: vec![DeleteRecordsPartitionResult {
+        partitions: vec![tagged_wire!(DeleteRecordsPartitionResult {
             partition_index: 0,
             low_watermark,
             error_code,
-            unknown_tagged_fields: krabka_protocol::UnknownTaggedFields::default(),
-        }],
-        unknown_tagged_fields: krabka_protocol::UnknownTaggedFields::default(),
-    }]
+        })],
+    })]
 }
 
 /// A trim the partition has already satisfied answers success and deletes
@@ -364,19 +325,11 @@ async fn a_trim_that_deletes_nothing_leaves_the_log_start_alone() {
         ),
     ];
 
-    let (broker_handle, _dir) = start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
-    let broker = broker_handle.broker_arc_for_test();
-    let admin = principal("admin");
-    let peer = peer();
-    let ctx = test_context(&admin, &peer);
+    broker_fixture!((broker_handle, _dir, broker), allow_all);
+    request_identity!((admin, peer, ctx), principal("admin"), test_context);
 
     for (topic, offset, low_watermark, error_code) in cases {
-        topic_holding_a_pending_batch(&broker_handle, &broker, topic, None, &ctx).await;
-        let part = broker
-            .partitions
-            .get(topic, krabka_ids::PartitionIndex(0))
-            .expect("the partition is local");
-        let before = part.log_start_offset();
+        pending_partition_fixture!((part, before), &broker_handle, &broker, topic, &ctx);
 
         let resp = drive(&broker, &request(topic, &[(0, offset)]), &admin, &peer).await;
 
@@ -395,18 +348,10 @@ async fn a_trim_that_deletes_nothing_leaves_the_log_start_alone() {
 /// caller who could otherwise trim still cannot.
 #[tokio::test]
 async fn a_frozen_topic_refuses_a_trim() {
-    let (broker_handle, _dir) = start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
-    let broker = broker_handle.broker_arc_for_test();
-    let admin = principal("admin");
-    let peer = peer();
-    let ctx = test_context(&admin, &peer);
+    broker_fixture!((broker_handle, _dir, broker), allow_all);
+    request_identity!((admin, peer, ctx), principal("admin"), test_context);
     let topic = "delete-records-frozen";
-    topic_holding_a_pending_batch(&broker_handle, &broker, topic, None, &ctx).await;
-    let part = broker
-        .partitions
-        .get(topic, krabka_ids::PartitionIndex(0))
-        .expect("the partition is local");
-    let before = part.log_start_offset();
+    pending_partition_fixture!((part, before), &broker_handle, &broker, topic, &ctx);
 
     broker_handle
         .submit_metadata_record_for_test(krabka_metadata::MetadataRecord::V1TopicFreeze(
@@ -445,18 +390,10 @@ async fn a_frozen_topic_refuses_a_trim() {
 /// client re-resolves the leader rather than deleting on a stale replica.
 #[tokio::test]
 async fn a_replica_that_is_not_the_leader_refuses_a_trim() {
-    let (broker_handle, _dir) = start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
-    let broker = broker_handle.broker_arc_for_test();
-    let admin = principal("admin");
-    let peer = peer();
-    let ctx = test_context(&admin, &peer);
+    broker_fixture!((broker_handle, _dir, broker), allow_all);
+    request_identity!((admin, peer, ctx), principal("admin"), test_context);
     let topic = "delete-records-follower";
-    topic_holding_a_pending_batch(&broker_handle, &broker, topic, None, &ctx).await;
-    let part = broker
-        .partitions
-        .get(topic, krabka_ids::PartitionIndex(0))
-        .expect("the partition is local");
-    let before = part.log_start_offset();
+    pending_partition_fixture!((part, before), &broker_handle, &broker, topic, &ctx);
     part.current_leader.store(
         broker.config.node_id.0 + 1,
         std::sync::atomic::Ordering::Release,
@@ -495,11 +432,8 @@ async fn a_compact_only_topic_refuses_a_trim() {
             2,
         ),
     ];
-    let (broker_handle, _dir) = start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
-    let broker = broker_handle.broker_arc_for_test();
-    let admin = principal("admin");
-    let peer = peer();
-    let ctx = test_context(&admin, &peer);
+    broker_fixture!((broker_handle, _dir, broker), allow_all);
+    request_identity!((admin, peer, ctx), principal("admin"), test_context);
 
     for (topic, policy, low_watermark, error_code, log_start) in cases {
         topic_with_configs_holding_a_pending_batch(
@@ -535,10 +469,8 @@ async fn a_compact_only_topic_refuses_a_trim() {
 /// partition the metadata does not hold answers `UNKNOWN_TOPIC_OR_PARTITION`.
 #[tokio::test]
 async fn a_partition_hosted_elsewhere_answers_not_leader_or_follower() {
-    let (broker_handle, _dir) = start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
-    let broker = broker_handle.broker_arc_for_test();
-    let admin = principal("admin");
-    let peer = peer();
+    broker_fixture!((broker_handle, _dir, broker), allow_all);
+    request_identity!((admin, peer), principal("admin"));
     let topic = "delete-records-elsewhere";
     let elsewhere = krabka_metadata::NodeId(broker.config.node_id.0 + 1);
     broker
@@ -550,18 +482,9 @@ async fn a_partition_hosted_elsewhere_answers_not_leader_or_follower() {
                 partitions: 1,
                 replication_factor: 1,
             }),
-            krabka_metadata::MetadataRecord::V1Partition(krabka_metadata::PartitionRecord {
-                topic: topic.to_owned(),
-                partition: 0,
-                leader: elsewhere,
-                replicas: vec![elsewhere],
-                isr: vec![elsewhere],
-                leader_epoch: krabka_metadata::LeaderEpoch(0),
-                adding_replicas: vec![],
-                removing_replicas: vec![],
-                directories: vec![],
-                partition_epoch: 0,
-            }),
+            krabka_metadata::MetadataRecord::V1Partition(
+                crate::handlers::test_support::single_replica_partition(topic, 0, elsewhere),
+            ),
         ])
         .await
         .expect("the partition commits");
@@ -571,24 +494,21 @@ async fn a_partition_hosted_elsewhere_answers_not_leader_or_follower() {
 
     let resp = drive(&broker, &request(topic, &[(0, 1), (1, 1)]), &admin, &peer).await;
 
-    let expected = vec![DeleteRecordsTopicResult {
+    let expected = vec![tagged_wire!(DeleteRecordsTopicResult {
         name: topic.to_owned(),
         partitions: vec![
-            DeleteRecordsPartitionResult {
+            tagged_wire!(DeleteRecordsPartitionResult {
                 partition_index: 0,
                 low_watermark: -1,
                 error_code: codes::NOT_LEADER_OR_FOLLOWER,
-                unknown_tagged_fields: krabka_protocol::UnknownTaggedFields::default(),
-            },
-            DeleteRecordsPartitionResult {
+            }),
+            tagged_wire!(DeleteRecordsPartitionResult {
                 partition_index: 1,
                 low_watermark: -1,
                 error_code: codes::UNKNOWN_TOPIC_OR_PARTITION,
-                unknown_tagged_fields: krabka_protocol::UnknownTaggedFields::default(),
-            },
+            }),
         ],
-        unknown_tagged_fields: krabka_protocol::UnknownTaggedFields::default(),
-    }];
+    })];
     assert!(resp.topics == expected, "{resp:?}");
     broker_handle.shutdown().await;
 }
@@ -599,11 +519,8 @@ async fn a_partition_hosted_elsewhere_answers_not_leader_or_follower() {
 /// would move the log start.
 #[tokio::test]
 async fn an_internal_topic_refuses_a_trim() {
-    let (broker_handle, _dir) = start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
-    let broker = broker_handle.broker_arc_for_test();
-    let admin = principal("admin");
-    let peer = peer();
-    let ctx = test_context(&admin, &peer);
+    broker_fixture!((broker_handle, _dir, broker), allow_all);
+    request_identity!((admin, peer, ctx), principal("admin"), test_context);
 
     broker_handle.wait_until_group_coordinator_ready().await;
     broker_handle
@@ -827,9 +744,11 @@ async fn follower_fetch(broker: &Broker, topic: &str, fetch_offset: i64, log_sta
         }],
         ..Default::default()
     };
-    let replicator = principal("replicator");
-    let peer = peer();
-    let ctx = crate::test_support::request_context(&replicator, &peer, "replica-2");
+    request_identity!(
+        (replicator, peer, ctx),
+        principal("replicator"),
+        client_id = "replica-2"
+    );
     let (response, _) = crate::handlers::fetch::handle(
         broker,
         VERSION,
@@ -853,8 +772,7 @@ async fn delete_to(
     offset: i64,
     timeout_ms: i32,
 ) -> Vec<DeleteRecordsTopicResult> {
-    let admin = principal("admin");
-    let peer = peer();
+    request_identity!((admin, peer), principal("admin"));
     let request = DeleteRecordsRequest {
         timeout_ms,
         ..request(topic, &[(0, offset)])

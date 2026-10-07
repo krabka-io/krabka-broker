@@ -23,11 +23,11 @@
 
 mod kafka_wire;
 
-use std::{collections::HashSet, io, net::SocketAddr, time::Duration};
+use std::{collections::HashSet, net::SocketAddr, time::Duration};
 
 use assert2::assert;
 use bytes::BytesMut;
-use krabka_broker::{Broker, BrokerConfig, BrokerHandle};
+use krabka_broker::{Broker, BrokerHandle};
 use krabka_protocol::{
     Decode, Encode,
     owned::{
@@ -35,7 +35,7 @@ use krabka_protocol::{
         describe_topic_partitions_response::{
             DescribeTopicPartitionsResponse, DescribeTopicPartitionsResponsePartition,
         },
-        metadata_request::{MetadataRequest, MetadataRequestTopic},
+        metadata_request::MetadataRequest,
         metadata_response::{MetadataResponse, MetadataResponsePartition},
     },
 };
@@ -60,17 +60,8 @@ const DESCRIBE_TOPIC_PARTITIONS_VERSION: i16 = 0;
 /// 200 ms under `BrokerConfig::for_tests`.
 const CONVERGE_TIMEOUT: Duration = Duration::from_secs(15);
 
-/// One length-prefixed request/response exchange on correlation id 1, with
-/// flexible headers because every API this suite sends is flexible; see
-/// [`kafka_wire::round_trip`].
-async fn round_trip(
-    stream: &mut TcpStream,
-    api_key: i16,
-    api_version: i16,
-    body: &[u8],
-) -> io::Result<Vec<u8>> {
-    kafka_wire::round_trip(stream, api_key, api_version, 1, CLIENT_ID, true, body).await
-}
+// Flexible headers and correlation ID 1 for every request in this suite.
+crate::flexible_round_trip_fixture!(round_trip, CLIENT_ID, 1);
 
 /// Boots one broker over `primary` + `extra`.
 ///
@@ -89,8 +80,7 @@ async fn start_two_dir_broker() -> (BrokerHandle, TempDir, TempDir, SocketAddr) 
     let controller = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = data_plane.local_addr().unwrap();
     let controller_addr = controller.local_addr().unwrap();
-    let mut cfg = BrokerConfig::for_tests(primary.path().to_path_buf());
-    cfg.extra_log_dirs = vec![extra.path().to_path_buf()];
+    let mut cfg = crate::support::storage::two_dir_config(primary.path(), extra.path());
     cfg.listen_addr = addr;
     cfg.advertised_listener = addr.to_string();
     cfg.controller_listen_addr = controller_addr;
@@ -121,12 +111,8 @@ async fn metadata_partitions(addr: SocketAddr) -> Vec<MetadataResponsePartition>
 
 async fn metadata_partitions_of(addr: SocketAddr, name: &str) -> Vec<MetadataResponsePartition> {
     let req = MetadataRequest {
-        topics: Some(vec![MetadataRequestTopic {
-            name: Some(name.to_string()),
-            ..Default::default()
-        }]),
         allow_auto_topic_creation: false,
-        ..Default::default()
+        ..crate::support::discovery::named_topic_metadata(name.to_string())
     };
     let mut body = BytesMut::new();
     req.encode(&mut body, METADATA_VERSION).unwrap();
@@ -368,8 +354,7 @@ fn expected_partition(observer: &BrokerHandle, dead: i32) -> MetadataResponsePar
 /// controller writes it to the metadata log.
 #[tokio::test]
 async fn a_follower_reports_the_replicas_of_a_fenced_broker_offline() {
-    let mut cluster = support::start_n_node_with_retry(3).await;
-    support::wait_for_all_brokers_registered(&cluster, 3).await;
+    let mut cluster = crate::support::registered_cluster(3).await;
     create_topic_named(cluster[0].0.listen_addr(), FENCED_TOPIC, 1, 3).await;
     for (handle, _, _) in &cluster {
         handle.wait_until_partition_present(FENCED_TOPIC, 0).await;
@@ -378,17 +363,7 @@ async fn a_follower_reports_the_replicas_of_a_fenced_broker_offline() {
     // The controller leader answers this correctly out of its own registry.
     // The interesting node is one of the two that do not hold one: it serves
     // clients all the same.
-    let leader = cluster[0].0.wait_until_controller_leader().await;
-    let followers: Vec<usize> = (0..cluster.len())
-        .filter(|&i| cluster[i].0.node_id() != leader.0)
-        .collect();
-    assert!(
-        followers.len() == 2,
-        "a three-node cluster has two non-controller nodes"
-    );
-    // `followers` ascends, so removing the victim leaves the observer's index
-    // where it was.
-    let (observer_index, victim_index) = (followers[0], followers[1]);
+    let (_leader, observer_index, victim_index) = support::two_controller_followers(&cluster).await;
     let victim_id = node_id_of(&cluster[victim_index].0);
     let observer_addr = cluster[observer_index].0.listen_addr();
 
@@ -420,7 +395,5 @@ async fn a_follower_reports_the_replicas_of_a_fenced_broker_offline() {
         "the observer must still be a follower for this test to mean anything"
     );
 
-    for (handle, _, _) in cluster {
-        handle.shutdown().await;
-    }
+    crate::support::shutdown_cluster(cluster).await;
 }

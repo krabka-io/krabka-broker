@@ -49,7 +49,7 @@ use std::{
 };
 
 use assert2::assert;
-use jvm_acceptance::{KAFKA_IMAGE_TXN, broker0_advertised, docker_run_kafka_tool_with_image};
+use jvm_acceptance::broker0_advertised;
 
 /// The Apache Kafka image the worker runs from. Its tarball is the whole
 /// release, so `connect-distributed.sh` and the `FileStream` connector jar are
@@ -95,9 +95,7 @@ struct ConnectWorker {
 
 impl Drop for ConnectWorker {
     fn drop(&mut self) {
-        let _ = Command::new("docker")
-            .args(["rm", "-f", &self.container])
-            .output();
+        crate::support::remove_container(&self.container);
     }
 }
 
@@ -171,15 +169,7 @@ impl ConnectWorker {
     /// `listOffsets` that never answered or a plugin that was not found is
     /// written down.
     fn logs(&self) -> String {
-        let out = Command::new("docker")
-            .args(["logs", &self.container])
-            .output()
-            .expect("spawn docker logs");
-        format!(
-            "stdout:\n{}\nstderr:\n{}",
-            String::from_utf8_lossy(&out.stdout),
-            String::from_utf8_lossy(&out.stderr),
-        )
+        crate::support::docker_logs(&self.container)
     }
 
     /// One file inside the container, or `None` if it is not there yet. The
@@ -353,42 +343,12 @@ fn http(
 /// `cleanup.policy=compact` line here is `TopicAdmin`'s `CreateTopics` config
 /// having survived on the broker rather than a default being echoed back.
 fn describe_topic_configs(bootstrap: &str, topic: &str) -> String {
-    let out = docker_run_kafka_tool_with_image(
-        KAFKA_IMAGE_TXN,
-        &[
-            "kafka-configs",
-            "--describe",
-            "--entity-type",
-            "topics",
-            "--entity-name",
-            topic,
-            "--bootstrap-server",
-            bootstrap,
-        ],
-    );
-    let text = String::from_utf8_lossy(&out.stdout).into_owned();
-    eprintln!("KRABKA[test] kafka-configs --describe {topic}:\n{text}");
-    text
+    crate::jvm_acceptance::describe_console_topic_configs(bootstrap, topic)
 }
 
 /// Create a one-partition topic through the JVM `kafka-topics` tool.
 fn create_topic(bootstrap: &str, topic: &str) {
-    docker_run_kafka_tool_with_image(
-        KAFKA_IMAGE_TXN,
-        &[
-            "kafka-topics",
-            "--create",
-            "--if-not-exists",
-            "--topic",
-            topic,
-            "--partitions",
-            "1",
-            "--replication-factor",
-            "1",
-            "--bootstrap-server",
-            bootstrap,
-        ],
-    );
+    crate::jvm_acceptance::create_console_topic_at(bootstrap, topic);
 }
 
 /// A distributed Connect worker boots against krabka, runs a `FileStream`

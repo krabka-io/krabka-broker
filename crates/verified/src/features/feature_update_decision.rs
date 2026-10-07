@@ -5,12 +5,9 @@ use super::{
     FeatureKind, FeatureLevels, FeatureUpdateDecision, FeatureUpdateFacts, FeatureUpdateType,
 };
 
+open_logic! {
 /// The reference decision: the first failed rule in `updateFeature`'s
 /// order, or what the admitted row does.
-// cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
-#[cfg(creusot)]
-#[cfg_attr(test, mutants::skip)]
-#[logic(open)]
 pub fn feature_update_model(facts: FeatureUpdateFacts) -> FeatureUpdateDecision {
     pearlite! {
         match facts.update_type {
@@ -57,6 +54,7 @@ pub fn feature_update_model(facts: FeatureUpdateFacts) -> FeatureUpdateDecision 
             }
         }
     }
+}
 }
 
 /// Decide one feature row from the host's facts.

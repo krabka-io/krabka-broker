@@ -2,7 +2,7 @@
   "profile": [],
   "proofs": {
     "Coma": {
-      "vc_checkpoint_id_retained": { "prover": "alt-ergo", "time": 0.024 }
+      "vc_checkpoint_id_retained": { "prover": "alt-ergo", "time": 0.017 }
     }
   }
 }

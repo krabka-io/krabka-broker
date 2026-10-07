@@ -7,9 +7,7 @@ use krabka_protocol::primitives::uuid::Uuid;
 
 use super::*;
 use crate::coordinator::unified::{
-    GroupCoordinator,
     actor::{
-        GroupActorMessage,
         member_state::build_member,
         test_support::{
             StaticMetadata, empty_metadata, make_coordinator, make_coordinator_with_topic,
@@ -24,18 +22,7 @@ use crate::coordinator::unified::{
 async fn first_join_emits_one_batch() {
     let (coord, log) = make_coordinator();
     let handle = coord.get_or_create_consumer("g");
-    let resp = rpc::consumer_request(
-        &handle,
-        ConsumerGroupHeartbeatRequest {
-            group_id: "g".into(),
-            member_id: String::new(),
-            member_epoch: 0,
-            subscribed_topic_names: Some(vec!["t".into()]),
-            rebalance_timeout_ms: 60_000,
-            ..Default::default()
-        },
-    )
-    .await;
+    let resp = rpc::consumer_heartbeat(&handle, "", 0, Some("t")).await;
     assert!(resp.error_code == 0);
     let batches = log.batches().await;
     assert!(
@@ -74,16 +61,14 @@ async fn first_join_adopts_client_member_id() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn member_limit_rejects_only_new_members() {
     let log = Arc::new(InMemoryOffsetsLog::default());
-    let coord = Arc::new(GroupCoordinator::new(
+    let coord = crate::coordinator::unified::actor::test_support::coordinator_with_log(
         NextGenConfig {
             max_size: 1,
             ..NextGenConfig::assigning_at_once()
         },
-        crate::coordinator::unified::share::config::ShareGroupConfig::assigning_at_once(),
         empty_metadata(),
         log,
-        crate::coordinator::unified::streams::config::StreamsGroupConfig::default(),
-    ));
+    );
     let handle = coord.get_or_create_consumer("g");
 
     let joined = rpc::consumer_heartbeat(&handle, "m1", 0, Some("t")).await;
@@ -685,33 +670,11 @@ fn static_replacement_writes_new_records_and_tombstones_the_released_member() {
 async fn unchanged_heartbeat_emits_no_batch() {
     let (coord, log) = make_coordinator();
     let handle = coord.get_or_create_consumer("g");
-    let resp1 = rpc::consumer_request(
-        &handle,
-        ConsumerGroupHeartbeatRequest {
-            group_id: "g".into(),
-            member_id: String::new(),
-            member_epoch: 0,
-            subscribed_topic_names: Some(vec!["t".into()]),
-            rebalance_timeout_ms: 60_000,
-            ..Default::default()
-        },
-    )
-    .await;
+    let resp1 = rpc::consumer_heartbeat(&handle, "", 0, Some("t")).await;
     let mid = resp1.member_id.clone().unwrap();
     let batches_after_join = log.batches().await.len();
 
-    let _ = rpc::consumer_request(
-        &handle,
-        ConsumerGroupHeartbeatRequest {
-            group_id: "g".into(),
-            member_id: mid,
-            member_epoch: resp1.member_epoch,
-            subscribed_topic_names: Some(vec!["t".into()]),
-            rebalance_timeout_ms: 60_000,
-            ..Default::default()
-        },
-    )
-    .await;
+    let _ = rpc::consumer_heartbeat(&handle, &mid, resp1.member_epoch, Some("t")).await;
     let batches_after_steady = log.batches().await.len();
     assert!(
         batches_after_steady == batches_after_join,
@@ -723,18 +686,7 @@ async fn unchanged_heartbeat_emits_no_batch() {
 async fn leave_emits_tombstone_batch() {
     let (coord, log) = make_coordinator();
     let handle = coord.get_or_create_consumer("g");
-    let response = rpc::consumer_request(
-        &handle,
-        ConsumerGroupHeartbeatRequest {
-            group_id: "g".into(),
-            member_id: String::new(),
-            member_epoch: 0,
-            subscribed_topic_names: Some(vec!["t".into()]),
-            rebalance_timeout_ms: 60_000,
-            ..Default::default()
-        },
-    )
-    .await;
+    let response = rpc::consumer_heartbeat(&handle, "", 0, Some("t")).await;
     let mid = response.member_id.unwrap();
     let pre_leave = log.batches().await.len();
 
@@ -748,13 +700,7 @@ async fn leave_emits_tombstone_batch() {
         },
     )
     .await;
-    let batches = log.batches().await;
-    assert!(batches.len() == pre_leave + 1);
-    let leave_batch = &batches[batches.len() - 1];
-    assert!(
-        leave_batch.records.iter().any(|r| r.value.is_none()),
-        "leave batch must contain at least one tombstone"
-    );
+    crate::coordinator::unified::test_support::assert_next_tombstone_batch(&log, pre_leave).await;
 }
 
 #[test]
@@ -768,22 +714,8 @@ fn leave_reconciles_and_persists_survivor_assignments() {
             ..Default::default()
         },
     };
-    let mut state = GroupState::new("g");
-    for member_id in ["m1", "m2"] {
-        state.add_or_update_member(build_member(
-            member_id,
-            &ConsumerGroupHeartbeatRequest {
-                subscribed_topic_names: Some(vec!["t".into()]),
-                rebalance_timeout_ms: 60_000,
-                ..Default::default()
-            },
-            crate::coordinator::unified::ClientIdentity {
-                id: "client",
-                host: "host",
-            },
-            Instant::now(),
-        ));
-    }
+    let mut state =
+        super::super::test_support::subscribed_consumer_group("g", &["m1", "m2"], &["t"]);
     run_reconcile(&mut state, &config, &metadata);
     let epoch_before = state.group_epoch;
 
@@ -865,27 +797,18 @@ async fn failed_upgrade_append_keeps_the_atomic_batch_unpublished() {
     log.fail_next
         .store(true, std::sync::atomic::Ordering::SeqCst);
 
-    let (tx, rx) = tokio::sync::oneshot::channel();
-    handle
-        .tx
-        .send(GroupActorMessage::Heartbeat {
-            request: ConsumerGroupHeartbeatRequest {
-                group_id: "g".into(),
-                member_id: "native".into(),
-                member_epoch: 0,
-                subscribed_topic_names: Some(vec!["t".into()]),
-                rebalance_timeout_ms: 60_000,
-                ..Default::default()
-            },
-            client_id: "client-a".into(),
-            client_host: String::new(),
-            regex_resolver: crate::coordinator::unified::regex_resolver::no_topic_regex_resolver(),
-            reply: tx,
-        })
-        .await
-        .unwrap();
-
-    let response = rx.await.unwrap();
+    let response = crate::coordinator::unified::actor::test_support::rpc::consumer_request(
+        &handle,
+        ConsumerGroupHeartbeatRequest {
+            group_id: "g".into(),
+            member_id: "native".into(),
+            member_epoch: 0,
+            subscribed_topic_names: Some(vec!["t".into()]),
+            rebalance_timeout_ms: 60_000,
+            ..Default::default()
+        },
+    )
+    .await;
     check!(response.error_code == codes::COORDINATOR_LOAD_IN_PROGRESS);
     assert!(log.batches().await.is_empty());
 }
@@ -1018,28 +941,19 @@ async fn a_heartbeat_replaces_or_upgrades_a_classic_group_as_kafka_does() {
             )),
         );
         let handle = coord.find("g").expect("seeded classic actor");
-        let (tx, rx) = tokio::sync::oneshot::channel();
-        handle
-            .tx
-            .send(GroupActorMessage::Heartbeat {
-                request: ConsumerGroupHeartbeatRequest {
-                    group_id: "g".into(),
-                    member_id: "native".into(),
-                    member_epoch: epoch,
-                    subscribed_topic_names: Some(vec!["t".into()]),
-                    rebalance_timeout_ms: 60_000,
-                    topic_partitions: Some(vec![]),
-                    ..Default::default()
-                },
-                client_id: "client-a".into(),
-                client_host: String::new(),
-                regex_resolver:
-                    crate::coordinator::unified::regex_resolver::no_topic_regex_resolver(),
-                reply: tx,
-            })
-            .await
-            .unwrap();
-        let response = rx.await.unwrap();
+        let response = crate::coordinator::unified::actor::test_support::rpc::consumer_request(
+            &handle,
+            ConsumerGroupHeartbeatRequest {
+                group_id: "g".into(),
+                member_id: "native".into(),
+                member_epoch: epoch,
+                subscribed_topic_names: Some(vec!["t".into()]),
+                rebalance_timeout_ms: 60_000,
+                topic_partitions: Some(vec![]),
+                ..Default::default()
+            },
+        )
+        .await;
         let got = (
             response.error_code,
             response.error_message.as_deref(),

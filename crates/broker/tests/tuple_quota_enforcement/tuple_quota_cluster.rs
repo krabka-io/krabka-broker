@@ -43,23 +43,6 @@ pub(crate) async fn wait_partition_exists(handle: &BrokerHandle, topic: &str, pa
 // Helper: seed a dummy ACL to disable the compat shim (allow-all when no ACLs)
 // ─────────────────────────────────────────────────────────────────────────────
 
-pub(crate) async fn seed_compat_shim_disable_acl(handle: &BrokerHandle) {
-    crate::support::acl::seed_topic_acl(
-        handle,
-        "__compat_shim_disable__",
-        "User:admin",
-        krabka_metadata::AclOperation::Read,
-    )
-    .await;
-}
-
 /// Seeds an ACL that allows alice to Write to the topic `topic`.
-pub(crate) async fn seed_alice_write_acl(handle: &BrokerHandle, topic: &str) {
-    crate::support::acl::seed_topic_acl(
-        handle,
-        topic,
-        "User:alice",
-        krabka_metadata::AclOperation::Write,
-    )
-    .await;
-}
+pub use crate::support::acl::seed_alice_write_acl;
+pub use crate::support::acl::seed_compat_shim_disable_acl;

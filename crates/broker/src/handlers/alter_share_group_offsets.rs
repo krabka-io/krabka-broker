@@ -29,7 +29,6 @@ use krabka_protocol::{
 };
 
 use crate::{
-    broker::Broker,
     codes,
     coordinator::unified::{GroupType, share::actor::ShareGroupActorMessage},
     error::BrokerError,
@@ -37,227 +36,226 @@ use crate::{
     task_util::{AskError, ask},
 };
 
-pub(crate) async fn handle(
-    broker: &Broker,
-    req: AlterShareGroupOffsetsRequest,
-    _version: i16,
-    ctx: &crate::handlers::RequestContext<'_>,
-) -> Result<AlterShareGroupOffsetsResponse, BrokerError> {
-    // Feature gate: share groups are on from a finalized `share.version` of 1,
-    // and below it the RPC is unsupported.
-    let image = broker.controller.current_image();
-    if !crate::features::share_groups_enabled(&image) {
-        return Ok(AlterShareGroupOffsetsResponse::error(
-            codes::UNSUPPORTED_VERSION,
-            None,
-        ));
-    }
-
-    let ng_opt = Some(broker.group_coordinator.clone());
-    let gid = req.group_id;
-
-    // ── ACL preamble ────────────────────────────────────
-    // Per-group `Read` check, per Kafka's `handleAlterShareGroupOffsetsRequest`
-    // (krabka previously checked `Alter`, which neither refuses a plain
-    // `Alter` grant nor accepts the normal `Read`-only share-consumer grant).
-    // On Deny → top-level `error_code = 30`.
-    if crate::handlers::group_read_denied(broker.config.authorizer.as_ref(), &image, ctx, &gid) {
-        return Ok(AlterShareGroupOffsetsResponse::error(
-            codes::GROUP_AUTHORIZATION_FAILED,
-            None,
-        ));
-    }
-    // Kafka's `GroupCoordinatorService.alterShareGroupOffsets` refuses the
-    // empty group id before any group lookup. This structural check runs
-    // before coordinator routing: an empty id hashes to some partition, and a
-    // broker that does not lead it would otherwise answer `NOT_COORDINATOR`
-    // instead of `INVALID_GROUP_ID`, so the error a client sees would depend
-    // on which broker happened to receive the request.
-    if gid.is_empty() {
-        return Ok(AlterShareGroupOffsetsResponse::error(
-            codes::INVALID_GROUP_ID,
-            None,
-        ));
-    }
-    if let Some(error_code) = crate::handlers::group_coordinator_error(broker, &gid) {
-        return Ok(AlterShareGroupOffsetsResponse::error(error_code, None));
-    }
-    // `GroupMetadataManager.getOrMaybeCreateShareGroup` throws
-    // `GroupIdNotFoundException` for a group id already locked to another
-    // protocol type. A share group not yet created (`None`) is fine: the
-    // actor below creates and persists it.
-    let existing_type = broker.group_coordinator.group_type(&gid);
-    if let Some(existing_type) = existing_type
-        && existing_type != GroupType::Share
+context_handler! {
+    AlterShareGroupOffsetsRequest => AlterShareGroupOffsetsResponse,
+    (broker, req, _version, ctx),
     {
-        return Ok(AlterShareGroupOffsetsResponse::error(
-            codes::GROUP_ID_NOT_FOUND,
-            None,
-        ));
-    }
-    let group_already_exists = existing_type.is_some();
-
-    // Per-topic `Read` ACL — per-partition `TOPIC_AUTHORIZATION_FAILED` on
-    // Deny, checked BEFORE the unknown-topic lookup below. Decided up front
-    // (borrowing `req.topics`, not owning it) because the loop below moves
-    // each topic's partitions out of `req.topics`.
-    let denied_topics = crate::handlers::denied_topics(
-        broker.config.authorizer.as_ref(),
-        &image,
-        ctx,
-        AclOperation::Read,
-        req.topics.iter().map(|t| t.topic_name.as_str()),
-    );
-
-    let mut responses: Vec<AlterShareGroupOffsetsResponseTopic> =
-        Vec::with_capacity(req.topics.len());
-    let mut actor_requests = Vec::new();
-    let mut actor_response_slots = Vec::new();
-
-    for rt in req.topics {
-        let topic_name = rt.topic_name;
-        let topic_denied = denied_topics.contains(&topic_name);
-
-        if topic_denied {
-            let partitions = rt
-                .partitions
-                .into_iter()
-                .map(|rp| AlterShareGroupOffsetsResponsePartition {
-                    partition_index: rp.partition_index,
-                    error_code: codes::TOPIC_AUTHORIZATION_FAILED,
-                    ..Default::default()
-                })
-                .collect();
-            responses.push(AlterShareGroupOffsetsResponseTopic {
-                topic_name,
-                topic_id: Uuid::default(),
-                partitions,
-                ..Default::default()
-            });
-            continue;
+        // Feature gate: share groups are on from a finalized `share.version` of 1,
+        // and below it the RPC is unsupported.
+        let image = broker.controller.current_image();
+        if !crate::features::share_groups_enabled(&image) {
+            return Ok(AlterShareGroupOffsetsResponse::error(
+                codes::UNSUPPORTED_VERSION,
+                None,
+            ));
         }
 
-        let topic_id = image.topic(&topic_name).map(|t| t.topic_id);
+        let ng_opt = Some(broker.group_coordinator.clone());
+        let gid = req.group_id;
 
-        let mut partitions: Vec<AlterShareGroupOffsetsResponsePartition> =
-            Vec::with_capacity(rt.partitions.len());
+        // ── ACL preamble ────────────────────────────────────
+        // Per-group `Read` check, per Kafka's `handleAlterShareGroupOffsetsRequest`
+        // (krabka previously checked `Alter`, which neither refuses a plain
+        // `Alter` grant nor accepts the normal `Read`-only share-consumer grant).
+        // On Deny → top-level `error_code = 30`.
+        if crate::handlers::group_read_denied(broker.config.authorizer.as_ref(), &image, ctx, &gid) {
+            return Ok(AlterShareGroupOffsetsResponse::error(
+                codes::GROUP_AUTHORIZATION_FAILED,
+                None,
+            ));
+        }
+        // Kafka's `GroupCoordinatorService.alterShareGroupOffsets` refuses the
+        // empty group id before any group lookup. This structural check runs
+        // before coordinator routing: an empty id hashes to some partition, and a
+        // broker that does not lead it would otherwise answer `NOT_COORDINATOR`
+        // instead of `INVALID_GROUP_ID`, so the error a client sees would depend
+        // on which broker happened to receive the request.
+        if gid.is_empty() {
+            return Ok(AlterShareGroupOffsetsResponse::error(
+                codes::INVALID_GROUP_ID,
+                None,
+            ));
+        }
+        if let Some(error_code) = crate::handlers::group_coordinator_error(broker, &gid) {
+            return Ok(AlterShareGroupOffsetsResponse::error(error_code, None));
+        }
+        // `GroupMetadataManager.getOrMaybeCreateShareGroup` throws
+        // `GroupIdNotFoundException` for a group id already locked to another
+        // protocol type. A share group not yet created (`None`) is fine: the
+        // actor below creates and persists it.
+        let existing_type = broker.group_coordinator.group_type(&gid);
+        if let Some(existing_type) = existing_type
+            && existing_type != GroupType::Share
+        {
+            return Ok(AlterShareGroupOffsetsResponse::error(
+                codes::GROUP_ID_NOT_FOUND,
+                None,
+            ));
+        }
+        let group_already_exists = existing_type.is_some();
 
-        for rp in rt.partitions {
-            let partition_record = image.partition(&topic_name, rp.partition_index);
-            let Some((topic_id, partition_record)) = topic_id.zip(partition_record) else {
-                partitions.push(AlterShareGroupOffsetsResponsePartition {
-                    partition_index: rp.partition_index,
-                    error_code: codes::UNKNOWN_TOPIC_OR_PARTITION,
-                    error_message: Some(
-                        crate::share_coordinator::coordinator::message::UNKNOWN_TOPIC_OR_PARTITION
-                            .to_owned(),
-                    ),
+        // Per-topic `Read` ACL — per-partition `TOPIC_AUTHORIZATION_FAILED` on
+        // Deny, checked BEFORE the unknown-topic lookup below. Decided up front
+        // (borrowing `req.topics`, not owning it) because the loop below moves
+        // each topic's partitions out of `req.topics`.
+        let denied_topics = crate::handlers::denied_topics(
+            broker.config.authorizer.as_ref(),
+            &image,
+            ctx,
+            AclOperation::Read,
+            req.topics.iter().map(|t| t.topic_name.as_str()),
+        );
+
+        let mut responses: Vec<AlterShareGroupOffsetsResponseTopic> =
+            Vec::with_capacity(req.topics.len());
+        let mut actor_requests = Vec::new();
+        let mut actor_response_slots = Vec::new();
+
+        for rt in req.topics {
+            let topic_name = rt.topic_name;
+            let topic_denied = denied_topics.contains(&topic_name);
+
+            if topic_denied {
+                let partitions = rt
+                    .partitions
+                    .into_iter()
+                    .map(|rp| AlterShareGroupOffsetsResponsePartition {
+                        partition_index: rp.partition_index,
+                        error_code: codes::TOPIC_AUTHORIZATION_FAILED,
+                        ..Default::default()
+                    })
+                    .collect();
+                responses.push(AlterShareGroupOffsetsResponseTopic {
+                    topic_name,
+                    topic_id: Uuid::default(),
+                    partitions,
                     ..Default::default()
                 });
                 continue;
-            };
+            }
 
-            actor_response_slots.push((responses.len(), partitions.len()));
-            actor_requests.push(crate::coordinator::unified::share::actor::ResetPartition {
-                topic_id,
-                topic_name: topic_name.clone(),
-                partition: rp.partition_index,
-                start_offset: rp.start_offset,
-                observed_leader_epoch: partition_record.leader_epoch.0,
-            });
-            partitions.push(AlterShareGroupOffsetsResponsePartition {
-                partition_index: rp.partition_index,
-                error_code: codes::NONE,
+            let topic_id = image.topic(&topic_name).map(|t| t.topic_id);
+
+            let mut partitions: Vec<AlterShareGroupOffsetsResponsePartition> =
+                Vec::with_capacity(rt.partitions.len());
+
+            for rp in rt.partitions {
+                let partition_record = image.partition(&topic_name, rp.partition_index);
+                let Some((topic_id, partition_record)) = topic_id.zip(partition_record) else {
+                    partitions.push(AlterShareGroupOffsetsResponsePartition {
+                        partition_index: rp.partition_index,
+                        error_code: codes::UNKNOWN_TOPIC_OR_PARTITION,
+                        error_message: Some(
+                            crate::share_coordinator::coordinator::message::UNKNOWN_TOPIC_OR_PARTITION
+                                .to_owned(),
+                        ),
+                        ..Default::default()
+                    });
+                    continue;
+                };
+
+                actor_response_slots.push((responses.len(), partitions.len()));
+                actor_requests.push(crate::coordinator::unified::share::actor::ResetPartition {
+                    topic_id,
+                    topic_name: topic_name.clone(),
+                    partition: rp.partition_index,
+                    start_offset: rp.start_offset,
+                    observed_leader_epoch: partition_record.leader_epoch.0,
+                });
+                partitions.push(AlterShareGroupOffsetsResponsePartition {
+                    partition_index: rp.partition_index,
+                    error_code: codes::NONE,
+                    ..Default::default()
+                });
+            }
+
+            responses.push(AlterShareGroupOffsetsResponseTopic {
+                topic_name,
+                topic_id: topic_id.map_or_else(Uuid::default, |id| Uuid(*id.as_bytes())),
+                partitions,
                 ..Default::default()
             });
         }
 
-        responses.push(AlterShareGroupOffsetsResponseTopic {
-            topic_name,
-            topic_id: topic_id.map_or_else(Uuid::default, |id| Uuid(*id.as_bytes())),
-            partitions,
-            ..Default::default()
-        });
-    }
+        // No partition survived denial/unknown-topic filtering, and the group id
+        // does not exist yet: every response row already carries its final error
+        // code, and there is nothing to send an actor. Answer now, without
+        // claiming the group id as `Share` -- locking a not-yet-existing id for a
+        // request that mutates nothing would block classic/consumer/streams use
+        // of that id for the broker's lifetime while leaving no persisted trace
+        // of the group (a phantom that vanishes on restart). An id that already
+        // exists as a share group still goes to the actor below even with an
+        // empty batch, so its own emptiness/existence checks (e.g.
+        // `NON_EMPTY_GROUP`) still run.
+        if actor_requests.is_empty() && !group_already_exists {
+            let resp = AlterShareGroupOffsetsResponse {
+                throttle_time_ms: 0,
+                error_code: codes::NONE,
+                responses,
+                ..Default::default()
+            };
+            return Ok(resp);
+        }
 
-    // No partition survived denial/unknown-topic filtering, and the group id
-    // does not exist yet: every response row already carries its final error
-    // code, and there is nothing to send an actor. Answer now, without
-    // claiming the group id as `Share` -- locking a not-yet-existing id for a
-    // request that mutates nothing would block classic/consumer/streams use
-    // of that id for the broker's lifetime while leaving no persisted trace
-    // of the group (a phantom that vanishes on restart). An id that already
-    // exists as a share group still goes to the actor below even with an
-    // empty batch, so its own emptiness/existence checks (e.g.
-    // `NON_EMPTY_GROUP`) still run.
-    if actor_requests.is_empty() && !group_already_exists {
+        // The actor checks emptiness and applies the complete requested batch in
+        // one mailbox turn, so a heartbeat cannot join between the gate and a
+        // reset. Its seed message is queued first when this is a recovered group.
+        //
+        // `mark_share` + `get_or_create_share` is Kafka's
+        // `getOrMaybeCreateShareGroup(groupId, true)`: a group id with no prior
+        // type lock is created as a share group here, exactly as the first
+        // `ShareGroupHeartbeat` would create it.
+        let ng = ng_opt.as_ref().expect("group coordinator is installed");
+        ng.mark_share(&gid);
+        let actor = ng.get_or_create_share(&gid);
+        let asked = ask(&actor.tx, |reply| ShareGroupActorMessage::ResetOffsets {
+            requests: actor_requests,
+            reply,
+        })
+        .await;
+        let actor_result = match asked {
+            Ok(actor_result) => actor_result,
+            Err(AskError::Closed) => {
+                return Ok(AlterShareGroupOffsetsResponse::error(
+                    codes::COORDINATOR_NOT_AVAILABLE,
+                    None,
+                ));
+            }
+            Err(AskError::Dropped) => {
+                return Err(BrokerError::Share("share-group reset actor stopped".into()));
+            }
+        };
+        let result_codes = match actor_result {
+            Ok(result_codes) => result_codes,
+            Err(error_code) => return Ok(AlterShareGroupOffsetsResponse::error(error_code, None)),
+        };
+        if result_codes.len() != actor_response_slots.len() {
+            return Ok(AlterShareGroupOffsetsResponse::error(
+                codes::COORDINATOR_NOT_AVAILABLE,
+                None,
+            ));
+        }
+        for ((topic_slot, partition_slot), error_code) in
+            actor_response_slots.into_iter().zip(result_codes)
+        {
+            let topic_id = uuid::Uuid::from_bytes(responses[topic_slot].topic_id.0);
+            let partition = &mut responses[topic_slot].partitions[partition_slot];
+            partition.error_code = error_code;
+            if error_code == codes::NONE {
+                broker
+                    .share_partition_leaders
+                    .invalidate(&gid, topic_id, partition.partition_index);
+            }
+        }
+
         let resp = AlterShareGroupOffsetsResponse {
             throttle_time_ms: 0,
             error_code: codes::NONE,
             responses,
             ..Default::default()
         };
-        return Ok(resp);
+        Ok(resp)
     }
-
-    // The actor checks emptiness and applies the complete requested batch in
-    // one mailbox turn, so a heartbeat cannot join between the gate and a
-    // reset. Its seed message is queued first when this is a recovered group.
-    //
-    // `mark_share` + `get_or_create_share` is Kafka's
-    // `getOrMaybeCreateShareGroup(groupId, true)`: a group id with no prior
-    // type lock is created as a share group here, exactly as the first
-    // `ShareGroupHeartbeat` would create it.
-    let ng = ng_opt.as_ref().expect("group coordinator is installed");
-    ng.mark_share(&gid);
-    let actor = ng.get_or_create_share(&gid);
-    let asked = ask(&actor.tx, |reply| ShareGroupActorMessage::ResetOffsets {
-        requests: actor_requests,
-        reply,
-    })
-    .await;
-    let actor_result = match asked {
-        Ok(actor_result) => actor_result,
-        Err(AskError::Closed) => {
-            return Ok(AlterShareGroupOffsetsResponse::error(
-                codes::COORDINATOR_NOT_AVAILABLE,
-                None,
-            ));
-        }
-        Err(AskError::Dropped) => {
-            return Err(BrokerError::Share("share-group reset actor stopped".into()));
-        }
-    };
-    let result_codes = match actor_result {
-        Ok(result_codes) => result_codes,
-        Err(error_code) => return Ok(AlterShareGroupOffsetsResponse::error(error_code, None)),
-    };
-    if result_codes.len() != actor_response_slots.len() {
-        return Ok(AlterShareGroupOffsetsResponse::error(
-            codes::COORDINATOR_NOT_AVAILABLE,
-            None,
-        ));
-    }
-    for ((topic_slot, partition_slot), error_code) in
-        actor_response_slots.into_iter().zip(result_codes)
-    {
-        let topic_id = uuid::Uuid::from_bytes(responses[topic_slot].topic_id.0);
-        let partition = &mut responses[topic_slot].partitions[partition_slot];
-        partition.error_code = error_code;
-        if error_code == codes::NONE {
-            broker
-                .share_partition_leaders
-                .invalidate(&gid, topic_id, partition.partition_index);
-        }
-    }
-
-    let resp = AlterShareGroupOffsetsResponse {
-        throttle_time_ms: 0,
-        error_code: codes::NONE,
-        responses,
-        ..Default::default()
-    };
-    Ok(resp)
 }
 
 #[cfg(test)]
@@ -266,7 +264,6 @@ mod tests {
 
     use assert2::assert;
     use krabka_protocol::{
-        UnknownTaggedFields,
         owned::{
             alter_share_group_offsets_request::{
                 AlterShareGroupOffsetsRequest, AlterShareGroupOffsetsRequestPartition,
@@ -276,7 +273,6 @@ mod tests {
                 self, AlterShareGroupOffsetsResponse, AlterShareGroupOffsetsResponsePartition,
                 AlterShareGroupOffsetsResponseTopic,
             },
-            create_topics_request::{CreatableTopic, CreateTopicsRequest},
             create_topics_response,
             share_group_heartbeat_request::ShareGroupHeartbeatRequest,
         },
@@ -291,6 +287,29 @@ mod tests {
         test_support::{DenyAll, test_ctx},
     };
 
+    macro_rules! joining_share_member {
+        (($tx:ident, $rx:ident, $response:ident), $actor:expr, $group:expr, $member:expr, $topics:expr) => {
+            let ($tx, $rx) = tokio::sync::oneshot::channel();
+            $actor
+                .tx
+                .send(ShareGroupActorMessage::Heartbeat {
+                    request: ShareGroupHeartbeatRequest {
+                        group_id: $group.into(),
+                        member_id: $member.into(),
+                        member_epoch: 0,
+                        subscribed_topic_names: Some($topics),
+                        ..Default::default()
+                    },
+                    client_id: "client-a".into(),
+                    client_host: "127.0.0.1".into(),
+                    reply: $tx,
+                })
+                .await
+                .expect("send heartbeat");
+            let $response = $rx.await.expect("heartbeat response");
+        };
+    }
+
     const UNKNOWN_TOPIC_OR_PARTITION_MESSAGE: &str =
         crate::share_coordinator::coordinator::message::UNKNOWN_TOPIC_OR_PARTITION;
 
@@ -304,29 +323,23 @@ mod tests {
         denied_topics: Vec<String>,
     }
 
-    impl Authorizer for ScenarioAuthorizer {
-        fn authorize(
-            &self,
-            _source: &dyn krabka_authz::AclSource,
-            req: &crate::authorizer::AuthorizationRequest<'_>,
-        ) -> AuthorizationResult {
-            use krabka_metadata::{AclOperation, ResourceType};
-            let allowed = match (req.resource_type, req.operation) {
-                (ResourceType::Group, AclOperation::Read) => self.group_read,
-                (ResourceType::Group, AclOperation::Alter) => self.group_alter,
-                (ResourceType::Topic, AclOperation::Read) => !self
-                    .denied_topics
-                    .iter()
-                    .any(|t| t.as_str() == req.resource_name),
-                _ => true,
-            };
-            if allowed {
-                AuthorizationResult::Allow
-            } else {
-                AuthorizationResult::Deny
-            }
+    test_authorizer!(ScenarioAuthorizer, (self, _source, req), {
+        use krabka_metadata::{AclOperation, ResourceType};
+        let allowed = match (req.resource_type, req.operation) {
+            (ResourceType::Group, AclOperation::Read) => self.group_read,
+            (ResourceType::Group, AclOperation::Alter) => self.group_alter,
+            (ResourceType::Topic, AclOperation::Read) => !self
+                .denied_topics
+                .iter()
+                .any(|t| t.as_str() == req.resource_name),
+            _ => true,
+        };
+        if allowed {
+            AuthorizationResult::Allow
+        } else {
+            AuthorizationResult::Deny
         }
-    }
+    });
 
     fn request(
         group_id: &str,
@@ -360,16 +373,8 @@ mod tests {
         ctx: &crate::handlers::RequestContext<'_>,
     ) {
         let version = create_topics_response::MAX_VERSION;
-        let request = CreateTopicsRequest {
-            topics: vec![CreatableTopic {
-                name: topic_name.into(),
-                num_partitions: 1,
-                replication_factor: 1,
-                ..Default::default()
-            }],
-            timeout_ms: 5_000,
-            ..Default::default()
-        };
+        let request =
+            crate::handlers::test_support::configured_topic_request(topic_name, &[], 1, 1, 5_000);
         let response = crate::handlers::create_topics::handle(broker, request, version, ctx)
             .await
             .expect("create topic");
@@ -397,13 +402,11 @@ mod tests {
                 false,
                 "missing",
                 vec![0],
-                AlterShareGroupOffsetsResponse {
-                    throttle_time_ms: 0,
+                unthrottled_wire!(AlterShareGroupOffsetsResponse {
                     error_code: codes::UNSUPPORTED_VERSION,
                     error_message: None,
                     responses: Vec::new(),
-                    unknown_tagged_fields: UnknownTaggedFields(Vec::new()),
-                },
+                }),
             ),
             (
                 "denied group returns top-level authorization failure",
@@ -411,13 +414,11 @@ mod tests {
                 true,
                 "missing",
                 vec![0],
-                AlterShareGroupOffsetsResponse {
-                    throttle_time_ms: 0,
+                unthrottled_wire!(AlterShareGroupOffsetsResponse {
                     error_code: codes::GROUP_AUTHORIZATION_FAILED,
                     error_message: None,
                     responses: Vec::new(),
-                    unknown_tagged_fields: UnknownTaggedFields(Vec::new()),
-                },
+                }),
             ),
             (
                 "unknown topic preserves topic and partition fields",
@@ -425,50 +426,33 @@ mod tests {
                 true,
                 "missing-topic",
                 vec![3, 5],
-                AlterShareGroupOffsetsResponse {
-                    throttle_time_ms: 0,
+                unthrottled_wire!(AlterShareGroupOffsetsResponse {
                     error_code: codes::NONE,
                     error_message: None,
-                    responses: vec![AlterShareGroupOffsetsResponseTopic {
+                    responses: vec![tagged_wire!(AlterShareGroupOffsetsResponseTopic {
                         topic_name: "missing-topic".into(),
                         topic_id: Uuid::default(),
                         partitions: vec![
-                            AlterShareGroupOffsetsResponsePartition {
+                            tagged_wire!(AlterShareGroupOffsetsResponsePartition {
                                 partition_index: 3,
                                 error_code: codes::UNKNOWN_TOPIC_OR_PARTITION,
                                 error_message: Some(UNKNOWN_TOPIC_OR_PARTITION_MESSAGE.into()),
-                                unknown_tagged_fields: UnknownTaggedFields(Vec::new()),
-                            },
-                            AlterShareGroupOffsetsResponsePartition {
+                            }),
+                            tagged_wire!(AlterShareGroupOffsetsResponsePartition {
                                 partition_index: 5,
                                 error_code: codes::UNKNOWN_TOPIC_OR_PARTITION,
                                 error_message: Some(UNKNOWN_TOPIC_OR_PARTITION_MESSAGE.into()),
-                                unknown_tagged_fields: UnknownTaggedFields(Vec::new()),
-                            },
+                            }),
                         ],
-                        unknown_tagged_fields: UnknownTaggedFields(Vec::new()),
-                    }],
-                    unknown_tagged_fields: UnknownTaggedFields(Vec::new()),
-                },
+                    })],
+                }),
             ),
         ];
-        for (case, authorizer, share_enabled, topic_name, partitions, expected) in cases {
-            let (broker_handle, _dir) =
-                crate::test_support::start_share_broker(authorizer, share_enabled).await;
-            let broker = broker_handle.broker_arc_for_test();
-            test_ctx!(ctx, "alice");
-            let resp = handle(
-                &broker,
-                request("g1", topic_name, &partitions),
-                version,
-                &ctx,
-            )
-            .await
-            .expect("handle");
-
-            assert!(resp == expected, "case: {case}");
-            broker_handle.shutdown().await;
-        }
+        share_refusal_cases!(
+            (case, authorizer, share_enabled, [topic_name, partitions], expected) in cases;
+            (broker_handle, _dir, broker, ctx, resp);
+            handle(request("g1", topic_name, &partitions), version)
+        );
     }
 
     /// Issue #727: krabka checked `Alter` on the group and never checked
@@ -605,13 +589,11 @@ mod tests {
     /// refused with `GROUP_ID_NOT_FOUND` (69), before any actor is touched.
     #[tokio::test]
     async fn invalid_and_wrong_type_group_ids_are_refused() {
-        let (broker_handle, _dir) = crate::test_support::start_share_broker(
-            Arc::new(crate::authorizer::AllowAllAuthorizer),
-            true,
-        )
-        .await;
-        let broker = broker_handle.broker_arc_for_test();
-        test_ctx!(ctx, "alice");
+        broker_fixture!(
+            (broker_handle, _dir, broker),
+            share_allow_all,
+            context(ctx, "alice")
+        );
 
         let empty_id_resp = handle(
             &broker,
@@ -649,13 +631,11 @@ mod tests {
     /// change its start offset back.
     #[tokio::test]
     async fn alter_creates_and_persists_a_new_share_group() {
-        let (broker_handle, _dir) = crate::test_support::start_share_broker(
-            Arc::new(crate::authorizer::AllowAllAuthorizer),
-            true,
-        )
-        .await;
-        let broker = broker_handle.broker_arc_for_test();
-        test_ctx!(ctx, "alice");
+        broker_fixture!(
+            (broker_handle, _dir, broker),
+            share_allow_all,
+            context(ctx, "alice")
+        );
         create_topic(&broker_handle, &broker, "new-topic", &ctx).await;
         crate::share_coordinator::handlers::test_support::lead_share_state_partitions(&broker)
             .await;
@@ -711,24 +691,13 @@ mod tests {
         // `(topic_id, partition)` already in `state.initialized`.
         let actor = broker.group_coordinator.get_or_create_share("g-new");
         for member_id in ["m1", "m2"] {
-            let (tx, rx) = tokio::sync::oneshot::channel();
-            actor
-                .tx
-                .send(ShareGroupActorMessage::Heartbeat {
-                    request: ShareGroupHeartbeatRequest {
-                        group_id: "g-new".into(),
-                        member_id: member_id.into(),
-                        member_epoch: 0,
-                        subscribed_topic_names: Some(vec!["new-topic".into()]),
-                        ..Default::default()
-                    },
-                    client_id: "client-a".into(),
-                    client_host: "127.0.0.1".into(),
-                    reply: tx,
-                })
-                .await
-                .expect("send heartbeat");
-            let resp = rx.await.expect("heartbeat response");
+            joining_share_member!(
+                (tx, rx, resp),
+                actor,
+                "g-new",
+                member_id,
+                vec!["new-topic".into()]
+            );
             assert!(resp.error_code == codes::NONE, "{resp:?}");
         }
         let (_, _, start_offset_after, _) = persister
@@ -745,34 +714,12 @@ mod tests {
 
     #[tokio::test]
     async fn active_group_rejects_the_whole_reset_batch() {
-        let (broker_handle, _dir) = crate::test_support::start_share_broker(
-            Arc::new(crate::authorizer::AllowAllAuthorizer),
-            true,
-        )
-        .await;
-        let broker = broker_handle.broker_arc_for_test();
+        broker_fixture!((broker_handle, _dir, broker), share_allow_all);
         let coordinator = broker.group_coordinator.clone();
 
         coordinator.mark_share("busy");
         let actor = coordinator.get_or_create_share("busy");
-        let (tx, rx) = tokio::sync::oneshot::channel();
-        actor
-            .tx
-            .send(ShareGroupActorMessage::Heartbeat {
-                request: ShareGroupHeartbeatRequest {
-                    group_id: "busy".into(),
-                    member_id: "member-1".into(),
-                    member_epoch: 0,
-                    subscribed_topic_names: Some(Vec::new()),
-                    ..Default::default()
-                },
-                client_id: "client-a".into(),
-                client_host: "127.0.0.1".into(),
-                reply: tx,
-            })
-            .await
-            .expect("send heartbeat");
-        let resp = rx.await.expect("heartbeat response");
+        joining_share_member!((tx, rx, resp), actor, "busy", "member-1", Vec::new());
         assert!(resp.error_code == codes::NONE, "{resp:?}");
 
         test_ctx!(ctx, "alice");
@@ -793,13 +740,11 @@ mod tests {
 
     #[tokio::test]
     async fn reset_mutates_only_requested_valid_partitions_and_bumps_group_epoch() {
-        let (broker_handle, _dir) = crate::test_support::start_share_broker(
-            Arc::new(crate::authorizer::AllowAllAuthorizer),
-            true,
-        )
-        .await;
-        let broker = broker_handle.broker_arc_for_test();
-        test_ctx!(ctx, "alice");
+        broker_fixture!(
+            (broker_handle, _dir, broker),
+            share_allow_all,
+            context(ctx, "alice")
+        );
         create_topic(&broker_handle, &broker, "reset-topic", &ctx).await;
         crate::share_coordinator::handlers::test_support::lead_share_state_partitions(&broker)
             .await;

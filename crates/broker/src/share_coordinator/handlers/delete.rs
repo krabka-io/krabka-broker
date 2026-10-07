@@ -3,7 +3,6 @@
 //! the in-memory entry. The handler gates on local leadership of the target
 //! `__share_group_state` partition.
 
-use futures_util::future::join_all;
 use krabka_metadata::MetadataImage;
 use krabka_protocol::owned::{
     delete_share_group_state_request::DeleteShareGroupStateRequest,
@@ -12,37 +11,15 @@ use krabka_protocol::owned::{
     },
 };
 
-use crate::{
-    broker::Broker, codes, error::BrokerError, share_coordinator::coordinator::ShareCoordinator,
-};
+use crate::share_coordinator::coordinator::ShareCoordinator;
 
-/// Checks `ClusterAction` on the cluster, then serves the request.
-///
-/// Kafka's `KafkaApis` answers a denied principal with
-/// `DeleteShareGroupStateResponse.toGlobalErrorResponse`: `CLUSTER_AUTHORIZATION_FAILED` on
-/// every requested partition, and the share coordinator does not run.
-pub(crate) async fn handle(
-    broker: &Broker,
-    req: DeleteShareGroupStateRequest,
-    _version: i16,
-    ctx: &crate::handlers::RequestContext<'_>,
-) -> Result<DeleteShareGroupStateResponse, BrokerError> {
-    Ok(if super::cluster_action_denied(broker, ctx) {
-        super::cluster_authorization_failed!(
-            req,
-            DeleteShareGroupStateResponse,
-            DeleteStateResult,
-            PartitionResult
-        )
-    } else {
-        delete_state(
-            &broker.share_coordinator,
-            &broker.controller.current_image(),
-            req,
-        )
-        .await
-    })
-}
+super::share_state_handler!(
+    DeleteShareGroupStateRequest,
+    DeleteShareGroupStateResponse,
+    DeleteStateResult,
+    PartitionResult,
+    delete_state
+);
 
 /// Deletes every partition of `req`, as Kafka's
 /// `ShareCoordinatorService.deleteState` does.
@@ -54,43 +31,21 @@ async fn delete_state(
     image: &MetadataImage,
     req: DeleteShareGroupStateRequest,
 ) -> DeleteShareGroupStateResponse {
-    if req.group_id.is_empty()
-        || req.topics.is_empty()
-        || req.topics.iter().any(|topic| topic.partitions.is_empty())
-    {
+    if req.group_id.is_empty() || super::empty_partition_data!(req) {
         return DeleteShareGroupStateResponse::default();
     }
-    let group_id = req.group_id.as_str();
-
-    // Kafka's `ShareCoordinatorService` schedules one operation for each
-    // partition and answers when every one of them completes. Each operation
-    // waits until its records commit, so the partitions run together.
-    let results: Vec<DeleteStateResult> =
-        join_all(req.topics.into_iter().map(|topic| async move {
-            let topic_id = uuid::Uuid::from_bytes(topic.topic_id.0);
-            let partitions = join_all(topic.partitions.into_iter().map(|pd| async move {
-                let result = coordinator
-                    .delete(image, group_id, topic_id, pd.partition)
-                    .await;
-                let (error_code, error_message) = match result {
-                    Ok(()) => (codes::NONE, None),
-                    Err(error) => (error.code(), Some(error.row_message("delete"))),
-                };
-                PartitionResult {
-                    partition: pd.partition,
-                    error_code,
-                    error_message,
-                    ..Default::default()
-                }
-            }))
+    let results = super::state_results!(req, DeleteStateResult, |group_id, topic_id, pd| {
+        let result = coordinator
+            .delete(image, group_id, topic_id, pd.partition)
             .await;
-            DeleteStateResult {
-                topic_id: topic.topic_id,
-                partitions,
-                ..Default::default()
-            }
-        }))
-        .await;
+        let (error_code, error_message) = super::operation_result(result, "delete");
+        PartitionResult {
+            partition: pd.partition,
+            error_code,
+            error_message,
+            ..Default::default()
+        }
+    });
 
     DeleteShareGroupStateResponse {
         results,
@@ -103,61 +58,30 @@ mod tests {
     use assert2::check;
     use krabka_log::Offset;
     use krabka_protocol::{
-        UnknownTaggedFields,
         owned::delete_share_group_state_request::{DeleteStateData, PartitionData},
         primitives::uuid::Uuid as ProtoUuid,
     };
 
     use super::*;
-    use crate::share_coordinator::coordinator::test_support::{
-        Logged, image_with_topic, logged_records,
+    use crate::{
+        codes,
+        share_coordinator::coordinator::test_support::{
+            Logged, image_with_topic, logged_records, logged_since,
+        },
     };
 
     const TOPIC: uuid::Uuid = uuid::Uuid::from_bytes([31; 16]);
     const UNKNOWN_TOPIC: uuid::Uuid = uuid::Uuid::from_bytes([34; 16]);
 
-    fn request(
-        group_id: &str,
-        topic_id: uuid::Uuid,
-        partitions: &[i32],
-    ) -> DeleteShareGroupStateRequest {
-        DeleteShareGroupStateRequest {
-            group_id: group_id.into(),
-            topics: vec![DeleteStateData {
-                topic_id: ProtoUuid(*topic_id.as_bytes()),
-                partitions: partitions
-                    .iter()
-                    .map(|&partition| PartitionData {
-                        partition,
-                        ..Default::default()
-                    })
-                    .collect(),
-                ..Default::default()
-            }],
-            ..Default::default()
+    super::super::test_support::request_fixture! {
+        DeleteShareGroupStateRequest, DeleteStateData, PartitionData;
+        fn request(group_id: &str, [topic_id: uuid::Uuid], partitions: &[i32]);
+        topic ProtoUuid(*topic_id.as_bytes()); |partition| {
+            PartitionData { partition, ..Default::default() }
         }
     }
 
-    fn response(
-        topic_id: uuid::Uuid,
-        partition: i32,
-        error_code: i16,
-        message: Option<&str>,
-    ) -> DeleteShareGroupStateResponse {
-        DeleteShareGroupStateResponse {
-            results: vec![DeleteStateResult {
-                topic_id: ProtoUuid(*topic_id.as_bytes()),
-                partitions: vec![PartitionResult {
-                    partition,
-                    error_code,
-                    error_message: message.map(str::to_owned),
-                    unknown_tagged_fields: UnknownTaggedFields(vec![]),
-                }],
-                unknown_tagged_fields: UnknownTaggedFields(vec![]),
-            }],
-            unknown_tagged_fields: UnknownTaggedFields(vec![]),
-        }
-    }
+    super::super::test_support::response_fixture!(DeleteShareGroupStateResponse, DeleteStateResult, PartitionResult; keyed);
 
     /// The whole response and the appended records for each request, over a
     /// state for partition 0 only of a two-partition topic, as Kafka's
@@ -270,11 +194,7 @@ mod tests {
 
             let resp = delete_state(&coordinator, &image, req).await;
             check!(resp == expected, "{name}");
-            let logged: Vec<Logged> = logged_records(&coordinator, state_partition)
-                .into_iter()
-                .skip(before)
-                .map(|(_, logged)| logged)
-                .collect();
+            let logged = logged_since(&coordinator, state_partition, before);
             check!(logged == appended, "{name}");
             check!(
                 coordinator.state_for_test("g", TOPIC, 0).await.is_some() == kept,

@@ -29,7 +29,7 @@ use tracing::{info, warn};
 use super::{
     Config, FollowedKey,
     follower_throttle::record_replicated,
-    replication_target_changed, task_replication_target,
+    replication_target_changed,
     truncation::{
         diverging_epoch_truncation_target, handle_epoch_fence,
         handle_offset_moved_to_tiered_storage, handle_offset_out_of_range,
@@ -168,17 +168,11 @@ pub(super) async fn handle_partition_response(
                 return RowAction::Drop;
             }
             if let Some(part) = cfg.partitions.get(&cfg.topic, cfg.partition) {
-                let _target_guard = match part
-                    .lock_replication_target(task_replication_target(cfg))
-                    .await
-                {
-                    Ok(guard) => guard,
-                    Err(error) => {
-                        warn!(topic = %cfg.topic, partition = cfg.partition.get(), %error,
-                            "replicator: skipping diverging_epoch truncation from stale local target");
-                        return RowAction::Drop;
-                    }
-                };
+                let _target_guard = lock_local_target!(
+                    part,
+                    cfg,
+                    "replicator: skipping diverging_epoch truncation from stale local target"
+                );
                 let leader_end_offset = part_resp.diverging_epoch.end_offset;
                 let end_offset =
                     diverging_epoch_truncation_target(&part, &part_resp.diverging_epoch).0;
@@ -218,17 +212,11 @@ pub(super) async fn handle_partition_response(
                     "replicator: local partition vanished between fetches");
                 return RowAction::Continue;
             };
-            let _target_guard = match part
-                .lock_replication_target(task_replication_target(cfg))
-                .await
-            {
-                Ok(guard) => guard,
-                Err(error) => {
-                    warn!(topic = %cfg.topic, partition = cfg.partition.get(), %error,
-                        "replicator: discarding response for stale local target");
-                    return RowAction::Drop;
-                }
-            };
+            let _target_guard = lock_local_target!(
+                part,
+                cfg,
+                "replicator: discarding response for stale local target"
+            );
             match part_resp.records.take() {
                 Some(RecordsPayload::Raw(bytes)) => {
                     let action = replicate_raw_batches(&part, cfg, bytes).await;
@@ -303,7 +291,7 @@ pub(super) async fn handle_partition_response(
             codes::UNKNOWN_TOPIC_OR_PARTITION => {
                 // Leader hasn't materialized its side yet
                 // (CreateTopics-vs-replicator race).
-                RowAction::Backoff(cfg.replication.unknown_topic_retry_delay)
+                RowAction::Backoff(cfg.connection.replication.unknown_topic_retry_delay)
             }
             codes::NOT_LEADER_OR_FOLLOWER => RowAction::Drop,
             codes::FENCED_LEADER_EPOCH | codes::UNKNOWN_LEADER_EPOCH => {
@@ -345,14 +333,14 @@ pub(super) async fn handle_partition_response(
                 // Back off before re-fetching so a persistent fence (e.g. our
                 // leader_epoch hasn't caught up to the new leader's yet) doesn't
                 // hot-spin the CPU between fetch and fence.
-                RowAction::Backoff(cfg.replication.epoch_fence_backoff)
+                RowAction::Backoff(cfg.connection.replication.epoch_fence_backoff)
             }
             other => {
                 warn!(
                     error_code = other,
                     "replicator: unexpected fetch error_code"
                 );
-                RowAction::Backoff(cfg.replication.unexpected_error_backoff)
+                RowAction::Backoff(cfg.connection.replication.unexpected_error_backoff)
             }
         },
 
@@ -619,6 +607,13 @@ mod tests {
         },
     };
 
+    fn local_partition_fixture() -> (Config, tempfile::TempDir, Arc<crate::partition::Partition>) {
+        let (cfg, log_dir) = test_config(image_with_leader(LEADER_ID));
+        ensure_local_partition(&cfg).unwrap();
+        let part = cfg.partitions.get(&cfg.topic, cfg.partition).unwrap();
+        (cfg, log_dir, part)
+    }
+
     fn one_record_batch(base_offset: i64) -> RecordBatch {
         RecordBatch {
             base_offset,
@@ -635,7 +630,7 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn unexpected_error_asks_for_the_configured_backoff() {
         let (mut cfg, _log_dir) = test_config(image_with_leader(LEADER_ID));
-        cfg.replication.unexpected_error_backoff = secs(37);
+        cfg.connection.replication.unexpected_error_backoff = secs(37);
         let response = fetch_response(
             TOPIC,
             WIRE_TOPIC_ID,
@@ -656,7 +651,7 @@ mod tests {
     async fn unknown_leader_epoch_retries_without_epoch_lookup() {
         let (mut cfg, _log_dir) = test_config(image_with_leader(LEADER_ID));
         ensure_local_partition(&cfg).unwrap();
-        cfg.replication.epoch_fence_backoff = secs(37);
+        cfg.connection.replication.epoch_fence_backoff = secs(37);
         let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
         listener.set_nonblocking(true).unwrap();
         cfg.leader_port = listener.local_addr().unwrap().port();
@@ -763,9 +758,7 @@ mod tests {
 
     #[tokio::test]
     async fn stale_request_epoch_cannot_truncate_the_follower_log() {
-        let (cfg, _log_dir) = test_config(image_with_leader(LEADER_ID));
-        ensure_local_partition(&cfg).unwrap();
-        let part = cfg.partitions.get(&cfg.topic, cfg.partition).unwrap();
+        let (cfg, _log_dir, part) = local_partition_fixture();
         part.replicate_batch(one_record_batch(0)).await.unwrap();
         assert!(part.log_end_offset() == Offset(1));
 
@@ -871,9 +864,7 @@ mod tests {
             expected_epochs,
         } in cases
         {
-            let (cfg, _log_dir) = test_config(image_with_leader(LEADER_ID));
-            ensure_local_partition(&cfg).unwrap();
-            let part = cfg.partitions.get(&cfg.topic, cfg.partition).unwrap();
+            let (cfg, _log_dir, part) = local_partition_fixture();
             for &(leader_epoch, count) in runs {
                 for _ in 0..count {
                     let mut batch = RecordBatch {
@@ -903,24 +894,14 @@ mod tests {
 
             assert!(action == RowAction::Continue, "{name}");
             assert!(part.log_end_offset() == Offset(expected_end), "{name}");
-            let epochs: Vec<(i32, i64)> = part
-                .log
-                .lock()
-                .unwrap()
-                .epoch_checkpoint()
-                .entries()
-                .iter()
-                .map(|entry| (entry.epoch.0, entry.start_offset.0))
-                .collect();
+            let epochs = part.epoch_history();
             assert!(epochs == expected_epochs, "{name}");
         }
     }
 
     #[tokio::test]
     async fn failed_append_leaves_log_retryable() {
-        let (cfg, _log_dir) = test_config(image_with_leader(LEADER_ID));
-        ensure_local_partition(&cfg).unwrap();
-        let part = cfg.partitions.get(&cfg.topic, cfg.partition).unwrap();
+        let (cfg, _log_dir, part) = local_partition_fixture();
         let respond = |base_offset| {
             fetch_response(
                 TOPIC,
@@ -997,9 +978,7 @@ mod tests {
         let mut actual = Vec::new();
         let mut expected = Vec::new();
         for raw in [false, true] {
-            let (cfg, log_dir) = test_config(image_with_leader(LEADER_ID));
-            ensure_local_partition(&cfg).unwrap();
-            let part = cfg.partitions.get(&cfg.topic, cfg.partition).unwrap();
+            let (cfg, log_dir, part) = local_partition_fixture();
             part.log
                 .lock()
                 .unwrap()
@@ -1032,9 +1011,7 @@ mod tests {
     #[tokio::test]
     async fn a_batch_past_the_log_end_offset_is_replicated_across_the_hole() {
         for raw in [false, true] {
-            let (cfg, _log_dir) = test_config(image_with_leader(LEADER_ID));
-            ensure_local_partition(&cfg).unwrap();
-            let part = cfg.partitions.get(&cfg.topic, cfg.partition).unwrap();
+            let (cfg, _log_dir, part) = local_partition_fixture();
 
             // Offsets 1 to 4 were compacted away on the leader.
             for base_offset in [0, 5] {
@@ -1051,9 +1028,7 @@ mod tests {
 
     #[tokio::test]
     async fn raw_compressed_replication_stays_byte_exact() {
-        let (cfg, _log_dir) = test_config(image_with_leader(LEADER_ID));
-        ensure_local_partition(&cfg).unwrap();
-        let part = cfg.partitions.get(&cfg.topic, cfg.partition).unwrap();
+        let (cfg, _log_dir, part) = local_partition_fixture();
         let mut batch = one_record_batch(0);
         batch.partition_leader_epoch = cfg.leader_epoch.0;
         batch.attributes = batch.attributes.with_compression(CompressionType::Lz4);

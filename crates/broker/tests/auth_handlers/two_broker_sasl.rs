@@ -11,21 +11,20 @@ use std::net::SocketAddr;
 
 use assert2::assert;
 use krabka_broker::{
-    BootstrapMode, Broker, BrokerConfig, BrokerHandle,
-    config::{InterBrokerCredentials, ListenerSpec},
+    BootstrapMode, Broker, BrokerConfig, BrokerHandle, config::InterBrokerCredentials,
 };
-use krabka_client_core::Client;
-use krabka_protocol::{
-    owned::{
-        create_topics_request::CreateTopicsRequest,
-        produce_request::{PartitionProduceData, ProduceRequest, TopicProduceData},
-    },
-    records::{Record, RecordBatch},
-};
+use krabka_protocol::{owned::create_topics_request::CreateTopicsRequest, records::RecordBatch};
 use krabka_security::{ListenerProtocol, SaslMechanism};
 use tempfile::TempDir;
 
-use crate::harness::admin_plain_password;
+use crate::{
+    harness::admin_plain_password,
+    support::{
+        client::connect_client,
+        produce::single_partition_produce,
+        records::{batch_from_records, value_record},
+    },
+};
 
 /// Reserve `n` ephemeral loopback ports and keep their listeners open.
 async fn reserve_listeners(n: usize) -> (Vec<SocketAddr>, Vec<tokio::net::TcpListener>) {
@@ -56,36 +55,15 @@ fn sasl_two_listener_config(
 ) -> BrokerConfig {
     let listen = plaintext_addrs[i];
     let sasl = sasl_addrs[i];
-    let mut cfg = BrokerConfig::for_tests(log_dir.to_path_buf());
-    cfg.broker_id = i32::try_from(i + 1).unwrap();
-    cfg.listen_addr = listen;
-    cfg.advertised_listener = listen.to_string();
-    cfg.node_id = krabka_broker::NodeId(u64::try_from(i + 1).unwrap());
-    cfg.controller_listen_addr = controller_addrs[i];
-    cfg.controller_quorum_voters = voters
-        .iter()
-        .map(|(id, a)| (krabka_broker::NodeId(*id), a.to_string()))
-        .collect();
-    cfg.bootstrap_mode = mode;
+    let mut cfg =
+        crate::support::broker_config(i, plaintext_addrs, controller_addrs, voters, log_dir, mode);
     cfg.listeners = vec![
-        ListenerSpec {
-            name: "PLAINTEXT".to_string(),
-            bind_addr: listen,
-            advertised: listen.to_string(),
-            protocol: ListenerProtocol::Plaintext,
-            tls_config: None,
-            sasl_mechanisms: None,
-            principal_mapper: krabka_broker::SslPrincipalMapper::default(),
-        },
-        ListenerSpec {
-            name: "SASL_PLAINTEXT".to_string(),
-            bind_addr: sasl,
-            advertised: sasl.to_string(),
-            protocol: ListenerProtocol::SaslPlaintext,
-            tls_config: None,
-            sasl_mechanisms: None,
-            principal_mapper: krabka_broker::SslPrincipalMapper::default(),
-        },
+        crate::support::listeners::listener("PLAINTEXT", listen, ListenerProtocol::Plaintext),
+        crate::support::listeners::listener(
+            "SASL_PLAINTEXT",
+            sasl,
+            ListenerProtocol::SaslPlaintext,
+        ),
     ];
     cfg.inter_broker_listener_name = "SASL_PLAINTEXT".to_string();
     cfg.enabled_sasl_mechanisms = vec![SaslMechanism::Plain];
@@ -106,13 +84,7 @@ fn sasl_two_listener_config(
 /// triples in broker id order.
 async fn start_two_node_sasl() -> Vec<(BrokerHandle, BrokerConfig, TempDir)> {
     let _ = rustls::crypto::ring::default_provider().install_default();
-    let _ = tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("warn")),
-        )
-        .with_test_writer()
-        .try_init();
+    crate::support::init_tracing_with("warn");
 
     let (plaintext_addrs, plaintext_listeners) = reserve_listeners(2).await;
     let (sasl_addrs, sasl_listeners) = reserve_listeners(2).await;
@@ -179,11 +151,7 @@ async fn two_broker_sasl_plaintext_replication() {
     }
 
     let leader_addr = cluster[0].1.listen_addr.to_string();
-    let admin = Client::builder()
-        .bootstrap(leader_addr.clone())
-        .build()
-        .await
-        .unwrap();
+    let admin = connect_client(leader_addr.clone(), None).await;
     let resp = admin
         .send(CreateTopicsRequest {
             // Node 1, which the produce below goes to, leads the partition.
@@ -202,39 +170,24 @@ async fn two_broker_sasl_plaintext_replication() {
     }
 
     // Produce 10 records to the leader.
-    let producer = Client::builder()
-        .bootstrap(leader_addr)
-        .build()
-        .await
-        .unwrap();
+    let producer = connect_client(leader_addr, None).await;
     let batch = RecordBatch {
         base_offset: 0,
         last_offset_delta: 9,
-        records: (0..10)
-            .map(|i| Record {
-                offset_delta: i,
-                value: Some(bytes::Bytes::from(format!("v{i}"))),
-                ..Default::default()
-            })
-            .collect(),
-        ..Default::default()
+        ..batch_from_records(
+            (0..10)
+                .map(|i| value_record(i, Some(bytes::Bytes::from(format!("v{i}")))))
+                .collect(),
+        )
     };
     let prod = producer
-        .send(ProduceRequest {
-            acks: -1,
-            timeout_ms: 5_000,
-            topic_data: vec![TopicProduceData {
-                name: "sasl-repl".into(),
-                topic_id,
-                partition_data: vec![PartitionProduceData {
-                    index: 0,
-                    records: Some(batch.into()),
-                    ..Default::default()
-                }],
-                ..Default::default()
-            }],
-            ..Default::default()
-        })
+        .send(single_partition_produce(
+            "sasl-repl",
+            topic_id,
+            0,
+            Some(batch.into()),
+            (-1, 5_000),
+        ))
         .await
         .unwrap();
     assert!(prod.responses[0].partition_responses[0].error_code == 0);
@@ -247,7 +200,5 @@ async fn two_broker_sasl_plaintext_replication() {
         h.wait_until_local_log_end_offset("sasl-repl", 0, 10).await;
     }
 
-    for (h, _, _) in cluster {
-        h.shutdown().await;
-    }
+    crate::support::shutdown_cluster(cluster).await;
 }

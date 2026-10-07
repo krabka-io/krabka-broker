@@ -9,11 +9,7 @@ use krabka_protocol::owned::{
     list_groups_request::ListGroupsRequest,
 };
 
-use crate::{
-    RESOURCE_TYPE_TOPIC,
-    admin_harness::{build_client, create_topic_helper},
-    support::start_n_node,
-};
+use crate::{RESOURCE_TYPE_TOPIC, admin_harness::create_topic_helper};
 
 /// `ListConfigResources` v1 with empty `resource_types` returns the default
 /// set: every topic and every broker, plus empty client-metrics. This test
@@ -24,9 +20,7 @@ use crate::{
 async fn list_config_resources_default_set_includes_topics_and_brokers() {
     const RESOURCE_TYPE_BROKER: i8 = 4;
 
-    let cluster = start_n_node(1).await.expect("start_n_node");
-    let (_, cfg, _dir) = &cluster[0];
-    let client = build_client(cfg.listen_addr).await;
+    let (_cluster, client) = crate::support::start_n_node_client(1, "admin-handlers-test").await;
 
     create_topic_helper(&client, "t-lcr-a", 1).await;
     create_topic_helper(&client, "t-lcr-b", 1).await;
@@ -66,9 +60,8 @@ async fn list_config_resources_default_set_includes_topics_and_brokers() {
 /// `SyncGroup` exchange.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn list_groups_includes_freshly_created_group() {
-    let cluster = start_n_node(1).await.expect("start_n_node");
-    let (broker, cfg, _dir) = &cluster[0];
-    let client = build_client(cfg.listen_addr).await;
+    let (cluster, client) = crate::support::start_n_node_client(1, "admin-handlers-test").await;
+    let broker = &cluster[0].0;
 
     // Seed the group manager directly with a new group.
     broker.group_create_for_test("test-group-listed");

@@ -62,26 +62,12 @@ pub(crate) fn check_records_read(
 
 #[cfg(test)]
 mod tests {
-    use bytes::Bytes;
-    use krabka_protocol::records::{Attributes, Record, RecordHeader};
+    use krabka_protocol::records::{Attributes, Record};
     use krabka_units::prelude::bytes as byte_size;
 
     use super::*;
 
-    /// A record with a `value_len`-byte value, a key, a header and a
-    /// two-byte timestamp delta.
-    fn record(value_len: usize) -> Record {
-        Record {
-            timestamp_delta: 300,
-            key: Some(Bytes::from_static(b"key")),
-            value: Some(Bytes::from(vec![7_u8; value_len])),
-            headers: vec![RecordHeader {
-                key: "h".into(),
-                value: None,
-            }],
-            ..Default::default()
-        }
-    }
+    krabka_macros::record_limit_fixture!(record);
 
     fn batch(codec: CompressionType, records: Vec<Record>) -> RecordBatch {
         RecordBatch {

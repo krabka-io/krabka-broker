@@ -3,23 +3,23 @@
   "proofs": {
     "Coma": {
       "vc_constructed_time_index_preserves_first": {
-        "prover": "alt-ergo",
-        "time": 0.241
+        "prover": "z3",
+        "time": 0.027
       },
       "vc_deref_Vec_tup2_i64_u32_Global": {
         "prover": "alt-ergo",
-        "time": 0.008
+        "time": 0.007
       },
       "vc_indexed_timestamp_scan_finds_first": {
         "prover": "alt-ergo",
-        "time": 0.005
+        "time": 0.018
       },
-      "vc_len_tup2_usize_usize": { "prover": "alt-ergo", "time": 0.008 },
-      "vc_new_tup2_i64_u32": { "prover": "alt-ergo", "time": 0.005 },
-      "vc_push_tup2_i64_u32": { "prover": "alt-ergo", "time": 0.008 },
+      "vc_len_tup2_usize_usize": { "prover": "alt-ergo", "time": 0.017 },
+      "vc_new_tup2_i64_u32": { "prover": "alt-ergo", "time": 0.013 },
+      "vc_push_tup2_i64_u32": { "prover": "alt-ergo", "time": 0.014 },
       "vc_running_maximum_index_entry": {
         "prover": "alt-ergo",
-        "time": 0.007
+        "time": 0.018
       }
     }
   }

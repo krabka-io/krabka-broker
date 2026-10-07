@@ -115,24 +115,9 @@ impl Checkpoint {
 #[cfg(test)]
 mod tests {
     use assert2::check;
-    use ring::{
-        rand::SystemRandom,
-        signature::{Ed25519KeyPair, KeyPair},
-    };
 
     use super::*;
-    use crate::signing::FileEd25519Signer;
-
-    fn signer() -> (FileEd25519Signer, Vec<u8>) {
-        let rng = SystemRandom::new();
-        let pkcs8 = Ed25519KeyPair::generate_pkcs8(&rng).unwrap();
-        let kp = Ed25519KeyPair::from_pkcs8(pkcs8.as_ref()).unwrap();
-        let pubkey = kp.public_key().as_ref().to_vec();
-        (
-            FileEd25519Signer::from_pkcs8_bytes(pkcs8.as_ref(), "k1".into()).unwrap(),
-            pubkey,
-        )
-    }
+    use crate::test_support::signer;
 
     #[test]
     fn signed_checkpoint_round_trips_through_record_and_verifies() {

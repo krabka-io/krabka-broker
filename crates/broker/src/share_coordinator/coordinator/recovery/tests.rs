@@ -14,7 +14,8 @@ use crate::{
         coordinator::{
             ShareStateError,
             test_support::{
-                batch, coordinator, image_with_topic, lead_all, open_state_partition, share_write,
+                batch, coordinator, image_with_topic, lead_all, open_state_partition,
+                open_state_partitions, share_write,
             },
         },
         persistence::{StateBatch, encode_state_key},
@@ -92,10 +93,10 @@ async fn recover_honors_nondefault_read_bound() {
 #[tokio::test]
 async fn write_persists_and_recovers() {
     let dir = tempdir().unwrap();
-    let reg = Arc::new(PartitionRegistry::new());
-    for p in 0..ShareCoordinatorConfig::default().state_topic_num_partitions {
-        open_state_partition(&reg, dir.path(), p);
-    }
+    let reg = open_state_partitions(
+        dir.path(),
+        ShareCoordinatorConfig::default().state_topic_num_partitions,
+    );
     let tid = uuid::Uuid::from_bytes([10; 16]);
     {
         let coord = ShareCoordinator::new(
@@ -164,10 +165,10 @@ async fn state_records_are_stored_in_the_configured_codec_and_recover() {
         CompressionType::Zstd,
     ] {
         let dir = tempdir().unwrap();
-        let reg = Arc::new(PartitionRegistry::new());
-        for p in 0..ShareCoordinatorConfig::default().state_topic_num_partitions {
-            open_state_partition(&reg, dir.path(), p);
-        }
+        let reg = open_state_partitions(
+            dir.path(),
+            ShareCoordinatorConfig::default().state_topic_num_partitions,
+        );
         let config = ShareCoordinatorConfig {
             state_topic_compression_codec: codec,
             ..ShareCoordinatorConfig::default()
@@ -208,25 +209,35 @@ async fn state_records_are_stored_in_the_configured_codec_and_recover() {
 // be `base_offset + 1`, and a second batch appended after it must also be
 // replayed (only reachable when the cursor advances by
 // `last_offset_delta + 1`).
-#[tokio::test]
-async fn replay_uses_per_record_and_inter_batch_offsets() {
-    let dir = tempdir().unwrap();
-    let (coord, reg) = coordinator(dir.path());
+async fn led_state_partition(
+    log_dir: &std::path::Path,
+    topic_id: uuid::Uuid,
+) -> (
+    ShareCoordinator,
+    Arc<PartitionRegistry>,
+    Arc<crate::partition::Partition>,
+) {
+    let (coord, reg) = coordinator(log_dir);
     lead_all(&coord).await;
-    let tid = uuid::Uuid::from_bytes([11; 16]);
-    let state_partition = coord.state_partition_for("g", &tid, 0);
+    let state_partition = coord.state_partition_for("g", &topic_id, 0);
     let part = reg
         .get(bootstrap::TOPIC, state_partition)
         .expect("state partition open");
+    (coord, reg, part)
+}
+
+#[tokio::test]
+async fn replay_uses_per_record_and_inter_batch_offsets() {
+    let dir = tempdir().unwrap();
+    let tid = uuid::Uuid::from_bytes([11; 16]);
+    let (coord, _reg, part) = led_state_partition(dir.path(), tid).await;
 
     let (snap_key, upd_key) = state_keys(tid);
 
     // Batch A (base_offset 0): an UPDATE at delta 0, then a SNAPSHOT at
     // delta 1 (last_offset_delta = 1). The snapshot's rec_offset is
     // `base_offset + 1 == 1`.
-    part.produce_batch(update_then_snapshot(snap_key.clone(), upd_key))
-        .await
-        .unwrap();
+    append_update_then_snapshot(&part, &snap_key, upd_key).await;
 
     // Batch B (base_offset 2): a later SNAPSHOT. Only reached if the cursor
     // advanced past batch A by `last_offset_delta + 1`.
@@ -271,21 +282,14 @@ async fn replay_uses_per_record_and_inter_batch_offsets() {
 #[tokio::test]
 async fn replay_snapshot_offset_is_base_plus_delta() {
     let dir = tempdir().unwrap();
-    let (coord, reg) = coordinator(dir.path());
-    lead_all(&coord).await;
     let tid = uuid::Uuid::from_bytes([12; 16]);
-    let state_partition = coord.state_partition_for("g", &tid, 0);
-    let part = reg
-        .get(bootstrap::TOPIC, state_partition)
-        .expect("state partition open");
+    let (coord, _reg, part) = led_state_partition(dir.path(), tid).await;
 
     let (snap_key, upd_key) = state_keys(tid);
 
     // Single batch, base_offset 0: an UPDATE at delta 0 then a SNAPSHOT at
     // delta 1. The snapshot's rec_offset is `0 + 1 == 1`.
-    part.produce_batch(update_then_snapshot(snap_key.clone(), upd_key))
-        .await
-        .unwrap();
+    append_update_then_snapshot(&part, &snap_key, upd_key).await;
 
     coord.reload_all_partitions_for_test().await;
 
@@ -294,6 +298,27 @@ async fn replay_snapshot_offset_is_base_plus_delta() {
     check!(st.start_offset == 20);
     // The snapshot record sits at base_offset(0) + offset_delta(1) == 1.
     check!(st.last_snapshot_offset == 1);
+}
+
+/// Append the two-record cursor fixture before the caller adds any later batch.
+async fn append_update_then_snapshot(
+    partition: &crate::partition::Partition,
+    snapshot_key: &Bytes,
+    update_key: Bytes,
+) {
+    partition
+        .produce_batch(update_then_snapshot(snapshot_key.clone(), update_key))
+        .await
+        .unwrap();
+}
+
+/// Apply a leadership image and wait for this refresh's background loads.
+async fn refresh_and_wait(coordinator: &Arc<ShareCoordinator>, image: &MetadataImage) {
+    coordinator
+        .refresh_leader_partitions(image)
+        .await
+        .finished()
+        .await;
 }
 
 /// A metadata image with one `__share_group_state` partition, led by `leader`
@@ -545,6 +570,19 @@ async fn leadership_change_loads_and_unloads_the_state_partition() {
     }
 }
 
+fn coordinator_for_topic(
+    registry: &Arc<PartitionRegistry>,
+    topic_id: uuid::Uuid,
+) -> (Arc<ShareCoordinator>, PartitionIndex) {
+    let coordinator = Arc::new(ShareCoordinator::new(
+        krabka_audit::NodeId(1),
+        Arc::clone(registry),
+        ShareCoordinatorConfig::default(),
+    ));
+    let state_partition = coordinator.state_partition_for("g", &topic_id, 0);
+    (coordinator, state_partition)
+}
+
 /// A broker that the image names as leader, but whose state partition log is
 /// not open yet, answers `COORDINATOR_LOAD_IN_PROGRESS`. The refresh after the
 /// log opens loads the partition.
@@ -553,19 +591,10 @@ async fn led_partition_without_a_local_log_loads_once_the_log_opens() {
     let dir = tempdir().unwrap();
     let registry = Arc::new(PartitionRegistry::new());
     let topic_id = uuid::Uuid::from_bytes([46; 16]);
-    let coordinator = Arc::new(ShareCoordinator::new(
-        krabka_audit::NodeId(1),
-        Arc::clone(&registry),
-        ShareCoordinatorConfig::default(),
-    ));
-    let state_partition = coordinator.state_partition_for("g", &topic_id, 0);
+    let (coordinator, state_partition) = coordinator_for_topic(&registry, topic_id);
     let image = state_partition_image(state_partition.get(), 1, 0);
 
-    coordinator
-        .refresh_leader_partitions(&image)
-        .await
-        .finished()
-        .await;
+    refresh_and_wait(&coordinator, &image).await;
     check!(coordinator.load_status(state_partition).await == Some(super::LoadStatus::Pending));
     check!(
         coordinator.read_summary("g", topic_id, 0).await
@@ -573,11 +602,7 @@ async fn led_partition_without_a_local_log_loads_once_the_log_opens() {
     );
 
     open_state_partition(&registry, dir.path(), state_partition.get());
-    coordinator
-        .refresh_leader_partitions(&image)
-        .await
-        .finished()
-        .await;
+    refresh_and_wait(&coordinator, &image).await;
     check!(coordinator.load_status(state_partition).await == Some(super::LoadStatus::Active));
     check!(coordinator.read_summary("g", topic_id, 0).await == Ok(None));
 }
@@ -590,12 +615,7 @@ async fn failed_load_serves_nothing_and_the_next_refresh_loads_again() {
     let dir = tempdir().unwrap();
     let registry = Arc::new(PartitionRegistry::new());
     let topic_id = uuid::Uuid::from_bytes([47; 16]);
-    let coordinator = Arc::new(ShareCoordinator::new(
-        krabka_audit::NodeId(1),
-        Arc::clone(&registry),
-        ShareCoordinatorConfig::default(),
-    ));
-    let state_partition = coordinator.state_partition_for("g", &topic_id, 0);
+    let (coordinator, state_partition) = coordinator_for_topic(&registry, topic_id);
     open_state_partition(&registry, dir.path(), state_partition.get());
     let image = state_partition_image(state_partition.get(), 1, 0);
 
@@ -614,11 +634,7 @@ async fn failed_load_serves_nothing_and_the_next_refresh_loads_again() {
     check!(coordinator.load_status(state_partition).await == Some(super::LoadStatus::Failed));
     check!(coordinator.read_summary("g", topic_id, 0).await == Err(crate::codes::NOT_COORDINATOR));
 
-    coordinator
-        .refresh_leader_partitions(&image)
-        .await
-        .finished()
-        .await;
+    refresh_and_wait(&coordinator, &image).await;
     check!(coordinator.load_status(state_partition).await == Some(super::LoadStatus::Active));
     check!(coordinator.read_summary("g", topic_id, 0).await == Ok(None));
 }

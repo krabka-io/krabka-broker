@@ -18,7 +18,7 @@ use super::{
     ActorState, chrono_now_ms,
     reconciliation::{assignment_delay, configure_after_load, reconcile},
     records::{flush_pending, snapshot_pending_after_change},
-    request::{build_member, task_ids_to_map, task_offsets_to_map},
+    request::{build_member, task_ids_to_map, task_offsets_to_map, update_client_tags},
     response::{ResponseDelta, build_assignment_resp, endpoint_to_partitions, error_resp},
 };
 use crate::{
@@ -59,11 +59,7 @@ pub(super) async fn handle_session_tick(
     // `evict_expired` set `dirty`; reconcile owns the single `bump_epoch`.
     reconcile(actor, config, metadata_source);
     let mut pending = snapshot_pending_after_change(actor, &[]);
-    for mid in &evicted {
-        pending.member_metadata.push((mid.clone(), None));
-        pending.target_per_member.push((mid.clone(), None));
-        pending.current_per_member.push((mid.clone(), None));
-    }
+    crate::coordinator::unified::persistence::tombstone_members!(pending, &evicted);
     let now_ms = chrono_now_ms();
     flush_pending(actor, pending, offsets_log, coordinator, now_ms).await
 }
@@ -109,9 +105,9 @@ pub(super) async fn handle_heartbeat(
     // joining member.
     let mut replaced = None;
     if let Some(instance_id) = &req.instance_id {
-        let existing = static_member_id(actor, instance_id);
-        if let Some(resp) = static_member_error(req, instance_id, existing.as_deref(), actor) {
-            return Ok(resp);
+        let (existing, error) = checked_static_member(actor, req, instance_id);
+        if let Some(response) = error {
+            return Ok(response);
         }
         if req.member_epoch == 0
             && let Some(previous) = existing
@@ -568,6 +564,31 @@ fn update_member_steady_state(
     changed
 }
 
+type MetadataFields = (
+    Option<String>,
+    Option<String>,
+    i32,
+    i32,
+    String,
+    Option<(String, u16)>,
+    Vec<(String, String)>,
+);
+
+/// The fields whose replacement changes this member's durable metadata.
+fn metadata_fields(
+    m: &crate::coordinator::unified::streams::state::StreamsMemberState,
+) -> MetadataFields {
+    (
+        m.instance_id.clone(),
+        m.rack_id.clone(),
+        m.rebalance_timeout_ms,
+        m.topology_epoch,
+        m.process_id.clone(),
+        m.user_endpoint.clone(),
+        m.client_tags.clone(),
+    )
+}
+
 /// Applies the member fields of a heartbeat to a known member, as Kafka's
 /// `StreamsGroupMember.Builder.maybeUpdate*` calls do: a field that the
 /// request carries replaces the stored value, and an absent field (or a
@@ -577,15 +598,7 @@ fn update_member_metadata(
     m: &mut crate::coordinator::unified::streams::state::StreamsMemberState,
     req: &StreamsGroupHeartbeatRequest,
 ) -> bool {
-    let before = (
-        m.instance_id.clone(),
-        m.rack_id.clone(),
-        m.rebalance_timeout_ms,
-        m.topology_epoch,
-        m.process_id.clone(),
-        m.user_endpoint.clone(),
-        m.client_tags.clone(),
-    );
+    let before = metadata_fields(m);
     if req.instance_id.is_some() {
         m.instance_id.clone_from(&req.instance_id);
     }
@@ -608,22 +621,8 @@ fn update_member_metadata(
     if req.member_epoch == 0 || endpoint.is_some() {
         m.user_endpoint = endpoint;
     }
-    if let Some(tags) = &req.client_tags {
-        m.client_tags = tags
-            .iter()
-            .map(|kv| (kv.key.clone(), kv.value.clone()))
-            .collect();
-    }
-    before
-        != (
-            m.instance_id.clone(),
-            m.rack_id.clone(),
-            m.rebalance_timeout_ms,
-            m.topology_epoch,
-            m.process_id.clone(),
-            m.user_endpoint.clone(),
-            m.client_tags.clone(),
-        )
+    update_client_tags(m, req);
+    before != metadata_fields(m)
 }
 
 /// Handles a leave-group heartbeat, where `member_epoch == -1`.
@@ -643,9 +642,9 @@ async fn handle_leave(
         actor.state.request_shutdown(&req.member_id);
     }
     if let Some(instance_id) = &req.instance_id {
-        let existing = static_member_id(actor, instance_id);
-        if let Some(resp) = static_member_error(req, instance_id, existing.as_deref(), actor) {
-            return Ok(resp);
+        let (_, error) = checked_static_member(actor, req, instance_id);
+        if let Some(response) = error {
+            return Ok(response);
         }
         if req.member_epoch == LEAVE_GROUP_STATIC_MEMBER_EPOCH {
             return leave_static_member(actor, offsets_log, coordinator, req, now_ms).await;
@@ -663,13 +662,7 @@ async fn handle_leave(
     // `remove_member` set `dirty`; reconcile owns the single `bump_epoch`.
     reconcile(actor, config, metadata_source);
     let mut pending = snapshot_pending_after_change(actor, &[]);
-    pending.member_metadata.push((req.member_id.clone(), None));
-    pending
-        .target_per_member
-        .push((req.member_id.clone(), None));
-    pending
-        .current_per_member
-        .push((req.member_id.clone(), None));
+    crate::coordinator::unified::persistence::tombstone_members!(pending, [&req.member_id]);
     flush_pending(actor, pending, offsets_log, coordinator, now_ms).await?;
     // Kafka's leave response echoes the member id and epoch, and sends an
     // empty status list and no group configuration.
@@ -693,6 +686,17 @@ fn static_member_id(actor: &ActorState, instance_id: &str) -> Option<String> {
         .values()
         .find(|member| member.instance_id.as_deref() == Some(instance_id))
         .map(|member| member.member_id.clone())
+}
+
+/// Resolves the instance before checking its ownership, for joins and leaves alike.
+fn checked_static_member(
+    actor: &ActorState,
+    req: &StreamsGroupHeartbeatRequest,
+    instance_id: &str,
+) -> (Option<String>, Option<StreamsGroupHeartbeatResponse>) {
+    let existing = static_member_id(actor, instance_id);
+    let error = static_member_error(req, instance_id, existing.as_deref(), actor);
+    (existing, error)
 }
 
 /// Kafka's static member checks: a join may not take an instance id that a

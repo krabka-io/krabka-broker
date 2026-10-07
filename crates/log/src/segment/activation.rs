@@ -138,7 +138,14 @@ mod tests {
     use tempfile::tempdir;
 
     use super::*;
-    use crate::segment::test_support::{DENSE_INDEX, sample_batch};
+    use crate::segment::test_support::seeded_segment;
+
+    fn check_pending_ranges(seg: &Segment, expected: &[(Offset, Offset)]) {
+        let mut pending = Vec::new();
+        seg.pending_activation_ranges_into(Offset(0), Offset(0), 0, 1_000, &mut pending)
+            .unwrap();
+        assert2::check!(pending == expected);
+    }
 
     /// A segment whose maximum timestamp is unknown must be walked, never
     /// skipped.
@@ -153,10 +160,7 @@ mod tests {
     #[test]
     fn a_segment_with_an_unknown_maximum_is_never_skipped_as_active() {
         let dir = tempdir().unwrap();
-        {
-            let mut seg = Segment::create(dir.path(), Offset(0)).unwrap();
-            seg.append(&sample_batch(0, 1, 9_000), DENSE_INDEX).unwrap();
-        }
+        drop(seeded_segment(dir.path(), 0, &[(0, 1, 9_000)]));
 
         // The no-scan load: real bytes on disk, maximum still unknown.
         let seg = Segment::open(dir.path(), Offset(0)).unwrap();
@@ -167,27 +171,20 @@ mod tests {
         assert2::check!(scan.active_end == Offset(0));
         assert2::check!(scan.pending_at == Some(9_000));
 
-        let mut pending = Vec::new();
-        seg.pending_activation_ranges_into(Offset(0), Offset(0), 0, 1_000, &mut pending)
-            .unwrap();
-        assert2::check!(pending == vec![(Offset(0), Offset(0))]);
+        check_pending_ranges(&seg, &[(Offset(0), Offset(0))]);
         drop(dir);
     }
 
     /// A segment with no bytes takes the shortcut: there is nothing to walk.
     #[test]
     fn an_empty_segment_is_wholly_active() {
-        let dir = tempdir().unwrap();
-        let seg = Segment::create(dir.path(), Offset(0)).unwrap();
+        let (dir, seg) = crate::segment::test_support::test_segment();
 
         assert2::check!(seg.is_wholly_active(0, 1_000));
         let scan = seg.scan_activation(Offset(0), 0, 1_000).unwrap();
         assert2::check!(scan.pending_at == None);
 
-        let mut pending = Vec::new();
-        seg.pending_activation_ranges_into(Offset(0), Offset(0), 0, 1_000, &mut pending)
-            .unwrap();
-        assert2::check!(pending == Vec::new());
+        check_pending_ranges(&seg, &[]);
         drop(dir);
     }
 }

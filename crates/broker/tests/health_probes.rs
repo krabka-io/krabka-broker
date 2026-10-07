@@ -14,30 +14,22 @@
 //! asserted against a handle that has already come back from
 //! `Broker::start_with_health`.
 
+mod support;
+
 use std::{net::SocketAddr, time::Duration};
 
 use assert2::{assert, check};
 use krabka_broker::{
     Broker, BrokerConfig,
-    config::{DEFAULT_READINESS_MAX_METADATA_LAG, ListenerSpec},
+    config::DEFAULT_READINESS_MAX_METADATA_LAG,
     health::{HealthState, router},
 };
 use krabka_security::ListenerProtocol;
-use tokio::{
-    io::{AsyncReadExt as _, AsyncWriteExt as _},
-    net::{TcpListener, TcpStream},
-};
+use tokio::net::TcpListener;
 
 /// One HTTP/1.1 GET, returned as `(status line, body)`.
 async fn get(addr: SocketAddr, path: &str) -> (String, String) {
-    let mut stream = TcpStream::connect(addr).await.unwrap();
-    let req =
-        format!("GET {path} HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\nAccept: */*\r\n\r\n");
-    stream.write_all(req.as_bytes()).await.unwrap();
-    stream.flush().await.unwrap();
-    let mut buf = Vec::new();
-    stream.read_to_end(&mut buf).await.unwrap();
-    let raw = String::from_utf8(buf).unwrap();
+    let raw = crate::support::client::http_get(addr, path, true).await;
     let (head, body) = raw.split_once("\r\n\r\n").unwrap_or((raw.as_str(), ""));
     let status = head.lines().next().unwrap_or_default().to_string();
     (status, body.to_string())
@@ -56,15 +48,10 @@ async fn serve_probes(state: HealthState) -> SocketAddr {
 
 fn loopback_config(log_dir: &std::path::Path) -> BrokerConfig {
     let mut cfg = BrokerConfig::for_tests(log_dir.to_path_buf());
-    cfg.listeners = vec![ListenerSpec {
-        name: "PLAINTEXT".into(),
-        bind_addr: "127.0.0.1:0".parse().unwrap(),
-        advertised: "127.0.0.1:0".into(),
-        protocol: ListenerProtocol::Plaintext,
-        tls_config: None,
-        sasl_mechanisms: None,
-        principal_mapper: krabka_broker::SslPrincipalMapper::default(),
-    }];
+    cfg.listeners = vec![crate::support::listeners::loopback_listener(
+        "PLAINTEXT",
+        ListenerProtocol::Plaintext,
+    )];
     cfg.inter_broker_listener_name = "PLAINTEXT".into();
     cfg
 }

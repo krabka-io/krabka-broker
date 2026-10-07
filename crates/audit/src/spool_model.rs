@@ -150,12 +150,7 @@ impl SpoolState {
     /// Ghost: the losses that durable markers report, whether or not they
     /// have been replayed yet.
     fn reported(&self) -> u64 {
-        self.markers
-            .iter()
-            .enumerate()
-            .filter(|&(record, _)| self.durable_history & (1 << record) != 0)
-            .filter_map(|(_, marker)| marker.map(|m| m.count))
-            .sum()
+        self.durable_markers().map(|marker| marker.count).sum()
     }
 
     fn durable_markers(&self) -> impl Iterator<Item = Losses> + '_ {
@@ -583,17 +578,11 @@ fn check(model: SpoolModel) -> impl Checker<SpoolModel> {
         .join()
 }
 
+krabka_macros::bounded_bfs!(bounded_bfs);
+
 #[test]
 fn audit_spool_crash_and_replay_interleavings() {
-    let checker = check(SpoolModel::SETTLE);
-    eprintln!(
-        "[audit-spool] unique_states={} generated={} max_depth={}",
-        checker.unique_state_count(),
-        checker.state_count(),
-        checker.max_depth()
-    );
-    assert2::assert!(checker.max_depth() < MAX_DEPTH);
-    assert2::assert!(checker.state_count() < MAX_STATES);
+    let checker = bounded_bfs(SpoolModel::SETTLE, "audit-spool", MAX_DEPTH, MAX_STATES);
     // Pin: a changed count is a changed model, not a retuning knob.
     assert2::assert!(
         checker.unique_state_count() == PINNED_UNIQUE_STATES,

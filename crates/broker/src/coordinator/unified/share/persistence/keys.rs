@@ -20,13 +20,7 @@
 //! key string keeps the legacy `i16` length prefix and a key carries no
 //! tagged-field trailer. Only the values are flexible.
 
-use bytes::Bytes;
-use krabka_protocol::ProtocolError;
-
-use crate::{
-    coordinator::unified::persistence::{encode_string_key, get_string},
-    error::BrokerError,
-};
+use crate::coordinator::unified::persistence::group_record_keys;
 
 pub const KEY_SHARE_MEMBER_METADATA: i16 = 10;
 pub const KEY_SHARE_GROUP_METADATA: i16 = 11;
@@ -35,80 +29,29 @@ pub const KEY_SHARE_TARGET_ASSIGNMENT_MEMBER: i16 = 13;
 pub const KEY_SHARE_CURRENT_MEMBER_ASSIGNMENT: i16 = 14;
 pub const KEY_SHARE_GROUP_STATE_PARTITION_METADATA: i16 = 15;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ShareGroupKey {
-    GroupMetadata { group_id: String },
-    MemberMetadata { group_id: String, member_id: String },
-    TargetAssignmentMetadata { group_id: String },
-    TargetAssignmentMember { group_id: String, member_id: String },
-    CurrentMemberAssignment { group_id: String, member_id: String },
-    StatePartitionMetadata { group_id: String },
-}
-
-/// Encodes a [`ShareGroupKey`] with its leading `i16` key version.
-///
-/// # Errors
-///
-/// Returns [`BrokerError::Protocol`] when a string of the key is longer than
-/// 32767 bytes, which a non-flexible key string cannot carry.
-pub fn encode_share_key(key: &ShareGroupKey) -> Result<Bytes, BrokerError> {
-    match key {
-        ShareGroupKey::GroupMetadata { group_id } => {
-            encode_string_key(KEY_SHARE_GROUP_METADATA, &[group_id])
-        }
-        ShareGroupKey::MemberMetadata {
-            group_id,
-            member_id,
-        } => encode_string_key(KEY_SHARE_MEMBER_METADATA, &[group_id, member_id]),
-        ShareGroupKey::TargetAssignmentMetadata { group_id } => {
-            encode_string_key(KEY_SHARE_TARGET_ASSIGNMENT_METADATA, &[group_id])
-        }
-        ShareGroupKey::TargetAssignmentMember {
-            group_id,
-            member_id,
-        } => encode_string_key(KEY_SHARE_TARGET_ASSIGNMENT_MEMBER, &[group_id, member_id]),
-        ShareGroupKey::CurrentMemberAssignment {
-            group_id,
-            member_id,
-        } => encode_string_key(KEY_SHARE_CURRENT_MEMBER_ASSIGNMENT, &[group_id, member_id]),
-        ShareGroupKey::StatePartitionMetadata { group_id } => {
-            encode_string_key(KEY_SHARE_GROUP_STATE_PARTITION_METADATA, &[group_id])
-        }
+group_record_keys! {
+    pub enum ShareGroupKey {
+        GroupMetadata => KEY_SHARE_GROUP_METADATA,
+        MemberMetadata(member_id) => KEY_SHARE_MEMBER_METADATA,
+        TargetAssignmentMetadata => KEY_SHARE_TARGET_ASSIGNMENT_METADATA,
+        TargetAssignmentMember(member_id) => KEY_SHARE_TARGET_ASSIGNMENT_MEMBER,
+        CurrentMemberAssignment(member_id) => KEY_SHARE_CURRENT_MEMBER_ASSIGNMENT,
+        StatePartitionMetadata => KEY_SHARE_GROUP_STATE_PARTITION_METADATA,
     }
-}
 
-/// # Errors
-/// Returns an error when log I/O fails, a record or index is corrupt, or the requested offset violates the segment state.
-pub fn parse_share_key(version: i16, mut buf: &[u8]) -> Result<ShareGroupKey, BrokerError> {
-    let key = match version {
-        KEY_SHARE_GROUP_METADATA => ShareGroupKey::GroupMetadata {
-            group_id: get_string(&mut buf)?,
-        },
-        KEY_SHARE_MEMBER_METADATA => ShareGroupKey::MemberMetadata {
-            group_id: get_string(&mut buf)?,
-            member_id: get_string(&mut buf)?,
-        },
-        KEY_SHARE_TARGET_ASSIGNMENT_METADATA => ShareGroupKey::TargetAssignmentMetadata {
-            group_id: get_string(&mut buf)?,
-        },
-        KEY_SHARE_TARGET_ASSIGNMENT_MEMBER => ShareGroupKey::TargetAssignmentMember {
-            group_id: get_string(&mut buf)?,
-            member_id: get_string(&mut buf)?,
-        },
-        KEY_SHARE_CURRENT_MEMBER_ASSIGNMENT => ShareGroupKey::CurrentMemberAssignment {
-            group_id: get_string(&mut buf)?,
-            member_id: get_string(&mut buf)?,
-        },
-        KEY_SHARE_GROUP_STATE_PARTITION_METADATA => ShareGroupKey::StatePartitionMetadata {
-            group_id: get_string(&mut buf)?,
-        },
-        _ => {
-            return Err(BrokerError::Protocol(ProtocolError::InvalidValue(
-                "unknown share-group key version",
-            )));
-        }
-    };
-    Ok(key)
+    /// # Errors
+    /// Returns an error when log I/O fails, a record or index is corrupt, or the requested offset violates the segment state.
+    fn parse_share_key;
+
+    /// Encodes a [`ShareGroupKey`] with its leading `i16` key version.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::error::BrokerError::Protocol`] when a string of the key is longer than
+    /// 32767 bytes, which a non-flexible key string cannot carry.
+    fn encode_share_key;
+
+    invalid "unknown share-group key version";
 }
 
 #[cfg(test)]

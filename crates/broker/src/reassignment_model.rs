@@ -84,16 +84,8 @@ impl ReassignModel {
 
     fn leader_handoff() -> Self {
         Self {
-            replicas: vec![
-                krabka_audit::NodeId(1),
-                krabka_audit::NodeId(2),
-                krabka_audit::NodeId(3),
-            ],
-            adding: vec![krabka_audit::NodeId(3)],
-            removing: vec![krabka_audit::NodeId(2)],
-            initial_isr: vec![krabka_audit::NodeId(1), krabka_audit::NodeId(2)],
             leader: krabka_audit::NodeId(2), // in `removing` → handoff required before completion
-            max_epoch: 10,
+            ..Self::basic()
         }
     }
 
@@ -317,51 +309,51 @@ impl Model for ReassignModel {
         }
     }
 
-    fn next_state(&self, last: &Self::State, action: Self::Action) -> Option<Self::State> {
-        let mut state = last.clone();
-        match action {
-            ReassignAction::AdmitToIsr(n) => {
-                if state.isr.contains(&n) || !state.replicas.contains(&n) {
-                    return None;
+    krabka_macros::model_transition!(last, action, state; {
+            match action {
+                ReassignAction::AdmitToIsr(n) => {
+                    if state.isr.contains(&n) || !state.replicas.contains(&n) {
+                        return None;
+                    }
+                    // Rebuild ISR in canonical replica order (keeps the space small).
+                    state.isr = state
+                        .replicas
+                        .iter()
+                        .copied()
+                        .filter(|r| state.isr.contains(r) || *r == n)
+                        .collect();
                 }
-                // Rebuild ISR in canonical replica order (keeps the space small).
-                state.isr = state
-                    .replicas
-                    .iter()
-                    .copied()
-                    .filter(|r| state.isr.contains(r) || *r == n)
-                    .collect();
+                ReassignAction::Die(n) => {
+                    if last.alive.len() <= 1 || !state.alive.remove(&n) {
+                        return None;
+                    }
+                }
+                ReassignAction::Revive(n) => {
+                    if !state.alive.insert(n) {
+                        return None;
+                    }
+                }
+                ReassignAction::ReassignStep => {
+                    if !in_flight(&state) {
+                        return None;
+                    }
+                    let pr = pr_of(&state);
+                    let alive: HashSet<NodeId> = state.alive.iter().copied().collect();
+                    {
+                        let next = reassign_one(&pr, &alive)?;
+                        assert_step(last, &next);
+                        state.leader = next.leader;
+                        state.isr = next.isr;
+                        state.adding = next.adding_replicas;
+                        state.removing = next.removing_replicas;
+                        state.replicas = next.replicas;
+                        state.leader_epoch = next.leader_epoch.0;
+                    }
+                }
             }
-            ReassignAction::Die(n) => {
-                if last.alive.len() <= 1 || !state.alive.remove(&n) {
-                    return None;
-                }
-            }
-            ReassignAction::Revive(n) => {
-                if !state.alive.insert(n) {
-                    return None;
-                }
-            }
-            ReassignAction::ReassignStep => {
-                if !in_flight(&state) {
-                    return None;
-                }
-                let pr = pr_of(&state);
-                let alive: HashSet<NodeId> = state.alive.iter().copied().collect();
-                {
-                    let next = reassign_one(&pr, &alive)?;
-                    assert_step(last, &next);
-                    state.leader = next.leader;
-                    state.isr = next.isr;
-                    state.adding = next.adding_replicas;
-                    state.removing = next.removing_replicas;
-                    state.replicas = next.replicas;
-                    state.leader_epoch = next.leader_epoch.0;
-                }
-            }
-        }
-        Some(state)
-    }
+            Some(state)
+
+    });
 
     fn properties(&self) -> Vec<Property<Self>> {
         vec![
@@ -401,10 +393,10 @@ impl Model for ReassignModel {
 
 fn run(model: ReassignModel, label: &str, pinned_unique_states: usize) {
     let checker = run_bfs(model, label, MAX_DEPTH, MAX_STATES);
-    // Pin: a changed count is a changed model, not a retuning knob.
-    assert2::assert!(
-        checker.unique_state_count() == pinned_unique_states,
-        "[{label}] unique-state count moved: the reachable set of this model changed"
+    crate::model_check::assert_pinned_count(
+        checker.unique_state_count(),
+        pinned_unique_states,
+        label,
     );
     checker.assert_properties();
 }

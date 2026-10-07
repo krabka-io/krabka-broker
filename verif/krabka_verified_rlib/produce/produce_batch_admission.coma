@@ -1,17 +1,18 @@
-(* #"/workspace/crates/verified/src/produce.rs" 61 0 68 26 *)
+(* #"/workspace/crates/verified/src/produce.rs" 49 0 56 26 *)
 
 let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
 let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
-let%span sproduce = "/workspace/crates/verified/src/produce.rs" 69 27 69 28
-let%span sproduce'0 = "/workspace/crates/verified/src/produce.rs" 70 32 70 40
-let%span sproduce'1 = "/workspace/crates/verified/src/produce.rs" 71 31 71 32
-let%span sproduce'2 = "/workspace/crates/verified/src/produce.rs" 71 11 71 32
-let%span sproduce'3 = "/workspace/crates/verified/src/produce.rs" 72 28 72 29
-let%span sproduce'4 = "/workspace/crates/verified/src/produce.rs" 74 27 74 28
-let%span sproduce'5 = "/workspace/crates/verified/src/produce.rs" 74 48 74 49
-let%span sproduce'6 = "/workspace/crates/verified/src/produce.rs" 37 10 43 53
-let%span sproduce'7 = "/workspace/crates/verified/src/produce.rs" 44 10 51 24
-let%span sproduce'8 = "/workspace/crates/verified/src/produce.rs" 52 10 59 23
+let%span sproduce = "/workspace/crates/verified/src/produce.rs" 57 27 57 28
+let%span sproduce'0 = "/workspace/crates/verified/src/produce.rs" 58 32 58 40
+let%span sproduce'1 = "/workspace/crates/verified/src/produce.rs" 59 31 59 32
+let%span sproduce'2 = "/workspace/crates/verified/src/produce.rs" 59 11 59 32
+let%span sproduce'3 = "/workspace/crates/verified/src/produce.rs" 60 28 60 29
+let%span sproduce'4 = "/workspace/crates/verified/src/produce.rs" 62 27 62 28
+let%span sproduce'5 = "/workspace/crates/verified/src/produce.rs" 62 48 62 49
+let%span sproduce'6 = "/workspace/crates/verified/src/produce.rs" 35 10 41 53
+let%span sproduce'7 = "/workspace/crates/verified/src/produce.rs" 42 10 44 24
+let%span sproduce'8 = "/workspace/crates/verified/src/produce.rs" 45 10 47 23
+let%span sproduce'9 = "/workspace/crates/verified/src/produce.rs" 81 16 82 50
 
 use creusot.int.Int32
 use creusot.int.Int64
@@ -30,11 +31,16 @@ predicate gt_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord'0] oth
 
 meta "rewrite_def" predicate gt_log_Int
 
+predicate record_header_valid [#"/workspace/crates/verified/src/produce.rs" 74 0 80 9] (delta: int) (count: int) (control: bool) (producer: int) (sequence: int) =
+  [%#sproduce'9] 0 <= delta
+  /\ delta < Int32.to_int const_MAX
+  /\ count = delta + 1 /\ gt_log_Int count 0 /\ not control /\ (producer < 0 \/ ge_log_Int sequence 0)
+
 meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let produce_batch_admission [#"/workspace/crates/verified/src/produce.rs" 61 0 68 26] (last_offset_delta: Int32.t)
+let produce_batch_admission [#"/workspace/crates/verified/src/produce.rs" 49 0 56 26] (last_offset_delta: Int32.t)
   (records_count: Int32.t) (control_batch: bool) (producer_id: Int64.t) (base_sequence: Int32.t) (create_time: bool)
   (return (x: t_ProduceBatchAdmission)) = (! bb0
   [ bb0 = s0
@@ -85,17 +91,9 @@ let produce_batch_admission [#"/workspace/crates/verified/src/produce.rs" 61 0 6
       \/ Int32.to_int records_count <= 0
       \/ control_batch \/ ge_log_Int (Int64.to_int producer_id) 0 /\ Int32.to_int base_sequence < 0))
     /\ ([@stop_split] [@expl:produce_batch_admission ensures #1] [%#sproduce'7] (result = InvalidTimestamp)
-      = (0 <= Int32.to_int last_offset_delta
-      /\ Int32.to_int last_offset_delta < Int32.to_int const_MAX
-      /\ Int32.to_int records_count = Int32.to_int last_offset_delta + 1
-      /\ gt_log_Int (Int32.to_int records_count) 0
-      /\ not control_batch
-      /\ (Int64.to_int producer_id < 0 \/ ge_log_Int (Int32.to_int base_sequence) 0) /\ not create_time))
+      = (record_header_valid (Int32.to_int last_offset_delta) (Int32.to_int records_count) control_batch (Int64.to_int producer_id) (Int32.to_int base_sequence)
+      /\ not create_time))
     /\ ([@stop_split] [@expl:produce_batch_admission ensures #2] [%#sproduce'8] (result = Admit)
-    = (0 <= Int32.to_int last_offset_delta
-    /\ Int32.to_int last_offset_delta < Int32.to_int const_MAX
-    /\ Int32.to_int records_count = Int32.to_int last_offset_delta + 1
-    /\ gt_log_Int (Int32.to_int records_count) 0
-    /\ not control_batch
-    /\ (Int64.to_int producer_id < 0 \/ ge_log_Int (Int32.to_int base_sequence) 0) /\ create_time))}
+    = (record_header_valid (Int32.to_int last_offset_delta) (Int32.to_int records_count) control_batch (Int64.to_int producer_id) (Int32.to_int base_sequence)
+    /\ create_time))}
     (! return {result}) ]
