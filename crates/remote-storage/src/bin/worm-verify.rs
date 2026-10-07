@@ -502,10 +502,6 @@ fn summary(report: &ArchiveVerifyReport) -> Vec<String> {
             "    bucket retention: {}",
             protection(&partition.bucket_retention_objects)
         ));
-        lines.push(format!(
-            "    unknown (legacy manifest): {}",
-            protection(&partition.unknown_protection_objects)
-        ));
     }
     lines
 }
@@ -561,8 +557,6 @@ mod tests {
                 create_precondition_objects: krabka_remote_storage::ObjectProtectionReport::default(
                 ),
                 bucket_retention_objects: krabka_remote_storage::ObjectProtectionReport::default(),
-                unknown_protection_objects: krabka_remote_storage::ObjectProtectionReport::default(
-                ),
                 epochs: Vec::new(),
                 unsigned_manifests: 0,
                 untrusted_manifests: 0,
