@@ -1,16 +1,16 @@
-(* #"/workspace/crates/verified/src/audit/spool_append_decision.rs" 96 0 96 79 *)
+(* #"/workspace/crates/verified/src/audit/spool_append_decision.rs" 97 0 97 79 *)
 
-let%span sspool_append_decision = "/workspace/crates/verified/src/audit/spool_append_decision.rs" 103 19 103 20
-let%span sspool_append_decision'0 = "/workspace/crates/verified/src/audit/spool_append_decision.rs" 107 42 107 50
-let%span sspool_append_decision'1 = "/workspace/crates/verified/src/audit/spool_append_decision.rs" 108 31 108 32
-let%span sspool_append_decision'2 = "/workspace/crates/verified/src/audit/spool_append_decision.rs" 108 12 108 32
-let%span sspool_append_decision'3 = "/workspace/crates/verified/src/audit/spool_append_decision.rs" 112 15 112 40
-let%span sspool_append_decision'4 = "/workspace/crates/verified/src/audit/spool_append_decision.rs" 84 10 85 76
-let%span sspool_append_decision'5 = "/workspace/crates/verified/src/audit/spool_append_decision.rs" 86 10 87 52
-let%span sspool_append_decision'6 = "/workspace/crates/verified/src/audit/spool_append_decision.rs" 88 10 89 26
-let%span sspool_append_decision'7 = "/workspace/crates/verified/src/audit/spool_append_decision.rs" 90 10 92 63
-let%span sspool_append_decision'8 = "/workspace/crates/verified/src/audit/spool_append_decision.rs" 93 10 94 51
-let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span sspool_append_decision = "/workspace/crates/verified/src/audit/spool_append_decision.rs" 104 19 104 20
+let%span sspool_append_decision'0 = "/workspace/crates/verified/src/audit/spool_append_decision.rs" 108 42 108 50
+let%span sspool_append_decision'1 = "/workspace/crates/verified/src/audit/spool_append_decision.rs" 109 31 109 32
+let%span sspool_append_decision'2 = "/workspace/crates/verified/src/audit/spool_append_decision.rs" 109 12 109 32
+let%span sspool_append_decision'3 = "/workspace/crates/verified/src/audit/spool_append_decision.rs" 113 15 113 40
+let%span sspool_append_decision'4 = "/workspace/crates/verified/src/audit/spool_append_decision.rs" 85 10 86 76
+let%span sspool_append_decision'5 = "/workspace/crates/verified/src/audit/spool_append_decision.rs" 87 10 88 52
+let%span sspool_append_decision'6 = "/workspace/crates/verified/src/audit/spool_append_decision.rs" 89 10 90 26
+let%span sspool_append_decision'7 = "/workspace/crates/verified/src/audit/spool_append_decision.rs" 91 10 93 63
+let%span sspool_append_decision'8 = "/workspace/crates/verified/src/audit/spool_append_decision.rs" 94 10 95 51
+let%span sord = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
 
 use creusot.int.UInt64
 use creusot.prelude.Any
@@ -28,7 +28,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let settle_loss_batch [#"/workspace/crates/verified/src/audit/spool_append_decision.rs" 96 0 96 79]
+let settle_loss_batch [#"/workspace/crates/verified/src/audit/spool_append_decision.rs" 97 0 97 79]
   (state: t_AuditLosses) (batch: t_AuditLosses) (return (x: t_AuditLosses)) = (! bb0
   [ bb0 = s0
     [ s0 = [ &_23 <- state.generation <> batch.generation ] s1

@@ -12,8 +12,7 @@ use krabka_broker::{BootstrapMode, Broker};
 
 use crate::harness::{
     ACCEPT, NONE, ShareAck, acquired_count, bootstrap_share_state, broker_config,
-    broker_test_permit, connect, create_topic, fetch_until_acquired, join, produce_n, share_ack,
-    topic_id, wait_for_share_init,
+    broker_test_permit, connect, fetch_until_acquired, share_ack,
 };
 
 /// Lag restore: `delivery_complete_count` survives a broker restart.
@@ -32,14 +31,11 @@ async fn delivery_complete_count_restored_across_restart() {
 
     let tid;
     {
-        let broker = Broker::start(broker_config(log_dir.clone())).await.unwrap();
-        let client = connect(&broker.listen_addr().to_string()).await;
-        create_topic(&broker, &client, "t", 1).await;
-        tid = topic_id(&broker, "t");
-        bootstrap_share_state(&broker, &client, "g1").await;
-        produce_n(&client, "t", tid, 0, N).await;
-        let (member, _epoch) = join(&client, "g1", "t").await;
-        wait_for_share_init(&broker, "g1", tid, 0).await;
+        let (broker, client, topic) =
+            crate::support::share::start_topic(broker_config(log_dir.clone()), "t", 1).await;
+        tid = topic;
+        let (member, _epoch) =
+            crate::harness::initialize_consumption(&broker, &client, tid, N).await;
 
         // Acquire 0..N-1 and Accept 1..N-1: the SPSO stays at 0 behind the
         // still-acquired offset 0, and the window holds N-1 terminal records.

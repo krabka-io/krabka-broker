@@ -9,6 +9,7 @@ use assert2::check;
 use krabka_metadata::{PatternType, TopicFreezeRecord};
 
 use super::*;
+use crate::remote_log_manager::test_support::{local_backends, sweep_counts, sweep_once};
 
 /// The `orders` topic, plus the one live freeze entry `freeze` names.
 /// `None` is the unfrozen control every freeze case runs against.
@@ -88,31 +89,16 @@ async fn tick_once(image: MetadataImage, config: LogConfig) -> TickOutcome {
     partitions.insert("orders".into(), PartitionIndex(0), Arc::clone(&partition));
 
     let controller = fixed_source(image);
-    let rsm: Arc<dyn RemoteStorageManager> = Arc::new(LocalTieredStorage::new(remote_dir.path()));
-    let rlmm: Arc<dyn RemoteLogMetadataManager> = Arc::new(InmemoryRemoteLogMetadataManager::new());
+    let (rsm, rlmm) = local_backends(remote_dir.path());
 
-    tick_all(
+    sweep_once(
         &partitions,
         &controller,
         &tier(ArchiveMode::Mutable, &rsm, &rlmm),
-        NodeId(1),
-        1,
-        SweepConcurrency::default(),
     )
     .await;
 
-    let remote_finished = rlmm
-        .list_remote_log_segments(&tp())
-        .unwrap()
-        .iter()
-        .filter(|md| md.state() == RemoteLogSegmentState::CopySegmentFinished)
-        .count();
-    // A segment the sweep rolled counts once its rollover flush lands.
-    let local_sealed_after = {
-        let mut log = partition.log.lock().expect("partition log mutex poisoned");
-        log.sync().expect("flush rolled segments");
-        log.tierable_segments().len()
-    };
+    let (remote_finished, local_sealed_after) = sweep_counts(&partition, &rlmm);
     TickOutcome {
         sealed_before,
         remote_finished,

@@ -127,26 +127,13 @@ fn any_v2_batch_transactional(buf: &[u8]) -> bool {
         return false;
     }
     let mut remaining = buf;
-    while remaining.len() >= V2_HEADER_LEN && remaining[MAGIC_OFFSET] == 2 {
-        let batch_length =
-            i32::from_be_bytes([remaining[8], remaining[9], remaining[10], remaining[11]]);
-        let Ok(batch_length) = usize::try_from(batch_length) else {
-            break;
-        };
-        let Some(total_len) = batch_length.checked_add(LOG_OVERHEAD) else {
-            break;
-        };
-        if total_len < V2_HEADER_LEN || total_len > remaining.len() {
-            break;
-        }
-        let attributes = i16::from_be_bytes([
-            remaining[ATTRIBUTES_OFFSET],
-            remaining[ATTRIBUTES_OFFSET + 1],
-        ]);
+    while let Some((batch, tail)) = complete_v2_batch(remaining) {
+        let attributes =
+            i16::from_be_bytes([batch[ATTRIBUTES_OFFSET], batch[ATTRIBUTES_OFFSET + 1]]);
         if Attributes(attributes).is_transactional() {
             return true;
         }
-        remaining = &remaining[total_len..];
+        remaining = tail;
     }
     false
 }
@@ -206,6 +193,19 @@ pub(super) fn next_batch(buf: &[u8]) -> NextBatch {
     }
 }
 
+/// Splits one complete v2 batch from the tail, stopping at the same
+/// malformed or truncated boundary for both header-only walks.
+fn complete_v2_batch(buf: &[u8]) -> Option<(&[u8], &[u8])> {
+    if buf.len() < V2_HEADER_LEN || buf[MAGIC_OFFSET] != 2 {
+        return None;
+    }
+    let length = i32::from_be_bytes([buf[8], buf[9], buf[10], buf[11]]);
+    let length = usize::try_from(length).ok()?.checked_add(LOG_OVERHEAD)?;
+    (V2_HEADER_LEN..=buf.len())
+        .contains(&length)
+        .then(|| buf.split_at(length))
+}
+
 /// Length of the largest v2 batch in `buf`, header included.
 ///
 /// Returns `buf.len()` for a slice that is not v2 at all, which is a legacy
@@ -216,20 +216,9 @@ fn largest_v2_batch_len(buf: &[u8]) -> usize {
     }
     let mut largest = 0usize;
     let mut remaining = buf;
-    while remaining.len() >= V2_HEADER_LEN && remaining[MAGIC_OFFSET] == 2 {
-        let batch_length =
-            i32::from_be_bytes([remaining[8], remaining[9], remaining[10], remaining[11]]);
-        let Ok(batch_length) = usize::try_from(batch_length) else {
-            break;
-        };
-        let Some(total_len) = batch_length.checked_add(LOG_OVERHEAD) else {
-            break;
-        };
-        if total_len < V2_HEADER_LEN || total_len > remaining.len() {
-            break;
-        }
-        largest = largest.max(total_len);
-        remaining = &remaining[total_len..];
+    while let Some((batch, tail)) = complete_v2_batch(remaining) {
+        largest = largest.max(batch.len());
+        remaining = tail;
     }
     // A malformed or truncated tail is still bytes the producer sent, and the
     // gate must not shrink away from it.

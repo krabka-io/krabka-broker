@@ -3,8 +3,8 @@
 //! enforcing `SimpleAclAuthorizer` in place of the permissive default, so
 //! every test in the suite starts from a cluster that actually checks ACLs.
 
-use krabka_broker::{BrokerConfig, authorizer::SimpleAclAuthorizer, config::ListenerSpec};
-use krabka_security::{ListenerProtocol, SaslMechanism};
+use krabka_broker::{BrokerConfig, BrokerHandle, authorizer::SimpleAclAuthorizer};
+use krabka_security::SaslMechanism;
 
 /// Build a `BrokerConfig` with a single `SASL_PLAINTEXT` listener, PLAIN
 /// enabled, and the given super-user. The non-super-user case still
@@ -17,17 +17,7 @@ pub fn sasl_plain_broker_config(
     creds: &[(&str, &str)],
     super_user: Option<&str>,
 ) -> BrokerConfig {
-    let mut cfg = BrokerConfig::for_tests(log_dir.to_path_buf());
-    cfg.listeners = vec![ListenerSpec {
-        name: "SASL_PLAINTEXT".to_string(),
-        bind_addr: "127.0.0.1:0".parse().unwrap(),
-        advertised: "127.0.0.1:0".to_string(),
-        protocol: ListenerProtocol::SaslPlaintext,
-        tls_config: None,
-        sasl_mechanisms: None,
-        principal_mapper: krabka_broker::SslPrincipalMapper::default(),
-    }];
-    cfg.inter_broker_listener_name = "SASL_PLAINTEXT".to_string();
+    let mut cfg = crate::support::sasl_plaintext_config(log_dir.to_path_buf());
     cfg.enabled_sasl_mechanisms = vec![SaslMechanism::Plain];
     for (u, p) in creds {
         cfg.plain_credentials
@@ -48,17 +38,7 @@ pub fn sasl_plain_broker_config_multi_super(
     creds: &[(&str, &str)],
     super_users: &[&str],
 ) -> BrokerConfig {
-    let mut cfg = BrokerConfig::for_tests(log_dir.to_path_buf());
-    cfg.listeners = vec![ListenerSpec {
-        name: "SASL_PLAINTEXT".to_string(),
-        bind_addr: "127.0.0.1:0".parse().unwrap(),
-        advertised: "127.0.0.1:0".to_string(),
-        protocol: ListenerProtocol::SaslPlaintext,
-        tls_config: None,
-        sasl_mechanisms: None,
-        principal_mapper: krabka_broker::SslPrincipalMapper::default(),
-    }];
-    cfg.inter_broker_listener_name = "SASL_PLAINTEXT".to_string();
+    let mut cfg = crate::support::sasl_plaintext_config(log_dir.to_path_buf());
     cfg.enabled_sasl_mechanisms = vec![SaslMechanism::Plain];
     for (u, p) in creds {
         cfg.plain_credentials
@@ -85,4 +65,15 @@ fn with_controller_peer(
         .cloned()
         .chain(std::iter::once("ANONYMOUS".to_string()))
         .collect()
+}
+
+/// Fresh ACL broker with the common admin and alice credentials.
+pub async fn start_admin_alice() -> (BrokerHandle, tempfile::TempDir, std::net::SocketAddr) {
+    let dir = tempfile::tempdir().unwrap();
+    let cfg = sasl_plain_broker_config(
+        dir.path(),
+        &[("admin", "admin-secret"), ("alice", "wonderland")],
+        Some("admin"),
+    );
+    crate::support::sasl::start_broker(cfg, dir).await
 }

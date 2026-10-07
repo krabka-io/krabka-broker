@@ -11,7 +11,6 @@ use assert2::{assert, check};
 use crate::jvm_acceptance::{
     KAFKA_IMAGE_TXN, broker0_advertised, docker_run_kafka_tool_with_image_and_mount,
     nc_check_connectivity, plain_jaas, start_sasl_plaintext_broker_with_super_user,
-    write_client_props,
 };
 
 /// JVM acceptance: `kafka-acls.sh` end-to-end provision flow.
@@ -36,12 +35,7 @@ async fn jvm_kafka_acls_provision_via_cli() {
         start_sasl_plaintext_broker_with_super_user(ADMIN, &[(ADMIN, ADMIN_PASS)]).await;
     nc_check_connectivity();
 
-    let admin_props = write_client_props(&format!(
-        "security.protocol=SASL_PLAINTEXT\n\
-         sasl.mechanism=PLAIN\n\
-         sasl.jaas.config={}\n",
-        plain_jaas(ADMIN, ADMIN_PASS),
-    ));
+    let admin_props = crate::jvm_acceptance::write_plain_props(ADMIN, ADMIN_PASS);
     let mount = admin_props.mount_str();
 
     // 1. --add.

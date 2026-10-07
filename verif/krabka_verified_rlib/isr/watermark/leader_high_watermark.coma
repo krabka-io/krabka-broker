@@ -1,34 +1,34 @@
-(* #"/workspace/crates/verified/src/isr/watermark.rs" 199 0 199 87 *)
+(* #"/workspace/crates/verified/src/isr/watermark.rs" 200 0 200 87 *)
 
-let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
-let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
-let%span swell_founded = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/well_founded.rs" 43 8 43 33
-let%span sslice = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 331 18 331 22
-let%span swatermark = "/workspace/crates/verified/src/isr/watermark.rs" 204 16 204 17
-let%span swatermark'0 = "/workspace/crates/verified/src/isr/watermark.rs" 209 32 209 52
-let%span swatermark'1 = "/workspace/crates/verified/src/isr/watermark.rs" 210 14 210 28
-let%span swatermark'2 = "/workspace/crates/verified/src/isr/watermark.rs" 207 34 208 74
-let%span swatermark'3 = "/workspace/crates/verified/src/isr/watermark.rs" 206 34 206 69
-let%span swatermark'4 = "/workspace/crates/verified/src/isr/watermark.rs" 205 34 205 55
-let%span swatermark'5 = "/workspace/crates/verified/src/isr/watermark.rs" 211 22 211 33
-let%span swatermark'6 = "/workspace/crates/verified/src/isr/watermark.rs" 212 24 212 95
-let%span swatermark'7 = "/workspace/crates/verified/src/isr/watermark.rs" 213 20 213 94
-let%span swatermark'8 = "/workspace/crates/verified/src/isr/watermark.rs" 213 52 213 93
-let%span swatermark'9 = "/workspace/crates/verified/src/isr/watermark.rs" 213 38 213 94
-let%span swatermark'10 = "/workspace/crates/verified/src/isr/watermark.rs" 217 13 217 14
-let%span swatermark'11 = "/workspace/crates/verified/src/isr/watermark.rs" 217 8 217 14
-let%span swatermark'12 = "/workspace/crates/verified/src/isr/watermark.rs" 194 11 194 50
-let%span swatermark'13 = "/workspace/crates/verified/src/isr/watermark.rs" 195 10 195 66
-let%span swatermark'14 = "/workspace/crates/verified/src/isr/watermark.rs" 196 10 196 71
-let%span swatermark'15 = "/workspace/crates/verified/src/isr/watermark.rs" 197 10 197 67
-let%span swatermark'16 = "/workspace/crates/verified/src/isr/watermark.rs" 143 10 143 11
-let%span swatermark'17 = "/workspace/crates/verified/src/isr/watermark.rs" 146 8 156 9
-let%span swatermark'18 = "/workspace/crates/verified/src/isr/watermark.rs" 44 10 44 56
-let%span swatermark'19 = "/workspace/crates/verified/src/isr/watermark.rs" 170 8 178 9
-let%span swatermark'20 = "/workspace/crates/verified/src/isr/watermark.rs" 117 16 117 58
-let%span swatermark'21 = "/workspace/crates/verified/src/isr/watermark.rs" 130 8 132 70
-let%span swatermark'22 = "/workspace/crates/verified/src/isr/watermark.rs" 15 8 22 13
-let%span swatermark'23 = "/workspace/crates/verified/src/isr/watermark.rs" 39 16 39 74
+let%span sord = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sord'0 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span swell_founded = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/well_founded.rs" 43 8 43 33
+let%span sslice = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 331 18 331 22
+let%span swatermark = "/workspace/crates/verified/src/isr/watermark.rs" 205 16 205 17
+let%span swatermark'0 = "/workspace/crates/verified/src/isr/watermark.rs" 210 32 210 52
+let%span swatermark'1 = "/workspace/crates/verified/src/isr/watermark.rs" 211 14 211 28
+let%span swatermark'2 = "/workspace/crates/verified/src/isr/watermark.rs" 208 34 209 74
+let%span swatermark'3 = "/workspace/crates/verified/src/isr/watermark.rs" 207 34 207 69
+let%span swatermark'4 = "/workspace/crates/verified/src/isr/watermark.rs" 206 34 206 55
+let%span swatermark'5 = "/workspace/crates/verified/src/isr/watermark.rs" 212 22 212 33
+let%span swatermark'6 = "/workspace/crates/verified/src/isr/watermark.rs" 213 24 213 95
+let%span swatermark'7 = "/workspace/crates/verified/src/isr/watermark.rs" 214 20 214 94
+let%span swatermark'8 = "/workspace/crates/verified/src/isr/watermark.rs" 214 52 214 93
+let%span swatermark'9 = "/workspace/crates/verified/src/isr/watermark.rs" 214 38 214 94
+let%span swatermark'10 = "/workspace/crates/verified/src/isr/watermark.rs" 218 13 218 14
+let%span swatermark'11 = "/workspace/crates/verified/src/isr/watermark.rs" 218 8 218 14
+let%span swatermark'12 = "/workspace/crates/verified/src/isr/watermark.rs" 195 11 195 50
+let%span swatermark'13 = "/workspace/crates/verified/src/isr/watermark.rs" 196 10 196 66
+let%span swatermark'14 = "/workspace/crates/verified/src/isr/watermark.rs" 197 10 197 71
+let%span swatermark'15 = "/workspace/crates/verified/src/isr/watermark.rs" 198 10 198 67
+let%span swatermark'16 = "/workspace/crates/verified/src/isr/watermark.rs" 144 10 144 11
+let%span swatermark'17 = "/workspace/crates/verified/src/isr/watermark.rs" 147 8 157 9
+let%span swatermark'18 = "/workspace/crates/verified/src/isr/watermark.rs" 45 10 45 56
+let%span swatermark'19 = "/workspace/crates/verified/src/isr/watermark.rs" 171 8 179 9
+let%span swatermark'20 = "/workspace/crates/verified/src/isr/watermark.rs" 118 16 118 58
+let%span swatermark'21 = "/workspace/crates/verified/src/isr/watermark.rs" 131 8 133 70
+let%span swatermark'22 = "/workspace/crates/verified/src/isr/watermark.rs" 16 8 23 13
+let%span swatermark'23 = "/workspace/crates/verified/src/isr/watermark.rs" 40 16 40 74
 
 use creusot.int.Int64
 use creusot.int.UInt64
@@ -71,10 +71,10 @@ let len_HwmReplica (self_: Slice64.slice t_HwmReplica) (return (x: UInt64.t)) = 
     = UInt64.t'int result}
     (! return {result}) ]
 
-predicate kafka_replica_is_caught_up [#"/workspace/crates/verified/src/isr/watermark.rs" 34 0 38 9] (follower_log_end: int) (leader_log_end'0: int) (caught_up_within_lag'0: bool) =
+predicate kafka_replica_is_caught_up [#"/workspace/crates/verified/src/isr/watermark.rs" 35 0 39 9] (follower_log_end: int) (leader_log_end'0: int) (caught_up_within_lag'0: bool) =
   [%#swatermark'23] follower_log_end = leader_log_end'0 \/ caught_up_within_lag'0
 
-predicate kafka_is_replica_isr_eligible [#"/workspace/crates/verified/src/isr/watermark.rs" 13 0 13 68] (facts: t_IsrEligibilityFacts) =
+predicate kafka_is_replica_isr_eligible [#"/workspace/crates/verified/src/isr/watermark.rs" 14 0 14 68] (facts: t_IsrEligibilityFacts) =
   [%#swatermark'22] not facts.fenced
   /\ not facts.shutting_down
   /\ match facts.fetch_broker_epoch with
@@ -85,12 +85,12 @@ predicate kafka_is_replica_isr_eligible [#"/workspace/crates/verified/src/isr/wa
     | None -> false
     end
 
-predicate kafka_holds_watermark [#"/workspace/crates/verified/src/isr/watermark.rs" 128 0 128 74] (replica: t_HwmReplica) (leader_log_end'0: int) =
+predicate kafka_holds_watermark [#"/workspace/crates/verified/src/isr/watermark.rs" 129 0 129 74] (replica: t_HwmReplica) (leader_log_end'0: int) =
   [%#swatermark'21] replica.in_isr
   \/ kafka_replica_is_caught_up (Int64.to_int replica.log_end) leader_log_end'0 replica.caught_up_within_lag
   /\ kafka_is_replica_isr_eligible replica.eligibility
 
-function kafka_watermark_candidate [#"/workspace/crates/verified/src/isr/watermark.rs" 144 0 144 91] (leader_log_end'0: int) (replicas: Seq.seq t_HwmReplica) (n: int) : int
+function kafka_watermark_candidate [#"/workspace/crates/verified/src/isr/watermark.rs" 145 0 145 91] (leader_log_end'0: int) (replicas: Seq.seq t_HwmReplica) (n: int) : int
 
 axiom kafka_watermark_candidate_def:
   forall leader_log_end'0: int, replicas: Seq.seq t_HwmReplica, n: int [kafka_watermark_candidate leader_log_end'0 replicas n]. kafka_watermark_candidate leader_log_end'0 replicas n
@@ -111,10 +111,10 @@ let replica_isr_eligible (facts: t_IsrEligibilityFacts) (return (x: bool)) = any
     = kafka_is_replica_isr_eligible facts}
     (! return {result}) ]
 
-predicate kafka_is_under_min_isr [#"/workspace/crates/verified/src/isr/watermark.rs" 116 0 116 60] (facts: t_HighWatermarkFacts) =
+predicate kafka_is_under_min_isr [#"/workspace/crates/verified/src/isr/watermark.rs" 117 0 117 60] (facts: t_HighWatermarkFacts) =
   [%#swatermark'20] UInt64.t'int facts.isr_size < UInt64.t'int facts.effective_min_isr
 
-function kafka_leader_high_watermark [#"/workspace/crates/verified/src/isr/watermark.rs" 168 0 168 91] (facts: t_HighWatermarkFacts) (replicas: Seq.seq t_HwmReplica) : int
+function kafka_leader_high_watermark [#"/workspace/crates/verified/src/isr/watermark.rs" 169 0 169 91] (facts: t_HighWatermarkFacts) (replicas: Seq.seq t_HwmReplica) : int
  = [%#swatermark'19] if kafka_is_under_min_isr facts then
     Int64.to_int facts.current'
   else
@@ -129,7 +129,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let leader_high_watermark [#"/workspace/crates/verified/src/isr/watermark.rs" 199 0 199 87]
+let leader_high_watermark [#"/workspace/crates/verified/src/isr/watermark.rs" 200 0 200 87]
   (facts: t_HighWatermarkFacts) (replicas: Slice64.slice t_HwmReplica) (return (x: Int64.t)) =
 {[@stop_split] [@expl:leader_high_watermark requires] [%#swatermark'12] Int64.to_int facts.current'
   <= Int64.to_int facts.leader_log_end}

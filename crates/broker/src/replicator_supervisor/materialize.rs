@@ -171,6 +171,7 @@ mod tests {
     use assert2::assert;
 
     use super::*;
+    use crate::replicator_supervisor::test_support::MaterializeFixture;
 
     #[derive(Debug)]
     struct TestStampSource(AtomicU64);
@@ -186,23 +187,12 @@ mod tests {
         log_dir: &std::path::Path,
         topic: &str,
     ) {
-        materialize_partition(MaterializePartitionConfig {
+        materialize_partition(MaterializeFixture::default().config(
             partitions,
             topic,
-            topic_id: None,
-            partition: 0,
-            log_dirs: &[log_dir.to_path_buf()],
-            log_config: &LogConfig::default(),
-            log_dir_status: &crate::log_dir_status::LogDirRegistry::default(),
-            producer_state: &Arc::new(crate::producer_state::ProducerState::new()),
-            max_produce_group: 1_024,
-            partition_writer_queue_depth: 64,
-            diskless_wal_local_replica_count: 3,
-            diskless: false,
-            hot_tail: None,
-            wal_shards: None,
-            sequencer: None,
-        })
+            &[log_dir.to_path_buf()],
+            &LogConfig::default(),
+        ))
         .expect("materialize partition");
     }
 
@@ -229,23 +219,12 @@ mod tests {
 
         let dir = tempdir().expect("tempdir");
         let partitions = Arc::new(PartitionRegistry::new());
-        materialize_partition(MaterializePartitionConfig {
-            partitions: &partitions,
-            topic: "t",
-            topic_id: None,
-            partition: 0,
-            log_dirs: &[dir.path().to_path_buf()],
-            log_config: &LogConfig::default(),
-            log_dir_status: &crate::log_dir_status::LogDirRegistry::default(),
-            producer_state: &Arc::new(crate::producer_state::ProducerState::new()),
-            max_produce_group: 1_024,
-            partition_writer_queue_depth: 64,
-            diskless_wal_local_replica_count: 3,
-            diskless: false,
-            hot_tail: None,
-            wal_shards: None,
-            sequencer: None,
-        })
+        materialize_partition(MaterializeFixture::default().config(
+            &partitions,
+            "t",
+            &[dir.path().to_path_buf()],
+            &LogConfig::default(),
+        ))
         .expect("materialize");
         let part = partitions.get("t", PartitionIndex(0)).expect("part");
         // Mirror what reconcile does for leader partitions.
@@ -279,23 +258,12 @@ mod tests {
         let absolute = format!("{}/abs", root.path().display());
         for topic in [escaping.as_str(), absolute.as_str(), "..", ""] {
             let partitions = Arc::new(PartitionRegistry::new());
-            let result = materialize_partition(MaterializePartitionConfig {
-                partitions: &partitions,
+            let result = materialize_partition(MaterializeFixture::default().config(
+                &partitions,
                 topic,
-                topic_id: None,
-                partition: 0,
-                log_dirs: std::slice::from_ref(&log_dir),
-                log_config: &LogConfig::default(),
-                log_dir_status: &crate::log_dir_status::LogDirRegistry::default(),
-                producer_state: &Arc::new(crate::producer_state::ProducerState::new()),
-                max_produce_group: 1_024,
-                partition_writer_queue_depth: 64,
-                diskless_wal_local_replica_count: 3,
-                diskless: false,
-                hot_tail: None,
-                wal_shards: None,
-                sequencer: None,
-            });
+                std::slice::from_ref(&log_dir),
+                &LogConfig::default(),
+            ));
             assert!(
                 result
                     == Err(krabka_log::topic_name::validate_topic_name(topic)
@@ -332,21 +300,13 @@ mod tests {
         );
 
         materialize_partition(MaterializePartitionConfig {
-            partitions: &partitions,
-            topic: "t",
             topic_id: Some(topic_id),
-            partition: 0,
-            log_dirs: &[first.path().to_path_buf(), preferred.path().to_path_buf()],
-            log_config: &LogConfig::default(),
-            log_dir_status: &crate::log_dir_status::LogDirRegistry::default(),
-            producer_state: &Arc::new(crate::producer_state::ProducerState::new()),
-            max_produce_group: 1_024,
-            partition_writer_queue_depth: 64,
-            diskless_wal_local_replica_count: 3,
-            diskless: false,
-            hot_tail: None,
-            wal_shards: None,
-            sequencer: None,
+            ..MaterializeFixture::default().config(
+                &partitions,
+                "t",
+                &[first.path().to_path_buf(), preferred.path().to_path_buf()],
+                &LogConfig::default(),
+            )
         })
         .expect("materialize");
 
@@ -431,21 +391,16 @@ mod tests {
         ));
 
         materialize_partition(MaterializePartitionConfig {
-            partitions: &partitions,
-            topic: "diskless",
             topic_id: Some(topic_id),
-            partition: 0,
-            log_dirs: &[dir.path().to_path_buf()],
-            log_config: &LogConfig::default(),
-            log_dir_status: &crate::log_dir_status::LogDirRegistry::default(),
-            producer_state: &Arc::new(crate::producer_state::ProducerState::new()),
-            max_produce_group: 1_024,
-            partition_writer_queue_depth: 64,
-            diskless_wal_local_replica_count: 3,
             diskless: true,
             hot_tail: Some(hot_tail),
             wal_shards: Some(wal_shards.clone()),
-            sequencer: None,
+            ..MaterializeFixture::default().config(
+                &partitions,
+                "diskless",
+                &[dir.path().to_path_buf()],
+                &LogConfig::default(),
+            )
         })
         .expect("materialize");
 

@@ -7,17 +7,9 @@
 //! not rf=2 replication. The test's own doc comment explains why the stronger
 //! assertion is not reliable on this network topology.
 
-use std::{
-    io::Write,
-    process::{Command, Stdio},
-};
-
 use assert2::assert;
 
-use crate::jvm_acceptance::{
-    KAFKA_IMAGE, broker0_advertised, docker_run_kafka_tool_with_mount, nc_check_connectivity,
-    plain_jaas, start_two_sasl_brokers, write_client_props,
-};
+use crate::jvm_acceptance::{KAFKA_IMAGE, nc_check_connectivity, start_two_sasl_brokers};
 
 /// JVM-driven 2-broker test for the `SASL_PLAINTEXT` inter-broker
 /// listener. Both brokers boot with the same shared `admin` credential and
@@ -69,35 +61,19 @@ async fn jvm_inter_broker_replication_authed() {
     broker1.wait_until_brokers_registered(2).await;
 
     // JVM client config: SASL_PLAINTEXT + PLAIN as the admin (super-user).
-    let props = write_client_props(&format!(
-        "security.protocol=SASL_PLAINTEXT\n\
-         sasl.mechanism=PLAIN\n\
-         sasl.jaas.config={}\n",
-        plain_jaas(ADMIN, ADMIN_PASS),
-    ));
+    let props = crate::jvm_acceptance::write_plain_props(ADMIN, ADMIN_PASS);
     let mount = props.mount_str();
 
     // Create an rf=1 topic (see test doc-comment — JVM-driven rf=2
     // assertion isn't reliable under WSL networking). Single replica is
     // enough to prove the JVM client → broker SASL handshake works in
     // both directions across the two-broker cluster's controller layer.
-    docker_run_kafka_tool_with_mount(
-        &mount,
-        &[
-            "kafka-topics",
-            "--create",
-            "--if-not-exists",
-            "--topic",
-            TOPIC,
-            "--partitions",
-            "1",
-            "--replication-factor",
-            "1",
-            "--bootstrap-server",
-            broker0_advertised(),
-            "--command-config",
-            "/client.properties",
-        ],
+    crate::jvm_acceptance::create_console_topic(
+        crate::jvm_acceptance::KAFKA_IMAGE,
+        &[&mount],
+        TOPIC,
+        1,
+        1,
     );
 
     // Wait for the topic to materialize in a broker's metadata image (either
@@ -109,40 +85,18 @@ async fn jvm_inter_broker_replication_authed() {
 
     // Produce 50 records via `kafka-console-producer`. The metadata
     // response steers the producer to whichever broker leads partition 0.
-    let mut child = Command::new("docker")
-        .args([
-            "run",
-            "--rm",
-            "-i",
-            "-v",
-            &mount,
-            "--add-host=host.docker.internal:host-gateway",
-            KAFKA_IMAGE,
-            "kafka-console-producer",
-            "--bootstrap-server",
-            broker0_advertised(),
-            "--topic",
-            TOPIC,
-            "--producer.config",
-            "/client.properties",
-        ])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("spawn producer");
+
     let payload: String = (0..50)
         .map(|i| format!("rec-{i}\n"))
         .collect::<Vec<_>>()
         .concat();
-    child
-        .stdin
-        .as_mut()
-        .expect("stdin")
-        .write_all(payload.as_bytes())
-        .expect("write stdin");
-    drop(child.stdin.take());
-    let producer_out = child.wait_with_output().expect("wait producer");
+    let producer_out = crate::jvm_acceptance::produce_console(
+        KAFKA_IMAGE,
+        &[&mount],
+        TOPIC,
+        false,
+        payload.as_bytes(),
+    );
     assert!(
         producer_out.status.success(),
         "producer failed: stdout={} stderr={}",

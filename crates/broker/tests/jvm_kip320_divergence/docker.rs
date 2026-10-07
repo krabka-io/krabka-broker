@@ -11,6 +11,8 @@ use std::process::{Command, Stdio};
 use base64::Engine as _;
 use uuid::Uuid;
 
+use crate::support::bridge_gateway;
+
 /// cp-kafka 6.1.1 (Kafka 2.7) ships the standard Apache Kafka CLI tools used
 /// for produce / topic admin / `kafka-dump-log`. NOTE: its bundled consumer
 /// only negotiates Fetch up to v11 and predates client-side KIP-320 position
@@ -77,27 +79,6 @@ pub fn docker_bridge_gateway() -> String {
     })
 }
 
-/// The bridge gateway out of the `Gateway|Subnet` pair `docker network inspect`
-/// renders, falling back to the subnet's first address when the daemon reports
-/// no gateway of its own.
-///
-/// The daemon `init-dockerd` starts inside a `BuildBuddy` Firecracker microVM is
-/// one that reports none: it leaves `Gateway` empty while still reporting
-/// `Subnet`, and every scenario here then died on `AddrParseError(Ip)` with
-/// nothing in the message to say which field was missing. Docker gives the
-/// first address of the subnet to the bridge itself, so that address is the
-/// gateway whether or not the daemon spells it out.
-fn bridge_gateway(rendered: &str) -> Option<String> {
-    let (gateway, subnet) = rendered.trim().split_once('|')?;
-    if gateway.parse::<std::net::IpAddr>().is_ok() {
-        return Some(gateway.to_owned());
-    }
-    let (base, _prefix) = subnet.split_once('/')?;
-    let base: std::net::Ipv4Addr = base.parse().ok()?;
-    let first = u32::from(base).checked_add(1)?;
-    Some(std::net::Ipv4Addr::from(first).to_string())
-}
-
 /// Run a bundled Kafka CLI tool in a throwaway cp-kafka container on the
 /// default bridge with `host.docker.internal` wired to the host gateway.
 /// Mirrors `jvm_acceptance.rs::docker_run_kafka_tool_with_image`.
@@ -123,13 +104,10 @@ pub fn docker_run_kafka_tool_with_image(image: &str, args: &[&str]) -> std::proc
 /// Produce `lines` to `topic` partition 0 with the JVM `kafka-console-producer`
 /// at `acks=all`, one record per line. Panics on producer failure.
 pub fn produce_lines_via_jvm(bootstrap: &str, topic: &str, lines: &[String]) {
-    let mut child = Command::new("docker")
-        .args([
-            "run",
-            "--rm",
-            "-i",
-            "--add-host=host.docker.internal:host-gateway",
-            KAFKA_IMAGE,
+    let mut child = crate::support::jvm_docker_command(
+        KAFKA_IMAGE,
+        &[],
+        &[
             "kafka-console-producer",
             "--bootstrap-server",
             bootstrap,
@@ -137,12 +115,14 @@ pub fn produce_lines_via_jvm(bootstrap: &str, topic: &str, lines: &[String]) {
             topic,
             "--producer-property",
             "acks=all",
-        ])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("spawn JVM producer");
+        ],
+        true,
+    )
+    .stdin(Stdio::piped())
+    .stdout(Stdio::piped())
+    .stderr(Stdio::piped())
+    .spawn()
+    .expect("spawn JVM producer");
     {
         use std::io::Write as _;
         let stdin = child.stdin.as_mut().expect("stdin");

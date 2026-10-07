@@ -77,6 +77,8 @@
 //! by the leader's local retention, not by the archive.
 
 mod support;
+#[path = "tiered_storage_multi_broker/topic_fixture.rs"]
+mod topic_fixture;
 
 // Cargo compiles this file as its own test binary, so the crate root's module
 // directory is `tests/`. `#[path]` re-bases each declaration onto the sibling

@@ -33,10 +33,6 @@ use super::{
 /// Round 2 runs only after a failure. The JVM client replies to the error JSON
 /// with a single `\x01`. The handler returns `SASL_AUTHENTICATION_FAILED`
 /// (58), and the dispatcher closes the connection.
-// Single state-machine dispatch: Negotiating-success / Negotiating-failure /
-// Reauth-success / Reauth-failure / fall-through. Extracting per-arm helpers
-// would obscure the shape and force ferrying `mech` / `prev_mech` / now_ms /
-// the cap through a parameter wall.
 #[cfg(test)]
 pub async fn handle_authenticate_oauthbearer(
     req: &SaslAuthenticateRequest,
@@ -84,139 +80,76 @@ async fn handle_authenticate_oauthbearer_inner(
     clock_ms: impl Fn() -> i64,
     max_session_lifetime: Option<Time>,
 ) -> SaslAuthenticateResponse {
-    match auth {
+    let (mechanism, previous_name) = match auth {
         ConnectionAuth::Negotiating {
             exchange: SaslExchange::OAuthBearer,
             mechanism,
-            // OAUTHBEARER never carries a delegation-token expiry;
-            // this side-channel is only ever populated by the SCRAM round-1
-            // token-fallback path. Ignore here.
-            pending_token_expiry_ms: _,
-        } => {
-            let mech = *mechanism;
-            match validate_bearer(&req.auth_bytes, validator, jwks_cache, &clock_ms).await {
-                Ok((outcome, now_ms)) => {
-                    // Clamp `session_lifetime_ms` to the optional
-                    // broker cap, then anchor `Authenticated.expires_at_ms`
-                    // to the CLAMPED value. The dispatch loop reads
-                    // `expires_at_ms` to enforce the re-auth deadline — if
-                    // we stored the raw token exp here, the broker would
-                    // tolerate the connection past the value reported to
-                    // the client.
-                    let krabka_verified::OAuthSessionDecision::Admit {
-                        session_lifetime_ms,
-                        effective_expires_at_ms,
-                    } = oauth_session_decision(
-                        outcome.expires_at_ms,
-                        now_ms,
-                        max_session_lifetime,
-                        false,
-                        true,
-                    )
-                    else {
-                        return reject_initial_oauthbearer(
-                            auth,
-                            mech,
-                            "invalid OAuth session lifetime",
-                        );
-                    };
-                    *auth = ConnectionAuth::Authenticated {
-                        principal: outcome.principal,
-                        mechanism: mech,
-                        expires_at_ms: Some(effective_expires_at_ms),
-                        // OAUTHBEARER is a real SASL mechanism,
-                        // never a delegation token.
-                        authenticated_via_token: false,
-                    };
-                    sasl_ok(bytes::Bytes::new(), session_lifetime_ms)
-                }
-                Err(reason) => reject_initial_oauthbearer(auth, mech, reason),
-            }
-        }
-        // The client's `\x01` final message after a rejected token: complete
-        // the RFC 7628 failure handshake by closing with code 58.
-        ConnectionAuth::Negotiating {
-            exchange: SaslExchange::OAuthBearerFailed,
             ..
-        } => oauthbearer_failure(),
-        // The same `\x01` after a rejected re-authentication token: the
-        // previous session stands while the dispatcher closes the connection.
-        ConnectionAuth::Reauthenticating {
-            exchange: SaslExchange::OAuthBearerFailed,
-            ..
-        } => {
-            if let Some(previous) = super::state::begin_reauth(auth) {
-                super::state::finish_reauth(auth, previous, oauthbearer_failure())
-            } else {
-                oauthbearer_failure()
-            }
-        }
-        // In-band re-authentication. Validate the new token and,
-        // on success, require the principal name to match the previous
-        // session (KIP-368 forbids principal switches mid-connection).
+        } => (*mechanism, None),
         ConnectionAuth::Reauthenticating {
             previous,
             exchange: SaslExchange::OAuthBearer,
             ..
+        } => (previous.mechanism, Some(previous.principal.name.clone())),
+        // The client's final message completes the RFC 7628 failure handshake.
+        ConnectionAuth::Negotiating {
+            exchange: SaslExchange::OAuthBearerFailed,
+            ..
+        } => return oauthbearer_failure(),
+        ConnectionAuth::Reauthenticating {
+            exchange: SaslExchange::OAuthBearerFailed,
+            ..
         } => {
-            let prev_mech = previous.mechanism;
-            let prev_name = previous.principal.name.clone();
-            match validate_bearer(&req.auth_bytes, validator, jwks_cache, &clock_ms).await {
-                Ok((outcome, now_ms)) => {
-                    let principal_matches = outcome.principal.name == prev_name;
-                    let decision = oauth_session_decision(
-                        outcome.expires_at_ms,
-                        now_ms,
-                        max_session_lifetime,
-                        true,
-                        principal_matches,
-                    );
-                    let krabka_verified::OAuthSessionDecision::Admit {
-                        session_lifetime_ms,
-                        effective_expires_at_ms,
-                    } = decision
-                    else {
-                        if !principal_matches {
-                            tracing::debug!(
-                                previous = %prev_name,
-                                attempted = %outcome.principal.name,
-                                "OAUTHBEARER re-auth principal mismatch"
-                            );
-                            return fail_authenticate_with(principal_change_message(
-                                &prev_name,
-                                &outcome.principal.name,
-                            ));
-                        }
-                        return fail_authenticate(
-                            "OAUTHBEARER re-auth rejected an invalid session lifetime",
-                        );
-                    };
-                    // Same clamp as the Negotiating-success arm
-                    // so re-auth respects the broker cap.
-                    *auth = ConnectionAuth::Authenticated {
-                        principal: outcome.principal,
-                        mechanism: prev_mech,
-                        expires_at_ms: Some(effective_expires_at_ms),
-                        // OAUTHBEARER re-auth never produces a
-                        // token-authed session.
-                        authenticated_via_token: false,
-                    };
-                    sasl_ok(bytes::Bytes::new(), session_lifetime_ms)
-                }
-                // A rejected token gets the RFC 7628 error challenge, exactly
-                // as on the initial authentication; the client's `\x01` reply
-                // then fails the exchange with that JSON as the message.
-                Err(reason) => {
-                    tracing::debug!(reason, "OAUTHBEARER re-auth token rejected");
-                    if let ConnectionAuth::Reauthenticating { exchange, .. } = auth {
-                        *exchange = SaslExchange::OAuthBearerFailed;
-                    }
-                    sasl_ok(krabka_security::invalid_token_json().into_bytes(), 0)
-                }
-            }
+            let previous =
+                super::state::begin_reauth(auth).expect("matched Reauthenticating above");
+            return super::state::finish_reauth(auth, previous, oauthbearer_failure());
         }
-        _ => fail_authenticate("not in oauthbearer negotiation"),
-    }
+        _ => return fail_authenticate("not in oauthbearer negotiation"),
+    };
+    let (outcome, now_ms) =
+        match validate_bearer(&req.auth_bytes, validator, jwks_cache, &clock_ms).await {
+            Ok(validated) => validated,
+            Err(reason) => return reject_oauthbearer(auth, mechanism, reason),
+        };
+    let principal_matches = previous_name
+        .as_ref()
+        .is_none_or(|name| *name == outcome.principal.name);
+    let krabka_verified::OAuthSessionDecision::Admit {
+        session_lifetime_ms,
+        effective_expires_at_ms,
+    } = oauth_session_decision(
+        outcome.expires_at_ms,
+        now_ms,
+        max_session_lifetime,
+        previous_name.is_some(),
+        principal_matches,
+    )
+    else {
+        if let Some(previous) = previous_name {
+            if !principal_matches {
+                tracing::debug!(
+                    previous = %previous,
+                    attempted = %outcome.principal.name,
+                    "OAUTHBEARER re-auth principal mismatch"
+                );
+                return fail_authenticate_with(principal_change_message(
+                    &previous,
+                    &outcome.principal.name,
+                ));
+            }
+            return fail_authenticate("OAUTHBEARER re-auth rejected an invalid session lifetime");
+        }
+        return reject_oauthbearer(auth, mechanism, "invalid OAuth session lifetime");
+    };
+    // Anchor expiry to the clamped lifetime reported to the client, so the
+    // dispatcher's deadline also respects the broker's session cap.
+    *auth = ConnectionAuth::Authenticated {
+        principal: outcome.principal,
+        mechanism,
+        expires_at_ms: Some(effective_expires_at_ms),
+        authenticated_via_token: false,
+    };
+    sasl_ok(bytes::Bytes::new(), session_lifetime_ms)
 }
 
 fn oauth_session_decision(
@@ -253,17 +186,22 @@ fn oauth_session_decision(
     })
 }
 
-fn reject_initial_oauthbearer(
+fn reject_oauthbearer(
     auth: &mut ConnectionAuth,
     mechanism: krabka_security::SaslMechanism,
     reason: &'static str,
 ) -> SaslAuthenticateResponse {
-    tracing::debug!(reason, "OAUTHBEARER token rejected");
-    *auth = ConnectionAuth::Negotiating {
-        mechanism,
-        exchange: SaslExchange::OAuthBearerFailed,
-        pending_token_expiry_ms: None,
-    };
+    if let ConnectionAuth::Reauthenticating { exchange, .. } = auth {
+        tracing::debug!(reason, "OAUTHBEARER re-auth token rejected");
+        *exchange = SaslExchange::OAuthBearerFailed;
+    } else {
+        tracing::debug!(reason, "OAUTHBEARER token rejected");
+        *auth = ConnectionAuth::Negotiating {
+            mechanism,
+            exchange: SaslExchange::OAuthBearerFailed,
+            pending_token_expiry_ms: None,
+        };
+    }
     sasl_ok(krabka_security::invalid_token_json().into_bytes(), 0)
 }
 

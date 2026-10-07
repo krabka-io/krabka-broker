@@ -48,6 +48,45 @@ pub(super) async fn create_topic(
     assert!(response.topics[0].error_code == codes::NONE, "{response:?}");
 }
 
+/// A topic whose remote-storage configuration has reached the local log.
+/// Keep both directories alive while a test fills or reads its remote tier.
+pub(super) async fn remote_topic(
+    topic: &str,
+    extra_configs: Vec<CreatableTopicConfig>,
+) -> (
+    crate::broker::BrokerHandle,
+    krabka_client_core::Client,
+    [tempfile::TempDir; 2],
+) {
+    let remote_dir = tempfile::tempdir().expect("remote tempdir");
+    let remote_path = remote_dir.path().to_path_buf();
+    let (broker, directory) = crate::test_support::start_broker_no_audit_with(move |config| {
+        config.remote_storage_backend =
+            Some(crate::config::RemoteStorageBackend::Local { dir: remote_path });
+    })
+    .await;
+    let client = client_for(&broker).await;
+    let mut configs = vec![CreatableTopicConfig {
+        name: "remote.storage.enable".into(),
+        value: Some("true".into()),
+        ..Default::default()
+    }];
+    configs.extend(extra_configs);
+    create_topic(&client, topic, configs).await;
+    broker.wait_until_partition_present(topic, 0).await;
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        while !broker
+            .partition_log_config_for_test(topic, 0)
+            .is_some_and(|config| config.remote_storage_enable)
+        {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("remote topic config propagated");
+    (broker, client, [directory, remote_dir])
+}
+
 pub(super) async fn list_one(
     client: &krabka_client_core::Client,
     topic: &str,
@@ -87,4 +126,21 @@ pub(super) async fn list_one_at_epoch(
         .remove(0)
         .partitions
         .remove(0)
+}
+
+#[derive(Debug)]
+pub(super) struct DenyNamed(pub(super) std::collections::HashSet<&'static str>);
+
+impl crate::authorizer::Authorizer for DenyNamed {
+    fn authorize(
+        &self,
+        _source: &dyn krabka_authz::AclSource,
+        req: &crate::authorizer::AuthorizationRequest<'_>,
+    ) -> crate::authorizer::AuthorizationResult {
+        if self.0.contains(req.resource_name) {
+            crate::authorizer::AuthorizationResult::Deny
+        } else {
+            crate::authorizer::AuthorizationResult::Allow
+        }
+    }
 }

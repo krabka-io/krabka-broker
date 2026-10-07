@@ -18,18 +18,12 @@ async fn run_from_args_restores_the_archive_and_returns_exit_ok() {
     let target = tempfile::tempdir().expect("target parent");
     let log_dir = target.path().join("restored");
 
-    let code = run_from_args([
-        "krabka-restore".to_owned(),
-        "--archive-local".to_owned(),
-        fixture.archive_root.path().display().to_string(),
-        "--log-dir".to_owned(),
-        log_dir.display().to_string(),
-        "--node-id".to_owned(),
-        "1".to_owned(),
-        "--standalone".to_owned(),
-        "--controller-listener".to_owned(),
-        "127.0.0.1:9093".to_owned(),
-    ])
+    let code = run_from_args(crate::args::restore_argv(
+        fixture.archive_root.path(),
+        &log_dir,
+        "127.0.0.1:9093",
+        &[],
+    ))
     .await;
 
     check!(code == EXIT_OK);
@@ -50,19 +44,12 @@ async fn dry_run_reports_success_but_writes_no_partition_data() {
     let target = tempfile::tempdir().expect("target parent");
     let log_dir = target.path().join("restored");
 
-    let code = run_from_args([
-        "krabka-restore".to_owned(),
-        "--archive-local".to_owned(),
-        fixture.archive_root.path().display().to_string(),
-        "--log-dir".to_owned(),
-        log_dir.display().to_string(),
-        "--node-id".to_owned(),
-        "1".to_owned(),
-        "--standalone".to_owned(),
-        "--controller-listener".to_owned(),
-        "127.0.0.1:9093".to_owned(),
-        "--dry-run".to_owned(),
-    ])
+    let code = run_from_args(crate::args::restore_argv(
+        fixture.archive_root.path(),
+        &log_dir,
+        "127.0.0.1:9093",
+        &["--dry-run"],
+    ))
     .await;
 
     check!(code == EXIT_OK);

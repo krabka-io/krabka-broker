@@ -211,6 +211,7 @@ mod tests {
     use krabka_remote_storage::{InmemoryRemoteLogMetadataManager, LocalTieredStorage};
 
     use super::*;
+    use crate::remote_log_manager::test_support::{copy_all_exports, local_backends};
 
     /// The delete paths take an index cache so a segment they remove stops
     /// holding its bytes. These tests assert on the RLMM lifecycle, so the
@@ -233,15 +234,7 @@ mod tests {
             Arc::new(LocalTieredStorage::new(remote_dir.path()));
         let rlmm_impl = Arc::new(InmemoryRemoteLogMetadataManager::new());
         let rlmm: Arc<dyn RemoteLogMetadataManager> = rlmm_impl.clone();
-        let copied = copy_eligible(
-            &tier(ArchiveMode::Mutable, &rsm, &rlmm),
-            &tp(),
-            1,
-            LeaderEpoch(0),
-            exports.clone(),
-        )
-        .await;
-        assert!(copied == exports.len());
+        copy_all_exports(&tier(ArchiveMode::Mutable, &rsm, &rlmm), &exports).await;
 
         cascade_remote_partition_delete(
             tp(),
@@ -275,10 +268,7 @@ mod tests {
     #[tokio::test]
     async fn cascade_remote_partition_delete_is_noop_on_empty_partition() {
         let remote_dir = tempfile::tempdir().unwrap();
-        let rsm: Arc<dyn RemoteStorageManager> =
-            Arc::new(LocalTieredStorage::new(remote_dir.path()));
-        let rlmm: Arc<dyn RemoteLogMetadataManager> =
-            Arc::new(InmemoryRemoteLogMetadataManager::new());
+        let (rsm, rlmm) = local_backends(remote_dir.path());
         // No add — partition has no segments. Cascade still walks the
         // three partition-delete states without error.
         cascade_remote_partition_delete(

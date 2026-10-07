@@ -38,6 +38,9 @@ use std::{
 
 use assert2::assert;
 
+pub(crate) use crate::support::docker;
+use crate::support::free_port;
+
 /// The tag `//packaging:image_load` loads the broker image under.
 ///
 /// `//bazel/defs.bzl` sets `KRABKA_BROKER_IMAGE` to the same string from
@@ -72,37 +75,6 @@ const RETENTION_CHECK_INTERVAL: &str = "1s";
 /// The image tag to run.
 pub(crate) fn image() -> String {
     std::env::var("KRABKA_BROKER_IMAGE").unwrap_or_else(|_| DEFAULT_IMAGE.to_owned())
-}
-
-/// Run `docker` with `args`, returning stdout on success.
-///
-/// # Panics
-///
-/// Panics when the command cannot be spawned or exits non-zero. Every call site
-/// is setup or teardown of the fixture, where a failure is not a condition the
-/// soak is meant to tolerate.
-pub(crate) fn docker(args: &[&str]) -> String {
-    let out = Command::new("docker")
-        .args(args)
-        .output()
-        .unwrap_or_else(|e| panic!("spawn docker {args:?}: {e}"));
-    assert!(
-        out.status.success(),
-        "docker {args:?} exited {:?}\nstdout: {}\nstderr: {}",
-        out.status.code(),
-        String::from_utf8_lossy(&out.stdout),
-        String::from_utf8_lossy(&out.stderr),
-    );
-    String::from_utf8_lossy(&out.stdout).trim().to_owned()
-}
-
-/// A free loopback port, bound and released.
-fn free_port() -> u16 {
-    std::net::TcpListener::bind("127.0.0.1:0")
-        .expect("bind an ephemeral port")
-        .local_addr()
-        .expect("local addr")
-        .port()
 }
 
 /// One broker of the cluster.

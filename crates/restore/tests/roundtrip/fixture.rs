@@ -7,17 +7,13 @@
 //! then makes of it.
 
 use assert2::assert;
-use bytes::Bytes;
 use krabka_audit::signing::FileEd25519Signer;
-use krabka_ids::LeaderEpoch;
 use krabka_log::Log;
 use krabka_protocol::records::RecordBatch;
 use krabka_remote_storage::{
-    ChainHead, ChainStamp, EpochId, LocalTieredStorage, LogSegmentData, MANIFEST_SUFFIX,
-    ManifestSeq, ObjectEntry, RemoteLogSegmentDetails, RemoteLogSegmentId,
-    RemoteLogSegmentMetadata, RemoteLogSegmentState, RemoteStorageManager as _, Sha256Digest,
-    TopicIdPartition, WormArchiver, WormChainRecord, parse_segment_file_name, partition_dir_name,
-    segment_file_name,
+    ChainHead, ChainStamp, EpochId, LocalTieredStorage, MANIFEST_SUFFIX, ManifestSeq, ObjectEntry,
+    RemoteLogSegmentMetadata, Sha256Digest, TopicIdPartition, WormArchiver, WormChainRecord,
+    parse_segment_file_name, partition_dir_name, segment_file_name,
 };
 use tempfile::TempDir;
 use uuid::Uuid;
@@ -139,40 +135,8 @@ fn build_partition(storage: &LocalTieredStorage, spec: PartitionSpec<'_>) -> Par
         .map(|(export, batch)| {
             let segment_id = Uuid::new_v4();
             let partition_id = TopicIdPartition::new(spec.topic_id, spec.topic, spec.partition);
-            let leader_epoch_checkpoint =
-                Bytes::from(format!("0\n1\n0 {}\n", export.base_offset.0).into_bytes());
-            let metadata = RemoteLogSegmentMetadata::new(
-                RemoteLogSegmentId::new(partition_id, segment_id),
-                export.base_offset.0,
-                export.last_offset.0,
-                export.max_timestamp,
-                1,
-                0,
-                RemoteLogSegmentDetails::new(
-                    i32::try_from(
-                        std::fs::metadata(&export.log_path)
-                            .expect("log metadata")
-                            .len(),
-                    )
-                    .expect("fixture segment fits i32"),
-                    RemoteLogSegmentState::CopySegmentFinished,
-                    maplit::btreemap! {LeaderEpoch(0) => export.base_offset.0},
-                ),
-            )
-            .expect("valid remote metadata");
-            storage
-                .copy_log_segment_data(
-                    &metadata,
-                    &LogSegmentData {
-                        log_segment: export.log_path.clone(),
-                        offset_index: export.offset_index_path.clone(),
-                        time_index: export.time_index_path.clone(),
-                        transaction_index: export.transaction_index_path.clone(),
-                        producer_snapshot_index: Some(export.producer_snapshot_path.clone()),
-                        leader_epoch_index: leader_epoch_checkpoint,
-                    },
-                )
-                .expect("archive the segment");
+            let metadata =
+                crate::archive_fixture::archive_segment(storage, partition_id, segment_id, export);
 
             SegmentFixture {
                 segment_id,

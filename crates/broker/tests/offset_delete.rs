@@ -14,7 +14,6 @@ use krabka_protocol::{
     Encode,
     owned::{
         consumer_protocol_subscription::ConsumerProtocolSubscription,
-        create_topics_request::{CreatableTopic, CreateTopicsRequest},
         join_group_request::{JoinGroupRequest, JoinGroupRequestProtocol},
         offset_commit_request::{
             OffsetCommitRequest, OffsetCommitRequestPartition, OffsetCommitRequestTopic,
@@ -43,21 +42,7 @@ async fn start() -> support::InProcess {
 }
 
 async fn create_topic(p: &support::InProcess, name: &str, num_partitions: i32) {
-    let resp = p
-        .client
-        .send(CreateTopicsRequest {
-            topics: vec![CreatableTopic {
-                name: name.into(),
-                num_partitions,
-                replication_factor: 1,
-                ..Default::default()
-            }],
-            timeout_ms: 5_000,
-            ..Default::default()
-        })
-        .await
-        .expect("CreateTopics");
-    assert!(resp.topics[0].error_code == 0, "CreateTopics for {name}");
+    crate::support::client::create_topic(&p.client, name, num_partitions).await;
 }
 
 async fn commit_offset(p: &support::InProcess, group: &str, topic: &str, partition: i32, off: i64) {

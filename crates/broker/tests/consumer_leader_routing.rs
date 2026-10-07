@@ -29,16 +29,12 @@ use bytes::Bytes;
 use krabka_client_consumer::{AutoOffsetReset, Consumer};
 use krabka_client_core::Client;
 use krabka_protocol::{
-    owned::{
-        create_topics_request::{CreatableTopic, CreateTopicsRequest},
-        produce_request::{PartitionProduceData, ProduceRequest, TopicProduceData},
-    },
+    owned::produce_request::{PartitionProduceData, ProduceRequest, TopicProduceData},
     records::{Record, RecordBatch},
 };
+use support::cluster_lock;
 
 mod support;
-
-use support::cluster_lock;
 
 /// Produce one single-record batch to a partition on the broker that owns it.
 ///
@@ -130,21 +126,8 @@ async fn consumer_fetches_from_non_bootstrap_leaders() {
     // Create the topic with replication_factor=1. Each partition lives on
     // exactly ONE broker; the bootstrap broker has NO replica for partitions
     // placed on the other two nodes.
-    let cr = admin
-        .send(CreateTopicsRequest {
-            topics: vec![CreatableTopic {
-                name: topic.into(),
-                num_partitions: n_partitions,
-                replication_factor: 1,
-                ..Default::default()
-            }],
-            timeout_ms: 5_000,
-            ..Default::default()
-        })
-        .await
-        .unwrap();
-    assert!(cr.topics[0].error_code == 0, "create_topic: {cr:?}");
-    let topic_id = cr.topics[0].topic_id;
+    let topic_id =
+        crate::support::client::create_topic_with(&admin, topic, n_partitions, 1, 5_000).await;
 
     // Wait until node 1's controller image knows every partition AND its
     // assigned leader. The metadata image is raft-replicated and is the exact

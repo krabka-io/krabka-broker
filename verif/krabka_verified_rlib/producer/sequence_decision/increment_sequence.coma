@@ -1,23 +1,23 @@
-(* #"/workspace/crates/verified/src/producer/sequence_decision.rs" 21 0 21 63 *)
+(* #"/workspace/crates/verified/src/producer/sequence_decision.rs" 22 0 22 63 *)
 
-let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
-let%span snum = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 328 20 329 89
-let%span snum'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 332 26 332 87
-let%span ssequence_decision = "/workspace/crates/verified/src/producer/sequence_decision.rs" 24 10 24 41
-let%span ssequence_decision'0 = "/workspace/crates/verified/src/producer/sequence_decision.rs" 25 28 25 29
-let%span ssequence_decision'1 = "/workspace/crates/verified/src/producer/sequence_decision.rs" 26 27 26 35
-let%span ssequence_decision'2 = "/workspace/crates/verified/src/producer/sequence_decision.rs" 26 21 26 35
-let%span ssequence_decision'3 = "/workspace/crates/verified/src/producer/sequence_decision.rs" 28 28 28 29
-let%span ssequence_decision'4 = "/workspace/crates/verified/src/producer/sequence_decision.rs" 28 57 28 65
-let%span ssequence_decision'5 = "/workspace/crates/verified/src/producer/sequence_decision.rs" 28 44 28 66
-let%span ssequence_decision'6 = "/workspace/crates/verified/src/producer/sequence_decision.rs" 28 33 28 66
-let%span ssequence_decision'7 = "/workspace/crates/verified/src/producer/sequence_decision.rs" 30 28 30 36
-let%span ssequence_decision'8 = "/workspace/crates/verified/src/producer/sequence_decision.rs" 30 16 30 37
-let%span ssequence_decision'9 = "/workspace/crates/verified/src/producer/sequence_decision.rs" 30 53 30 61
-let%span ssequence_decision'10 = "/workspace/crates/verified/src/producer/sequence_decision.rs" 30 40 30 62
-let%span ssequence_decision'11 = "/workspace/crates/verified/src/producer/sequence_decision.rs" 30 16 30 62
-let%span ssequence_decision'12 = "/workspace/crates/verified/src/producer/sequence_decision.rs" 19 10 19 65
-let%span ssequence_decision'13 = "/workspace/crates/verified/src/producer/sequence_decision.rs" 10 16 10 47
+let%span sord = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span snum = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 328 20 329 89
+let%span snum'0 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 332 26 332 87
+let%span ssequence_decision = "/workspace/crates/verified/src/producer/sequence_decision.rs" 25 10 25 41
+let%span ssequence_decision'0 = "/workspace/crates/verified/src/producer/sequence_decision.rs" 26 28 26 29
+let%span ssequence_decision'1 = "/workspace/crates/verified/src/producer/sequence_decision.rs" 27 27 27 35
+let%span ssequence_decision'2 = "/workspace/crates/verified/src/producer/sequence_decision.rs" 27 21 27 35
+let%span ssequence_decision'3 = "/workspace/crates/verified/src/producer/sequence_decision.rs" 29 28 29 29
+let%span ssequence_decision'4 = "/workspace/crates/verified/src/producer/sequence_decision.rs" 29 57 29 65
+let%span ssequence_decision'5 = "/workspace/crates/verified/src/producer/sequence_decision.rs" 29 44 29 66
+let%span ssequence_decision'6 = "/workspace/crates/verified/src/producer/sequence_decision.rs" 29 33 29 66
+let%span ssequence_decision'7 = "/workspace/crates/verified/src/producer/sequence_decision.rs" 31 28 31 36
+let%span ssequence_decision'8 = "/workspace/crates/verified/src/producer/sequence_decision.rs" 31 16 31 37
+let%span ssequence_decision'9 = "/workspace/crates/verified/src/producer/sequence_decision.rs" 31 53 31 61
+let%span ssequence_decision'10 = "/workspace/crates/verified/src/producer/sequence_decision.rs" 31 40 31 62
+let%span ssequence_decision'11 = "/workspace/crates/verified/src/producer/sequence_decision.rs" 31 16 31 62
+let%span ssequence_decision'12 = "/workspace/crates/verified/src/producer/sequence_decision.rs" 20 10 20 65
+let%span ssequence_decision'13 = "/workspace/crates/verified/src/producer/sequence_decision.rs" 11 16 11 47
 
 use creusot.int.Int32
 use creusot.prelude.Any
@@ -51,15 +51,15 @@ let elim_Some (_x: t_Option_i32) (return (f0: Int32.t)) = any
       end}
     any) ]
 
-function sequence_modulo_2_31 [#"/workspace/crates/verified/src/producer/sequence_decision.rs" 9 0 9 49] (sequence: int) : int
+function sequence_modulo_2_31 [#"/workspace/crates/verified/src/producer/sequence_decision.rs" 10 0 10 49] (sequence: int) : int
  = [%#ssequence_decision'13] EuclideanDivision.mod sequence 2147483648
 
 meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let increment_sequence [#"/workspace/crates/verified/src/producer/sequence_decision.rs" 21 0 21 63]
-  (sequence: Int32.t) (increment: Int32.t) (return (x: Int32.t)) = (! bb0
+let increment_sequence [#"/workspace/crates/verified/src/producer/sequence_decision.rs" 22 0 22 63] (sequence: Int32.t)
+  (increment: Int32.t) (return (x: Int32.t)) = (! bb0
   [ bb0 = s0
     [ s0 = checked_add [%#ssequence_decision] {sequence} {increment} (fun (_x: t_Option_i32) -> [ &_6 <- _x ] s1)
     | s1 = any [ br0 -> {_6 = None} (! bb7) | br1 (x0: Int32.t) -> {_6 = Some x0} (! bb9) ] ]

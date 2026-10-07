@@ -43,21 +43,14 @@
 
 mod support;
 
-use std::{
-    process::{Command, Stdio},
-    time::Duration,
-};
-
 use assert2::{assert, check};
-use krabka_broker::{Broker, BrokerConfig, BrokerHandle};
+use krabka_broker::BrokerHandle;
 use krabka_client_core::Client;
-use krabka_log::LogConfig;
 use krabka_protocol::owned::{
     common::streams_group_heartbeat_request::task_ids::TaskIds as ReqTaskIds,
     create_topics_request::{CreatableTopic, CreateTopicsRequest},
-    streams_group_heartbeat_request::{StreamsGroupHeartbeatRequest, Subtopology, Topology},
+    streams_group_heartbeat_request::Topology,
     streams_group_heartbeat_response::StreamsGroupHeartbeatResponse,
-    update_features_request::{FeatureUpdateKey, UpdateFeaturesRequest},
 };
 
 /// Port the broker binds on the host and that the container reaches through
@@ -70,91 +63,27 @@ use krabka_protocol::owned::{
 /// time. A port per process lets them overlap.
 ///
 /// `&'static str`, so these read as the constants they replaced.
-fn ports() -> &'static (String, String, String) {
-    static PORTS: std::sync::OnceLock<(String, String, String)> = std::sync::OnceLock::new();
-    PORTS.get_or_init(|| {
-        let (client, controller) = (support::free_port(), support::free_port());
-        (
-            format!("host.docker.internal:{client}"),
-            format!("0.0.0.0:{client}"),
-            format!("0.0.0.0:{controller}"),
-        )
-    })
-}
-
 fn bootstrap_addr() -> &'static str {
-    &ports().0
+    &support::jvm_listeners().advertised
 }
 
-fn listen_addr() -> &'static str {
-    &ports().1
-}
-
-fn controller_listen() -> &'static str {
-    &ports().2
-}
-
-/// The broker over loopback, which is how the test's own client reaches it.
-/// Only the containers use the advertised `host.docker.internal` name.
-fn client_addr() -> &'static str {
-    static V: std::sync::OnceLock<String> = std::sync::OnceLock::new();
-    V.get_or_init(|| listen_addr().replace("0.0.0.0", "127.0.0.1"))
-}
 /// Official Apache Kafka image. It ships KIP-1071 streams groups plus the
 /// `kafka-streams-groups.sh` admin tool (`StreamsGroupDescribe` / `ListGroups`).
 const KAFKA_IMAGE: &str = "mirror.gcr.io/apache/kafka:4.1.0";
 const STREAMS_GROUPS: &str = "/opt/kafka/bin/kafka-streams-groups.sh";
-/// Kafka `COORDINATOR_LOAD_IN_PROGRESS`. The test retries the first-join
-/// heartbeat while the coordinator is still loading.
-const ERR_COORDINATOR_LOAD_IN_PROGRESS: i16 = 14;
-
 /// Boot one broker bound to `0.0.0.0:9092`. It advertises `host.docker.internal:
 /// 9092` so the Docker container's post-Metadata connect targets a hostname it
 /// can resolve. Mirrors `jvm_share_groups.rs::start_host_broker`.
 async fn start_host_broker() -> (BrokerHandle, tempfile::TempDir) {
-    let bootstrap = bootstrap_addr();
-    let listen = listen_addr();
-    let _ = tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("krabka_broker=info,info")),
-        )
-        .with_test_writer()
-        .try_init();
-    let dir = tempfile::tempdir().expect("tempdir");
-    let listen_addr: std::net::SocketAddr = listen_addr().parse().expect("static addr");
-    let controller_addr: std::net::SocketAddr =
-        controller_listen().parse().expect("allocated addr");
-    let config = BrokerConfig {
-        broker_id: 1,
-        listen_addr,
-        advertised_listener: bootstrap_addr().into(),
-        log_dir: dir.path().to_path_buf(),
-        log_config: LogConfig::default(),
-        node_id: krabka_broker::NodeId(1),
-        controller_listen_addr: controller_addr,
-        controller_quorum_voters: vec![(krabka_broker::NodeId(1), controller_addr.to_string())],
-        heartbeat_interval: krabka_units::millis(3_000),
-        heartbeat_timeout: krabka_units::millis(9_000),
-        replica_lag_time_max: krabka_units::millis(30_000),
-        controller_election_timeout: krabka_units::secs(5),
-        controller_heartbeat_interval: krabka_units::millis(500),
-        bootstrap_mode: krabka_broker::BootstrapMode::Bootstrap,
-        ..BrokerConfig::default().with_internal_topics_for(1)
-    };
-    let handle = Broker::start(config).await.expect("start broker");
-    eprintln!("KRABKA[test] broker started listen={listen} advertised={bootstrap}");
-    // The raw heartbeats below do not look their coordinator up first, so
-    // `__consumer_offsets` must exist before them.
-    handle.wait_until_group_coordinator_ready().await;
-    (handle, dir)
+    let (broker, dir) = support::start_jvm_single("krabka_broker=info,info", |_| {}).await;
+    broker.wait_until_group_coordinator_ready().await;
+    (broker, dir)
 }
-
 /// Native client that connects to the broker's local loopback listener. The
 /// container reaches the same broker through `host.docker.internal`.
 async fn connect() -> Client {
     Client::builder()
-        .bootstrap(client_addr().to_string())
+        .bootstrap(support::jvm_client_addr().to_string())
         .client_id("krabka-streams-test")
         .build()
         .await
@@ -187,84 +116,12 @@ async fn create_topic(broker: &BrokerHandle, client: &Client, topic: &str, parti
 
 /// Finalize `streams.version` to level 1 so the heartbeat/describe handlers
 /// stop returning `UNSUPPORTED_VERSION`. `upgrade_type: 1` is UPGRADE.
-async fn finalize_streams_version(client: &Client) {
-    let resp = client
-        .send(UpdateFeaturesRequest {
-            feature_updates: vec![FeatureUpdateKey {
-                feature: "streams.version".into(),
-                max_version_level: 1,
-                upgrade_type: 1,
-                ..Default::default()
-            }],
-            ..Default::default()
-        })
-        .await
-        .expect("UpdateFeatures");
-    assert!(
-        resp.error_code == 0,
-        "streams.version finalize failed: {resp:?}"
-    );
-}
+use support::streams::{active_partition_count, finalize_streams_version, follow_up};
 
-/// A single-subtopology topology that subscribes to one source topic (stateless).
 fn topology(source_topic: &str) -> Topology {
-    Topology {
-        epoch: 0,
-        subtopologies: vec![Subtopology {
-            subtopology_id: "0".into(),
-            source_topics: vec![source_topic.into()],
-            state_changelog_topics: vec![],
-            ..Default::default()
-        }],
-        ..Default::default()
-    }
+    support::streams::topology(source_topic, Vec::new())
 }
 
-/// First-join heartbeat: a client-generated member id, epoch 0,
-/// process id, rebalance timeout, and the supplied topology.
-fn first_join(group: &str, topo: Topology) -> StreamsGroupHeartbeatRequest {
-    StreamsGroupHeartbeatRequest {
-        group_id: group.into(),
-        member_id: uuid::Uuid::new_v4().to_string(),
-        member_epoch: 0,
-        process_id: Some("p1".into()),
-        rebalance_timeout_ms: 30_000,
-        active_tasks: Some(Vec::new()),
-        standby_tasks: Some(Vec::new()),
-        warmup_tasks: Some(Vec::new()),
-        topology: Some(topo),
-        ..Default::default()
-    }
-}
-
-/// Follow-up heartbeat: known member id and its current epoch. It echoes back
-/// the owned active tasks, as a steady-state member would.
-fn follow_up(
-    group: &str,
-    member_id: &str,
-    epoch: i32,
-    active: Option<Vec<ReqTaskIds>>,
-) -> StreamsGroupHeartbeatRequest {
-    StreamsGroupHeartbeatRequest {
-        group_id: group.into(),
-        member_id: member_id.into(),
-        member_epoch: epoch,
-        standby_tasks: active.as_ref().map(|_| Vec::new()),
-        warmup_tasks: active.as_ref().map(|_| Vec::new()),
-        active_tasks: active,
-        ..Default::default()
-    }
-}
-
-/// Sum of all active-task partitions in a heartbeat response.
-fn active_partition_count(resp: &StreamsGroupHeartbeatResponse) -> usize {
-    resp.active_tasks
-        .as_ref()
-        .map_or(0, |v| v.iter().map(|t| t.partitions.len()).sum())
-}
-
-/// Drive a single member to its first join, then re-heartbeat until it owns
-/// `want_active` partitions (steady state). Returns the minted `member_id`.
 async fn join_and_converge(
     client: &Client,
     group: &str,
@@ -272,50 +129,7 @@ async fn join_and_converge(
     want_active: usize,
     tries: usize,
 ) -> (String, StreamsGroupHeartbeatResponse) {
-    let mut resp = client
-        .send(first_join(group, topo.clone()))
-        .await
-        .expect("first heartbeat");
-    let mut member_id = resp.member_id.clone();
-
-    for _ in 0..tries {
-        // COORDINATOR_LOAD_IN_PROGRESS: retry the first join.
-        if resp.error_code == ERR_COORDINATOR_LOAD_IN_PROGRESS {
-            resp = client
-                .send(first_join(group, topo.clone()))
-                .await
-                .expect("retry first heartbeat");
-            member_id = resp.member_id.clone();
-            continue;
-        }
-        assert!(resp.error_code == 0, "heartbeat error: {resp:?}");
-        if active_partition_count(&resp) >= want_active {
-            break;
-        }
-        // intentional: streams-group task assignment is coordinator-local state,
-        // not in the metadata image and exposed by no metric — bounded backoff
-        // between heartbeat RPCs is the only way to observe convergence.
-        tokio::time::sleep(Duration::from_millis(200)).await;
-        let active = resp.active_tasks.clone().map(|v| {
-            v.into_iter()
-                .map(|t| ReqTaskIds {
-                    subtopology_id: t.subtopology_id,
-                    partitions: t.partitions,
-                    ..Default::default()
-                })
-                .collect()
-        });
-        // As the Kafka Streams client does, the follow-up is never a join.
-        // While the initial rebalance delay holds the assignment back, the
-        // member is at Kafka 4.3's initial target assignment epoch 1, not at
-        // the join epoch 0 that would need the rebalance timeout again.
-        resp = client
-            .send(follow_up(group, &member_id, resp.member_epoch, active))
-            .await
-            .expect("follow-up heartbeat");
-        member_id = resp.member_id.clone();
-    }
-    (member_id, resp)
+    support::streams::streams_join_and_converge(client, group, topo, want_active, tries, true).await
 }
 
 /// Heartbeat once more to keep the live member's session fresh while the JVM
@@ -336,22 +150,7 @@ async fn keepalive(client: &Client, group: &str, member_id: &str, epoch: i32) {
 /// admin tool may exit non-zero even on a successful round-trip, as the
 /// `jvm_share_groups.rs` note records. So callers check stdout, not exit status.
 fn docker_run(args: &[&str]) -> std::process::Output {
-    let out = Command::new("docker")
-        .arg("run")
-        .arg("--rm")
-        .arg("--add-host=host.docker.internal:host-gateway")
-        .arg(KAFKA_IMAGE)
-        .args(args)
-        .stderr(Stdio::piped())
-        .stdout(Stdio::piped())
-        .output()
-        .expect("docker run");
-    eprintln!(
-        "KRABKA[test] docker {args:?} status={} stderr={}",
-        out.status,
-        String::from_utf8_lossy(&out.stderr),
-    );
-    out
+    support::jvm_docker_run(KAFKA_IMAGE, args)
 }
 
 /// A DEBUG-level log4j2 config, written into the container at `/tmp/d.yaml`, so

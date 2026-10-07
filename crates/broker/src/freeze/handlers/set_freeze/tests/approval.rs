@@ -5,8 +5,8 @@
 
 use assert2::{assert, check};
 use krabka_metadata::{
-    BreakGlassAction, BreakGlassApproval, BreakGlassProposalRecord, MetadataRecord, PatternType,
-    TopicFreezeRecord,
+    BreakGlassAction, BreakGlassApproval, BreakGlassProposalRecord, MetadataImage, MetadataRecord,
+    PatternType, TopicFreezeRecord,
 };
 use krabka_protocol::krabka::freeze::PATTERN_TYPE_LITERAL;
 use tempfile::TempDir;
@@ -74,63 +74,27 @@ fn a_freeze_needs_no_proposal() {
 
 #[test]
 fn a_thaw_spends_the_approved_proposal_that_covers_its_scope() {
-    let dir = TempDir::new().expect("tempdir");
-    let (base, _) = config_with_alice(&dir);
-    let config = BrokerConfig {
-        break_glass: BreakGlassConfig {
-            approvers: ["User:alice", "User:bob", "User:carol"]
-                .map(str::to_owned)
-                .to_vec(),
-            ..BreakGlassConfig::default()
-        },
-        ..base
-    };
-    let mut image = image(&[("orders", PatternType::Literal)]);
-    image.apply(&MetadataRecord::V1BreakGlassProposal(approved_thaw(
-        "literal:orders",
-    )));
-    let principal = principal(ALICE_NAME);
-    let peer = peer();
-    let ctx = context(&principal, &peer);
-    let env = FreezeEnv {
-        config: &config,
-        image: &image,
-        ctx: &ctx,
-    };
-    let thaw = TopicFreezeRecord {
-        frozen: false,
-        proposal_id: PROPOSAL,
-        ..record_of(
-            &freeze_request("orders", PATTERN_TYPE_LITERAL),
-            PatternType::Literal,
-            ALICE,
-        )
-    };
+    with_approved_thaw(PROPOSAL, |env, thaw| {
+        assert!(let Ok(Some(consumed)) = check_approval(env, thaw));
 
-    assert!(let Ok(Some(consumed)) = check_approval(&env, &thaw));
-
-    check!(consumed_proposal_id(&consumed) == Some(PROPOSAL));
-    assert!(let MetadataRecord::V1BreakGlassProposal(proposal) = &consumed);
-    check!(proposal.consumed_at_ms > 0);
+        check!(consumed_proposal_id(&consumed) == Some(PROPOSAL));
+        assert!(let MetadataRecord::V1BreakGlassProposal(proposal) = &consumed);
+        check!(proposal.consumed_at_ms > 0);
+    });
 }
 
 #[test]
 fn a_thaw_that_names_another_proposal_is_refused() {
+    with_approved_thaw(Uuid::from_u128(0xDEAD), |env, thaw| {
+        let outcome = check_approval(env, thaw);
+
+        check!(outcome.err().map(|r| r.code) == Some(codes::BREAK_GLASS_APPROVAL_REQUIRED));
+    });
+}
+
+fn with_approved_thaw(proposal_id: Uuid, check: impl FnOnce(&FreezeEnv<'_>, &TopicFreezeRecord)) {
     let dir = TempDir::new().expect("tempdir");
-    let (base, _) = config_with_alice(&dir);
-    let config = BrokerConfig {
-        break_glass: BreakGlassConfig {
-            approvers: ["User:alice", "User:bob", "User:carol"]
-                .map(str::to_owned)
-                .to_vec(),
-            ..BreakGlassConfig::default()
-        },
-        ..base
-    };
-    let mut image = image(&[("orders", PatternType::Literal)]);
-    image.apply(&MetadataRecord::V1BreakGlassProposal(approved_thaw(
-        "literal:orders",
-    )));
+    let (config, image) = approved_context(&dir, &[("orders", PatternType::Literal)]);
     let principal = principal(ALICE_NAME);
     let peer = peer();
     let ctx = context(&principal, &peer);
@@ -141,7 +105,7 @@ fn a_thaw_that_names_another_proposal_is_refused() {
     };
     let thaw = TopicFreezeRecord {
         frozen: false,
-        proposal_id: Uuid::from_u128(0xDEAD),
+        proposal_id,
         ..record_of(
             &freeze_request("orders", PATTERN_TYPE_LITERAL),
             PatternType::Literal,
@@ -149,31 +113,19 @@ fn a_thaw_that_names_another_proposal_is_refused() {
         )
     };
 
-    let outcome = check_approval(&env, &thaw);
-
-    check!(outcome.err().map(|r| r.code) == Some(codes::BREAK_GLASS_APPROVAL_REQUIRED));
+    check(&env, &thaw);
 }
 
 #[test]
 fn a_proposal_for_one_scope_does_not_thaw_another() {
     let dir = TempDir::new().expect("tempdir");
-    let (base, _) = config_with_alice(&dir);
-    let config = BrokerConfig {
-        break_glass: BreakGlassConfig {
-            approvers: ["User:alice", "User:bob", "User:carol"]
-                .map(str::to_owned)
-                .to_vec(),
-            ..BreakGlassConfig::default()
-        },
-        ..base
-    };
-    let mut image = image(&[
-        ("orders", PatternType::Literal),
-        ("orders", PatternType::Prefixed),
-    ]);
-    image.apply(&MetadataRecord::V1BreakGlassProposal(approved_thaw(
-        "literal:orders",
-    )));
+    let (config, image) = approved_context(
+        &dir,
+        &[
+            ("orders", PatternType::Literal),
+            ("orders", PatternType::Prefixed),
+        ],
+    );
     let principal = principal(ALICE_NAME);
     let peer = peer();
     let ctx = context(&principal, &peer);
@@ -206,6 +158,28 @@ fn a_proposal_for_one_scope_does_not_thaw_another() {
             "{label}"
         );
     }
+}
+
+// Alice's configured approvers and their literal orders thaw proposal.
+fn approved_context(
+    dir: &TempDir,
+    entries: &[(&str, PatternType)],
+) -> (BrokerConfig, MetadataImage) {
+    let (base, _) = config_with_alice(dir);
+    let config = BrokerConfig {
+        break_glass: BreakGlassConfig {
+            approvers: ["User:alice", "User:bob", "User:carol"]
+                .map(str::to_owned)
+                .to_vec(),
+            ..BreakGlassConfig::default()
+        },
+        ..base
+    };
+    let mut image = image(entries);
+    image.apply(&MetadataRecord::V1BreakGlassProposal(approved_thaw(
+        "literal:orders",
+    )));
+    (config, image)
 }
 
 // A proposal that two distinct principals approved, on `target`.

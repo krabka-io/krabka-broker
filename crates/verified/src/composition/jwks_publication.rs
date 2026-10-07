@@ -62,6 +62,25 @@ pub(super) fn publication_trace(initial: u64, fetches: &[bool]) -> (u64, u64) {
     (generation, published)
 }
 
+// cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
+#[cfg(creusot)]
+#[cfg_attr(test, mutants::skip)]
+#[logic(open)]
+pub(super) fn initial_session_input_valid(
+    facts: OAuthSessionFacts,
+    cache: JwksCacheFacts,
+    completed: Int,
+) -> bool {
+    pearlite! {
+        cache.now_ms@ == facts.now_ms@ && facts.now_ms@ >= 0 && completed >= facts.now_ms@
+        && cache.generation_before@ % 2 == 0 && cache.generation_after == cache.generation_before
+        && (!cache.expiry_enabled || (cache.expiry_ms@ >= 0
+            && cache.last_successful_fetch_ms@ > 0 && cache.last_successful_fetch_ms@ <= facts.now_ms@))
+        && facts.expiry == OAuthExpiryPresence::Present && facts.token_expires_at_ms@ > completed
+        && facts.authentication == OAuthAuthenticationKind::Initial && facts.cap == OAuthSessionCap::Disabled
+    }
+}
+
 /// For a valid initial controller credential and a stable starting generation,
 /// authenticate exactly when no keys were replaced, no writer is in flight,
 /// and hard cache expiry has not elapsed at completion. A final publication
@@ -69,12 +88,7 @@ pub(super) fn publication_trace(initial: u64, fetches: &[bool]) -> (u64, u64) {
 /// precondition is needed: the publisher trace derives it, even at exhaustion.
 /// Token expiry bounds the computed lifetime; this does not prove subsequent
 /// controller frame expiry enforcement or cryptographic correctness.
-#[requires(cache.now_ms@ == facts.now_ms@ && facts.now_ms@ >= 0 && completed_ms@ >= facts.now_ms@)]
-#[requires(cache.generation_before@ % 2 == 0 && cache.generation_after == cache.generation_before)]
-#[requires(!cache.expiry_enabled || (cache.expiry_ms@ >= 0
-    && cache.last_successful_fetch_ms@ > 0 && cache.last_successful_fetch_ms@ <= facts.now_ms@))]
-#[requires(facts.expiry == OAuthExpiryPresence::Present && facts.token_expires_at_ms@ > completed_ms@
-    && facts.authentication == OAuthAuthenticationKind::Initial && facts.cap == OAuthSessionCap::Disabled)]
+#[requires(initial_session_input_valid(facts, cache, completed_ms@))]
 #[ensures(result.1.0@ >= cache.generation_before@ && result.1.1@ <= successful_fetches(fetches@, fetches@.len()))]
 #[ensures((result.0 == OAuthSessionDecision::Reject) == (result.1.1@ > 0
     || (begin_unfinished_writer && cache.generation_before@ < u64::MAX@ - 1)

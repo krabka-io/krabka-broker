@@ -224,11 +224,7 @@ impl Partition {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::atomic::{AtomicI32, AtomicU64};
-
     use assert2::{assert, check};
-    use krabka_log::LogConfig;
-    use tempfile::tempdir;
     use tokio::sync::Notify;
 
     use super::*;
@@ -273,31 +269,7 @@ mod tests {
 
     #[tokio::test]
     async fn debug_does_not_dump_log() {
-        let dir = tempdir().expect("tempdir");
-        let log = Log::open(dir.path(), LogConfig::default()).expect("open log");
-        let (tx, _rx) = mpsc::channel::<WriterMessage>(1);
-        let writer = tokio::spawn(async {});
-        let p = Partition {
-            topic: "t".into(),
-            index: PartitionIndex(0),
-            log_dir: Arc::new(ArcSwap::from_pointee(dir.path().to_path_buf())),
-            log: Arc::new(Mutex::new(log)),
-            writer_tx: tx,
-            marker_materialization: Arc::new(tokio::sync::Mutex::new(
-                std::collections::HashMap::default(),
-            )),
-            append_notify: Arc::new(Notify::new()),
-            replica_state: Arc::new(tokio::sync::Mutex::new(
-                crate::replica_state::ReplicaState::new(),
-            )),
-            hw_advance_notify: Arc::new(Notify::new()),
-            current_leader: Arc::new(AtomicU64::new(0)),
-            current_leader_epoch: Arc::new(AtomicI32::new(0)),
-            delivery: DeliveryHandles::new(),
-            replication_target: initial_replication_target(None),
-            diskless: false,
-            writer_handle: Arc::new(Mutex::new(Some(writer))),
-        };
+        let (p, _dir) = test_partition(Arc::new(Notify::new()));
         let s = format!("{p:?}");
         // topic/partition_id appear; the mutex/log internals must NOT appear
         // in Debug output.

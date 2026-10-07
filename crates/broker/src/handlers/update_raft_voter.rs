@@ -29,7 +29,6 @@
 
 use std::ops::ControlFlow;
 
-use bytes::Bytes;
 use krabka_metadata::{Voter, VoterEndpoint};
 use krabka_protocol::owned::{
     update_raft_voter_request::UpdateRaftVoterRequest,
@@ -38,21 +37,14 @@ use krabka_protocol::owned::{
 use krabka_raft::{reconfig::UpdateVoter, voter_requests};
 
 use crate::{
-    broker::Broker,
     codes,
-    error::BrokerError,
     handlers::{
         ErrorCodeResponse as _, cluster_action_denied,
         raft_voter::{Admitted, Refusals, prelude},
     },
 };
 
-pub(crate) async fn handle(
-    broker: &Broker,
-    version: i16,
-    req_bytes: &[u8],
-    ctx: &crate::handlers::RequestContext<'_>,
-) -> Result<Bytes, BrokerError> {
+crate::handlers::raft_voter::handler!(broker, version, req_bytes, ctx, {
     let Admitted { req, image, quorum } = match prelude::<UpdateRaftVoterRequest, _>(
         broker,
         version,
@@ -114,7 +106,7 @@ pub(crate) async fn handle(
         },
         version,
     )
-}
+});
 
 #[cfg(test)]
 mod tests {
@@ -153,10 +145,12 @@ mod tests {
     /// Applies one malformation to an otherwise well-formed request.
     type Mutate = fn(&mut UpdateRaftVoterRequest);
 
-    crate::test_support::wire_helpers!(
+    crate::test_support::codec_helpers!(UpdateRaftVoterRequest, UpdateRaftVoterResponse);
+
+    crate::handlers::raft_voter::test_dispatch!(
+        82,
         UpdateRaftVoterRequest,
-        UpdateRaftVoterResponse,
-        client_id = "admin-client"
+        UpdateRaftVoterResponse
     );
 
     use super::*;
@@ -188,12 +182,7 @@ mod tests {
         let (broker_handle, _dir) = start_broker(Arc::new(DenyAll)).await;
         let broker = broker_handle.broker_arc_for_test();
         test_ctx!(ctx, "alice");
-        let req_bytes = encode_request(&request(2), version);
-
-        let resp = super::handle(&broker, version, &req_bytes, &ctx)
-            .await
-            .expect("handle");
-        let resp = decode_response(&resp, version);
+        let resp = answer(&broker, version, &request(2), &ctx).await;
 
         assert!(resp.error_code == codes::CLUSTER_AUTHORIZATION_FAILED);
         broker_handle.shutdown().await;
@@ -210,12 +199,7 @@ mod tests {
         request.cluster_id = Some(broker.controller.current_image().cluster_id().to_string());
         request.current_leader_epoch =
             i32::try_from(broker.controller.quorum_state().current_term).unwrap_or(i32::MAX);
-        let req_bytes = encode_request(&request, version);
-
-        let resp = super::handle(&broker, version, &req_bytes, &ctx)
-            .await
-            .expect("handle");
-        let resp = decode_response(&resp, version);
+        let resp = answer(&broker, version, &request, &ctx).await;
 
         assert!(resp.error_code == codes::INVALID_REQUEST);
         broker_handle.shutdown().await;
@@ -283,11 +267,7 @@ mod tests {
         for (what, mutate, want) in cases {
             let mut req = well_formed();
             mutate(&mut req);
-            let req_bytes = encode_request(&req, version);
-            let resp = super::handle(&broker, version, &req_bytes, &ctx)
-                .await
-                .expect("handle");
-            let resp = decode_response(&resp, version);
+            let resp = answer(&broker, version, &req, &ctx).await;
             assert!(resp.error_code == want, "{what}");
             // Every refusal names the leader, as `RaftUtil.updateVoterResponse`
             // fills it.
@@ -469,12 +449,7 @@ mod tests {
         request.cluster_id = Some(broker.controller.current_image().cluster_id().to_string());
         request.current_leader_epoch =
             i32::try_from(broker.controller.quorum_state().current_term).unwrap_or(i32::MAX);
-        let req_bytes = encode_request(&request, version);
-
-        let resp = super::handle(&broker, version, &req_bytes, &ctx)
-            .await
-            .expect("handle");
-        let resp = decode_response(&resp, version);
+        let resp = answer(&broker, version, &request, &ctx).await;
 
         assert!(resp.error_code == codes::VOTER_NOT_FOUND);
         broker_handle.shutdown().await;

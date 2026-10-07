@@ -18,7 +18,6 @@ use bytes::Bytes;
 use krabka_metadata::{AclOperation, ResourceType};
 use krabka_protocol::{
     owned::{
-        create_topics_request::{CreatableTopic, CreateTopicsRequest},
         share_acknowledge_request::{
             AcknowledgePartition, AcknowledgeTopic, ShareAcknowledgeRequest,
         },
@@ -121,30 +120,8 @@ async fn start() -> (BrokerHandle, tempfile::TempDir) {
 }
 
 async fn create_topic(broker: &BrokerHandle, name: &str) -> WireUuid {
-    let client = krabka_client_core::Client::builder()
-        .bootstrap(broker.listen_addr().to_string())
-        .client_id("share-group-authorization-test")
-        .build()
+    crate::handlers::test_support::create_topic(broker, "share-group-authorization-test", name, 1)
         .await
-        .expect("client build");
-    let response = client
-        .send(CreateTopicsRequest {
-            topics: vec![CreatableTopic {
-                name: name.to_string(),
-                num_partitions: 1,
-                replication_factor: 1,
-                ..Default::default()
-            }],
-            timeout_ms: 5_000,
-            ..Default::default()
-        })
-        .await
-        .expect("CreateTopics");
-    assert!(response.topics[0].error_code == codes::NONE, "{response:?}");
-    broker.wait_until_partition_present(name, 0).await;
-    let image = broker.controller_image_for_test();
-    let topic = image.topic(name).expect("created topic in the image");
-    WireUuid(topic.topic_id.into_bytes())
 }
 
 /// The versions that both RPCs serve.

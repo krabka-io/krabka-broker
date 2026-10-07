@@ -205,24 +205,7 @@ async fn fetch(
 // the same request reads the new offset.
 #[tokio::test]
 async fn require_stable_reports_unstable_offsets_on_the_legacy_shape() {
-    const VERSION: i16 = 7; // lowest version carrying require_stable
-    const PRODUCER_ID: i64 = 91;
-    let (broker_handle, _dir) = crate::test_support::start_group_broker_no_audit(Arc::new(
-        crate::authorizer::AllowAllAuthorizer,
-    ))
-    .await;
-    let broker = broker_handle.broker_arc_for_test();
-    seed_committed_offset(&broker, "grp", "orders", 0, 42).await;
-    seed_committed_offset(&broker, "grp", "orders", 1, 11).await;
-    seed_pending_txn_offsets(
-        &broker,
-        "grp",
-        PRODUCER_ID,
-        TXN_RECORDS_AT,
-        vec![("orders".to_string(), 0)],
-    )
-    .await;
-
+    const VERSION: i16 = 7;
     let request = |require_stable| OffsetFetchRequest {
         group_id: "grp".into(),
         topics: Some(vec![
@@ -235,13 +218,15 @@ async fn require_stable_reports_unstable_offsets_on_the_legacy_shape() {
         require_stable,
         ..Default::default()
     };
-    let stable_row = |partition_index, committed_offset| OffsetFetchResponsePartition {
-        partition_index,
-        committed_offset,
-        committed_leader_epoch: 5,
-        metadata: Some(String::new()),
-        error_code: codes::NONE,
-        ..Default::default()
+    let row = |partition_index, committed_offset, committed_leader_epoch, error_code| {
+        OffsetFetchResponsePartition {
+            partition_index,
+            committed_offset,
+            committed_leader_epoch,
+            metadata: Some(String::new()),
+            error_code,
+            ..Default::default()
+        }
     };
     let expect = |partitions| OffsetFetchResponse {
         throttle_time_ms: 0,
@@ -255,47 +240,7 @@ async fn require_stable_reports_unstable_offsets_on_the_legacy_shape() {
         ..Default::default()
     };
 
-    let relaxed = fetch(&broker, VERSION, &request(false)).await;
-    assert!(relaxed == expect(vec![stable_row(0, 42), stable_row(1, 11)]));
-
-    let strict = fetch(&broker, VERSION, &request(true)).await;
-    assert!(
-        strict
-            == expect(vec![
-                OffsetFetchResponsePartition {
-                    partition_index: 0,
-                    committed_offset: -1,
-                    committed_leader_epoch: -1,
-                    metadata: Some(String::new()),
-                    error_code: codes::UNSTABLE_OFFSET_COMMIT,
-                    ..Default::default()
-                },
-                stable_row(1, 11),
-            ])
-    );
-
-    resolve_pending_txn_offsets(
-        &broker,
-        "grp",
-        PRODUCER_ID,
-        TXN_MARKER_AT,
-        vec![(
-            ("orders".to_string(), 0),
-            OffsetEntry {
-                offset: Offset(77),
-                leader_epoch: 5,
-                metadata: String::new(),
-                commit_timestamp_ms: crate::time_util::now_ms(),
-                expire_timestamp_ms: None,
-                topic_id: None,
-            },
-        )],
-    )
-    .await;
-
-    let resolved = fetch(&broker, VERSION, &request(true)).await;
-    assert!(resolved == expect(vec![stable_row(0, 77), stable_row(1, 11)]));
-    broker_handle.shutdown().await;
+    require_stable(VERSION, request, row, expect).await;
 }
 
 // The same three phases on the KIP-516 `groups[]` shape. `require_stable` is a
@@ -303,24 +248,7 @@ async fn require_stable_reports_unstable_offsets_on_the_legacy_shape() {
 // names.
 #[tokio::test]
 async fn require_stable_reports_unstable_offsets_on_the_groups_shape() {
-    const VERSION: i16 = 9; // groups[] shape, still keyed by topic name
-    const PRODUCER_ID: i64 = 91;
-    let (broker_handle, _dir) = crate::test_support::start_group_broker_no_audit(Arc::new(
-        crate::authorizer::AllowAllAuthorizer,
-    ))
-    .await;
-    let broker = broker_handle.broker_arc_for_test();
-    seed_committed_offset(&broker, "grp", "orders", 0, 42).await;
-    seed_committed_offset(&broker, "grp", "orders", 1, 11).await;
-    seed_pending_txn_offsets(
-        &broker,
-        "grp",
-        PRODUCER_ID,
-        TXN_RECORDS_AT,
-        vec![("orders".to_string(), 0)],
-    )
-    .await;
-
+    const VERSION: i16 = 9;
     let request = |require_stable| OffsetFetchRequest {
         groups: vec![
             krabka_protocol::owned::offset_fetch_request::OffsetFetchRequestGroup {
@@ -338,13 +266,15 @@ async fn require_stable_reports_unstable_offsets_on_the_groups_shape() {
         require_stable,
         ..Default::default()
     };
-    let stable_row = |partition_index, committed_offset| OffsetFetchResponsePartitions {
-        partition_index,
-        committed_offset,
-        committed_leader_epoch: 5,
-        metadata: Some(String::new()),
-        error_code: codes::NONE,
-        ..Default::default()
+    let row = |partition_index, committed_offset, committed_leader_epoch, error_code| {
+        OffsetFetchResponsePartitions {
+            partition_index,
+            committed_offset,
+            committed_leader_epoch,
+            metadata: Some(String::new()),
+            error_code,
+            ..Default::default()
+        }
     };
     let expect = |partitions| OffsetFetchResponse {
         throttle_time_ms: 0,
@@ -364,47 +294,7 @@ async fn require_stable_reports_unstable_offsets_on_the_groups_shape() {
         ..Default::default()
     };
 
-    let relaxed = fetch(&broker, VERSION, &request(false)).await;
-    assert!(relaxed == expect(vec![stable_row(0, 42), stable_row(1, 11)]));
-
-    let strict = fetch(&broker, VERSION, &request(true)).await;
-    assert!(
-        strict
-            == expect(vec![
-                OffsetFetchResponsePartitions {
-                    partition_index: 0,
-                    committed_offset: -1,
-                    committed_leader_epoch: -1,
-                    metadata: Some(String::new()),
-                    error_code: codes::UNSTABLE_OFFSET_COMMIT,
-                    ..Default::default()
-                },
-                stable_row(1, 11),
-            ])
-    );
-
-    resolve_pending_txn_offsets(
-        &broker,
-        "grp",
-        PRODUCER_ID,
-        TXN_MARKER_AT,
-        vec![(
-            ("orders".to_string(), 0),
-            OffsetEntry {
-                offset: Offset(77),
-                leader_epoch: 5,
-                metadata: String::new(),
-                commit_timestamp_ms: crate::time_util::now_ms(),
-                expire_timestamp_ms: None,
-                topic_id: None,
-            },
-        )],
-    )
-    .await;
-
-    let resolved = fetch(&broker, VERSION, &request(true)).await;
-    assert!(resolved == expect(vec![stable_row(0, 77), stable_row(1, 11)]));
-    broker_handle.shutdown().await;
+    require_stable(VERSION, request, row, expect).await;
 }
 
 // A `TxnOffsetCommit` records its KIP-447 mark only after its records are
@@ -1196,4 +1086,62 @@ async fn legacy_offset_fetch_creates_no_group() {
     assert!(response.topics[0].partitions[0].committed_offset == -1);
     assert!(broker.group_coordinator.find("typo").is_none());
     broker_handle.shutdown().await;
+}
+
+/// Exercise the same transaction phases against both KIP-447 wire shapes.
+async fn require_stable<R>(
+    version: i16,
+    request: impl Fn(bool) -> OffsetFetchRequest,
+    row: impl Fn(i32, i64, i32, i16) -> R,
+    expect: impl Fn(Vec<R>) -> OffsetFetchResponse,
+) {
+    const PRODUCER_ID: i64 = 91;
+    let (broker_handle, _dir) = crate::test_support::start_group_broker_no_audit(Arc::new(
+        crate::authorizer::AllowAllAuthorizer,
+    ))
+    .await;
+    let broker = broker_handle.broker_arc_for_test();
+    seed_committed_offset(&broker, "grp", "orders", 0, 42).await;
+    seed_committed_offset(&broker, "grp", "orders", 1, 11).await;
+    seed_pending_txn_offsets(
+        &broker,
+        "grp",
+        PRODUCER_ID,
+        TXN_RECORDS_AT,
+        vec![("orders".to_string(), 0)],
+    )
+    .await;
+    let stable_row = |partition_index, offset| row(partition_index, offset, 5, codes::NONE);
+    let relaxed = fetch(&broker, version, &request(false)).await;
+    assert!(relaxed == expect(vec![stable_row(0, 42), stable_row(1, 11)]));
+    let strict = fetch(&broker, version, &request(true)).await;
+    assert!(
+        strict
+            == expect(vec![
+                row(0, -1, -1, codes::UNSTABLE_OFFSET_COMMIT),
+                stable_row(1, 11)
+            ])
+    );
+    resolve_pending_txn_offsets(
+        &broker,
+        "grp",
+        PRODUCER_ID,
+        TXN_MARKER_AT,
+        vec![(("orders".to_string(), 0), committed_entry(77))],
+    )
+    .await;
+    let resolved = fetch(&broker, version, &request(true)).await;
+    assert!(resolved == expect(vec![stable_row(0, 77), stable_row(1, 11)]));
+    broker_handle.shutdown().await;
+}
+
+fn committed_entry(offset: i64) -> OffsetEntry {
+    OffsetEntry {
+        offset: Offset(offset),
+        leader_epoch: 5,
+        metadata: String::new(),
+        commit_timestamp_ms: crate::time_util::now_ms(),
+        expire_timestamp_ms: None,
+        topic_id: None,
+    }
 }

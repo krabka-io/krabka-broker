@@ -634,9 +634,7 @@ mod tests {
     use krabka_ids::PartitionIndex;
     use krabka_log::{Log, LogConfig, Offset};
     use krabka_metadata::{MetadataImage, MetadataRecord, TopicRecord};
-    use krabka_remote_storage::{
-        InmemoryRemoteLogMetadataManager, LocalTieredStorage, RemoteLogSegmentState,
-    };
+    use krabka_remote_storage::{InmemoryRemoteLogMetadataManager, RemoteLogSegmentState};
     use krabka_units::millis;
     use uuid::Uuid;
 
@@ -644,6 +642,7 @@ mod tests {
         test_support::{fixed_source, rolled_tiered_partition_with_config, tier, tp},
         *,
     };
+    use crate::remote_log_manager::test_support::{local_backends, sweep_counts, sweep_once};
 
     mod concurrency;
     mod epoch_cache;
@@ -705,10 +704,7 @@ mod tests {
 
         let controller: Arc<dyn crate::metadata_source::MetadataSource> =
             Arc::new(fixed_source(image_with_orders_topic()));
-        let rsm: Arc<dyn RemoteStorageManager> =
-            Arc::new(LocalTieredStorage::new(remote_dir.path()));
-        let rlmm: Arc<dyn RemoteLogMetadataManager> =
-            Arc::new(InmemoryRemoteLogMetadataManager::new());
+        let (rsm, rlmm) = local_backends(remote_dir.path());
         let shutdown = CancellationToken::new();
         let task = tokio::spawn(run(
             RemoteLogManagerContext {
@@ -758,18 +754,12 @@ mod tests {
         partitions.insert("orders".into(), PartitionIndex(0), partition);
 
         let controller = fixed_source(image_with_orders_topic());
-        let rsm: Arc<dyn RemoteStorageManager> =
-            Arc::new(LocalTieredStorage::new(remote_dir.path()));
-        let rlmm: Arc<dyn RemoteLogMetadataManager> =
-            Arc::new(InmemoryRemoteLogMetadataManager::new());
+        let (rsm, rlmm) = local_backends(remote_dir.path());
 
-        tick_all(
+        sweep_once(
             &partitions,
             &controller,
             &tier(ArchiveMode::Mutable, &rsm, &rlmm),
-            NodeId(1),
-            1,
-            SweepConcurrency::default(),
         )
         .await;
 
@@ -827,10 +817,7 @@ mod tests {
         let partitions = PartitionRegistry::new();
         partitions.insert("orders".into(), PartitionIndex(0), Arc::clone(&partition));
         let controller = fixed_source(image_with_orders_topic());
-        let rsm: Arc<dyn RemoteStorageManager> =
-            Arc::new(LocalTieredStorage::new(remote_dir.path()));
-        let rlmm: Arc<dyn RemoteLogMetadataManager> =
-            Arc::new(InmemoryRemoteLogMetadataManager::new());
+        let (rsm, rlmm) = local_backends(remote_dir.path());
 
         for (sweep, expected) in [
             (
@@ -850,13 +837,10 @@ mod tests {
                 },
             ),
         ] {
-            tick_all(
+            sweep_once(
                 &partitions,
                 &controller,
                 &tier(ArchiveMode::Mutable, &rsm, &rlmm),
-                NodeId(1),
-                1,
-                SweepConcurrency::default(),
             )
             .await;
 
@@ -905,10 +889,7 @@ mod tests {
         let partitions = PartitionRegistry::new();
         partitions.insert("orders".into(), PartitionIndex(0), partition);
         let controller = fixed_source(image);
-        let rsm: Arc<dyn RemoteStorageManager> =
-            Arc::new(LocalTieredStorage::new(remote_dir.path()));
-        let rlmm: Arc<dyn RemoteLogMetadataManager> =
-            Arc::new(InmemoryRemoteLogMetadataManager::new());
+        let (rsm, rlmm) = local_backends(remote_dir.path());
         tick_all(
             &partitions,
             &controller,
@@ -1151,20 +1132,14 @@ mod tests {
         partitions.insert("orders".into(), PartitionIndex(0), Arc::clone(&partition));
 
         let controller = fixed_source(image_with_orders_topic());
-        let rsm: Arc<dyn RemoteStorageManager> =
-            Arc::new(LocalTieredStorage::new(remote_dir.path()));
-        let rlmm: Arc<dyn RemoteLogMetadataManager> =
-            Arc::new(InmemoryRemoteLogMetadataManager::new());
+        let (rsm, rlmm) = local_backends(remote_dir.path());
 
         // Two sweeps: the second is where a copy/delete cycle would show.
         for sweep in 1..=2 {
-            tick_all(
+            sweep_once(
                 &partitions,
                 &controller,
                 &tier(ArchiveMode::Mutable, &rsm, &rlmm),
-                NodeId(1),
-                1,
-                SweepConcurrency::default(),
             )
             .await;
 
@@ -1223,10 +1198,7 @@ mod tests {
         partitions.insert("orders".into(), PartitionIndex(0), Arc::clone(&partition));
 
         let controller = fixed_source(image_with_orders_topic());
-        let rsm: Arc<dyn RemoteStorageManager> =
-            Arc::new(LocalTieredStorage::new(remote_dir.path()));
-        let rlmm: Arc<dyn RemoteLogMetadataManager> =
-            Arc::new(InmemoryRemoteLogMetadataManager::new());
+        let (rsm, rlmm) = local_backends(remote_dir.path());
         if leader_already_copied {
             copy_eligible(
                 &tier(ArchiveMode::Mutable, &rsm, &rlmm),
@@ -1238,28 +1210,14 @@ mod tests {
             .await;
         }
 
-        tick_all(
+        sweep_once(
             &partitions,
             &controller,
             &tier(ArchiveMode::Mutable, &rsm, &rlmm),
-            NodeId(1),
-            1,
-            SweepConcurrency::default(),
         )
         .await;
 
-        let remote_finished = rlmm
-            .list_remote_log_segments(&tp())
-            .unwrap()
-            .iter()
-            .filter(|md| md.state() == RemoteLogSegmentState::CopySegmentFinished)
-            .count();
-        // A segment the sweep rolled counts once its rollover flush lands.
-        let local_sealed_after = {
-            let mut log = partition.log.lock().expect("partition log mutex poisoned");
-            log.sync().expect("flush rolled segments");
-            log.tierable_segments().len()
-        };
+        let (remote_finished, local_sealed_after) = sweep_counts(&partition, &rlmm);
         FollowerSweep {
             sealed_before,
             remote_finished,
@@ -1329,18 +1287,12 @@ mod tests {
         partitions.insert("orders".into(), PartitionIndex(0), partition);
 
         let controller = fixed_source(image_with_orders_topic());
-        let rsm: Arc<dyn RemoteStorageManager> =
-            Arc::new(LocalTieredStorage::new(remote_dir.path()));
-        let rlmm: Arc<dyn RemoteLogMetadataManager> =
-            Arc::new(InmemoryRemoteLogMetadataManager::new());
+        let (rsm, rlmm) = local_backends(remote_dir.path());
 
-        tick_all(
+        sweep_once(
             &partitions,
             &controller,
             &tier(ArchiveMode::Mutable, &rsm, &rlmm),
-            NodeId(1),
-            1,
-            SweepConcurrency::default(),
         )
         .await;
 
@@ -1375,18 +1327,12 @@ mod tests {
             partitions.insert("orders".into(), PartitionIndex(0), partition);
 
             let controller = fixed_source(image_with_orders_topic());
-            let rsm: Arc<dyn RemoteStorageManager> =
-                Arc::new(LocalTieredStorage::new(remote_dir.path()));
-            let rlmm: Arc<dyn RemoteLogMetadataManager> =
-                Arc::new(InmemoryRemoteLogMetadataManager::new());
+            let (rsm, rlmm) = local_backends(remote_dir.path());
 
-            tick_all(
+            sweep_once(
                 &partitions,
                 &controller,
                 &tier(ArchiveMode::Mutable, &rsm, &rlmm),
-                NodeId(1),
-                1,
-                SweepConcurrency::default(),
             )
             .await;
 
@@ -1410,19 +1356,13 @@ mod tests {
         partitions.insert("orders".into(), PartitionIndex(0), Arc::clone(&partition));
 
         let controller = fixed_source(image_with_orders_topic());
-        let rsm: Arc<dyn RemoteStorageManager> =
-            Arc::new(LocalTieredStorage::new(remote_dir.path()));
-        let rlmm: Arc<dyn RemoteLogMetadataManager> =
-            Arc::new(InmemoryRemoteLogMetadataManager::new());
+        let (rsm, rlmm) = local_backends(remote_dir.path());
 
         // Copy first: the delete below has to have something to erase.
-        tick_all(
+        sweep_once(
             &partitions,
             &controller,
             &tier(ArchiveMode::Mutable, &rsm, &rlmm),
-            NodeId(1),
-            1,
-            SweepConcurrency::default(),
         )
         .await;
         assert!(!rlmm.list_remote_log_segments(&tp()).unwrap().is_empty());
@@ -1437,13 +1377,10 @@ mod tests {
         }
         let local_start = partition.log.lock().unwrap().local_log_start_offset();
 
-        tick_all(
+        sweep_once(
             &partitions,
             &controller,
             &tier(ArchiveMode::Mutable, &rsm, &rlmm),
-            NodeId(1),
-            1,
-            SweepConcurrency::default(),
         )
         .await;
 

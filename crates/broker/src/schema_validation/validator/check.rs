@@ -458,35 +458,10 @@ mod tests {
 
     #[tokio::test]
     async fn full_mode_resolves_avro_references_before_validating() {
-        let server = MockServer::start().await;
-        Mock::given(method("GET"))
-            .and(path(format!("/schemas/ids/{KNOWN_ID}/versions")))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
-                {"subject": "orders-value", "version": 1}
-            ])))
-            .expect(1)
-            .mount(&server)
-            .await;
-        Mock::given(method("GET"))
-            .and(path(format!("/schemas/ids/{KNOWN_ID}")))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "schema": r#"{"type":"record","name":"Envelope","fields":[{"name":"base","type":"Base"}]}"#,
-                "references": [{"name":"Base","subject":"order-base","version":1}]
-            })))
-            .expect(1)
-            .mount(&server)
-            .await;
-        Mock::given(method("GET"))
-            .and(path("/subjects/order-base/versions/1"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "subject": "order-base",
-                "version": 1,
-                "id": 7,
-                "schema": r#"{"type":"record","name":"Base","fields":[{"name":"id","type":"string"}]}"#
-            })))
-            .expect(1)
-            .mount(&server)
-            .await;
+        let server = super::super::test_support::referenced_avro(
+            r#"{"type":"record","name":"Envelope","fields":[{"name":"base","type":"Base"}]}"#,
+        )
+        .await;
 
         let v = validator(server.uri());
         let field = framed(KNOWN_ID, &[0x02, b'a']);
@@ -504,35 +479,8 @@ mod tests {
 
     #[tokio::test]
     async fn full_mode_accepts_an_unnamed_avro_root_with_a_reference() {
-        let server = MockServer::start().await;
-        Mock::given(method("GET"))
-            .and(path(format!("/schemas/ids/{KNOWN_ID}/versions")))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
-                {"subject": "orders-value", "version": 1}
-            ])))
-            .expect(1)
-            .mount(&server)
-            .await;
-        Mock::given(method("GET"))
-            .and(path(format!("/schemas/ids/{KNOWN_ID}")))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "schema": r#"{"type":"array","items":"Base"}"#,
-                "references": [{"name":"Base","subject":"order-base","version":1}]
-            })))
-            .expect(1)
-            .mount(&server)
-            .await;
-        Mock::given(method("GET"))
-            .and(path("/subjects/order-base/versions/1"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "subject": "order-base",
-                "version": 1,
-                "id": 7,
-                "schema": r#"{"type":"record","name":"Base","fields":[{"name":"id","type":"string"}]}"#
-            })))
-            .expect(1)
-            .mount(&server)
-            .await;
+        let server =
+            super::super::test_support::referenced_avro(r#"{"type":"array","items":"Base"}"#).await;
 
         let v = validator(server.uri());
         // One-element array, one record containing "a", then the array terminator.
@@ -552,14 +500,7 @@ mod tests {
     #[tokio::test]
     async fn full_mode_resolves_json_schema_references_before_validating() {
         let server = MockServer::start().await;
-        Mock::given(method("GET"))
-            .and(path(format!("/schemas/ids/{KNOWN_ID}/versions")))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
-                {"subject": "orders-value", "version": 1}
-            ])))
-            .expect(1)
-            .mount(&server)
-            .await;
+        super::super::test_support::schema_versions(&server, 1).await;
         Mock::given(method("GET"))
             .and(path(format!("/schemas/ids/{KNOWN_ID}")))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
@@ -613,14 +554,7 @@ mod tests {
     #[tokio::test]
     async fn full_mode_never_fetches_json_references_outside_the_registry_cache() {
         let server = MockServer::start().await;
-        Mock::given(method("GET"))
-            .and(path(format!("/schemas/ids/{KNOWN_ID}/versions")))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
-                {"subject": "orders-value", "version": 1}
-            ])))
-            .expect(1)
-            .mount(&server)
-            .await;
+        super::super::test_support::schema_versions(&server, 1).await;
         Mock::given(method("GET"))
             .and(path(format!("/schemas/ids/{KNOWN_ID}")))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({

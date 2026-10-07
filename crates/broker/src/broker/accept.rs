@@ -220,34 +220,10 @@ mod tests {
 
     #[tokio::test]
     async fn accepted_socket_tuning_sets_nodelay_and_large_buffers() {
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-            .await
-            .expect("bind loopback listener");
-        let addr = listener.local_addr().expect("listener addr");
-        let client_task = tokio::spawn(tokio::net::TcpStream::connect(addr));
-        let (server, _) = listener.accept().await.expect("accept loopback client");
-        let client = client_task
-            .await
-            .expect("connect task")
-            .expect("connect loopback client");
-
-        let sock = socket2::SockRef::from(&server);
-        server.set_nodelay(false).expect("clear TCP_NODELAY");
-        sock.set_send_buffer_size(4096).expect("shrink send buffer");
-        sock.set_recv_buffer_size(8192).expect("shrink recv buffer");
-        let send_before = sock.send_buffer_size().expect("read baseline send buffer");
-        let recv_before = sock.recv_buffer_size().expect("read baseline recv buffer");
-
-        tune_accepted_socket(&server, kibibytes(64), kibibytes(128));
-
-        assert!(server.nodelay().expect("read TCP_NODELAY"));
-        // Kernels clamp and may double requested sizes, so compare the distinct
-        // configured buffers instead of asserting host-dependent exact values.
-        let send_after = sock.send_buffer_size().expect("read send buffer");
-        let recv_after = sock.recv_buffer_size().expect("read recv buffer");
-        assert!(send_after > send_before);
-        assert!(recv_after > recv_before);
-        assert!(recv_after > send_after);
+        let (server, client) = crate::network::test_support::tcp_pair().await;
+        crate::network::test_support::check_socket_tuning(&server, |socket| {
+            tune_accepted_socket(socket, kibibytes(64), kibibytes(128));
+        });
         drop(client);
     }
 

@@ -18,7 +18,7 @@
 
 use assert2::assert;
 use bytes::BytesMut;
-use krabka_broker::{Broker, BrokerConfig, config::ListenerSpec};
+use krabka_broker::Broker;
 use krabka_protocol::{
     Decode, Encode,
     owned::{
@@ -30,7 +30,7 @@ use krabka_protocol::{
         sasl_handshake_response::SaslHandshakeResponse,
     },
 };
-use krabka_security::{ListenerProtocol, SaslMechanism};
+use krabka_security::SaslMechanism;
 use tokio::{io::AsyncReadExt, net::TcpStream};
 
 use crate::{
@@ -281,17 +281,7 @@ async fn oauthbearer_in_band_reauth_with_different_mechanism_closes() {
     // Enable both OAUTHBEARER + SCRAM-SHA-512 on the same listener so a
     // fresh-connection SCRAM handshake WOULD succeed. The reject here
     // must be due to the same-mechanism rule, not "mechanism unknown".
-    let mut cfg = BrokerConfig::for_tests(log_dir.path().to_path_buf());
-    cfg.listeners = vec![ListenerSpec {
-        name: "SASL_PLAINTEXT".to_string(),
-        bind_addr: "127.0.0.1:0".parse().unwrap(),
-        advertised: "127.0.0.1:0".to_string(),
-        protocol: ListenerProtocol::SaslPlaintext,
-        tls_config: None,
-        sasl_mechanisms: None,
-        principal_mapper: krabka_broker::SslPrincipalMapper::default(),
-    }];
-    cfg.inter_broker_listener_name = "SASL_PLAINTEXT".to_string();
+    let mut cfg = crate::support::sasl_plaintext_config(log_dir.path().to_path_buf());
     cfg.enabled_sasl_mechanisms = vec![SaslMechanism::OAuthBearer, SaslMechanism::ScramSha512];
     cfg.oauthbearer_validator = oauthbearer_zero_skew_validator();
     let handle = Broker::start(cfg).await.expect("broker must start");
@@ -357,18 +347,9 @@ async fn oauthbearer_in_band_reauth_with_different_mechanism_closes() {
 #[tokio::test(flavor = "current_thread")]
 async fn plain_listener_session_lifetime_ms_is_zero_and_no_timer() {
     let log_dir = tempfile::tempdir().unwrap();
-    let mut cfg = BrokerConfig::for_tests(log_dir.path().to_path_buf());
+    let mut cfg = crate::support::sasl_plaintext_config(log_dir.path().to_path_buf());
     cfg.connections_max_idle = Some(krabka_units::millis(0));
-    cfg.listeners = vec![ListenerSpec {
-        name: "SASL_PLAINTEXT".to_string(),
-        bind_addr: "127.0.0.1:0".parse().unwrap(),
-        advertised: "127.0.0.1:0".to_string(),
-        protocol: ListenerProtocol::SaslPlaintext,
-        tls_config: None,
-        sasl_mechanisms: None,
-        principal_mapper: krabka_broker::SslPrincipalMapper::default(),
-    }];
-    cfg.inter_broker_listener_name = "SASL_PLAINTEXT".to_string();
+
     cfg.enabled_sasl_mechanisms = vec![SaslMechanism::Plain];
     cfg.plain_credentials
         .insert("alice".to_string(), alice_password());
@@ -380,14 +361,17 @@ async fn plain_listener_session_lifetime_ms_is_zero_and_no_timer() {
     // `session_lifetime_ms` field directly.
     let mut stream = TcpStream::connect(addr).await.unwrap();
 
-    let av_req = ApiVersionsRequest::default();
-    let mut av_body = BytesMut::new();
-    av_req.encode(&mut av_body, 0).unwrap();
-    let av_resp_bytes = round_trip(&mut stream, 18, 0, 1, false, &av_body)
-        .await
-        .expect("ApiVersions round-trip");
-    let mut cur: &[u8] = &av_resp_bytes;
-    let _ = ApiVersionsResponse::decode(&mut cur, 0).unwrap();
+    let _: ApiVersionsResponse = crate::kafka_wire::exchange(
+        &mut stream,
+        &ApiVersionsRequest::default(),
+        18,
+        0,
+        1,
+        "krabka-sasl-test",
+        false,
+    )
+    .await
+    .expect("ApiVersions round-trip");
 
     let sh_req = SaslHandshakeRequest {
         mechanism: "PLAIN".to_string(),

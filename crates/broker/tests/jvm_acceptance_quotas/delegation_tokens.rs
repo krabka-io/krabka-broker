@@ -5,16 +5,11 @@
 //! The token producer runs through a directly spawned `docker run`, not the
 //! shared helper, because `kafka-console-producer` needs its records on stdin.
 
-use std::{
-    io::Write,
-    process::{Command, Stdio},
-};
-
 use assert2::assert;
 
 use crate::jvm_acceptance::{
     KAFKA_IMAGE_TXN, broker0_advertised, docker_run_kafka_tool_with_image_and_mount,
-    extract_jvm_kv, nc_check_connectivity, plain_jaas,
+    extract_jvm_kv, nc_check_connectivity,
     start_three_broker_sasl_plaintext_jvm_cluster_with_delegation_tokens,
     wait_three_brokers_registered, write_client_props,
 };
@@ -58,12 +53,7 @@ async fn jvm_kafka_delegation_tokens_end_to_end() {
     wait_three_brokers_registered(&h1, &h2, &h3, 3).await;
 
     // Admin properties: PLAIN, super-user — used for create/describe/expire.
-    let admin_props = write_client_props(&format!(
-        "security.protocol=SASL_PLAINTEXT\n\
-         sasl.mechanism=PLAIN\n\
-         sasl.jaas.config={}\n",
-        plain_jaas(ADMIN, ADMIN_PASS),
-    ));
+    let admin_props = crate::jvm_acceptance::write_plain_props(ADMIN, ADMIN_PASS);
     let admin_mount = admin_props.mount_str();
 
     // 1. Create the token. `--max-life-time-period -1` ⇒ use the broker's
@@ -108,57 +98,17 @@ async fn jvm_kafka_delegation_tokens_end_to_end() {
     let token_mount = token_props.mount_str();
 
     // 3. Create the topic as admin so the token producer can target it.
-    docker_run_kafka_tool_with_image_and_mount(
-        KAFKA_IMAGE_TXN,
-        &admin_mount,
-        &[
-            "kafka-topics",
-            "--create",
-            "--if-not-exists",
-            "--topic",
-            TOPIC,
-            "--partitions",
-            "1",
-            "--replication-factor",
-            "1",
-            "--bootstrap-server",
-            broker0_advertised(),
-            "--command-config",
-            "/client.properties",
-        ],
-    );
+    crate::jvm_acceptance::create_console_topic(KAFKA_IMAGE_TXN, &[&admin_mount], TOPIC, 1, 1);
 
     // 4. Produce one message authenticated as the delegation token.
-    let mut child = Command::new("docker")
-        .args([
-            "run",
-            "--rm",
-            "-i",
-            "-v",
-            &token_mount,
-            "--add-host=host.docker.internal:host-gateway",
-            KAFKA_IMAGE_TXN,
-            "kafka-console-producer",
-            "--bootstrap-server",
-            broker0_advertised(),
-            "--topic",
-            TOPIC,
-            "--producer.config",
-            "/client.properties",
-        ])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("spawn producer");
-    child
-        .stdin
-        .as_mut()
-        .expect("stdin")
-        .write_all(b"hello\n")
-        .expect("write stdin");
-    drop(child.stdin.take());
-    let producer_out = child.wait_with_output().expect("wait producer");
+
+    let producer_out = crate::jvm_acceptance::produce_console(
+        KAFKA_IMAGE_TXN,
+        &[&token_mount],
+        TOPIC,
+        false,
+        b"hello\n",
+    );
     assert!(
         producer_out.status.success(),
         "token producer failed: stdout={} stderr={}",

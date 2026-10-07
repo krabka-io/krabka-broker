@@ -34,6 +34,8 @@
 //! because the helper commits and aborts and then exits: nothing in it can be
 //! made to hold a transaction open while a container runs beside it.
 
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt as _;
 use std::{
     net::SocketAddr,
     process::Output,
@@ -54,7 +56,7 @@ use krabka_protocol::owned::{
     list_transactions_request::ListTransactionsRequest,
 };
 use tokio::{
-    io::{AsyncReadExt, AsyncWriteExt},
+    io::{AsyncReadExt as _, AsyncWriteExt as _},
     net::TcpStream,
 };
 
@@ -595,7 +597,6 @@ fn compile_transactional_producer() -> tempfile::TempDir {
     std::fs::write(&source, TRANSACTIONAL_PRODUCER_JAVA).expect("write the Java helper");
     #[cfg(unix)]
     {
-        use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(work.path(), std::fs::Permissions::from_mode(0o777))
             .expect("chmod the work directory");
         std::fs::set_permissions(&source, std::fs::Permissions::from_mode(0o644))

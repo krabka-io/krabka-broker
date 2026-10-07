@@ -18,6 +18,7 @@ use krabka_metadata::{ClientQuotaRecord, EntityKey, MetadataRecord, QuotaEntity}
 use krabka_protocol::{
     Decode, Encode as _,
     owned::{
+        create_topics_request::{CreatableTopic, CreateTopicsRequest},
         fetch_request::{FetchPartition, FetchRequest, FetchTopic},
         fetch_response::FetchResponse,
         produce_request::{PartitionProduceData, ProduceRequest, TopicProduceData},
@@ -29,11 +30,8 @@ use krabka_units::{Time, convert::TimeExt as _, millis};
 use tokio::net::TcpStream;
 use tokio_util::codec::Framed;
 
-use super::{super::test_support::DEFAULT_MAX_FRAME_BYTES, request_frame};
-use crate::{
-    broker::Broker,
-    network::codec::{self, KafkaCodec},
-};
+use super::request_frame;
+use crate::{broker::Broker, network::codec::KafkaCodec};
 
 /// `Produce` wire `api_key`.
 const PRODUCE_KEY: i16 = 0;
@@ -133,26 +131,31 @@ async fn seed_anonymous_quotas(handle: &crate::broker::BrokerHandle, quotas: &[(
 async fn connect_to_serve_loop(
     handle: &crate::broker::BrokerHandle,
 ) -> (tokio::task::JoinHandle<()>, Framed<TcpStream, KafkaCodec>) {
-    let broker = handle.broker_arc_for_test();
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+    crate::network::dispatch::test_support::plaintext_loop(handle.broker_arc_for_test()).await
+}
+
+async fn create_topic(framed: &mut Framed<TcpStream, KafkaCodec>, topic: &str) {
+    use krabka_protocol::owned::create_topics_request::{CreatableTopic, CreateTopicsRequest};
+    let body = encoded(
+        &CreateTopicsRequest {
+            topics: vec![CreatableTopic {
+                name: topic.to_owned(),
+                num_partitions: 1,
+                replication_factor: 1,
+                ..Default::default()
+            }],
+            timeout_ms: 5_000,
+            ..Default::default()
+        },
+        7,
+    );
+    send_request(framed, 19, 7, 1, &body).await;
+    let response = tokio::time::timeout(CLIENT_TIMEOUT, framed.next())
         .await
-        .expect("bind loopback");
-    let addr = listener.local_addr().expect("listener addr");
-    let server = tokio::spawn(async move {
-        let (stream, peer) = listener.accept().await.expect("accept");
-        let spec = crate::config::ListenerSpec {
-            name: "PLAINTEXT".to_string(),
-            bind_addr: addr,
-            advertised: "127.0.0.1:9092".to_string(),
-            protocol: krabka_security::ListenerProtocol::Plaintext,
-            tls_config: None,
-            sasl_mechanisms: None,
-            principal_mapper: crate::SslPrincipalMapper::default(),
-        };
-        super::super::serve_connection_stream(broker, stream, spec, peer, None).await;
-    });
-    let client = TcpStream::connect(addr).await.expect("connect");
-    (server, codec::frame(client, DEFAULT_MAX_FRAME_BYTES))
+        .expect("the response must beat the client timeout")
+        .expect("a response frame")
+        .expect("response decode");
+    check!(response_correlation_id(&response) == 1);
 }
 
 /// Writes a v0 `ApiVersions` request, the cheapest frame that still reaches a
@@ -383,8 +386,6 @@ async fn a_throttled_fetch_writes_its_plan_before_the_mute() {
 /// byte-rate mute-then-recover this test is about.
 #[tokio::test]
 async fn acks_zero_produce_writes_no_response_and_still_mutes() {
-    use krabka_protocol::owned::create_topics_request::{CreatableTopic, CreateTopicsRequest};
-
     let mute_window = millis(1000);
     // A byte-rate throttle is not bounded (#709): 2800 bytes/sec against an
     // 8 KiB produce, after the one-second burst, is about two seconds of debt,
@@ -393,26 +394,7 @@ async fn acks_zero_produce_writes_no_response_and_still_mutes() {
         broker_with_anonymous_quotas(mute_window, &[("producer_byte_rate", 2800.0)]).await;
     let (server, mut framed) = connect_to_serve_loop(&handle).await;
 
-    let create_topics_body = encoded(
-        &CreateTopicsRequest {
-            topics: vec![CreatableTopic {
-                name: "acks-zero-mute".to_owned(),
-                num_partitions: 1,
-                replication_factor: 1,
-                ..Default::default()
-            }],
-            timeout_ms: 5_000,
-            ..Default::default()
-        },
-        7,
-    );
-    send_request(&mut framed, 19, 7, 1, &create_topics_body).await;
-    let create_topics_response = tokio::time::timeout(CLIENT_TIMEOUT, framed.next())
-        .await
-        .expect("the response must beat the client timeout")
-        .expect("a response frame")
-        .expect("response decode");
-    check!(response_correlation_id(&create_topics_response) == 1);
+    create_topic(&mut framed, "acks-zero-mute").await;
 
     let produced_at = Instant::now();
     send_request(
@@ -746,8 +728,6 @@ async fn every_charged_api_reports_its_delay_and_mutes() {
 /// connection for the window this test needs clear of any mute.
 #[tokio::test]
 async fn acks_zero_produce_is_exempt_from_the_request_quota() {
-    use krabka_protocol::owned::create_topics_request::{CreatableTopic, CreateTopicsRequest};
-
     let mute_window = millis(1000);
     let dir = tempfile::TempDir::new().expect("tempdir");
     let mut cfg = crate::config::BrokerConfig::for_tests(dir.path().to_path_buf());
@@ -755,26 +735,7 @@ async fn acks_zero_produce_is_exempt_from_the_request_quota() {
     let handle = Broker::start(cfg).await.expect("start broker");
     let (server, mut framed) = connect_to_serve_loop(&handle).await;
 
-    let create_topics_body = encoded(
-        &CreateTopicsRequest {
-            topics: vec![CreatableTopic {
-                name: "acks-zero-exempt".to_owned(),
-                num_partitions: 1,
-                replication_factor: 1,
-                ..Default::default()
-            }],
-            timeout_ms: 5_000,
-            ..Default::default()
-        },
-        7,
-    );
-    send_request(&mut framed, 19, 7, 1, &create_topics_body).await;
-    let create_topics_response = tokio::time::timeout(CLIENT_TIMEOUT, framed.next())
-        .await
-        .expect("the response must beat the client timeout")
-        .expect("a response frame")
-        .expect("response decode");
-    check!(response_correlation_id(&create_topics_response) == 1);
+    create_topic(&mut framed, "acks-zero-exempt").await;
 
     // Seeded only now: the topic exists before the connection has any
     // request-quota debt to charge against it.
@@ -808,8 +769,6 @@ async fn acks_zero_produce_is_exempt_from_the_request_quota() {
 /// per-api throttle metric observes the request once, not once per quota.
 #[tokio::test]
 async fn a_controller_mutation_and_the_request_quota_resolve_in_one_observation() {
-    use krabka_protocol::owned::create_topics_request::{CreatableTopic, CreateTopicsRequest};
-
     const VERSION: i16 = 7;
     let (handle, _dir) = broker_with_anonymous_quotas(
         millis(1000),

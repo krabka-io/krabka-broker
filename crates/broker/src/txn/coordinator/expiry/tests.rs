@@ -3,11 +3,11 @@
 //! `__transaction_state-0` partition is a real log on disk, driven both
 //! directly and through one tick of the background task that ticks it.
 
-use std::{path::Path, sync::Arc};
+use std::sync::Arc;
 
 use assert2::{assert, check};
 use krabka_ids::PartitionIndex;
-use krabka_log::{Log, LogConfig, Offset, ProducerId};
+use krabka_log::{Offset, ProducerId};
 use krabka_metadata::{MetadataImage, MetadataRecord, NodeId, PartitionRecord, TopicRecord};
 use krabka_protocol::{
     UnknownTaggedFields, owned::describe_transactions_response::TransactionState,
@@ -20,7 +20,6 @@ use super::*;
 use crate::{
     codes,
     handlers::describe_transactions::transaction_state_row,
-    partition::Partition,
     partition_registry::PartitionRegistry,
     test_support::FakeMetadataSource,
     txn::{bootstrap, state::TxnEntry, two_pc::NO_TIMEOUT_MS, version::TxnVersion},
@@ -129,21 +128,6 @@ fn prepared_two_pc_entry(last_update_ms: i64) -> TxnEntry {
     entry
 }
 
-/// Opens `__transaction_state-0` as a real log under `dir`.
-fn transaction_state_partition(dir: &Path) -> Arc<Partition> {
-    let part_dir = crate::log_dir::partition_dir(dir, bootstrap::TOPIC, 0);
-    std::fs::create_dir_all(&part_dir).expect("create partition dir");
-    crate::broker::spawn_partition(
-        bootstrap::TOPIC.to_string(),
-        PartitionIndex(0),
-        dir.to_path_buf(),
-        Log::open(&part_dir, LogConfig::default()).expect("open log"),
-        crate::log_dir_status::LogDirRegistry::default(),
-        Arc::new(crate::producer_state::ProducerState::new()),
-        false,
-    )
-}
-
 /// A metadata image where `__transaction_state` has one partition, led by
 /// `leader`.
 fn image_with_leader(leader: NodeId, leader_epoch: i32) -> MetadataImage {
@@ -176,7 +160,7 @@ async fn seeded_coordinator(entry: TxnEntry, leader: NodeId) -> (Arc<TxnCoordina
     partitions.insert(
         bootstrap::TOPIC.into(),
         PartitionIndex(0),
-        transaction_state_partition(dir.path()),
+        crate::test_support::open_partition(dir.path(), bootstrap::TOPIC, 0),
     );
     let coordinator = Arc::new(TxnCoordinator::new(
         NodeId(1),

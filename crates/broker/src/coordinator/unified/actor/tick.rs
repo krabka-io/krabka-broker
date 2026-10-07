@@ -171,11 +171,7 @@ async fn handle_session_tick(
     run_reconcile(state, config, metadata);
     let mut pending = snapshot_pending_after_change(state, &[], true);
     pending.resolved_regexes = regex_records;
-    for mid in &evicted {
-        pending.member_metadata.push((mid.clone(), None));
-        pending.target_per_member.push((mid.clone(), None));
-        pending.current_per_member.push((mid.clone(), None));
-    }
+    crate::coordinator::unified::persistence::tombstone_members!(pending, &evicted);
     let now_ms = chrono_now_ms();
     if let Err(e) = flush_pending(state, pending, offsets_log, coordinator, now_ms).await {
         tracing::warn!(

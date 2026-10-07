@@ -348,15 +348,15 @@ mod tests {
             ..Default::default()
         };
 
-        let joined = heartbeat(&handle, request("m1", 0)).await;
-        check!(joined.error_code == codes::NONE);
-
-        let rejected = heartbeat(&handle, request("m2", 0)).await;
-        check!(rejected.error_code == codes::GROUP_MAX_SIZE_REACHED);
-
-        let existing = heartbeat(&handle, request("m1", joined.member_epoch)).await;
-        check!(existing.error_code == codes::NONE);
-        check!(existing.member_epoch == joined.member_epoch);
+        crate::coordinator::unified::test_support::assert_single_member_limit(|id, epoch| {
+            let request = request(id, epoch);
+            let handle = Arc::clone(&handle);
+            async move {
+                let response = heartbeat(&handle, request).await;
+                (response.error_code, response.member_epoch)
+            }
+        })
+        .await;
     }
 
     /// Kafka's `shareGroupLeave`: a known member is fenced, with its records

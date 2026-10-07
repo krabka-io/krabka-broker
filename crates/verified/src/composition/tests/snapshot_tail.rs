@@ -3,7 +3,7 @@ use proptest::prelude::*;
 
 use super::{
     ProducerDecision, ProducerReloadRange, ProducerSnapshotEntryFacts,
-    loaded_snapshot_bounds_truncated_retry,
+    loaded_snapshot_bounds_truncated_retry, oracle_next_producer_decision,
 };
 
 type Row = ProducerSnapshotEntryFacts;
@@ -97,24 +97,8 @@ fn check(
                 index - first
             },
         }
-    } else if let Some(last) = rows.last() {
-        if request.0 < last.producer_epoch {
-            ProducerDecision::Fenced
-        } else if request.0 > last.producer_epoch {
-            if request.1 == 0 {
-                ProducerDecision::Append
-            } else {
-                ProducerDecision::OutOfOrder
-            }
-        } else if request.1 == sequence(i64::from(last.last_sequence) + 1) {
-            ProducerDecision::Append
-        } else {
-            ProducerDecision::OutOfOrder
-        }
-    } else if request.3 && end == 0 && request.1 != 0 {
-        ProducerDecision::OutOfOrder
     } else {
-        ProducerDecision::Append
+        oracle_next_producer_decision(rows.last(), request, end)
     };
     let witness = found.map(|(index, row)| {
         (

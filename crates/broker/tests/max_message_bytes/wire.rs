@@ -9,11 +9,10 @@ use krabka_compression::CompressionType;
 use krabka_protocol::{
     owned::{
         create_topics_request::{CreatableTopic, CreatableTopicConfig, CreateTopicsRequest},
-        produce_request::{PartitionProduceData, ProduceRequest, TopicProduceData},
         produce_response::{LeaderIdAndEpoch, PartitionProduceResponse},
     },
     primitives::uuid::Uuid as WireUuid,
-    records::{Record, RecordBatch, RecordsPayload},
+    records::{Record, RecordBatch},
 };
 
 /// Kafka's `max.message.bytes`, and its broker-wide default
@@ -149,25 +148,7 @@ pub(super) async fn produce_batch(
     topic_id: WireUuid,
     batch: RecordBatch,
 ) -> PartitionProduceResponse {
-    let response = client
-        .send(ProduceRequest {
-            acks: 1,
-            timeout_ms: 5_000,
-            topic_data: vec![TopicProduceData {
-                name: topic.to_owned(),
-                topic_id,
-                partition_data: vec![PartitionProduceData {
-                    index: 0,
-                    records: Some(RecordsPayload::V2(vec![batch])),
-                    ..Default::default()
-                }],
-                ..Default::default()
-            }],
-            ..Default::default()
-        })
-        .await
-        .expect("Produce");
-    response.responses[0].partition_responses[0].clone()
+    crate::support::client::produce_batch(client, topic, topic_id, batch, 1, 5_000).await
 }
 
 /// The partition row an accepted produce answers with, at `base_offset`, on a

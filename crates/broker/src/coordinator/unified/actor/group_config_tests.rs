@@ -46,18 +46,7 @@ fn coordinator(
         Arc::new(InMemoryOffsetsLog::default()),
         StreamsGroupConfig::default(),
     ));
-    let mut image = krabka_metadata::MetadataImage::new(uuid::Uuid::nil());
-    for (group_id, entries) in overrides {
-        image.apply(&krabka_metadata::MetadataRecord::V1GroupConfig(
-            krabka_metadata::GroupConfigRecord {
-                group_id: (*group_id).to_owned(),
-                configs: entries
-                    .iter()
-                    .map(|(key, value)| ((*key).to_owned(), (*value).to_owned()))
-                    .collect(),
-            },
-        ));
-    }
+    let image = crate::coordinator::unified::test_support::group_config_image(overrides);
     coordinator.set_metadata_source(fixed_source(image));
     coordinator
 }

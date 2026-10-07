@@ -9,12 +9,16 @@
 
 use std::collections::BTreeMap;
 
-use bytes::BytesMut;
+use bytes::{BufMut, BytesMut};
 
 use crate::{
-    coordinator::unified::persistence::flex::{
-        get_compact_array_len, get_compact_string, get_i32_array, put_compact_array_len,
-        put_compact_string, put_empty_tagged_fields, put_i32_array, skip_tagged_fields,
+    coordinator::unified::persistence::{
+        flex::{
+            get_compact_array, get_compact_array_len, get_compact_string, get_i32_array,
+            put_compact_array, put_compact_array_len, put_compact_string, put_empty_tagged_fields,
+            put_i32_array, skip_tagged_fields,
+        },
+        get_i16,
     },
     error::BrokerError,
 };
@@ -50,40 +54,28 @@ pub(super) fn decode_task_map(buf: &mut &[u8]) -> Result<BTreeMap<String, Vec<i3
 /// compact strings and the struct's tagged-field count. Kafka's `ClientTags`
 /// and `TopicConfigs` both have this shape.
 pub(super) fn encode_key_value_list(buf: &mut BytesMut, items: &[(String, String)]) {
-    put_compact_array_len(buf, items.len());
-    for (k, v) in items {
+    put_compact_array(buf, items.iter(), |buf, (k, v)| {
         put_compact_string(buf, k);
         put_compact_string(buf, v);
         put_empty_tagged_fields(buf);
-    }
+    });
 }
 
 pub(super) fn decode_key_value_list(buf: &mut &[u8]) -> Result<Vec<(String, String)>, BrokerError> {
-    let n = get_compact_array_len(buf)?;
-    let mut out = Vec::with_capacity(n);
-    for _ in 0..n {
+    get_compact_array(buf, |buf| {
         let k = get_compact_string(buf)?;
         let v = get_compact_string(buf)?;
         skip_tagged_fields(buf)?;
-        out.push((k, v));
-    }
-    Ok(out)
+        Ok((k, v))
+    })
 }
 
 /// Encodes an `[]int16`, which the copartition groups of the topology record
 /// use for their indices into the subtopology's own topic lists.
 pub(super) fn encode_i16_list(buf: &mut BytesMut, items: &[i16]) {
-    put_compact_array_len(buf, items.len());
-    for v in items {
-        bytes::BufMut::put_i16(buf, *v);
-    }
+    put_compact_array(buf, items.iter(), |buf, &v| buf.put_i16(v));
 }
 
 pub(super) fn decode_i16_list(buf: &mut &[u8]) -> Result<Vec<i16>, BrokerError> {
-    let n = get_compact_array_len(buf)?;
-    let mut out = Vec::with_capacity(n);
-    for _ in 0..n {
-        out.push(crate::coordinator::unified::persistence::get_i16(buf)?);
-    }
-    Ok(out)
+    get_compact_array(buf, get_i16)
 }

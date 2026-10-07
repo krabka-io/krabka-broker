@@ -87,12 +87,7 @@ mod tests {
     // batch, skipping the offset-103 batch.
     #[test]
     fn read_uses_relative_offset_for_index_lookup() {
-        let dir = tempdir().unwrap();
-        let mut seg = Segment::create(dir.path(), Offset(100)).unwrap();
-        // Dense index (interval 0 → every batch indexed).
-        seg.append(&sample_batch(100, 3, 100), DENSE_INDEX).unwrap(); // offsets 100..=102
-        seg.append(&sample_batch(103, 2, 200), DENSE_INDEX).unwrap(); // offsets 103..=104
-        seg.append(&sample_batch(105, 1, 300), DENSE_INDEX).unwrap(); // offset 105
+        let (_dir, seg) = super::super::test_support::indexed_segment();
         let read = seg.read(Offset(103), NO_LIMIT).unwrap();
         assert2::assert!(seg.last_offset() == Offset(105));
         assert2::assert!(read == vec![sample_batch(103, 2, 200), sample_batch(105, 1, 300)]);

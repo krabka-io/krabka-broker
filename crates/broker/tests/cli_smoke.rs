@@ -242,6 +242,9 @@ impl Process {
             .args(args)
             .arg("--metrics-listen-addr=none")
             .arg("--health-listen-addr=none")
+            // The startup oracle consumes an INFO event, so request that level
+            // explicitly for each child, independent of the test runner's filter.
+            .env("RUST_LOG", krabka_broker::config::DEFAULT_LOG_FILTER)
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::inherit())
             .spawn()

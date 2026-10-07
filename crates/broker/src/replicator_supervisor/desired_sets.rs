@@ -75,7 +75,7 @@ pub(crate) fn desired_wal_placements(
 #[cfg(test)]
 mod tests {
     use assert2::assert;
-    use krabka_metadata::{MetadataRecord, PartitionRecord, TopicRecord};
+    use krabka_metadata::{MetadataRecord, TopicRecord};
     use uuid::Uuid;
 
     use super::*;
@@ -97,32 +97,8 @@ mod tests {
     #[test]
     fn desired_follower_set_includes_followers_excludes_leader_and_non_replicas() {
         let img = image_with(&[
-            MetadataRecord::V1Topic(TopicRecord {
-                name: "t".into(),
-                topic_id: Uuid::new_v4(),
-                partitions: 1,
-                replication_factor: 3,
-            }),
-            MetadataRecord::V1Partition(PartitionRecord {
-                topic: "t".into(),
-                partition: 0,
-                leader: krabka_audit::NodeId(1),
-                replicas: vec![
-                    krabka_audit::NodeId(1),
-                    krabka_audit::NodeId(2),
-                    krabka_audit::NodeId(3),
-                ],
-                isr: vec![
-                    krabka_audit::NodeId(1),
-                    krabka_audit::NodeId(2),
-                    krabka_audit::NodeId(3),
-                ],
-                leader_epoch: krabka_metadata::LeaderEpoch(0),
-                adding_replicas: vec![],
-                removing_replicas: vec![],
-                directories: vec![],
-                partition_epoch: 0,
-            }),
+            topic_record("t", 1),
+            partition_record("t", 0, NodeId(1), vec![NodeId(1), NodeId(2), NodeId(3)], 0),
         ]);
         let cases = [
             // Self is a follower replica → included.
@@ -223,78 +199,11 @@ mod tests {
     #[test]
     fn multiple_topics_aggregated() {
         let img = image_with(&[
-            MetadataRecord::V1Topic(TopicRecord {
-                name: "a".into(),
-                topic_id: Uuid::new_v4(),
-                partitions: 1,
-                replication_factor: 3,
-            }),
-            MetadataRecord::V1Partition(PartitionRecord {
-                topic: "a".into(),
-                partition: 0,
-                leader: krabka_audit::NodeId(1),
-                replicas: vec![
-                    krabka_audit::NodeId(1),
-                    krabka_audit::NodeId(2),
-                    krabka_audit::NodeId(3),
-                ],
-                isr: vec![
-                    krabka_audit::NodeId(1),
-                    krabka_audit::NodeId(2),
-                    krabka_audit::NodeId(3),
-                ],
-                leader_epoch: krabka_metadata::LeaderEpoch(0),
-                adding_replicas: vec![],
-                removing_replicas: vec![],
-                directories: vec![],
-                partition_epoch: 0,
-            }),
-            MetadataRecord::V1Topic(TopicRecord {
-                name: "b".into(),
-                topic_id: Uuid::new_v4(),
-                partitions: 2,
-                replication_factor: 3,
-            }),
-            MetadataRecord::V1Partition(PartitionRecord {
-                topic: "b".into(),
-                partition: 0,
-                leader: krabka_audit::NodeId(3),
-                replicas: vec![
-                    krabka_audit::NodeId(1),
-                    krabka_audit::NodeId(2),
-                    krabka_audit::NodeId(3),
-                ],
-                isr: vec![
-                    krabka_audit::NodeId(1),
-                    krabka_audit::NodeId(2),
-                    krabka_audit::NodeId(3),
-                ],
-                leader_epoch: krabka_metadata::LeaderEpoch(0),
-                adding_replicas: vec![],
-                removing_replicas: vec![],
-                directories: vec![],
-                partition_epoch: 0,
-            }),
-            MetadataRecord::V1Partition(PartitionRecord {
-                topic: "b".into(),
-                partition: 1,
-                leader: krabka_audit::NodeId(2),
-                replicas: vec![
-                    krabka_audit::NodeId(1),
-                    krabka_audit::NodeId(2),
-                    krabka_audit::NodeId(3),
-                ],
-                isr: vec![
-                    krabka_audit::NodeId(1),
-                    krabka_audit::NodeId(2),
-                    krabka_audit::NodeId(3),
-                ],
-                leader_epoch: krabka_metadata::LeaderEpoch(0),
-                adding_replicas: vec![],
-                removing_replicas: vec![],
-                directories: vec![],
-                partition_epoch: 0,
-            }),
+            topic_record("a", 1),
+            partition_record("a", 0, NodeId(1), vec![NodeId(1), NodeId(2), NodeId(3)], 0),
+            topic_record("b", 2),
+            partition_record("b", 0, NodeId(3), vec![NodeId(1), NodeId(2), NodeId(3)], 0),
+            partition_record("b", 1, NodeId(2), vec![NodeId(1), NodeId(2), NodeId(3)], 0),
         ]);
         let d = desired_follower_set(NodeId(2), &img);
         // b/1 is excluded: self is leader for it.

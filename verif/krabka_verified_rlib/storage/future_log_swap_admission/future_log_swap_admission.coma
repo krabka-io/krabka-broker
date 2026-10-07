@@ -1,6 +1,6 @@
-(* #"/workspace/crates/verified/src/storage/future_log_swap_admission.rs" 122 0 122 81 *)
+(* #"/workspace/crates/verified/src/storage/future_log_swap_admission.rs" 123 0 123 81 *)
 
-let%span sfuture_log_swap_admission = "/workspace/crates/verified/src/storage/future_log_swap_admission.rs" 120 10 120 49
+let%span sfuture_log_swap_admission = "/workspace/crates/verified/src/storage/future_log_swap_admission.rs" 121 10 121 49
 
 use creusot.prelude.Any
 use creusot.int.Int64
@@ -9,7 +9,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let future_log_swap_admission [#"/workspace/crates/verified/src/storage/future_log_swap_admission.rs" 122 0 122 81]
+let future_log_swap_admission [#"/workspace/crates/verified/src/storage/future_log_swap_admission.rs" 123 0 123 81]
   (current_leo: Int64.t) (future_leo: Int64.t) (return (x: bool)) = (! bb0
   [ bb0 = s0 [ s0 = [ &_ret <- current_leo = future_leo ] s1 | s1 = return {_ret} ] ]
   [ & _ret: bool = Any.any_l () | & current_leo: Int64.t = current_leo | & future_leo: Int64.t = future_leo ])

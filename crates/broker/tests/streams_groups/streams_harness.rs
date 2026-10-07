@@ -8,142 +8,29 @@
 //! heartbeat response, live here so each scenario module holds only its own
 //! assertions.
 
-use std::{sync::Arc, time::Duration};
+use std::sync::Arc;
 
-use assert2::assert;
-use krabka_broker::{Broker, BrokerConfig};
 use krabka_client_core::Client;
 use krabka_protocol::owned::{
-    common::streams_group_heartbeat_request::{
-        task_ids::TaskIds as ReqTaskIds, topic_info::TopicInfo,
-    },
-    create_topics_request::{CreatableTopic, CreateTopicsRequest},
     streams_group_describe_request::StreamsGroupDescribeRequest,
-    streams_group_heartbeat_request::{StreamsGroupHeartbeatRequest, Subtopology, Topology},
+    streams_group_heartbeat_request::Topology,
     streams_group_heartbeat_response::StreamsGroupHeartbeatResponse,
-    update_features_request::{FeatureUpdateKey, UpdateFeaturesRequest},
+};
+
+pub use crate::support::streams::{
+    active_partition_count, finalize_streams_version, first_join, follow_up, topology,
 };
 
 pub async fn boot() -> (krabka_broker::BrokerHandle, String, tempfile::TempDir) {
-    let dir = tempfile::TempDir::new().unwrap();
-    let broker = Broker::start(BrokerConfig::for_tests(dir.path().to_path_buf()))
-        .await
-        .unwrap();
-    // A streams or classic group needs `__consumer_offsets`. No broker creates
-    // it at startup, so create it as a client's first lookup does.
-    broker.wait_until_group_coordinator_ready().await;
-    let bootstrap = broker.listen_addr().to_string();
-    (broker, bootstrap, dir)
+    crate::support::streams::boot(false).await
 }
 
 pub async fn connect(bootstrap: &str) -> Arc<Client> {
-    Arc::new(
-        Client::builder()
-            .bootstrap(bootstrap)
-            .client_id("c1")
-            .build()
-            .await
-            .unwrap(),
-    )
+    crate::support::client::connect(bootstrap, "c1").await
 }
 
 pub async fn create_topic(client: &Client, topic: &str, partitions: i32) {
-    let resp = client
-        .send(CreateTopicsRequest {
-            topics: vec![CreatableTopic {
-                name: topic.into(),
-                num_partitions: partitions,
-                replication_factor: 1,
-                ..Default::default()
-            }],
-            timeout_ms: 5_000,
-            ..Default::default()
-        })
-        .await
-        .expect("CreateTopics");
-    assert!(
-        resp.topics[0].error_code == 0,
-        "topic create failed: {resp:?}"
-    );
-}
-
-/// Finalize `streams.version` to level 1 so the heartbeat and describe handlers
-/// stop returning `UNSUPPORTED_VERSION`. `upgrade_type: 1` is UPGRADE.
-pub async fn finalize_streams_version(client: &Client) {
-    let resp = client
-        .send(UpdateFeaturesRequest {
-            feature_updates: vec![FeatureUpdateKey {
-                feature: "streams.version".into(),
-                max_version_level: 1,
-                upgrade_type: 1,
-                ..Default::default()
-            }],
-            ..Default::default()
-        })
-        .await
-        .expect("UpdateFeatures");
-    assert!(
-        resp.error_code == 0,
-        "streams.version finalize failed: {resp:?}"
-    );
-}
-
-/// A single-subtopology topology that subscribes to one source topic, with the
-/// supplied changelog topics. An empty list means stateless.
-pub fn topology(source_topic: &str, changelogs: Vec<TopicInfo>) -> Topology {
-    Topology {
-        epoch: 0,
-        subtopologies: vec![Subtopology {
-            subtopology_id: "0".into(),
-            source_topics: vec![source_topic.into()],
-            state_changelog_topics: changelogs,
-            ..Default::default()
-        }],
-        ..Default::default()
-    }
-}
-
-/// First-join heartbeat. It sends a client-generated member id, empty task lists,
-/// epoch 0, a process id, a rebalance timeout, and the supplied topology.
-pub fn first_join(group: &str, topo: Topology) -> StreamsGroupHeartbeatRequest {
-    StreamsGroupHeartbeatRequest {
-        group_id: group.into(),
-        member_id: uuid::Uuid::new_v4().to_string(),
-        member_epoch: 0,
-        process_id: Some("p1".into()),
-        rebalance_timeout_ms: 30_000,
-        active_tasks: Some(Vec::new()),
-        standby_tasks: Some(Vec::new()),
-        warmup_tasks: Some(Vec::new()),
-        topology: Some(topo),
-        ..Default::default()
-    }
-}
-
-/// Follow-up heartbeat. It sends a known member id and its current epoch, and
-/// it echoes back the owned active tasks, as a steady-state member does.
-pub fn follow_up(
-    group: &str,
-    member_id: &str,
-    epoch: i32,
-    active: Option<Vec<ReqTaskIds>>,
-) -> StreamsGroupHeartbeatRequest {
-    StreamsGroupHeartbeatRequest {
-        group_id: group.into(),
-        member_id: member_id.into(),
-        member_epoch: epoch,
-        standby_tasks: active.as_ref().map(|_| Vec::new()),
-        warmup_tasks: active.as_ref().map(|_| Vec::new()),
-        active_tasks: active,
-        ..Default::default()
-    }
-}
-
-/// Sum of all active-task partitions in a heartbeat response.
-pub fn active_partition_count(resp: &StreamsGroupHeartbeatResponse) -> usize {
-    resp.active_tasks
-        .as_ref()
-        .map_or(0, |v| v.iter().map(|t| t.partitions.len()).sum())
+    crate::support::client::create_topic(client, topic, partitions).await;
 }
 
 /// Active-task partitions for a given subtopology id, sorted.
@@ -194,46 +81,13 @@ pub async fn join_and_converge(
     want_active: usize,
     tries: usize,
 ) -> (String, StreamsGroupHeartbeatResponse) {
-    // First join. Tolerate a transient coordinator-load on the very first call.
-    let mut resp = client
-        .send(first_join(group, topo.clone()))
-        .await
-        .expect("first heartbeat");
-    let mut member_id = resp.member_id.clone();
-
-    for _ in 0..tries {
-        // COORDINATOR_LOAD_IN_PROGRESS (14): retry the first join.
-        if resp.error_code == 14 {
-            resp = client
-                .send(first_join(group, topo.clone()))
-                .await
-                .expect("retry first heartbeat");
-            member_id = resp.member_id.clone();
-            continue;
-        }
-        assert!(resp.error_code == 0, "heartbeat error: {resp:?}");
-        if active_partition_count(&resp) >= want_active {
-            break;
-        }
-        // intentional: backoff between heartbeats while polling the RPC response
-        // for active-task-assignment convergence. The assignment is coordinator-
-        // local state that is not reflected in the metadata image and exposes no
-        // metric/awaiter, so a bounded re-heartbeat loop is the only observer.
-        tokio::time::sleep(Duration::from_millis(200)).await;
-        let active = resp.active_tasks.clone().map(|v| {
-            v.into_iter()
-                .map(|t| ReqTaskIds {
-                    subtopology_id: t.subtopology_id,
-                    partitions: t.partitions,
-                    ..Default::default()
-                })
-                .collect()
-        });
-        resp = client
-            .send(follow_up(group, &member_id, resp.member_epoch, active))
-            .await
-            .expect("follow-up heartbeat");
-        member_id = resp.member_id.clone();
-    }
-    (member_id, resp)
+    crate::support::streams::streams_join_and_converge(
+        client,
+        group,
+        topo,
+        want_active,
+        tries,
+        true,
+    )
+    .await
 }

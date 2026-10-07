@@ -11,6 +11,8 @@ pub(crate) mod leadership;
 pub(crate) mod metadata_update;
 pub(crate) mod partitioner;
 pub(crate) mod retention;
+#[cfg(test)]
+pub(crate) mod test_support;
 pub(crate) mod topic_deletion;
 
 pub use bootstrap::AUDIT_TOPIC;

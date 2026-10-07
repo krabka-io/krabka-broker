@@ -8,7 +8,7 @@
 //! delegation-token-authenticated caller — the credential-disclosure gate
 //! this suite exists to pin down.
 
-use std::{net::SocketAddr, sync::Arc, time::Duration};
+use std::net::SocketAddr;
 
 use assert2::assert;
 use krabka_metadata::{
@@ -19,62 +19,13 @@ use krabka_protocol::owned::describe_delegation_token_request::{
     DescribeDelegationTokenOwner, DescribeDelegationTokenRequest,
 };
 use krabka_raft::ControllerHandle;
-use krabka_security::{AuthMethod, KafkaPrincipal, Principal, SaslMechanism, SecretBytes};
+use krabka_security::{KafkaPrincipal, SecretBytes};
 use tempfile::TempDir;
 
 use super::handle;
-use crate::network::auth::ConnectionAuth;
-
-/// Spin up a single-voter `Controller` for tests, wait for leader.
-async fn test_controller(log_dir: std::path::PathBuf) -> Arc<ControllerHandle> {
-    let cfg = krabka_raft::ControllerConfig {
-        election_timeout: krabka_units::millis(200),
-        heartbeat_interval: Some(krabka_units::millis(50)),
-        client_id: "test".into(),
-        ..krabka_raft::ControllerConfig::for_tests(krabka_raft::NodeId(1), log_dir)
-    };
-    let handle = Arc::new(krabka_raft::Controller::start(cfg).await.unwrap());
-    let mut rx = handle.watch_leader();
-    let deadline = std::time::Instant::now() + Duration::from_secs(5);
-    while rx.borrow().is_none() {
-        assert!(std::time::Instant::now() < deadline, "no leader in 5s");
-        let _ = tokio::time::timeout(Duration::from_millis(100), rx.changed()).await;
-    }
-    handle
-}
-
-fn authed_with_token(name: &str, via_token: bool) -> ConnectionAuth {
-    ConnectionAuth::Authenticated {
-        principal: Principal {
-            name: name.into(),
-            auth_method: AuthMethod::SaslScramSha256,
-            groups: vec![],
-        },
-        mechanism: SaslMechanism::ScramSha256,
-        expires_at_ms: None,
-        authenticated_via_token: via_token,
-    }
-}
-
-fn authed(name: &str) -> ConnectionAuth {
-    authed_with_token(name, false)
-}
-
-fn anonymous() -> ConnectionAuth {
-    ConnectionAuth::Authenticated {
-        principal: crate::test_support::principal("ANONYMOUS"),
-        mechanism: SaslMechanism::Plain,
-        expires_at_ms: None,
-        authenticated_via_token: false,
-    }
-}
-
-fn kp(name: &str) -> KafkaPrincipal {
-    KafkaPrincipal {
-        principal_type: "User".into(),
-        name: name.into(),
-    }
-}
+use crate::handlers::delegation_token_test_support::{
+    anonymous, authed, authed_with_token, kp, test_controller,
+};
 
 fn peer() -> SocketAddr {
     "127.0.0.1:0".parse().unwrap()

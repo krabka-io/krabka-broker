@@ -3,22 +3,18 @@
 //!
 //! The broker boots with a bootstrap address on a dead port, so the retry loop
 //! never swaps the manager in and every `add_remote_log_segment_metadata` call
-//! returns `NotReady`. That boot is deliberately not shared with
-//! `rlmm_cluster`: the dead-port bootstrap is the whole point of the scenario.
+//! returns `NotReady`. The dead-port override keeps the manager unavailable.
 
 use std::time::Duration;
 
 use assert2::assert;
-use krabka_broker::{Broker, BrokerConfig, KafkaRlmmConfig, RemoteStorageBackend, RlmmKind};
-use krabka_protocol::owned::create_topics_request::{
-    CreatableTopic, CreatableTopicConfig, CreateTopicsRequest,
-};
-use tempfile::TempDir;
+use krabka_broker::RlmmKind;
+use krabka_protocol::owned::create_topics_request::{CreatableTopic, CreateTopicsRequest};
 
 use crate::{
-    rlmm_cluster::{await_tiered_config, build_client},
+    rlmm_cluster::{await_tiered_config, build_client, start_configured_topic_rlmm},
     rlmm_round_trip::remote_log_files,
-    run_broker_test, support,
+    run_broker_test,
 };
 
 /// While the topic-backed RLMM has not yet activated, the RLM copy task must
@@ -39,44 +35,16 @@ fn copy_task_skips_tiering_while_rlmm_not_ready() {
 async fn copy_task_skips_tiering_while_rlmm_not_ready_case() {
     const TOPIC: &str = "tiered-not-ready-itest";
 
-    support::init_tracing();
-
-    // Hold both ports to eliminate bind-and-drop races under parallel nextest.
-    let (client_addrs, controller_addrs, client_listeners, controller_listeners) =
-        support::bind_and_hold_ports(1).await;
-    let listen = client_addrs[0];
-
-    let log_dir = TempDir::new().expect("log tempdir");
-    let remote_dir = TempDir::new().expect("remote tempdir");
-
-    let mut cfg = BrokerConfig::for_tests(log_dir.path().to_path_buf());
-    cfg.listen_addr = listen;
-    cfg.advertised_listener = listen.to_string();
-    cfg.controller_listen_addr = controller_addrs[0];
-    cfg.controller_quorum_voters =
-        vec![(krabka_broker::NodeId(1), controller_addrs[0].to_string())];
-    cfg.remote_storage_backend = Some(RemoteStorageBackend::Local {
-        dir: remote_dir.path().to_path_buf(),
-    });
-    cfg.remote_log_manager_interval = krabka_units::millis(200);
-    // Dead port: the retry loop can never dial the bootstrap; the SwappableRlmm
-    // stays on the NotReadyRlmm stub for the entire test.
-    cfg.remote_log_metadata = RlmmKind::TopicBacked(KafkaRlmmConfig {
-        bootstrap: "127.0.0.1:1".into(),
-        num_partitions: 1,
-        replication: 1,
-        min_isr: 1,
-        snapshot_interval: krabka_units::hours(1),
-        snapshot_dir: log_dir.path().join("rlmm-snap"),
-        security: None,
-        ..KafkaRlmmConfig::default()
-    });
-
-    let data_listener = client_listeners.into_iter().next().unwrap();
-    let controller_listener = controller_listeners.into_iter().next().unwrap();
-    let broker = Broker::start_with_listeners(cfg, Some(controller_listener), Some(data_listener))
-        .await
-        .expect("broker starts");
+    let (broker, _log_dir, remote_dir) = start_configured_topic_rlmm(|cfg, log_dir| {
+        cfg.remote_log_manager_interval = krabka_units::millis(200);
+        // The dead bootstrap port keeps the SwappableRlmm on NotReady.
+        let RlmmKind::TopicBacked(metadata) = &mut cfg.remote_log_metadata else {
+            unreachable!("topic-backed fixture");
+        };
+        metadata.bootstrap = "127.0.0.1:1".into();
+        metadata.snapshot_dir = log_dir.join("rlmm-snap");
+    })
+    .await;
     let client = build_client(&broker).await;
 
     let resp = client
@@ -85,33 +53,7 @@ async fn copy_task_skips_tiering_while_rlmm_not_ready_case() {
                 name: TOPIC.into(),
                 num_partitions: 1,
                 replication_factor: 1,
-                configs: vec![
-                    CreatableTopicConfig {
-                        name: "remote.storage.enable".into(),
-                        value: Some("true".into()),
-                        ..Default::default()
-                    },
-                    CreatableTopicConfig {
-                        name: "internal.segment.bytes".into(),
-                        value: Some("1024".into()),
-                        ..Default::default()
-                    },
-                    CreatableTopicConfig {
-                        name: "local.retention.bytes".into(),
-                        value: Some("1".into()),
-                        ..Default::default()
-                    },
-                    CreatableTopicConfig {
-                        name: "retention.bytes".into(),
-                        value: Some("-1".into()),
-                        ..Default::default()
-                    },
-                    CreatableTopicConfig {
-                        name: "retention.ms".into(),
-                        value: Some("-1".into()),
-                        ..Default::default()
-                    },
-                ],
+                configs: crate::topic_fixture::tiered_configs(Some("1024")),
                 ..Default::default()
             }],
             timeout_ms: 5_000,

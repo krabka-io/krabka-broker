@@ -4,7 +4,7 @@
 //! These runs exercise the JVM `AdminClient` group APIs rather than a consumer,
 //! so they stay apart from the `kafka-console-consumer` suites.
 
-use std::process::{Command, Stdio};
+use std::{io::Write as _, process::Stdio};
 
 use assert2::assert;
 
@@ -24,44 +24,16 @@ async fn kafka_consumer_groups_list_describe() {
     let (_broker, _dir) = start_host_broker().await;
     nc_check_connectivity();
 
-    docker_run_kafka_tool(&[
-        "kafka-topics",
-        "--create",
-        "--if-not-exists",
-        "--topic",
+    crate::jvm_acceptance::create_console_topic(
+        crate::jvm_acceptance::KAFKA_IMAGE,
+        &[],
         TOPIC,
-        "--partitions",
-        "1",
-        "--replication-factor",
-        "1",
-        "--bootstrap-server",
-        broker0_advertised(),
-    ]);
+        1,
+        1,
+    );
 
     // Produce one record so the consumer has something to settle on.
-    let mut child = std::process::Command::new("docker")
-        .args([
-            "run",
-            "--rm",
-            "-i",
-            "--add-host=host.docker.internal:host-gateway",
-            KAFKA_IMAGE,
-            "kafka-console-producer",
-            "--bootstrap-server",
-            broker0_advertised(),
-            "--topic",
-            TOPIC,
-        ])
-        .stdin(std::process::Stdio::piped())
-        .spawn()
-        .expect("spawn producer");
-    {
-        use std::io::Write;
-        let stdin = child.stdin.as_mut().expect("stdin");
-        writeln!(stdin, "alpha").expect("write");
-    }
-    drop(child.stdin.take());
-    let _ = child.wait_with_output();
+    let _ = crate::jvm_acceptance::produce_console(KAFKA_IMAGE, &[], TOPIC, false, b"alpha\n");
 
     // Consume one record with --group so the group is registered with
     // the coordinator.
@@ -119,44 +91,16 @@ async fn kafka_consumer_groups_delete_offsets() {
     let (_broker, _dir) = start_host_broker().await;
     nc_check_connectivity();
 
-    docker_run_kafka_tool(&[
-        "kafka-topics",
-        "--create",
-        "--if-not-exists",
-        "--topic",
+    crate::jvm_acceptance::create_console_topic(
+        crate::jvm_acceptance::KAFKA_IMAGE,
+        &[],
         TOPIC,
-        "--partitions",
-        "2",
-        "--replication-factor",
-        "1",
-        "--bootstrap-server",
-        broker0_advertised(),
-    ]);
+        2,
+        1,
+    );
 
     // Produce one record so the consumer has something to commit on.
-    let mut child = Command::new("docker")
-        .args([
-            "run",
-            "--rm",
-            "-i",
-            "--add-host=host.docker.internal:host-gateway",
-            KAFKA_IMAGE,
-            "kafka-console-producer",
-            "--bootstrap-server",
-            broker0_advertised(),
-            "--topic",
-            TOPIC,
-        ])
-        .stdin(Stdio::piped())
-        .spawn()
-        .expect("spawn producer");
-    {
-        use std::io::Write;
-        let stdin = child.stdin.as_mut().expect("stdin");
-        writeln!(stdin, "alpha").expect("write");
-    }
-    drop(child.stdin.take());
-    let _ = child.wait_with_output();
+    let _ = crate::jvm_acceptance::produce_console(KAFKA_IMAGE, &[], TOPIC, false, b"alpha\n");
 
     // Consume one record with --group so an offset is committed and the
     // group is registered with the coordinator. After --max-messages exits
@@ -199,13 +143,10 @@ async fn kafka_consumer_groups_delete_offsets() {
     // 2.7 build may emit is satisfied. `kafka-consumer-groups` in 2.7
     // generally does not prompt for --delete-offsets when all flags are
     // supplied; the piped "y\n" is defensive and ignored otherwise.
-    let mut child = Command::new("docker")
-        .args([
-            "run",
-            "--rm",
-            "-i",
-            "--add-host=host.docker.internal:host-gateway",
-            KAFKA_IMAGE,
+    let mut child = crate::support::jvm_docker_command(
+        KAFKA_IMAGE,
+        &[],
+        &[
             "kafka-consumer-groups",
             "--bootstrap-server",
             broker0_advertised(),
@@ -214,14 +155,15 @@ async fn kafka_consumer_groups_delete_offsets() {
             GROUP,
             "--topic",
             TOPIC,
-        ])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("spawn delete-offsets");
+        ],
+        true,
+    )
+    .stdin(Stdio::piped())
+    .stdout(Stdio::piped())
+    .stderr(Stdio::piped())
+    .spawn()
+    .expect("spawn delete-offsets");
     {
-        use std::io::Write;
         let stdin = child.stdin.as_mut().expect("stdin");
         writeln!(stdin, "y").expect("write y");
     }

@@ -79,3 +79,32 @@ pub fn prefix_grants_agree(
         prefix_grants_agree(old, next, votes, reports, kind, node, end, new, count - 1);
     }
 }
+
+#[logic(open)]
+pub(super) fn control_request_admitted(
+    old: Seq<u64>,
+    state: (
+        crate::reconfiguration::ReconfigurationLeadership,
+        crate::reconfiguration::CurrentVoterSet,
+    ),
+    request: crate::reconfiguration::VoterChangeRequest,
+    node: u64,
+    target: crate::reconfiguration::TargetVoter,
+) -> bool {
+    pearlite! {
+        super::super::spec::valid_old(old)
+        && super::super::spec::membership_coherent(old, node, target.membership, request.kind)
+        && match crate::reconfiguration::voter_reconfiguration_rejection(state.0, state.1, request, target) {
+            Some(_) => false, None => true,
+        }
+    }
+}
+
+#[logic(open)]
+pub(super) fn control_inputs_coherent(
+    old: Seq<u64>,
+    context: crate::reconfiguration::CurrentVoterSet,
+    reports: Seq<(i64, i64)>,
+) -> bool {
+    pearlite! { context.voter_count@ == old.len() && reports.len() == old.len() + 1 }
+}

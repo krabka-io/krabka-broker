@@ -48,14 +48,35 @@ fn snapshot_of(
     );
 }
 
+fn two_segment_archive() -> (tempfile::TempDir, Uuid, Uuid, Uuid) {
+    let archive = tempfile::tempdir().expect("temp dir");
+    let (topic, first, second) = (Uuid::from_u128(1), Uuid::from_u128(10), Uuid::from_u128(11));
+    write_full_segment(archive.path(), "orders", 0, topic, 0, first);
+    write_full_segment(archive.path(), "orders", 0, topic, 100, second);
+    (archive, topic, first, second)
+}
+
+async fn snapshot_inventory(
+    archive: &std::path::Path,
+    snapshot: &std::path::Path,
+) -> Result<crate::discover::ArchiveInventory, RestoreError> {
+    let args = args_from(
+        archive,
+        &["--rlmm-snapshot", &snapshot.display().to_string()],
+    );
+    let store = open_archive(&args).expect("store");
+    inventory(&store, &args).await
+}
+
+fn check_orders_disagreement(error: RestoreError) {
+    check!(
+        matches!(error, RestoreError::MetadataDisagreement { topic, partition, .. } if topic == "orders" && partition == 0)
+    );
+}
+
 #[tokio::test]
 async fn a_snapshot_that_agrees_keeps_every_live_segment() {
-    let archive = tempfile::tempdir().expect("temp dir");
-    let topic_id = Uuid::from_u128(1);
-    let seg_a = Uuid::from_u128(10);
-    let seg_b = Uuid::from_u128(11);
-    write_full_segment(archive.path(), "orders", 0, topic_id, 0, seg_a);
-    write_full_segment(archive.path(), "orders", 0, topic_id, 100, seg_b);
+    let (archive, topic_id, seg_a, seg_b) = two_segment_archive();
 
     let snap_dir = tempfile::tempdir().expect("temp dir");
     let snap_path = snap_dir.path().join("snapshot");
@@ -69,12 +90,9 @@ async fn a_snapshot_that_agrees_keeps_every_live_segment() {
         ],
     );
 
-    let args = args_from(
-        archive.path(),
-        &["--rlmm-snapshot", &snap_path.display().to_string()],
-    );
-    let store = open_archive(&args).expect("store");
-    let result = inventory(&store, &args).await.expect("inventory");
+    let result = snapshot_inventory(archive.path(), &snap_path)
+        .await
+        .expect("inventory");
 
     check!(result.partitions.len() == 1);
     check!(result.partitions[0].segments.len() == 2);
@@ -82,12 +100,7 @@ async fn a_snapshot_that_agrees_keeps_every_live_segment() {
 
 #[tokio::test]
 async fn a_delete_started_segment_is_excluded_from_the_inventory_without_an_error() {
-    let archive = tempfile::tempdir().expect("temp dir");
-    let topic_id = Uuid::from_u128(1);
-    let seg_a = Uuid::from_u128(10);
-    let seg_b = Uuid::from_u128(11);
-    write_full_segment(archive.path(), "orders", 0, topic_id, 0, seg_a);
-    write_full_segment(archive.path(), "orders", 0, topic_id, 100, seg_b);
+    let (archive, topic_id, seg_a, seg_b) = two_segment_archive();
 
     let snap_dir = tempfile::tempdir().expect("temp dir");
     let snap_path = snap_dir.path().join("snapshot");
@@ -104,12 +117,9 @@ async fn a_delete_started_segment_is_excluded_from_the_inventory_without_an_erro
         ],
     );
 
-    let args = args_from(
-        archive.path(),
-        &["--rlmm-snapshot", &snap_path.display().to_string()],
-    );
-    let store = open_archive(&args).expect("store");
-    let result = inventory(&store, &args).await.expect("inventory");
+    let result = snapshot_inventory(archive.path(), &snap_path)
+        .await
+        .expect("inventory");
 
     check!(result.partitions.len() == 1);
     check!(result.partitions[0].segments.len() == 1);
@@ -188,17 +198,10 @@ async fn a_segment_the_snapshot_does_not_mention_is_a_disagreement() {
     // The snapshot knows nothing about this partition's segment at all.
     snapshot_of(&snap_path, "orders", topic_id, &[]);
 
-    let args = args_from(
-        archive.path(),
-        &["--rlmm-snapshot", &snap_path.display().to_string()],
-    );
-    let store = open_archive(&args).expect("store");
-    let err = inventory(&store, &args).await.unwrap_err();
-    check!(matches!(
-        err,
-        RestoreError::MetadataDisagreement { topic, partition, .. }
-            if topic == "orders" && partition == 0
-    ));
+    let err = snapshot_inventory(archive.path(), &snap_path)
+        .await
+        .unwrap_err();
+    check_orders_disagreement(err);
 }
 
 #[tokio::test]
@@ -221,12 +224,9 @@ async fn a_delete_finished_segment_with_bytes_still_present_is_a_disagreement() 
         &[(seg, 0, RemoteLogSegmentState::DeleteSegmentFinished)],
     );
 
-    let args = args_from(
-        archive.path(),
-        &["--rlmm-snapshot", &snap_path.display().to_string()],
-    );
-    let store = open_archive(&args).expect("store");
-    let err = inventory(&store, &args).await.unwrap_err();
+    let err = snapshot_inventory(archive.path(), &snap_path)
+        .await
+        .unwrap_err();
     check!(matches!(err, RestoreError::MetadataDisagreement { .. }));
 }
 
@@ -265,17 +265,10 @@ async fn a_live_partition_missing_from_the_scan_entirely_is_a_disagreement() {
         },
     );
 
-    let args = args_from(
-        archive.path(),
-        &["--rlmm-snapshot", &snap_path.display().to_string()],
-    );
-    let store = open_archive(&args).expect("store");
-    let err = inventory(&store, &args).await.unwrap_err();
-    check!(matches!(
-        err,
-        RestoreError::MetadataDisagreement { topic, partition, .. }
-            if topic == "orders" && partition == 0
-    ));
+    let err = snapshot_inventory(archive.path(), &snap_path)
+        .await
+        .unwrap_err();
+    check_orders_disagreement(err);
 }
 
 #[tokio::test]
@@ -323,12 +316,9 @@ async fn duplicate_segment_keys_in_the_snapshot_are_a_disagreement() {
         ],
     );
 
-    let args = args_from(
-        archive.path(),
-        &["--rlmm-snapshot", &snap_path.display().to_string()],
-    );
-    let store = open_archive(&args).expect("store");
-    let err = inventory(&store, &args).await.unwrap_err();
+    let err = snapshot_inventory(archive.path(), &snap_path)
+        .await
+        .unwrap_err();
     check!(matches!(err, RestoreError::MetadataDisagreement { .. }));
 }
 
@@ -353,12 +343,9 @@ async fn duplicate_partition_keys_in_the_snapshot_are_a_disagreement() {
         },
     );
 
-    let args = args_from(
-        archive.path(),
-        &["--rlmm-snapshot", &snap_path.display().to_string()],
-    );
-    let store = open_archive(&args).expect("store");
-    let err = inventory(&store, &args).await.unwrap_err();
+    let err = snapshot_inventory(archive.path(), &snap_path)
+        .await
+        .unwrap_err();
     check!(matches!(err, RestoreError::MetadataDisagreement { .. }));
 }
 
@@ -400,12 +387,9 @@ async fn a_corrupt_snapshot_file_is_reported_as_io_invalid_data() {
     let snap_path = archive.path().join("snapshot");
     std::fs::write(&snap_path, b"not an RLMM snapshot").expect("write corrupt snapshot");
 
-    let args = args_from(
-        archive.path(),
-        &["--rlmm-snapshot", &snap_path.display().to_string()],
-    );
-    let store = open_archive(&args).expect("store");
-    let err = inventory(&store, &args).await.unwrap_err();
+    let err = snapshot_inventory(archive.path(), &snap_path)
+        .await
+        .unwrap_err();
     check!(matches!(
         err,
         RestoreError::Io(io_error) if io_error.kind() == std::io::ErrorKind::InvalidData

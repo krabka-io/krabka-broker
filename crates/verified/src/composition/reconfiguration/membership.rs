@@ -1,6 +1,8 @@
 use creusot_std::prelude::*;
 
 #[cfg(creusot)]
+use super::spec::single_change_shape;
+#[cfg(creusot)]
 use super::spec::{expected_member, has_node, membership_coherent, prefix_node_extend, valid_old};
 #[cfg(creusot)]
 use crate::reconfiguration::{admitted_plan, may_reconfigure, voter_reconfiguration_rejection};
@@ -29,10 +31,7 @@ use crate::{
     admitted_plan(context, request.kind, plan) && may_reconfigure(leadership, context)
     &&
     next@.len() == plan.next_voter_count@ && next@.len() > 0
-    && old@.len() - 1 <= next@.len() && next@.len() <= old@.len() + 1
-    && (forall<id: u64> has_node(next@, next@.len(), id)
-        == expected_member(old@, old@.len(), request.kind, node, id))
-    && (forall<i: Int, j: Int> 0 <= i && i < j && j < next@.len() ==> next@[i] != next@[j])
+    && single_change_shape(old@, next@, request.kind, node)
     && match request.kind {
         VoterChangeKind::Add => next@.len() == old@.len() + 1,
         VoterChangeKind::Remove => next@.len() + 1 == old@.len(),

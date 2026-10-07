@@ -45,6 +45,7 @@ mod fetch_size;
 mod kafka_wire;
 #[path = "throttle/records.rs"]
 mod records;
+mod support;
 
 /// The client id every request header in this suite carries.
 const CLIENT_ID: &str = "krabka-throttle-test";

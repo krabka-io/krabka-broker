@@ -79,7 +79,10 @@ use krabka_protocol::{
     owned::create_topics_request::{CreatableTopic, CreateTopicsRequest},
     records::{CRC_COVERAGE_START, HEADER_LEN, RecordBatchHeader},
 };
+use support::{docker, free_port};
 use zerocopy::FromBytes;
+
+mod support;
 
 /// The tag `//packaging:image_load` loads the broker image under.
 ///
@@ -114,37 +117,6 @@ const READY_TIMEOUT: Duration = Duration::from_secs(90);
 /// The image tag to run.
 fn image() -> String {
     std::env::var("KRABKA_BROKER_IMAGE").unwrap_or_else(|_| DEFAULT_IMAGE.to_owned())
-}
-
-/// Run `docker` with `args`, returning stdout on success.
-///
-/// # Panics
-///
-/// Panics when the command cannot be spawned or exits non-zero. Every call site
-/// here is setup or teardown of the fixture, where a failure is not a condition
-/// the test is meant to tolerate.
-fn docker(args: &[&str]) -> String {
-    let out = Command::new("docker")
-        .args(args)
-        .output()
-        .unwrap_or_else(|e| panic!("spawn docker {args:?}: {e}"));
-    assert!(
-        out.status.success(),
-        "docker {args:?} exited {:?}\nstdout: {}\nstderr: {}",
-        out.status.code(),
-        String::from_utf8_lossy(&out.stdout),
-        String::from_utf8_lossy(&out.stderr),
-    );
-    String::from_utf8_lossy(&out.stdout).trim().to_owned()
-}
-
-/// A free loopback port, bound and released.
-fn free_port() -> u16 {
-    std::net::TcpListener::bind("127.0.0.1:0")
-        .expect("bind an ephemeral port")
-        .local_addr()
-        .expect("local addr")
-        .port()
 }
 
 /// One broker, running as a container process out of the packaging image.

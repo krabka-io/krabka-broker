@@ -13,11 +13,13 @@
 
 mod kafka_wire;
 
+mod support;
+
 use std::time::Duration;
 
 use assert2::{assert, check};
 use bytes::BytesMut;
-use krabka_broker::{Broker, BrokerConfig, config::ListenerSpec, metrics::PartitionLabel};
+use krabka_broker::{Broker, BrokerConfig, metrics::PartitionLabel};
 use krabka_protocol::{
     Decode, Encode,
     owned::{
@@ -28,11 +30,7 @@ use krabka_protocol::{
         produce_response::ProduceResponse,
     },
 };
-use krabka_security::ListenerProtocol;
-use tokio::{
-    io::{AsyncReadExt, AsyncWriteExt},
-    net::TcpStream,
-};
+use tokio::net::TcpStream;
 
 const TOPIC: &str = "metrics-it";
 const FETCH_VERSION: i16 = 12;
@@ -154,18 +152,7 @@ async fn fetch_one(addr: std::net::SocketAddr) {
 }
 
 async fn scrape(addr: std::net::SocketAddr) -> String {
-    let mut stream = TcpStream::connect(addr).await.unwrap();
-    let req = format!(
-        "GET /metrics HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\nAccept: */*\r\n\r\n",
-    );
-    stream.write_all(req.as_bytes()).await.unwrap();
-    stream.flush().await.unwrap();
-    let mut buf = Vec::new();
-    stream.read_to_end(&mut buf).await.unwrap();
-    let s = String::from_utf8(buf).unwrap();
-    // Strip the HTTP head, keep the body so we can grep metric names.
-    let body_start = s.find("\r\n\r\n").map_or(0, |i| i + 4);
-    s[body_start..].to_string()
+    crate::support::client::scrape_metrics(addr).await
 }
 
 async fn wait_until_absent(addr: std::net::SocketAddr, needle: &str) -> String {
@@ -214,18 +201,7 @@ async fn rejected_client_labels_leave_the_metrics_body() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn metrics_endpoint_serves_openmetrics_and_counters_tick() {
     let log_dir = tempfile::tempdir().unwrap();
-    let mut cfg = BrokerConfig::for_tests(log_dir.path().to_path_buf());
-    cfg.listeners = vec![ListenerSpec {
-        name: "PLAINTEXT".into(),
-        bind_addr: "127.0.0.1:0".parse().unwrap(),
-        advertised: "127.0.0.1:0".into(),
-        protocol: ListenerProtocol::Plaintext,
-        tls_config: None,
-        sasl_mechanisms: None,
-        principal_mapper: krabka_broker::SslPrincipalMapper::default(),
-    }];
-    cfg.inter_broker_listener_name = "PLAINTEXT".into();
-    cfg.metrics_listen_addr = Some("127.0.0.1:0".parse().unwrap());
+    let cfg = crate::support::client::metrics_config(log_dir.path().to_path_buf());
 
     let handle = Broker::start(cfg).await.unwrap();
     let kafka_addr = handle.listen_addr();
@@ -329,18 +305,7 @@ async fn metrics_endpoint_serves_openmetrics_and_counters_tick() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn partition_level_metrics_and_disk_gauge_render() {
     let log_dir = tempfile::tempdir().unwrap();
-    let mut cfg = BrokerConfig::for_tests(log_dir.path().to_path_buf());
-    cfg.listeners = vec![ListenerSpec {
-        name: "PLAINTEXT".into(),
-        bind_addr: "127.0.0.1:0".parse().unwrap(),
-        advertised: "127.0.0.1:0".into(),
-        protocol: ListenerProtocol::Plaintext,
-        tls_config: None,
-        sasl_mechanisms: None,
-        principal_mapper: krabka_broker::SslPrincipalMapper::default(),
-    }];
-    cfg.inter_broker_listener_name = "PLAINTEXT".into();
-    cfg.metrics_listen_addr = Some("127.0.0.1:0".parse().unwrap());
+    let mut cfg = crate::support::client::metrics_config(log_dir.path().to_path_buf());
     // Enable the disk scanner with a 1s tick so the gauge gets a
     // chance to populate within the test's wait window.
     cfg.partition_disk_scan_interval = krabka_units::secs(1);

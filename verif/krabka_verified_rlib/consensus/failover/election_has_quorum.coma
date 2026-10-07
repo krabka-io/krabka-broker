@@ -1,9 +1,9 @@
-(* #"/workspace/crates/verified/src/consensus/failover.rs" 14 0 14 83 *)
+(* #"/workspace/crates/verified/src/consensus/failover.rs" 15 0 15 83 *)
 
-let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
-let%span sfailover = "/workspace/crates/verified/src/consensus/failover.rs" 15 22 15 48
-let%span sfailover'0 = "/workspace/crates/verified/src/consensus/failover.rs" 12 10 12 61
-let%span sfailover'1 = "/workspace/crates/verified/src/consensus/failover.rs" 5 10 5 41
+let%span sord = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sfailover = "/workspace/crates/verified/src/consensus/failover.rs" 16 22 16 48
+let%span sfailover'0 = "/workspace/crates/verified/src/consensus/failover.rs" 13 10 13 61
+let%span sfailover'1 = "/workspace/crates/verified/src/consensus/failover.rs" 6 10 6 41
 
 use creusot.int.UInt64
 use int.ComputerDivision
@@ -23,8 +23,8 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let election_has_quorum [#"/workspace/crates/verified/src/consensus/failover.rs" 14 0 14 83]
-  (voter_count: UInt64.t) (current_grants: UInt64.t) (return (x: bool)) = (! bb0
+let election_has_quorum [#"/workspace/crates/verified/src/consensus/failover.rs" 15 0 15 83] (voter_count: UInt64.t)
+  (current_grants: UInt64.t) (return (x: bool)) = (! bb0
   [ bb0 = s0
     [ s0 = majority_size [%#sfailover] {voter_count} (fun (_x: UInt64.t) -> [ &_7 <- _x ] s1)
     | s1 = [ &_ret <- UInt64.ge current_grants _7 ] s2

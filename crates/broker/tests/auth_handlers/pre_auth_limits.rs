@@ -19,7 +19,7 @@ use std::{io, net::SocketAddr, time::Duration};
 
 use assert2::{assert, check};
 use bytes::{BufMut, BytesMut};
-use krabka_broker::{Broker, BrokerConfig, BrokerHandle, config::ListenerSpec};
+use krabka_broker::{Broker, BrokerConfig, BrokerHandle};
 use krabka_protocol::{
     Decode, Encode,
     owned::{
@@ -33,7 +33,7 @@ use krabka_protocol::{
         sasl_handshake_response::SaslHandshakeResponse,
     },
 };
-use krabka_security::{ListenerProtocol, SaslMechanism};
+use krabka_security::SaslMechanism;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::TcpStream,
@@ -47,17 +47,7 @@ const REBOOTSTRAP_REQUIRED: i16 = 129;
 /// A `SASL_PLAINTEXT` broker serving PLAIN for `admin`.
 async fn start_broker(customize: impl FnOnce(&mut BrokerConfig)) -> BrokerHandle {
     let log_dir = tempfile::tempdir().unwrap();
-    let mut cfg = BrokerConfig::for_tests(log_dir.path().to_path_buf());
-    cfg.listeners = vec![ListenerSpec {
-        name: "SASL_PLAINTEXT".to_string(),
-        bind_addr: "127.0.0.1:0".parse().unwrap(),
-        advertised: "127.0.0.1:0".to_string(),
-        protocol: ListenerProtocol::SaslPlaintext,
-        tls_config: None,
-        sasl_mechanisms: None,
-        principal_mapper: krabka_broker::SslPrincipalMapper::default(),
-    }];
-    cfg.inter_broker_listener_name = "SASL_PLAINTEXT".to_string();
+    let mut cfg = crate::support::sasl_plaintext_config(log_dir.path().to_path_buf());
     cfg.enabled_sasl_mechanisms = vec![SaslMechanism::Plain];
     cfg.plain_credentials
         .insert("admin".to_string(), admin_plain_password());

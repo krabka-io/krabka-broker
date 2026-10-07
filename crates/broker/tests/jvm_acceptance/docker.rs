@@ -4,11 +4,260 @@
 //! failed tool reports its captured output, and builds the host-side files that
 //! those containers bind-mount.
 
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt as _;
 use std::process::{Command, Stdio};
 
 use assert2::assert;
 
 use super::ports::host_port;
+
+/// Create a topic through the JVM admin client, optionally with client properties.
+pub(crate) fn create_console_topic(
+    image: &str,
+    mounts: &[&str],
+    topic: &str,
+    partitions: i32,
+    replicas: i16,
+) {
+    let partitions = partitions.to_string();
+    let replicas = replicas.to_string();
+    let mut args = vec![
+        "kafka-topics",
+        "--create",
+        "--if-not-exists",
+        "--topic",
+        topic,
+        "--partitions",
+        &partitions,
+        "--replication-factor",
+        &replicas,
+        "--bootstrap-server",
+        super::ports::broker0_advertised(),
+    ];
+    if !mounts.is_empty() {
+        args.extend(["--command-config", "/client.properties"]);
+    }
+    docker_run_kafka_tool_with_image_and_mounts(image, mounts, &args);
+}
+
+/// Produce the supplied console records, with the listener's optional client properties.
+pub(crate) fn produce_console(
+    image: &str,
+    mounts: &[&str],
+    topic: &str,
+    legacy: bool,
+    payload: &[u8],
+) -> std::process::Output {
+    let bootstrap_flag = if legacy {
+        "--broker-list"
+    } else {
+        "--bootstrap-server"
+    };
+    let mut args = vec![
+        "kafka-console-producer",
+        bootstrap_flag,
+        super::ports::broker0_advertised(),
+        "--topic",
+        topic,
+    ];
+    if !mounts.is_empty() {
+        args.extend(["--producer.config", "/client.properties"]);
+    }
+    crate::support::jvm_stdin_output(
+        &mut crate::support::jvm_docker_command(image, mounts, &args, true),
+        payload,
+    )
+}
+
+/// A numbered sequence of console records, with one record per line.
+pub(crate) fn numbered_payload(prefix: &str, count: usize) -> String {
+    use std::fmt::Write as _;
+
+    (0..count).fold(String::new(), |mut payload, index| {
+        writeln!(payload, "{prefix}-{index}").expect("write console record");
+        payload
+    })
+}
+
+/// PLAIN properties for the JVM admin tools.
+pub(crate) fn write_plain_props(user: &str, password: &str) -> ClientPropsFile {
+    write_client_props(&format!(
+        "security.protocol=SASL_PLAINTEXT\nsasl.mechanism=PLAIN\nsasl.jaas.config={}\n",
+        super::sasl::plain_jaas(user, password)
+    ))
+}
+
+/// `SASL_SSL` properties with the shared JVM truststore and optional non-idempotent producer.
+pub(crate) fn write_ssl_sasl_props(
+    mechanism: &str,
+    jaas: &str,
+    non_idempotent: bool,
+) -> ClientPropsFile {
+    let producer = if non_idempotent {
+        "enable.idempotence=false\nacks=1\n"
+    } else {
+        ""
+    };
+    write_client_props(&format!(
+        "security.protocol=SASL_SSL\nsasl.mechanism={mechanism}\nsasl.jaas.config={jaas}\nssl.truststore.location=/truststore.jks\nssl.truststore.password=changeit\nssl.endpoint.identification.algorithm=\n{producer}"
+    ))
+}
+
+/// Provision the shared TLS SCRAM user and return both JVM clients' properties.
+pub(crate) fn provision_ssl_scram_sha512(
+    admin: &str,
+    admin_password: &str,
+    user: &str,
+    password: &str,
+    truststore_mount: &str,
+) -> (ClientPropsFile, ClientPropsFile) {
+    let admin_props = write_ssl_sasl_props(
+        "PLAIN",
+        &super::sasl::plain_jaas(admin, admin_password),
+        false,
+    );
+    provision_console_scram(
+        KAFKA_IMAGE_TXN,
+        &[&admin_props.mount_str(), truststore_mount],
+        user,
+        password,
+        "SCRAM-SHA-512",
+    );
+    let user_props = write_ssl_sasl_props(
+        "SCRAM-SHA-512",
+        &super::sasl::scram_jaas(user, password),
+        true,
+    );
+    (admin_props, user_props)
+}
+
+/// Provision one SCRAM credential through the typed JVM admin API.
+pub(crate) fn provision_console_scram(
+    image: &str,
+    mounts: &[&str],
+    user: &str,
+    password: &str,
+    mechanism: &str,
+) {
+    docker_run_kafka_tool_with_image_and_mounts(
+        image,
+        mounts,
+        &[
+            "kafka-configs",
+            "--alter",
+            "--entity-type",
+            "users",
+            "--entity-name",
+            user,
+            "--add-config",
+            &format!("{mechanism}=[password={password}]"),
+            "--bootstrap-server",
+            super::ports::broker0_advertised(),
+            "--command-config",
+            "/client.properties",
+        ],
+    );
+}
+
+/// Add the named operations to one principal's topic or group ACL.
+pub(crate) fn add_console_acl(
+    image: &str,
+    mounts: &[&str],
+    principal: &str,
+    operations: &[&str],
+    resource_flag: &str,
+    resource: &str,
+) {
+    let mut args = vec![
+        "kafka-acls",
+        "--bootstrap-server",
+        super::ports::broker0_advertised(),
+        "--command-config",
+        "/client.properties",
+        "--add",
+        "--allow-principal",
+        principal,
+    ];
+    for operation in operations {
+        args.extend(["--operation", operation]);
+    }
+    args.extend([resource_flag, resource]);
+    docker_run_kafka_tool_with_image_and_mounts(image, mounts, &args);
+}
+
+/// Consume one partition or group with the console client's optional properties.
+pub(crate) fn consume_console(
+    image: &str,
+    mounts: &[&str],
+    topic: &str,
+    group: Option<&str>,
+    count: usize,
+    timeout_ms: u32,
+    require_success: bool,
+) -> std::process::Output {
+    let count = count.to_string();
+    let timeout = timeout_ms.to_string();
+    let mut args = vec!["kafka-console-consumer"];
+    if image == KAFKA_IMAGE_LEGACY {
+        args.push("--new-consumer");
+    }
+    args.extend([
+        "--bootstrap-server",
+        super::ports::broker0_advertised(),
+        "--topic",
+        topic,
+    ]);
+    args.extend(group.map_or(["--partition", "0"], |group| ["--group", group]));
+    args.extend([
+        "--from-beginning",
+        "--max-messages",
+        &count,
+        "--timeout-ms",
+        &timeout,
+    ]);
+    if !mounts.is_empty() {
+        args.extend(["--consumer.config", "/client.properties"]);
+    }
+    let out = crate::support::jvm_docker_command(image, mounts, &args, false)
+        .output()
+        .expect("console consumer");
+    if require_success {
+        assert!(
+            out.status.success(),
+            "console consumer failed: stdout={} stderr={}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+    out
+}
+
+/// The authenticated ten-record console round-trip used by the SASL mechanisms.
+pub(crate) fn authenticated_console_round_trip(image: &str, mounts: &[&str], topic: &str) {
+    let out = produce_console(
+        image,
+        mounts,
+        topic,
+        false,
+        numbered_payload("msg", 10).as_bytes(),
+    );
+    assert!(
+        out.status.success(),
+        "producer failed: stdout={} stderr={}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let out = consume_console(image, mounts, topic, None, 10, 20_000, true);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    for index in 0..10 {
+        let needle = format!("msg-{index}");
+        assert!(
+            stdout.contains(&needle),
+            "consumer missing {needle}: {stdout:?}"
+        );
+    }
+}
 
 /// Address the Kafka CLI containers use for bootstrap AND that the broker
 /// advertises in `Metadata`. [`docker_run_kafka_tool`] resolves it with
@@ -61,12 +310,10 @@ pub(crate) const KAFKA_IMAGE_ELR: &str = "mirror.gcr.io/apache/kafka:4.3.1";
 /// Verify TCP connectivity from inside a bridge-network container with
 /// `--add-host=host.docker.internal:host-gateway`.
 pub(crate) fn nc_check_connectivity() {
-    let out = Command::new("docker")
-        .args([
-            "run",
-            "--rm",
-            "--add-host=host.docker.internal:host-gateway",
-            "alpine",
+    let out = crate::support::jvm_docker_command(
+        "alpine",
+        &[],
+        &[
             "sh",
             "-c",
             &format!(
@@ -74,9 +321,11 @@ pub(crate) fn nc_check_connectivity() {
                 "host.docker.internal",
                 host_port()
             ),
-        ])
-        .output()
-        .expect("spawn nc check");
+        ],
+        false,
+    )
+    .output()
+    .expect("spawn nc check");
     eprintln!(
         "NC CHECK status={} stdout={} stderr={}",
         out.status,
@@ -374,7 +623,6 @@ pub(crate) fn write_client_props(props: &str) -> ClientPropsFile {
     std::fs::write(tmp.path(), props).expect("write props");
     #[cfg(unix)]
     {
-        use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(tmp.path(), std::fs::Permissions::from_mode(0o644))
             .expect("chmod props");
     }
@@ -498,9 +746,29 @@ pub(crate) fn write_temp_file(filename: &str, contents: &str) -> TempFileMount {
     std::fs::write(tmp.path(), contents).expect("write tempfile");
     #[cfg(unix)]
     {
-        use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(tmp.path(), std::fs::Permissions::from_mode(0o644))
             .expect("chmod tempfile");
     }
     TempFileMount { tmp }
+}
+
+/// Verify the reassignment and let the JVM tool clear its throttle settings.
+pub(crate) fn verify_console_reassignment(
+    admin_mount: &str,
+    json_mount: &str,
+) -> std::process::Output {
+    docker_run_kafka_tool_with_image_and_mounts(
+        KAFKA_IMAGE_TXN,
+        &[admin_mount, json_mount],
+        &[
+            "kafka-reassign-partitions",
+            "--verify",
+            "--reassignment-json-file",
+            "/reassignment.json",
+            "--bootstrap-server",
+            super::ports::broker0_advertised(),
+            "--command-config",
+            "/client.properties",
+        ],
+    )
 }

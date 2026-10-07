@@ -8,9 +8,12 @@
 //! [`test_partition_with_writer`] is `pub(crate)` for the same reason: the
 //! group coordinator's offsets log appends through a real writer in its tests.
 
-use std::sync::{
-    Arc, Mutex,
-    atomic::{AtomicI32, AtomicU64},
+use std::{
+    io::Write as _,
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicI32, AtomicU64},
+    },
 };
 
 use arc_swap::ArcSwap;
@@ -23,6 +26,24 @@ use crate::{
     delivery::DeliveryHandles,
     partition::{Partition, WriterMessage, initial_replication_target},
 };
+
+/// Fails leader-epoch checkpoint writes as a full disk would.
+#[derive(Debug)]
+pub(crate) struct EpochCheckpointFull;
+
+impl krabka_log::LogIo for EpochCheckpointFull {
+    fn write_at(
+        &self,
+        target: krabka_log::IoTarget,
+        file: &std::fs::File,
+        buf: &[u8],
+    ) -> std::io::Result<usize> {
+        if target == krabka_log::IoTarget::LeaderEpochCheckpoint {
+            return Err(std::io::ErrorKind::StorageFull.into());
+        }
+        (&*file).write(buf)
+    }
+}
 
 pub(crate) fn test_partition(hw_advance_notify: Arc<Notify>) -> (Partition, tempfile::TempDir) {
     let dir = tempdir().expect("tempdir");
@@ -108,29 +129,7 @@ pub(crate) fn test_partition_with_writer() -> (Partition, tempfile::TempDir) {
 }
 
 pub(super) fn append_records(p: &Partition, count: i32) {
-    use krabka_protocol::records::{Attributes, Record, RecordBatch};
-
-    let mut batch = RecordBatch {
-        base_offset: 0,
-        partition_leader_epoch: -1,
-        attributes: Attributes::default(),
-        last_offset_delta: count - 1,
-        base_timestamp: 1_700_000_000,
-        max_timestamp: 1_700_000_000,
-        producer_id: -1,
-        producer_epoch: -1,
-        base_sequence: -1,
-        records: (0..count)
-            .map(|i| Record {
-                attributes: 0,
-                offset_delta: i,
-                timestamp_delta: 0,
-                key: None,
-                value: Some(bytes::Bytes::from_static(b"v")),
-                headers: vec![],
-            })
-            .collect(),
-    };
+    let mut batch = crate::test_support::repeated_records_batch(count, 1_700_000_000);
     p.log
         .lock()
         .expect("log mutex")

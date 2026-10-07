@@ -373,75 +373,27 @@ mod tests {
         let count_clone = count.clone();
 
         tokio::spawn(async move {
-            use tokio::io::{AsyncReadExt, AsyncWriteExt};
+            use krabka_protocol::owned::{
+                update_raft_voter_request as req,
+                update_raft_voter_response::UpdateRaftVoterResponse,
+            };
+
+            use crate::auto_join::test_support::{negotiate_versions, read_frame, write_response};
             while let Ok((mut socket, _)) = listener.accept().await {
-                let mut len_buf = [0u8; 4];
-                if socket.read_exact(&mut len_buf).await.is_ok() {
-                    let frame_len = u32::from_be_bytes(len_buf) as usize;
-                    let mut frame = vec![0u8; frame_len];
-                    if socket.read_exact(&mut frame).await.is_ok() {
-                        let correlation_id = [frame[4], frame[5], frame[6], frame[7]];
-
-                        let resp = krabka_protocol::owned::api_versions_response::ApiVersionsResponse {
-                            error_code: 0,
-                            api_keys: vec![
-                                krabka_protocol::owned::api_versions_response::ApiVersion {
-                                    api_key:
-                                        krabka_protocol::owned::update_raft_voter_request::API_KEY,
-                                    min_version: 0,
-                                    max_version:
-                                        krabka_protocol::owned::update_raft_voter_request::MAX_VERSION,
-                                    ..Default::default()
-                                },
-                            ],
-                            ..Default::default()
-                        };
-                        let mut body = bytes::BytesMut::new();
-                        krabka_protocol::Encode::encode(&resp, &mut body, 0).expect("encode");
-                        let resp_len =
-                            u32::try_from(4 + body.len()).expect("response length fits in u32");
-                        let mut resp_frame = Vec::new();
-                        resp_frame.extend_from_slice(&resp_len.to_be_bytes());
-                        resp_frame.extend_from_slice(&correlation_id);
-                        resp_frame.extend_from_slice(&body);
-                        let _ = socket.write_all(&resp_frame).await;
-
-                        if socket.read_exact(&mut len_buf).await.is_ok() {
-                            let req_len = u32::from_be_bytes(len_buf) as usize;
-                            let mut req_frame = vec![0u8; req_len];
-                            if socket.read_exact(&mut req_frame).await.is_ok()
-                                && req_frame.len() >= 8
-                            {
-                                let key = i16::from_be_bytes([req_frame[0], req_frame[1]]);
-                                if key == krabka_protocol::owned::update_raft_voter_request::API_KEY
-                                {
-                                    count_clone.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                                    let req_correlation_id =
-                                        [req_frame[4], req_frame[5], req_frame[6], req_frame[7]];
-                                    let update_resp =
-                                        krabka_protocol::owned::update_raft_voter_response::UpdateRaftVoterResponse {
-                                            error_code: response_code,
-                                            ..Default::default()
-                                        };
-                                    let mut update_body = bytes::BytesMut::new();
-                                    krabka_protocol::Encode::encode(
-                                        &update_resp,
-                                        &mut update_body,
-                                        krabka_protocol::owned::update_raft_voter_request::MAX_VERSION,
-                                    )
-                                    .expect("encode");
-                                    let update_len = u32::try_from(4 + 1 + update_body.len())
-                                        .expect("update response length fits in u32");
-                                    let mut update_frame = Vec::new();
-                                    update_frame.extend_from_slice(&update_len.to_be_bytes());
-                                    update_frame.extend_from_slice(&req_correlation_id);
-                                    update_frame.push(0);
-                                    update_frame.extend_from_slice(&update_body);
-                                    let _ = socket.write_all(&update_frame).await;
-                                }
-                            }
-                        }
-                    }
+                if negotiate_versions(&mut socket, &[(req::API_KEY, req::MAX_VERSION)])
+                    .await
+                    .is_ok()
+                    && let Ok(frame) = read_frame(&mut socket).await
+                    && frame.len() >= 8
+                    && i16::from_be_bytes([frame[0], frame[1]]) == req::API_KEY
+                {
+                    count_clone.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    let response = UpdateRaftVoterResponse {
+                        error_code: response_code,
+                        ..Default::default()
+                    };
+                    let _ = write_response(&mut socket, &frame, &response, req::MAX_VERSION, true)
+                        .await;
                 }
             }
         });
@@ -453,30 +405,7 @@ mod tests {
     async fn run_voter_updates_advertises_to_leader_and_records_success() {
         let (addr, count) = spawn_mock_update_server(codes::NONE).await;
 
-        let source = Arc::new(
-            FakeMetadataSource::builder()
-                .leader(Some(NodeId(1)))
-                .term(1)
-                .controller_bound_addr("127.0.0.1:9093".parse().expect("addr"))
-                .build(),
-        );
-
-        let params = AutoJoinParams {
-            auto_join: true,
-            retry_backoff: millis(10),
-            voter_request_timeout: secs(1),
-            node_id: NodeId(2),
-            directory_id: uuid::Uuid::from_u128(2),
-            cluster_id: None,
-            bootstrap_servers: vec![addr.to_string()],
-            advertised_controller: None,
-            listener_protocol: krabka_security::ListenerProtocol::Plaintext,
-            inter_broker_server_name: "broker.internal".to_string(),
-            controller: source,
-            inter_broker_client: Arc::new(crate::network::client::InterBrokerClient::new(
-                None, None,
-            )),
-        };
+        let params = crate::auto_join::test_support::voter_update_params(addr, Some(NodeId(1)));
 
         let _ = tokio::time::timeout(Duration::from_millis(200), run_voter_updates(params)).await;
 
@@ -487,30 +416,7 @@ mod tests {
     async fn run_voter_updates_retries_on_error_response() {
         let (addr, count) = spawn_mock_update_server(codes::UNKNOWN_SERVER_ERROR).await;
 
-        let source = Arc::new(
-            FakeMetadataSource::builder()
-                .leader(Some(NodeId(1)))
-                .term(1)
-                .controller_bound_addr("127.0.0.1:9093".parse().expect("addr"))
-                .build(),
-        );
-
-        let params = AutoJoinParams {
-            auto_join: true,
-            retry_backoff: millis(10),
-            voter_request_timeout: secs(1),
-            node_id: NodeId(2),
-            directory_id: uuid::Uuid::from_u128(2),
-            cluster_id: None,
-            bootstrap_servers: vec![addr.to_string()],
-            advertised_controller: None,
-            listener_protocol: krabka_security::ListenerProtocol::Plaintext,
-            inter_broker_server_name: "broker.internal".to_string(),
-            controller: source,
-            inter_broker_client: Arc::new(crate::network::client::InterBrokerClient::new(
-                None, None,
-            )),
-        };
+        let params = crate::auto_join::test_support::voter_update_params(addr, Some(NodeId(1)));
 
         let _ = tokio::time::timeout(Duration::from_millis(150), run_voter_updates(params)).await;
 
@@ -521,30 +427,7 @@ mod tests {
     async fn run_voter_updates_does_not_advertise_when_leader_is_none() {
         let (addr, count) = spawn_mock_update_server(codes::NONE).await;
 
-        let source = Arc::new(
-            FakeMetadataSource::builder()
-                .leader(None)
-                .term(1)
-                .controller_bound_addr("127.0.0.1:9093".parse().expect("addr"))
-                .build(),
-        );
-
-        let params = AutoJoinParams {
-            auto_join: true,
-            retry_backoff: millis(10),
-            voter_request_timeout: secs(1),
-            node_id: NodeId(2),
-            directory_id: uuid::Uuid::from_u128(2),
-            cluster_id: None,
-            bootstrap_servers: vec![addr.to_string()],
-            advertised_controller: None,
-            listener_protocol: krabka_security::ListenerProtocol::Plaintext,
-            inter_broker_server_name: "broker.internal".to_string(),
-            controller: source,
-            inter_broker_client: Arc::new(crate::network::client::InterBrokerClient::new(
-                None, None,
-            )),
-        };
+        let params = crate::auto_join::test_support::voter_update_params(addr, None);
 
         let _ = tokio::time::timeout(Duration::from_millis(50), run_voter_updates(params)).await;
 

@@ -77,7 +77,7 @@ pub(crate) async fn start_three_tiered_brokers_with_segment_sizes(
         .collect();
 
     // Build a config for broker `i` (1-indexed broker_id/node_id).
-    let mut broker_configs: Vec<BrokerConfig> = (0..3)
+    let broker_configs: Vec<BrokerConfig> = (0..3)
         .map(|i| {
             let mut cfg = BrokerConfig::for_tests(log_dirs[i].path().to_path_buf());
             cfg.log_config.segment_size = segment_sizes[i];
@@ -120,28 +120,35 @@ pub(crate) async fn start_three_tiered_brokers_with_segment_sizes(
 
     // Static cold-boot: all 3 start concurrently (sequential would deadlock —
     // a leader needs a majority of the static voter set up).
-    let (config0, config1, config2) = (
-        broker_configs.remove(0),
-        broker_configs.remove(0),
-        broker_configs.remove(0),
-    );
-    let mut client_ls = client_listeners.into_iter();
-    let mut ctrl_ls = controller_listeners.into_iter();
-    let (client0, controller0) = (client_ls.next().unwrap(), ctrl_ls.next().unwrap());
-    let (client1, controller1) = (client_ls.next().unwrap(), ctrl_ls.next().unwrap());
-    let (client2, controller2) = (client_ls.next().unwrap(), ctrl_ls.next().unwrap());
-    let j0 = tokio::spawn(async move {
-        Broker::start_with_listeners(config0, Some(controller0), Some(client0)).await
-    });
-    let j1 = tokio::spawn(async move {
-        Broker::start_with_listeners(config1, Some(controller1), Some(client1)).await
-    });
-    let j2 = tokio::spawn(async move {
-        Broker::start_with_listeners(config2, Some(controller2), Some(client2)).await
-    });
-    let b1 = j0.await.expect("b1 spawn join").expect("b1 start");
-    let b2 = j1.await.expect("b2 spawn join").expect("b2 start");
-    let b3 = j2.await.expect("b3 spawn join").expect("b3 start");
+    let starts: Vec<_> = broker_configs
+        .into_iter()
+        .zip(controller_listeners)
+        .zip(client_listeners)
+        .map(|((config, controller), client)| {
+            tokio::spawn(async move {
+                Broker::start_with_listeners(config, Some(controller), Some(client)).await
+            })
+        })
+        .collect();
+    let mut starts = starts.into_iter();
+    let b1 = starts
+        .next()
+        .unwrap()
+        .await
+        .expect("b1 spawn join")
+        .expect("b1 start");
+    let b2 = starts
+        .next()
+        .unwrap()
+        .await
+        .expect("b2 spawn join")
+        .expect("b2 start");
+    let b3 = starts
+        .next()
+        .unwrap()
+        .await
+        .expect("b3 spawn join")
+        .expect("b3 start");
 
     (b1, b2, b3, log_dirs, remote_dir)
 }

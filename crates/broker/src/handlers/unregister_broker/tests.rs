@@ -56,18 +56,7 @@ async fn handle_denies_cluster_alter_with_message_and_throttle() {
     let (broker_handle, _dir) =
         crate::test_support::start_broker_with_authorizer_no_audit(Arc::new(DenyAll)).await;
     let broker = broker_handle.broker_arc_for_test();
-    let principal = principal("admin");
-    let peer = peer();
-    let ctx = context(&principal, &peer);
-    let req = UnregisterBrokerRequest {
-        broker_id: 1,
-        ..Default::default()
-    };
-
-    let resp = handle(&broker, version, &encode_request(&req, version), &ctx)
-        .await
-        .expect("handle");
-    let resp = decode_response(&resp);
+    let resp = answer(&broker, version, 1).await;
 
     let expected = UnregisterBrokerResponse {
         throttle_time_ms: 0,
@@ -123,18 +112,7 @@ async fn handle_unregisters_registered_broker_with_success_shape() {
     )
     .await;
     let broker = broker_handle.broker_arc_for_test();
-    let principal = principal("admin");
-    let peer = peer();
-    let ctx = context(&principal, &peer);
-    let req = UnregisterBrokerRequest {
-        broker_id: 1,
-        ..Default::default()
-    };
-
-    let resp = handle(&broker, version, &encode_request(&req, version), &ctx)
-        .await
-        .expect("handle");
-    let resp = decode_response(&resp);
+    let resp = answer(&broker, version, 1).await;
 
     let expected = UnregisterBrokerResponse {
         throttle_time_ms: 0,
@@ -244,18 +222,7 @@ async fn the_wire_handler_refuses_an_unregistration_that_no_proposal_covers() {
     })
     .await;
     let broker = broker_handle.broker_arc_for_test();
-    let principal = principal("admin");
-    let peer = peer();
-    let ctx = context(&principal, &peer);
-    let req = UnregisterBrokerRequest {
-        broker_id: 1,
-        ..Default::default()
-    };
-
-    let resp = handle(&broker, version, &encode_request(&req, version), &ctx)
-        .await
-        .expect("handle");
-    let resp = decode_response(&resp);
+    let resp = answer(&broker, version, 1).await;
 
     check!(resp.error_code == codes::POLICY_VIOLATION);
     check!(
@@ -350,18 +317,7 @@ async fn handle_removes_the_broker_from_every_isr_in_the_unregistering_append() 
         .expect("seed the partitions");
     // Broker 2 is heartbeating, so it may take over.
     broker.liveness.record_heartbeat(2).await;
-    let principal = principal("admin");
-    let peer = peer();
-    let ctx = context(&principal, &peer);
-    let req = UnregisterBrokerRequest {
-        broker_id: 1,
-        ..Default::default()
-    };
-
-    let resp = handle(&broker, version, &encode_request(&req, version), &ctx)
-        .await
-        .expect("handle");
-    let resp = decode_response(&resp);
+    let resp = answer(&broker, version, 1).await;
 
     check!(resp.error_code == codes::NONE, "{resp:?}");
     let image = broker.controller.current_image();
@@ -491,4 +447,18 @@ fn the_isr_departures_sit_between_the_consume_and_the_unregister_record() {
             "{case}"
         );
     }
+}
+
+async fn answer(broker: &Broker, version: i16, broker_id: i32) -> UnregisterBrokerResponse {
+    let principal = principal("admin");
+    let peer = peer();
+    let ctx = context(&principal, &peer);
+    let req = UnregisterBrokerRequest {
+        broker_id,
+        ..Default::default()
+    };
+    let response = handle(broker, version, &encode_request(&req, version), &ctx)
+        .await
+        .expect("handle");
+    decode_response(&response)
 }

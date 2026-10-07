@@ -16,7 +16,6 @@ use std::time::{Duration, Instant};
 use assert2::assert;
 use bytes::Bytes;
 use krabka_broker::{BootstrapMode, Broker, BrokerConfig, BrokerHandle, MarkerFanoutMode};
-use krabka_client_consumer::{AutoOffsetReset, Consumer, IsolationLevel};
 use krabka_client_core::Client;
 use krabka_protocol::{
     owned::{
@@ -272,28 +271,7 @@ async fn end_txn_until_answered(
 
 /// The values a `read_committed` consumer reads, up to and including `last`.
 async fn read_committed_through(bootstrap: &str, topic: &str, last: &str) -> Vec<String> {
-    let mut consumer = Consumer::builder()
-        .bootstrap(bootstrap.to_string())
-        .group_id(format!("{topic}-reader"))
-        .auto_offset_reset(AutoOffsetReset::Earliest)
-        .isolation_level(IsolationLevel::ReadCommitted)
-        .subscribe([topic.to_string()])
-        .build()
-        .await
-        .expect("consumer");
-    let mut seen = Vec::new();
-    let deadline = Instant::now() + SETTLE;
-    while seen.last().map(String::as_str) != Some(last) && Instant::now() < deadline {
-        for record in consumer
-            .poll(krabka_units::millis(200))
-            .await
-            .expect("poll")
-        {
-            seen.push(String::from_utf8_lossy(record.value.as_deref().unwrap_or(b"")).into_owned());
-        }
-    }
-    consumer.close().await.expect("close consumer");
-    seen
+    crate::txn_consumer_fixture::read_committed_through(bootstrap, topic, last, SETTLE).await
 }
 
 struct Started {

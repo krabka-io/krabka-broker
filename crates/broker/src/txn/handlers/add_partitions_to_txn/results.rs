@@ -8,6 +8,8 @@
 //! [`topic_refusal`](super::write_freeze::topic_refusal) overriding it, and
 //! the KIP-890 verify-only shape whose code is per partition.
 
+use std::collections::{HashMap, HashSet};
+
 use krabka_ids::PartitionIndex;
 use krabka_protocol::owned::common::{
     add_partitions_to_txn_request::add_partitions_to_txn_topic::AddPartitionsToTxnTopic,
@@ -18,7 +20,7 @@ use krabka_protocol::owned::common::{
 };
 
 use super::write_freeze::topic_refusal;
-use crate::txn::state::TopicPartition;
+use crate::txn::state::{TopicPartition, TxnEntry};
 
 /// Collapses a requested topic list to one row per topic and one row per
 /// partition within it, in first-occurrence order.
@@ -32,16 +34,13 @@ use crate::txn::state::TopicPartition;
 /// entry (#883).
 pub(super) fn dedup_topics(topics: &[AddPartitionsToTxnTopic]) -> Vec<AddPartitionsToTxnTopic> {
     let mut order: Vec<String> = Vec::new();
-    let mut partitions_by_topic: std::collections::HashMap<
-        String,
-        (Vec<i32>, std::collections::HashSet<i32>),
-    > = std::collections::HashMap::new();
+    let mut partitions_by_topic: HashMap<String, (Vec<i32>, HashSet<i32>)> = HashMap::new();
     for topic in topics {
         let (partitions, seen) = partitions_by_topic
             .entry(topic.name.clone())
             .or_insert_with(|| {
                 order.push(topic.name.clone());
-                (Vec::new(), std::collections::HashSet::new())
+                (Vec::new(), HashSet::new())
             });
         for &partition in &topic.partitions {
             if seen.insert(partition) {
@@ -67,7 +66,7 @@ pub(super) fn dedup_topics(topics: &[AddPartitionsToTxnTopic]) -> Vec<AddPartiti
 /// KIP-890 verify-only per-partition decision. See
 /// [`verification_code`](crate::txn::coordinator::produce_verification::verification_code).
 fn verify_partition_code(
-    entry: &crate::txn::state::TxnEntry,
+    entry: &TxnEntry,
     requested: (krabka_log::ProducerId, i16),
     tp: &TopicPartition,
 ) -> i16 {
@@ -83,43 +82,27 @@ fn verify_partition_code(
 /// own verify result instead of one shared code. A denied or frozen topic
 /// still short-circuits to its refusal on every partition row.
 pub(super) fn verify_partitions(
-    entry: &crate::txn::state::TxnEntry,
+    entry: &TxnEntry,
     requested: (krabka_log::ProducerId, i16),
     topics: &[AddPartitionsToTxnTopic],
-    (denied, frozen): (
-        &std::collections::HashSet<String>,
-        &std::collections::HashSet<String>,
-    ),
+    (denied, frozen): (&HashSet<String>, &HashSet<String>),
 ) -> Vec<AddPartitionsToTxnTopicResult> {
     topics
         .iter()
         .map(|t| {
             let refusal = topic_refusal(&t.name, denied, frozen);
-            AddPartitionsToTxnTopicResult {
-                name: t.name.clone(),
-                results_by_partition: t
-                    .partitions
-                    .iter()
-                    .map(|&p| {
-                        let row_code = refusal.unwrap_or_else(|| {
-                            verify_partition_code(
-                                entry,
-                                requested,
-                                &TopicPartition {
-                                    topic: t.name.clone(),
-                                    partition: PartitionIndex(p),
-                                },
-                            )
-                        });
-                        AddPartitionsToTxnPartitionResult {
-                            partition_index: p,
-                            partition_error_code: row_code,
-                            ..Default::default()
-                        }
-                    })
-                    .collect(),
-                ..Default::default()
-            }
+            topic_result(t, |p| {
+                refusal.unwrap_or_else(|| {
+                    verify_partition_code(
+                        entry,
+                        requested,
+                        &TopicPartition {
+                            topic: t.name.clone(),
+                            partition: PartitionIndex(p),
+                        },
+                    )
+                })
+            })
         })
         .collect()
 }
@@ -130,27 +113,15 @@ pub(super) fn verify_partitions(
 /// `code`.
 pub(super) fn per_topic_with_refusals(
     topics: &[AddPartitionsToTxnTopic],
-    denied: &std::collections::HashSet<String>,
-    frozen: &std::collections::HashSet<String>,
+    denied: &HashSet<String>,
+    frozen: &HashSet<String>,
     code: i16,
 ) -> Vec<AddPartitionsToTxnTopicResult> {
     topics
         .iter()
         .map(|t| {
             let row_code = topic_refusal(&t.name, denied, frozen).unwrap_or(code);
-            AddPartitionsToTxnTopicResult {
-                name: t.name.clone(),
-                results_by_partition: t
-                    .partitions
-                    .iter()
-                    .map(|&p| AddPartitionsToTxnPartitionResult {
-                        partition_index: p,
-                        partition_error_code: row_code,
-                        ..Default::default()
-                    })
-                    .collect(),
-                ..Default::default()
-            }
+            topic_result(t, |_| row_code)
         })
         .collect()
 }
@@ -162,22 +133,26 @@ pub(super) fn topic_error(
     topics: &[AddPartitionsToTxnTopic],
     code: i16,
 ) -> Vec<AddPartitionsToTxnTopicResult> {
-    topics
-        .iter()
-        .map(|t| AddPartitionsToTxnTopicResult {
-            name: t.name.clone(),
-            results_by_partition: t
-                .partitions
-                .iter()
-                .map(|&p| AddPartitionsToTxnPartitionResult {
-                    partition_index: p,
-                    partition_error_code: code,
-                    ..Default::default()
-                })
-                .collect(),
-            ..Default::default()
-        })
-        .collect()
+    topics.iter().map(|t| topic_result(t, |_| code)).collect()
+}
+
+fn topic_result(
+    topic: &AddPartitionsToTxnTopic,
+    code: impl Fn(i32) -> i16,
+) -> AddPartitionsToTxnTopicResult {
+    AddPartitionsToTxnTopicResult {
+        name: topic.name.clone(),
+        results_by_partition: topic
+            .partitions
+            .iter()
+            .map(|&partition_index| AddPartitionsToTxnPartitionResult {
+                partition_index,
+                partition_error_code: code(partition_index),
+                ..Default::default()
+            })
+            .collect(),
+        ..Default::default()
+    }
 }
 
 #[cfg(test)]

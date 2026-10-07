@@ -155,9 +155,8 @@ impl RemoteLogMetadataManager for TopicBasedRemoteLogMetadataManager {
 
 #[cfg(test)]
 mod tests {
-    use assert2::{assert, check};
-    use krabka_remote_storage::{CustomMetadata, RemotePartitionDeleteState};
-    use uuid::Uuid;
+    use assert2::assert;
+    use krabka_remote_storage::RemotePartitionDeleteState;
 
     use super::*;
     use crate::{
@@ -166,6 +165,8 @@ mod tests {
             finish, on_blocking, start_manager, start_manager_all, started, tp,
         },
     };
+
+    krabka_macros::remote_segment_check!(check_finished_segment);
 
     #[tokio::test(flavor = "multi_thread")]
     async fn add_finish_query_round_trip() {
@@ -180,13 +181,7 @@ mod tests {
         let m2 = m.clone();
         on_blocking(move || m2.update_remote_log_segment_metadata(finish(10)).unwrap()).await;
 
-        let got = m
-            .remote_log_segment_metadata(&tp(), LeaderEpoch(0), 42)
-            .unwrap()
-            .expect("segment found");
-        check!(got.remote_log_segment_id().id == Uuid::from_u128(10));
-        check!(got.custom_metadata() == Some(&CustomMetadata(vec![7])));
-        check!(m.highest_offset_for_epoch(&tp(), LeaderEpoch(0)).unwrap() == Some(99));
+        check_finished_segment(m.as_ref(), &tp());
         m.shutdown();
     }
 

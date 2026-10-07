@@ -5,9 +5,8 @@ use std::sync::Arc;
 use assert2::{assert, check};
 use krabka_ids::LeaderEpoch;
 use krabka_remote_storage::{
-    CustomMetadata, IndexType, InmemoryRemoteLogMetadataManager, LocalTieredStorage,
-    LogSegmentData, RemoteLogMetadataManager, RemoteLogSegmentId, RemoteLogSegmentMetadataUpdate,
-    RemoteStorageError, RemoteStorageManager,
+    CustomMetadata, InmemoryRemoteLogMetadataManager, LogSegmentData, RemoteLogMetadataManager,
+    RemoteLogSegmentId, RemoteLogSegmentMetadataUpdate, RemoteStorageError, RemoteStorageManager,
 };
 use krabka_units::{bytes, hours, millis};
 use uuid::Uuid;
@@ -17,7 +16,8 @@ use crate::{
     remote_log_manager::{
         copy_eligible,
         test_support::{
-            FakeWormArchive, rolled_log, seed_finished_segments, synth_export, tier, tp,
+            FakeWormArchive, TEST_COPY_TIMEOUT, archived_backends, local_backends,
+            missing_remote_reads, rolled_log, seed_finished_segments, synth_export, tier, tp,
         },
     },
     time_util::now_ms,
@@ -43,25 +43,7 @@ impl RemoteStorageManager for RefusesDeleteRsm {
     ) -> Result<Option<CustomMetadata>, RemoteStorageError> {
         Ok(None)
     }
-    fn fetch_log_segment(
-        &self,
-        metadata: &RemoteLogSegmentMetadata,
-        _start: u32,
-        _end: Option<u32>,
-    ) -> Result<Vec<u8>, RemoteStorageError> {
-        Err(RemoteStorageError::SegmentNotFound(
-            metadata.remote_log_segment_id().clone(),
-        ))
-    }
-    fn fetch_index(
-        &self,
-        metadata: &RemoteLogSegmentMetadata,
-        _index_type: IndexType,
-    ) -> Result<Vec<u8>, RemoteStorageError> {
-        Err(RemoteStorageError::SegmentNotFound(
-            metadata.remote_log_segment_id().clone(),
-        ))
-    }
+    missing_remote_reads!();
     fn delete_log_segment_data(
         &self,
         metadata: &RemoteLogSegmentMetadata,
@@ -400,17 +382,7 @@ async fn remote_retention_pass_evicts_old_segments_through_lifecycle() {
     let remote_dir = tempfile::tempdir().unwrap();
     let log = rolled_log(log_dir.path());
     let exports = log.tierable_segments();
-    let rsm: Arc<dyn RemoteStorageManager> = Arc::new(LocalTieredStorage::new(remote_dir.path()));
-    let rlmm: Arc<dyn RemoteLogMetadataManager> = Arc::new(InmemoryRemoteLogMetadataManager::new());
-    let copied = copy_eligible(
-        &tier(ArchiveMode::Mutable, &rsm, &rlmm),
-        &tp(),
-        1,
-        LeaderEpoch(0),
-        exports.clone(),
-    )
-    .await;
-    assert!(copied == exports.len());
+    let (rsm, rlmm) = archived_backends(remote_dir.path(), &exports).await;
     let pre = rlmm.list_remote_log_segments(&tp()).unwrap();
     assert!(!pre.is_empty());
 
@@ -466,8 +438,7 @@ async fn remote_retention_pass_noop_when_nothing_qualifies() {
     let remote_dir = tempfile::tempdir().unwrap();
     let log = rolled_log(log_dir.path());
     let exports = log.tierable_segments();
-    let rsm: Arc<dyn RemoteStorageManager> = Arc::new(LocalTieredStorage::new(remote_dir.path()));
-    let rlmm: Arc<dyn RemoteLogMetadataManager> = Arc::new(InmemoryRemoteLogMetadataManager::new());
+    let (rsm, rlmm) = local_backends(remote_dir.path());
     copy_eligible(
         &tier(ArchiveMode::Mutable, &rsm, &rlmm),
         &tp(),
@@ -512,8 +483,7 @@ async fn remote_retention_pass_noop_when_nothing_qualifies() {
 #[tokio::test]
 async fn remote_retention_pass_no_settings_and_an_unmoved_floor_evict_nothing() {
     let remote_dir = tempfile::tempdir().unwrap();
-    let rsm: Arc<dyn RemoteStorageManager> = Arc::new(LocalTieredStorage::new(remote_dir.path()));
-    let rlmm: Arc<dyn RemoteLogMetadataManager> = Arc::new(InmemoryRemoteLogMetadataManager::new());
+    let (rsm, rlmm) = local_backends(remote_dir.path());
     seed_finished_segments(&rlmm, 3);
     let cfg = LogConfig {
         retention: None,
@@ -833,17 +803,7 @@ async fn a_breach_eviction_frees_the_archive_without_moving_the_floor() {
     let log = rolled_log(log_dir.path());
     let exports = log.tierable_segments();
     assert!(exports.len() >= 2, "the test needs a prefix to evict");
-    let rsm: Arc<dyn RemoteStorageManager> = Arc::new(LocalTieredStorage::new(remote_dir.path()));
-    let rlmm: Arc<dyn RemoteLogMetadataManager> = Arc::new(InmemoryRemoteLogMetadataManager::new());
-    let copied = copy_eligible(
-        &tier(ArchiveMode::Mutable, &rsm, &rlmm),
-        &tp(),
-        1,
-        LeaderEpoch(0),
-        exports.clone(),
-    )
-    .await;
-    assert!(copied == exports.len());
+    let (rsm, rlmm) = archived_backends(remote_dir.path(), &exports).await;
 
     // A `DeleteRecords` floor one past the oldest copied segment, and a topic
     // that keeps its records forever: the breach is the only axis that can
@@ -896,8 +856,7 @@ async fn the_reported_floor_stops_at_a_gap_in_the_finished_segments() {
     let log = rolled_log(log_dir.path());
     let exports = log.tierable_segments();
     assert!(exports.len() >= 3, "the test needs a segment to skip over");
-    let rsm: Arc<dyn RemoteStorageManager> = Arc::new(LocalTieredStorage::new(remote_dir.path()));
-    let rlmm: Arc<dyn RemoteLogMetadataManager> = Arc::new(InmemoryRemoteLogMetadataManager::new());
+    let (rsm, rlmm) = local_backends(remote_dir.path());
     // Copy the first and the third segment and not the second, which is what
     // a failed copy in the middle of a tick leaves behind.
     let gapped = vec![exports[0].clone(), exports[2].clone()];
@@ -955,17 +914,7 @@ async fn a_floor_nobody_moved_leaves_the_archive_alone() {
     let log = rolled_log(log_dir.path());
     let exports = log.tierable_segments();
     assert!(exports.len() >= 2, "the test needs a prefix to evict");
-    let rsm: Arc<dyn RemoteStorageManager> = Arc::new(LocalTieredStorage::new(remote_dir.path()));
-    let rlmm: Arc<dyn RemoteLogMetadataManager> = Arc::new(InmemoryRemoteLogMetadataManager::new());
-    let copied = copy_eligible(
-        &tier(ArchiveMode::Mutable, &rsm, &rlmm),
-        &tp(),
-        1,
-        LeaderEpoch(0),
-        exports.clone(),
-    )
-    .await;
-    assert!(copied == exports.len());
+    let (rsm, rlmm) = archived_backends(remote_dir.path(), &exports).await;
 
     // What a restart leaves behind: a `log_start_offset` past every copied
     // segment, and nothing saying anyone deleted up to it.
@@ -1016,7 +965,7 @@ async fn a_retention_pass_records_its_delete_requests_errors_and_lag() {
         rlmm: &rlmm,
         metrics: &metrics,
         index_cache: &index_cache,
-        copy_timeout: crate::remote_log_manager::test_support::TEST_COPY_TIMEOUT,
+        copy_timeout: TEST_COPY_TIMEOUT,
         unstable_api_versions: crate::api_catalog::UnstableApiVersions::Disabled,
     };
     let cfg = LogConfig {

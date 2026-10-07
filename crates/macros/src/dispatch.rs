@@ -44,61 +44,52 @@ struct Kind {
     constructor: &'static str,
 }
 
+impl Kind {
+    const fn new(
+        label: &'static str,
+        adapter: Adapter,
+        traced: bool,
+        constructor: &'static str,
+    ) -> Self {
+        Self {
+            label,
+            adapter,
+            traced,
+            constructor,
+        }
+    }
+}
+
 const KINDS: [Kind; 9] = [
-    Kind {
-        label: "context",
-        adapter: Adapter::Context,
-        traced: true,
-        constructor: "context",
-    },
-    Kind {
-        label: "sync_context",
-        adapter: Adapter::SyncContext,
-        traced: true,
-        constructor: "context",
-    },
-    Kind {
-        label: "typed",
-        adapter: Adapter::Typed { group: false },
-        traced: true,
-        constructor: "context",
-    },
-    Kind {
-        label: "typed_own_span",
-        adapter: Adapter::Typed { group: false },
-        traced: false,
-        constructor: "context",
-    },
-    Kind {
-        label: "typed_group",
-        adapter: Adapter::Typed { group: true },
-        traced: true,
-        constructor: "context",
-    },
-    Kind {
-        label: "typed_sync",
-        adapter: Adapter::TypedSync { fallible: true },
-        traced: true,
-        constructor: "context",
-    },
-    Kind {
-        label: "typed_infallible",
-        adapter: Adapter::TypedSync { fallible: false },
-        traced: true,
-        constructor: "context",
-    },
-    Kind {
-        label: "auth",
-        adapter: Adapter::HandWritten,
-        traced: false,
-        constructor: "auth",
-    },
-    Kind {
-        label: "telemetry",
-        adapter: Adapter::Telemetry,
-        traced: true,
-        constructor: "telemetry",
-    },
+    Kind::new("context", Adapter::Context, true, "context"),
+    Kind::new("sync_context", Adapter::SyncContext, true, "context"),
+    Kind::new("typed", Adapter::Typed { group: false }, true, "context"),
+    Kind::new(
+        "typed_own_span",
+        Adapter::Typed { group: false },
+        false,
+        "context",
+    ),
+    Kind::new(
+        "typed_group",
+        Adapter::Typed { group: true },
+        true,
+        "context",
+    ),
+    Kind::new(
+        "typed_sync",
+        Adapter::TypedSync { fallible: true },
+        true,
+        "context",
+    ),
+    Kind::new(
+        "typed_infallible",
+        Adapter::TypedSync { fallible: false },
+        true,
+        "context",
+    ),
+    Kind::new("auth", Adapter::HandWritten, false, "auth"),
+    Kind::new("telemetry", Adapter::Telemetry, true, "telemetry"),
 ];
 
 /// The adapter function for one generated entry.
@@ -188,25 +179,20 @@ fn adapter(
         ),
         Adapter::HandWritten => return TokenStream::new(),
     };
-    let signature = if matches!(kind, Adapter::Telemetry) {
-        moxy::template! {
-            fn {{ adapter }}<'a>(
-                broker: &'a Broker,
-                version: ApiVersion,
-                correlation_id: CorrelationId,
-                body: &'a [u8],
-                ctx: &'a TelemetryContext<'a>,
-            ) -> BoxFuture<'a, Result<Bytes, BrokerError>>
-        }
+    let telemetry = matches!(kind, Adapter::Telemetry);
+    let context = if telemetry {
+        moxy::template! { TelemetryContext }
     } else {
-        moxy::template! {
-            fn {{ adapter }}<'a>(
-                broker: &'a Broker,
-                version: ApiVersion,
-                body: &'a [u8],
-                ctx: &'a RequestContext<'a>,
-            ) -> BoxFuture<'a, Result<Bytes, BrokerError>>
-        }
+        moxy::template! { RequestContext }
+    };
+    let signature = moxy::template! {
+        fn {{ adapter }}<'a>(
+            broker: &'a Broker,
+            version: ApiVersion,
+            @if telemetry { correlation_id: CorrelationId, }
+            body: &'a [u8],
+            ctx: &'a {{ context }}<'a>,
+        ) -> BoxFuture<'a, Result<Bytes, BrokerError>>
     };
     let block = if traced {
         traced_block(entry, raw_body, body)
@@ -351,17 +337,12 @@ mod tests {
     use moxy::token::TokenStream;
 
     use super::expand;
-
-    /// Removes every whitespace character, so token streams compare by their
-    /// tokens alone.
-    fn squeezed(source: &str) -> String {
-        source.chars().filter(|c| !c.is_whitespace()).collect()
-    }
+    use crate::meta::compact;
 
     fn expanded(table: &str) -> Result<String, String> {
         let table: TokenStream = table.parse().expect("table tokenizes");
         expand(table)
-            .map(|tokens| squeezed(&tokens.to_string()))
+            .map(|tokens| compact(&tokens))
             .map_err(|error| error.to_string())
     }
 
@@ -592,7 +573,7 @@ mod tests {
         ];
 
         for (table, expected) in cases {
-            check!(expanded(table) == Ok(squeezed(&expected)), "{table}");
+            check!(expanded(table) == Ok(compact(&expected)), "{table}");
         }
     }
 
@@ -600,7 +581,7 @@ mod tests {
     fn an_empty_table_registers_nothing() {
         assert!(
             expanded("")
-                == Ok(squeezed(
+                == Ok(compact(
                     "fn register_dispatch_table(registry: &mut DispatchRegistry) {}"
                 ))
         );

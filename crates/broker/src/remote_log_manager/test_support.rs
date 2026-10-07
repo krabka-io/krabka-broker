@@ -13,10 +13,10 @@ use krabka_log::{Log, LogConfig, Offset, SegmentExport};
 use krabka_metadata::{MetadataImage, NodeId};
 use krabka_protocol::records::{Record, RecordBatch};
 use krabka_remote_storage::{
-    CustomMetadata, IndexType, LogSegmentData, ObjectEntry, RemoteLogMetadataManager,
-    RemoteLogSegmentId, RemoteLogSegmentMetadata, RemoteLogSegmentMetadataUpdate,
-    RemoteLogSegmentState, RemoteStorageError, RemoteStorageManager, Sha256Digest,
-    TopicIdPartition, WormArchiver,
+    CustomMetadata, IndexType, InmemoryRemoteLogMetadataManager, LocalTieredStorage,
+    LogSegmentData, ObjectEntry, RemoteLogMetadataManager, RemoteLogSegmentId,
+    RemoteLogSegmentMetadata, RemoteLogSegmentMetadataUpdate, RemoteLogSegmentState,
+    RemoteStorageError, RemoteStorageManager, Sha256Digest, TopicIdPartition, WormArchiver,
 };
 use krabka_units::bytes;
 use uuid::Uuid;
@@ -79,6 +79,119 @@ pub(crate) fn tier_with_copy_timeout<'a>(
     }
 }
 
+/// Fresh mutable storage and metadata backends for one test's temporary directory.
+pub fn local_backends(
+    remote_dir: &std::path::Path,
+) -> (
+    Arc<dyn RemoteStorageManager>,
+    Arc<dyn RemoteLogMetadataManager>,
+) {
+    (
+        Arc::new(LocalTieredStorage::new(remote_dir)),
+        Arc::new(InmemoryRemoteLogMetadataManager::new()),
+    )
+}
+
+/// Stand-in backends that never retain readable segment or index bytes.
+/// Copy and deletion behavior remain explicit in each implementation.
+macro_rules! missing_remote_reads {
+    () => {
+        fn fetch_log_segment(
+            &self,
+            metadata: &krabka_remote_storage::RemoteLogSegmentMetadata,
+            _start: u32,
+            _end: Option<u32>,
+        ) -> Result<Vec<u8>, krabka_remote_storage::RemoteStorageError> {
+            Err(krabka_remote_storage::RemoteStorageError::SegmentNotFound(
+                metadata.remote_log_segment_id().clone(),
+            ))
+        }
+        fn fetch_index(
+            &self,
+            metadata: &krabka_remote_storage::RemoteLogSegmentMetadata,
+            _index_type: krabka_remote_storage::IndexType,
+        ) -> Result<Vec<u8>, krabka_remote_storage::RemoteStorageError> {
+            Err(krabka_remote_storage::RemoteStorageError::SegmentNotFound(
+                metadata.remote_log_segment_id().clone(),
+            ))
+        }
+    };
+}
+pub(crate) use missing_remote_reads;
+
+/// A mutable tier with counters owned by the test that asserts on them.
+pub(crate) fn tier_with_metrics<'a>(
+    rsm: &'a Arc<dyn RemoteStorageManager>,
+    rlmm: &'a Arc<dyn RemoteLogMetadataManager>,
+    metrics: &'a BrokerMetrics,
+    unstable_api_versions: crate::api_catalog::UnstableApiVersions,
+) -> RemoteTier<'a> {
+    RemoteTier {
+        metrics,
+        unstable_api_versions,
+        ..tier(ArchiveMode::Mutable, rsm, rlmm)
+    }
+}
+
+/// Copy every supplied fixture segment as broker 1 in leader epoch 0.
+/// The assertion stays at the copy checkpoint, before a retention pass runs.
+pub async fn copy_all_exports(tier: &RemoteTier<'_>, exports: &[SegmentExport]) {
+    let copied = super::copy_eligible(tier, &tp(), 1, LeaderEpoch(0), exports.to_vec()).await;
+    assert2::assert!(copied == exports.len());
+}
+
+/// One default-concurrency sweep by the fixture broker (node and broker ID 1).
+pub async fn sweep_once(
+    partitions: &crate::partition_registry::PartitionRegistry,
+    controller: &dyn crate::metadata_source::MetadataSource,
+    tier: &RemoteTier<'_>,
+) {
+    super::tick_all(
+        partitions,
+        controller,
+        tier,
+        NodeId(1),
+        1,
+        super::SweepConcurrency::default(),
+    )
+    .await;
+}
+
+/// The sealed exports and their config from one hold of the partition's log lock.
+pub fn partition_snapshot(partition: &Partition) -> (Vec<SegmentExport>, LogConfig) {
+    let log = partition.log.lock().expect("partition log mutex poisoned");
+    (log.tierable_segments(), log.config_snapshot())
+}
+
+/// Remote and local counts after a sweep; the local count waits for rollover flush.
+pub fn sweep_counts(
+    partition: &Partition,
+    rlmm: &Arc<dyn RemoteLogMetadataManager>,
+) -> (usize, usize) {
+    let remote_finished = rlmm
+        .list_remote_log_segments(&tp())
+        .unwrap()
+        .iter()
+        .filter(|md| md.state() == RemoteLogSegmentState::CopySegmentFinished)
+        .count();
+    let mut log = partition.log.lock().expect("partition log mutex poisoned");
+    log.sync().expect("flush rolled segments");
+    (remote_finished, log.tierable_segments().len())
+}
+
+/// Fresh mutable backends with every supplied fixture export successfully archived.
+pub async fn archived_backends(
+    remote_dir: &std::path::Path,
+    exports: &[SegmentExport],
+) -> (
+    Arc<dyn RemoteStorageManager>,
+    Arc<dyn RemoteLogMetadataManager>,
+) {
+    let (rsm, rlmm) = local_backends(remote_dir);
+    copy_all_exports(&tier(ArchiveMode::Mutable, &rsm, &rlmm), exports).await;
+    (rsm, rlmm)
+}
+
 /// A stand-in write-once archive. Every copy seals a real (unsigned) WORM
 /// manifest over the segment's leader-epoch bytes, keeps that manifest in
 /// memory, and returns the chain receipt the backend would.
@@ -130,25 +243,7 @@ impl RemoteStorageManager for FakeWormArchive {
             .insert(metadata.remote_log_segment_id().id, sealed.bytes.to_vec());
         Ok(Some(sealed.receipt.to_custom_metadata()))
     }
-    fn fetch_log_segment(
-        &self,
-        metadata: &RemoteLogSegmentMetadata,
-        _start: u32,
-        _end: Option<u32>,
-    ) -> Result<Vec<u8>, RemoteStorageError> {
-        Err(RemoteStorageError::SegmentNotFound(
-            metadata.remote_log_segment_id().clone(),
-        ))
-    }
-    fn fetch_index(
-        &self,
-        metadata: &RemoteLogSegmentMetadata,
-        _index_type: IndexType,
-    ) -> Result<Vec<u8>, RemoteStorageError> {
-        Err(RemoteStorageError::SegmentNotFound(
-            metadata.remote_log_segment_id().clone(),
-        ))
-    }
+    missing_remote_reads!();
     fn delete_log_segment_data(
         &self,
         metadata: &RemoteLogSegmentMetadata,

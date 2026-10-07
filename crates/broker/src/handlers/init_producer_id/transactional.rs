@@ -545,21 +545,6 @@ mod tests {
     /// Kafka's `transactional.id.expiration.ms` default.
     const EXPIRY_MS: i64 = 604_800_000;
 
-    /// Opens `__transaction_state-0` as a real log under `dir` and returns it.
-    fn transaction_state_partition(dir: &std::path::Path) -> Arc<Partition> {
-        let part_dir = crate::log_dir::partition_dir(dir, bootstrap::TOPIC, 0);
-        std::fs::create_dir_all(&part_dir).expect("create partition dir");
-        crate::broker::spawn_partition(
-            bootstrap::TOPIC.to_string(),
-            PartitionIndex(0),
-            dir.to_path_buf(),
-            Log::open(&part_dir, LogConfig::default()).expect("open log"),
-            crate::log_dir_status::LogDirRegistry::default(),
-            Arc::new(crate::producer_state::ProducerState::new()),
-            false,
-        )
-    }
-
     /// A coordinator that leads the single `__transaction_state` partition,
     /// with one committed transactional id already persisted into it.
     async fn coordinator_with_completed_transaction(
@@ -583,7 +568,7 @@ mod tests {
         }));
 
         let partitions = Arc::new(PartitionRegistry::new());
-        let part = transaction_state_partition(dir);
+        let part = crate::test_support::open_partition(dir, bootstrap::TOPIC, 0);
         partitions.insert(
             bootstrap::TOPIC.into(),
             PartitionIndex(0),

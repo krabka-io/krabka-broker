@@ -168,6 +168,27 @@ fn vote_answer_after_stepping_down_to_epoch_6(error_code: i16) -> VoteResponse {
     }
 }
 
+fn engine_with_local_directory() -> (Engine, tempfile::TempDir) {
+    let (mut engine, dir) = build_engine_only(NodeId(1), &[NodeId(1), NodeId(2), NodeId(3)]);
+    let mut voters = voter_set(&[NodeId(1), NodeId(2), NodeId(3)]);
+    let mut local = voters.get(NodeId(1)).expect("local voter").clone();
+    local.directory_id = Uuid::from_u128(11);
+    voters = VoterSet::from_voters(
+        voters
+            .ids()
+            .into_iter()
+            .filter(|id| *id != NodeId(1))
+            .filter_map(|id| voters.get(id).cloned())
+            .chain([local]),
+    );
+    engine.core = QuorumStateMachine::new(
+        NodeId(1),
+        crate::kraft::types::QuorumState::bootstrap(Uuid::nil(), voters),
+        engine.election_timeout,
+    );
+    (engine, dir)
+}
+
 #[tokio::test]
 async fn vote_runs_kafka_request_checks() {
     let top_level = |error_code| VoteResponse {
@@ -338,23 +359,7 @@ async fn vote_grant_names_the_new_epoch_and_no_leader() {
 /// one.
 #[tokio::test]
 async fn vote_refuses_a_voter_key_with_another_directory_id() {
-    let (mut engine, _dir) = build_engine_only(NodeId(1), &[NodeId(1), NodeId(2), NodeId(3)]);
-    let mut voters = voter_set(&[NodeId(1), NodeId(2), NodeId(3)]);
-    let mut local = voters.get(NodeId(1)).expect("local voter").clone();
-    local.directory_id = Uuid::from_u128(11);
-    voters = VoterSet::from_voters(
-        voters
-            .ids()
-            .into_iter()
-            .filter(|id| *id != NodeId(1))
-            .filter_map(|id| voters.get(id).cloned())
-            .chain([local]),
-    );
-    engine.core = QuorumStateMachine::new(
-        NodeId(1),
-        crate::kraft::types::QuorumState::bootstrap(Uuid::nil(), voters),
-        engine.election_timeout,
-    );
+    let (mut engine, _dir) = engine_with_local_directory();
 
     for (label, directory_id, want_error) in [
         ("another directory", Uuid::from_u128(12), 125),
@@ -837,23 +842,7 @@ async fn a_leader_from_the_adjacent_voter_set_keeps_its_endpoint() {
 
 #[tokio::test]
 async fn end_quorum_epoch_matches_candidate_directory_id() {
-    let (mut engine, _dir) = build_engine_only(NodeId(1), &[NodeId(1), NodeId(2), NodeId(3)]);
-    let mut voters = voter_set(&[NodeId(1), NodeId(2), NodeId(3)]);
-    let mut local = voters.get(NodeId(1)).expect("local voter").clone();
-    local.directory_id = Uuid::from_u128(11);
-    voters = VoterSet::from_voters(
-        voters
-            .ids()
-            .into_iter()
-            .filter(|id| *id != NodeId(1))
-            .filter_map(|id| voters.get(id).cloned())
-            .chain([local]),
-    );
-    engine.core = QuorumStateMachine::new(
-        NodeId(1),
-        crate::kraft::types::QuorumState::bootstrap(Uuid::nil(), voters),
-        engine.election_timeout,
-    );
+    let (mut engine, _dir) = engine_with_local_directory();
     engine.on_event(Event::ReceiveBeginQuorumEpoch {
         leader_id: NodeId(2),
         leader_epoch: 5,

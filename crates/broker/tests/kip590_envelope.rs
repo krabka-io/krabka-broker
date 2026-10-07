@@ -17,8 +17,7 @@
 use assert2::{assert, check};
 use bytes::{BufMut as _, Bytes, BytesMut};
 use krabka_broker::{
-    Broker, BrokerConfig, BrokerHandle, NodeId, authorizer::SimpleAclAuthorizer,
-    config::InterBrokerCredentials,
+    BrokerConfig, BrokerHandle, authorizer::SimpleAclAuthorizer, config::InterBrokerCredentials,
 };
 use krabka_metadata::{
     AclEntry, AclOperation, MetadataRecord, PatternType, PermissionType, ResourceType,
@@ -95,26 +94,7 @@ async fn start_broker_with(
     customize: impl FnOnce(&mut BrokerConfig),
 ) -> (BrokerHandle, tempfile::TempDir) {
     support::init_tracing();
-    let dir = tempfile::TempDir::new().expect("tempdir");
-    let data_listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-        .await
-        .expect("bind data listener");
-    let controller_listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-        .await
-        .expect("bind controller listener");
-    let data_addr = data_listener.local_addr().expect("data addr");
-    let controller_addr = controller_listener.local_addr().expect("controller addr");
-    let mut config = BrokerConfig::for_tests(dir.path().to_path_buf());
-    config.listen_addr = data_addr;
-    config.advertised_listener = data_addr.to_string();
-    config.controller_listen_addr = controller_addr;
-    config.controller_quorum_voters = vec![(NodeId(1), controller_addr.to_string())];
-    customize(&mut config);
-    let broker =
-        Broker::start_with_listeners(config, Some(controller_listener), Some(data_listener))
-            .await
-            .expect("start broker");
-    (broker, dir)
+    crate::support::start_with_bound_listeners(customize).await
 }
 
 /// A Kafka request frame: the length prefix, the request header, and the body.

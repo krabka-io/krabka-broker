@@ -1,32 +1,32 @@
-(* #"/workspace/crates/verified/src/composition/snapshot_replay.rs" 34 0 38 33 *)
+(* #"/workspace/crates/verified/src/composition/snapshot_replay.rs" 35 0 39 33 *)
 
-let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
-let%span sops = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/ops.rs" 688 18 691 9
-let%span sops'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/ops.rs" 702 25 702 33
-let%span sops'1 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/ops.rs" 701 18 701 32
-let%span sfuture_log_swap_admission = "/workspace/crates/verified/src/storage/future_log_swap_admission.rs" 107 10 107 30
-let%span sfuture_log_swap_admission'0 = "/workspace/crates/verified/src/storage/future_log_swap_admission.rs" 108 10 108 29
-let%span sfuture_log_swap_admission'1 = "/workspace/crates/verified/src/storage/future_log_swap_admission.rs" 109 10 109 53
-let%span soption = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/option.rs" 193 19 193 79
-let%span soption'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/option.rs" 194 18 197 9
-let%span sreplay_start = "/workspace/crates/verified/src/producer_snapshot/replay_start.rs" 65 10 72 6
-let%span sreplay_start'0 = "/workspace/crates/verified/src/producer_snapshot/replay_start.rs" 73 10 73 100
-let%span ssnapshot_transaction_valid = "/workspace/crates/verified/src/producer_snapshot/snapshot_transaction_valid.rs" 152 10 154 79
-let%span ssnapshot_transaction_valid'0 = "/workspace/crates/verified/src/producer_snapshot/snapshot_transaction_valid.rs" 155 10 160 53
-let%span ssnapshot_transaction_valid'1 = "/workspace/crates/verified/src/producer_snapshot/snapshot_transaction_valid.rs" 14 16 14 55
-let%span ssnapshot_transaction_valid'2 = "/workspace/crates/verified/src/producer_snapshot/snapshot_transaction_valid.rs" 58 8 65 9
-let%span ssnapshot_replay = "/workspace/crates/verified/src/composition/snapshot_replay.rs" 40 17 40 56
-let%span ssnapshot_replay'0 = "/workspace/crates/verified/src/composition/snapshot_replay.rs" 43 19 43 69
-let%span ssnapshot_replay'1 = "/workspace/crates/verified/src/composition/snapshot_replay.rs" 44 19 44 55
-let%span ssnapshot_replay'2 = "/workspace/crates/verified/src/composition/snapshot_replay.rs" 45 17 45 68
-let%span ssnapshot_replay'3 = "/workspace/crates/verified/src/composition/snapshot_replay.rs" 45 17 45 69
-let%span ssnapshot_replay'4 = "/workspace/crates/verified/src/composition/snapshot_replay.rs" 11 11 11 86
-let%span ssnapshot_replay'5 = "/workspace/crates/verified/src/composition/snapshot_replay.rs" 12 11 12 64
-let%span ssnapshot_replay'6 = "/workspace/crates/verified/src/composition/snapshot_replay.rs" 13 10 13 57
-let%span ssnapshot_replay'7 = "/workspace/crates/verified/src/composition/snapshot_replay.rs" 14 10 19 1
-let%span ssnapshot_replay'8 = "/workspace/crates/verified/src/composition/snapshot_replay.rs" 20 10 33 1
-let%span ssnapshot_replay'9 = "/workspace/crates/verified/src/composition/snapshot_replay.rs" 44 40 44 54
-let%span ssnapshot_replay'10 = "/workspace/crates/verified/src/composition/snapshot_replay.rs" 44 32 44 39
+let%span sord = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span soption = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/option.rs" 193 19 193 79
+let%span soption'0 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/option.rs" 194 18 197 9
+let%span sops = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/ops.rs" 688 18 691 9
+let%span sops'0 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/ops.rs" 702 25 702 33
+let%span sops'1 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/ops.rs" 701 18 701 32
+let%span sfuture_log_swap_admission = "/workspace/crates/verified/src/storage/future_log_swap_admission.rs" 108 10 108 30
+let%span sfuture_log_swap_admission'0 = "/workspace/crates/verified/src/storage/future_log_swap_admission.rs" 109 10 109 29
+let%span sfuture_log_swap_admission'1 = "/workspace/crates/verified/src/storage/future_log_swap_admission.rs" 110 10 110 53
+let%span sreplay_start = "/workspace/crates/verified/src/producer_snapshot/replay_start.rs" 66 10 73 6
+let%span sreplay_start'0 = "/workspace/crates/verified/src/producer_snapshot/replay_start.rs" 74 10 74 100
+let%span ssnapshot_transaction_valid = "/workspace/crates/verified/src/producer_snapshot/snapshot_transaction_valid.rs" 153 10 155 79
+let%span ssnapshot_transaction_valid'0 = "/workspace/crates/verified/src/producer_snapshot/snapshot_transaction_valid.rs" 156 10 161 53
+let%span ssnapshot_transaction_valid'1 = "/workspace/crates/verified/src/producer_snapshot/snapshot_transaction_valid.rs" 15 16 15 55
+let%span ssnapshot_transaction_valid'2 = "/workspace/crates/verified/src/producer_snapshot/snapshot_transaction_valid.rs" 59 8 66 9
+let%span ssnapshot_replay = "/workspace/crates/verified/src/composition/snapshot_replay.rs" 41 17 41 56
+let%span ssnapshot_replay'0 = "/workspace/crates/verified/src/composition/snapshot_replay.rs" 44 19 44 69
+let%span ssnapshot_replay'1 = "/workspace/crates/verified/src/composition/snapshot_replay.rs" 45 19 45 55
+let%span ssnapshot_replay'2 = "/workspace/crates/verified/src/composition/snapshot_replay.rs" 46 17 46 68
+let%span ssnapshot_replay'3 = "/workspace/crates/verified/src/composition/snapshot_replay.rs" 46 17 46 69
+let%span ssnapshot_replay'4 = "/workspace/crates/verified/src/composition/snapshot_replay.rs" 12 11 12 86
+let%span ssnapshot_replay'5 = "/workspace/crates/verified/src/composition/snapshot_replay.rs" 13 11 13 64
+let%span ssnapshot_replay'6 = "/workspace/crates/verified/src/composition/snapshot_replay.rs" 14 10 14 57
+let%span ssnapshot_replay'7 = "/workspace/crates/verified/src/composition/snapshot_replay.rs" 15 10 20 1
+let%span ssnapshot_replay'8 = "/workspace/crates/verified/src/composition/snapshot_replay.rs" 21 10 34 1
+let%span ssnapshot_replay'9 = "/workspace/crates/verified/src/composition/snapshot_replay.rs" 45 40 45 54
+let%span ssnapshot_replay'10 = "/workspace/crates/verified/src/composition/snapshot_replay.rs" 45 32 45 39
 
 use creusot.int.Int64
 use creusot.slice.Slice64
@@ -52,7 +52,7 @@ let truncation_frontier (frontier: Int64.t) (new_end: Int64.t) (return (x: Int64
 
 type t_Option_usize = None | Some UInt64.t
 
-predicate kafka_reload_keeps [#"/workspace/crates/verified/src/producer_snapshot/snapshot_transaction_valid.rs" 13 0 13 76] (offset: int) (log_start'0: int) (log_end'0: int) =
+predicate kafka_reload_keeps [#"/workspace/crates/verified/src/producer_snapshot/snapshot_transaction_valid.rs" 14 0 14 76] (offset: int) (log_start'0: int) (log_end'0: int) =
   [%#ssnapshot_transaction_valid'1] log_start'0 < offset /\ offset <= log_end'0
 
 let producer_snapshot_latest_index (offsets: Slice64.slice Int64.t) (range: t_ProducerReloadRange)
@@ -75,7 +75,7 @@ let producer_snapshot_latest_index (offsets: Slice64.slice Int64.t) (range: t_Pr
 
 type closure0 = { c0: Slice64.slice Int64.t }
 
-let closure0 [#"/workspace/crates/verified/src/composition/snapshot_replay.rs" 44 32 44 39] [@coma:extspec]
+let closure0 [#"/workspace/crates/verified/src/composition/snapshot_replay.rs" 45 32 45 39] [@coma:extspec]
   (self: closure0) (index: UInt64.t) (return (x: Int64.t)) = bb0
   [ bb0 = s0
     [ s0 = [ &_3 <- index ] s1
@@ -130,7 +130,7 @@ predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other
 
 meta "rewrite_def" predicate ge_log_Int
 
-function kafka_replay_start [#"/workspace/crates/verified/src/producer_snapshot/snapshot_transaction_valid.rs" 56 0 56 83] (range: t_ProducerReloadRange) (snapshot: t_Option_i64) : int
+function kafka_replay_start [#"/workspace/crates/verified/src/producer_snapshot/snapshot_transaction_valid.rs" 57 0 57 83] (range: t_ProducerReloadRange) (snapshot: t_Option_i64) : int
  = [%#ssnapshot_transaction_valid'2] match snapshot with
     | Some'0 offset -> if ge_log_Int (Int64.to_int offset) (Int64.to_int range.local_start) then
       Int64.to_int offset
@@ -227,7 +227,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let truncated_snapshot_selection_bounds_replay [#"/workspace/crates/verified/src/composition/snapshot_replay.rs" 34 0 38 33]
+let truncated_snapshot_selection_bounds_replay [#"/workspace/crates/verified/src/composition/snapshot_replay.rs" 35 0 39 33]
   (offsets: Slice64.slice Int64.t) (range: t_ProducerReloadRange) (cut: Int64.t)
   (return (x: t_Option_tup2_Option_usize_i64)) =
 {[@stop_split] [@expl:truncated_snapshot_selection_bounds_replay requires] ([@stop_split] [@expl:truncated_snapshot_selection_bounds_replay requires #0] [%#ssnapshot_replay'4] 0

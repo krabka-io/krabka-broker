@@ -390,19 +390,15 @@ mod tests {
 
     use assert2::{assert, check};
     use bytes::Bytes;
-    use krabka_compression::RecordDecompressionPolicy;
     use krabka_protocol::records::{Record, RecordBatch};
-    use uuid::Uuid;
 
     use super::{PreparedBatch, verify_transactional_produce};
     use crate::{
         codes,
         handlers::produce::{
-            framing::{FramedPartition, PartitionPayload},
-            leadership::BrokerProducePolicy,
+            framing::PartitionPayload,
             pipeline::{PartitionInput, PartitionServices, process_partition},
             test_support::{encode_batch, image_with_topic},
-            topic_settings::TimestampPolicy,
         },
     };
 
@@ -471,38 +467,11 @@ mod tests {
         for (version, verification_enabled, appends) in cases {
             let dir = tempfile::tempdir().unwrap();
             let image = Arc::new(image_with_topic("orders", &[1]));
-            let partitions = Arc::new(crate::partition_registry::PartitionRegistry::new());
-            let txn_coordinator = Arc::new(crate::txn::coordinator::TxnCoordinator::new(
-                krabka_audit::NodeId(1),
-                Arc::clone(&partitions),
-                Arc::new(crate::producer_id_manager::ProducerIdManager::new()),
-                50,
-                krabka_units::mebibytes(1),
-            ));
-            let producer_state = Arc::new(crate::producer_state::ProducerState::new());
-            let log_dir_status = crate::log_dir_status::LogDirRegistry::default();
-            let metrics = crate::metrics::BrokerMetrics::new();
-            let part_dir = crate::log_dir::partition_dir(dir.path(), "orders", 0);
-            std::fs::create_dir_all(&part_dir).unwrap();
-            let part = crate::broker::spawn_partition(
-                "orders".to_string(),
-                krabka_ids::PartitionIndex(0),
-                dir.path().to_path_buf(),
-                krabka_log::Log::open(&part_dir, krabka_log::LogConfig::default()).unwrap(),
-                log_dir_status.clone(),
-                Arc::clone(&producer_state),
-                false,
-            );
-            let record = image.partition("orders", 0).expect("partition");
-            part.install_replication_target(
-                Some(Uuid::nil()),
-                record.leader.0,
-                record.leader_epoch.0,
-            )
-            .await;
-            part.install_isr(&record.isr, &record.replicas, record.leader)
-                .await;
-            partitions.insert("orders".into(), krabka_ids::PartitionIndex(0), part);
+            let fixture = crate::handlers::produce::test_support::PipelineFixture::new(1);
+            let part = fixture.partition(dir.path(), "orders", &image).await;
+            fixture
+                .partitions
+                .insert("orders".into(), krabka_ids::PartitionIndex(0), part);
 
             let payload = encode_batch(&RecordBatch {
                 attributes: krabka_protocol::records::Attributes::default()
@@ -520,44 +489,18 @@ mod tests {
             });
             let row = process_partition(
                 PartitionInput {
-                    schema: None,
-                    part_data: FramedPartition {
-                        index: 0,
-                        payload: PartitionPayload::Slice(payload),
-                    },
-                    topic_compression: None,
-                    timestamps: TimestampPolicy::default(),
-                    compacted_topic: false,
-                    max_message_bytes: krabka_log::DEFAULT_MAX_MESSAGE_SIZE,
-                    delivery: None,
-                    topic_name: "orders".into(),
-                    freeze: crate::freeze::resolve::FreezeMutationResolution::Admit,
-                    internal_topic_denied: false,
                     transaction: super::TransactionRequest {
                         transactional_id: Some("tid"),
                         version,
                         producer_id_expiration_ms: 86_400_000,
                         verification_enabled,
                     },
-                    acks: 1,
+                    ..crate::handlers::produce::test_support::pipeline_input(
+                        "orders",
+                        PartitionPayload::Slice(payload),
+                    )
                 },
-                PartitionServices {
-                    schema_validator: None,
-                    partitions: &partitions,
-                    txn_coordinator: &txn_coordinator,
-                    producer_state: &producer_state,
-                    log_dir_status: &log_dir_status,
-                    image: &image,
-                    broker_policy: BrokerProducePolicy {
-                        node_id: krabka_audit::NodeId(1),
-                        default_min_insync_replicas: 1,
-                        is_witness: false,
-                    },
-                    record_decompression_policy: RecordDecompressionPolicy::default(),
-                    metrics: &metrics,
-                    phases: &crate::metrics::RequestPhases::default(),
-                    unstable_api_versions: crate::api_catalog::UnstableApiVersions::Disabled,
-                },
+                fixture.services(&image),
             )
             .await
             .expect("process partition")
@@ -683,36 +626,10 @@ mod tests {
 
         let dir = tempfile::tempdir().unwrap();
         let image = Arc::new(image_with_topic("orders", &[1]));
-        let partitions = Arc::new(crate::partition_registry::PartitionRegistry::new());
-        let txn_coordinator = Arc::new(crate::txn::coordinator::TxnCoordinator::new(
-            krabka_audit::NodeId(1),
-            Arc::clone(&partitions),
-            Arc::new(crate::producer_id_manager::ProducerIdManager::new()),
-            50,
-            krabka_units::mebibytes(1),
-        ));
-        let producer_state = Arc::new(crate::producer_state::ProducerState::new());
-        let log_dir_status = crate::log_dir_status::LogDirRegistry::default();
-        let metrics = crate::metrics::BrokerMetrics::new();
+        let fixture = crate::handlers::produce::test_support::PipelineFixture::new(1);
 
         // Materialize the local leader replica for "orders"-0.
-        let part_dir = crate::log_dir::partition_dir(dir.path(), "orders", 0);
-        std::fs::create_dir_all(&part_dir).unwrap();
-        let log = krabka_log::Log::open(&part_dir, krabka_log::LogConfig::default()).unwrap();
-        let part = crate::broker::spawn_partition(
-            "orders".to_string(),
-            krabka_ids::PartitionIndex(0),
-            dir.path().to_path_buf(),
-            log,
-            log_dir_status.clone(),
-            Arc::clone(&producer_state),
-            false,
-        );
-        let record = image.partition("orders", 0).expect("partition");
-        part.install_replication_target(Some(Uuid::nil()), record.leader.0, record.leader_epoch.0)
-            .await;
-        part.install_isr(&record.isr, &record.replicas, record.leader)
-            .await;
+        let part = fixture.partition(dir.path(), "orders", &image).await;
         // Push LEO to 3 so the HW can be clamped to 2 (one below the target).
         {
             let mut batch = RecordBatch {
@@ -735,12 +652,15 @@ mod tests {
         assert!(part.log_end_offset() == krabka_log::Offset(3));
         part.set_follower_hw(krabka_log::Offset(2)).await;
         assert!(part.high_watermark().await == krabka_log::Offset(2));
-        partitions.insert("orders".into(), krabka_ids::PartitionIndex(0), part);
+        fixture
+            .partitions
+            .insert("orders".into(), krabka_ids::PartitionIndex(0), part);
 
         // Pre-seed the dedup tracker so the incoming batch is a Duplicate whose
         // recorded base_offset is 0 and span is 0..=2.
         let pid: i64 = 7777;
-        producer_state
+        fixture
+            .producer_state
             .commit(
                 "orders",
                 krabka_ids::PartitionIndex(0),
@@ -768,44 +688,13 @@ mod tests {
 
         let outcome = process_partition(
             PartitionInput {
-                schema: None,
-                part_data: FramedPartition {
-                    index: 0,
-                    payload: PartitionPayload::Slice(payload),
-                },
-                topic_compression: None,
-                timestamps: TimestampPolicy::default(),
-                compacted_topic: false,
-                max_message_bytes: krabka_log::DEFAULT_MAX_MESSAGE_SIZE,
-                delivery: None,
-                topic_name: "orders".into(),
-                freeze: crate::freeze::resolve::FreezeMutationResolution::Admit,
-                internal_topic_denied: false,
-                transaction: crate::handlers::produce::producer_checks::TransactionRequest {
-                    transactional_id: None,
-                    version: 9,
-                    producer_id_expiration_ms: 86_400_000,
-                    verification_enabled: true,
-                },
                 acks: -1,
+                ..crate::handlers::produce::test_support::pipeline_input(
+                    "orders",
+                    PartitionPayload::Slice(payload),
+                )
             },
-            PartitionServices {
-                schema_validator: None,
-                partitions: &partitions,
-                txn_coordinator: &txn_coordinator,
-                producer_state: &producer_state,
-                log_dir_status: &log_dir_status,
-                image: &image,
-                broker_policy: BrokerProducePolicy {
-                    node_id: krabka_audit::NodeId(1),
-                    default_min_insync_replicas: 1,
-                    is_witness: false,
-                },
-                record_decompression_policy: RecordDecompressionPolicy::default(),
-                metrics: &metrics,
-                phases: &crate::metrics::RequestPhases::default(),
-                unstable_api_versions: crate::api_catalog::UnstableApiVersions::Disabled,
-            },
+            fixture.services(&image),
         )
         .await
         .expect("process partition");
@@ -853,35 +742,10 @@ mod tests {
 
         let dir = tempfile::tempdir().unwrap();
         let image = Arc::new(image_with_topic("orders", &[1]));
-        let partitions = Arc::new(crate::partition_registry::PartitionRegistry::new());
-        let txn_coordinator = Arc::new(crate::txn::coordinator::TxnCoordinator::new(
-            krabka_audit::NodeId(1),
-            Arc::clone(&partitions),
-            Arc::new(crate::producer_id_manager::ProducerIdManager::new()),
-            50,
-            krabka_units::mebibytes(1),
-        ));
-        let producer_state = Arc::new(crate::producer_state::ProducerState::new());
-        let log_dir_status = crate::log_dir_status::LogDirRegistry::default();
-        let metrics = crate::metrics::BrokerMetrics::new();
-        let part_dir = crate::log_dir::partition_dir(dir.path(), "orders", 0);
-        std::fs::create_dir_all(&part_dir).unwrap();
-        let part = crate::broker::spawn_partition(
-            "orders".to_string(),
-            krabka_ids::PartitionIndex(0),
-            dir.path().to_path_buf(),
-            krabka_log::Log::open(&part_dir, krabka_log::LogConfig::default()).unwrap(),
-            log_dir_status.clone(),
-            Arc::clone(&producer_state),
-            false,
-        );
-        let record = image.partition("orders", 0).expect("partition");
-        part.install_replication_target(Some(Uuid::nil()), record.leader.0, record.leader_epoch.0)
+        let fixture = crate::handlers::produce::test_support::PipelineFixture::new(1);
+        let part_handle = fixture
+            .register_partition(dir.path(), "orders", &image)
             .await;
-        part.install_isr(&record.isr, &record.replicas, record.leader)
-            .await;
-        let part_handle = Arc::clone(&part);
-        partitions.insert("orders".into(), krabka_ids::PartitionIndex(0), part);
 
         // Batch `n` holds two records with sequences `2n` and `2n + 1`, and
         // the max timestamp `1000 + n`.
@@ -903,53 +767,23 @@ mod tests {
                 base_timestamp: 1000,
                 ..Default::default()
             });
-            let partitions = &partitions;
-            let txn_coordinator = &txn_coordinator;
-            let producer_state = &producer_state;
-            let log_dir_status = &log_dir_status;
+            let fixture = &fixture;
             let image = &image;
-            let metrics = &metrics;
             async move {
                 process_partition(
                     PartitionInput {
-                        schema: None,
-                        part_data: FramedPartition {
-                            index: 0,
-                            payload: PartitionPayload::Slice(payload),
-                        },
-                        topic_compression: None,
-                        timestamps: TimestampPolicy::default(),
-                        compacted_topic: false,
-                        max_message_bytes: krabka_log::DEFAULT_MAX_MESSAGE_SIZE,
-                        delivery: None,
-                        topic_name: "orders".into(),
-                        freeze: crate::freeze::resolve::FreezeMutationResolution::Admit,
-                        internal_topic_denied: false,
                         transaction: super::TransactionRequest {
                             transactional_id: None,
                             version: 9,
                             producer_id_expiration_ms: 86_400_000,
                             verification_enabled: true,
                         },
-                        acks: 1,
+                        ..crate::handlers::produce::test_support::pipeline_input(
+                            "orders",
+                            PartitionPayload::Slice(payload),
+                        )
                     },
-                    PartitionServices {
-                        schema_validator: None,
-                        partitions,
-                        txn_coordinator,
-                        producer_state,
-                        log_dir_status,
-                        image,
-                        broker_policy: BrokerProducePolicy {
-                            node_id: krabka_audit::NodeId(1),
-                            default_min_insync_replicas: 1,
-                            is_witness: false,
-                        },
-                        record_decompression_policy: RecordDecompressionPolicy::default(),
-                        metrics,
-                        phases: &crate::metrics::RequestPhases::default(),
-                        unstable_api_versions: crate::api_catalog::UnstableApiVersions::Disabled,
-                    },
+                    fixture.services(image),
                 )
                 .await
                 .expect("process partition")
@@ -1081,39 +915,10 @@ mod tests {
         for (history, base_sequence, unstable, want, log_end) in cases {
             let dir = tempfile::tempdir().unwrap();
             let image = Arc::new(image_with_topic("orders", &[1]));
-            let partitions = Arc::new(crate::partition_registry::PartitionRegistry::new());
-            let txn_coordinator = Arc::new(crate::txn::coordinator::TxnCoordinator::new(
-                krabka_audit::NodeId(1),
-                Arc::clone(&partitions),
-                Arc::new(crate::producer_id_manager::ProducerIdManager::new()),
-                50,
-                krabka_units::mebibytes(1),
-            ));
-            let producer_state = Arc::new(crate::producer_state::ProducerState::new());
-            let log_dir_status = crate::log_dir_status::LogDirRegistry::default();
-            let metrics = crate::metrics::BrokerMetrics::new();
-            let part_dir = crate::log_dir::partition_dir(dir.path(), "orders", 0);
-            std::fs::create_dir_all(&part_dir).unwrap();
-            let part = crate::broker::spawn_partition(
-                "orders".to_string(),
-                krabka_ids::PartitionIndex(0),
-                dir.path().to_path_buf(),
-                krabka_log::Log::open(&part_dir, krabka_log::LogConfig::default()).unwrap(),
-                log_dir_status.clone(),
-                Arc::clone(&producer_state),
-                false,
-            );
-            let record = image.partition("orders", 0).expect("partition");
-            part.install_replication_target(
-                Some(Uuid::nil()),
-                record.leader.0,
-                record.leader_epoch.0,
-            )
-            .await;
-            part.install_isr(&record.isr, &record.replicas, record.leader)
+            let fixture = crate::handlers::produce::test_support::PipelineFixture::new(1);
+            let part_handle = fixture
+                .register_partition(dir.path(), "orders", &image)
                 .await;
-            let part_handle = Arc::clone(&part);
-            partitions.insert("orders".into(), krabka_ids::PartitionIndex(0), part);
 
             let produce = |base_sequence: i32| {
                 let payload = encode_batch(&RecordBatch {
@@ -1126,49 +931,25 @@ mod tests {
                     }],
                     ..Default::default()
                 });
-                let (partitions, txn_coordinator, producer_state) =
-                    (&partitions, &txn_coordinator, &producer_state);
-                let (log_dir_status, image, metrics) = (&log_dir_status, &image, &metrics);
+                let fixture = &fixture;
+                let image = &image;
                 async move {
                     process_partition(
                         PartitionInput {
-                            schema: None,
-                            part_data: FramedPartition {
-                                index: 0,
-                                payload: PartitionPayload::Slice(payload),
-                            },
-                            topic_compression: None,
-                            timestamps: TimestampPolicy::default(),
-                            compacted_topic: false,
-                            max_message_bytes: krabka_log::DEFAULT_MAX_MESSAGE_SIZE,
-                            delivery: None,
-                            topic_name: "orders".into(),
-                            freeze: crate::freeze::resolve::FreezeMutationResolution::Admit,
-                            internal_topic_denied: false,
                             transaction: super::TransactionRequest {
                                 transactional_id: None,
                                 version: 9,
                                 producer_id_expiration_ms: 86_400_000,
                                 verification_enabled: true,
                             },
-                            acks: 1,
+                            ..crate::handlers::produce::test_support::pipeline_input(
+                                "orders",
+                                PartitionPayload::Slice(payload),
+                            )
                         },
                         PartitionServices {
-                            schema_validator: None,
-                            partitions,
-                            txn_coordinator,
-                            producer_state,
-                            log_dir_status,
-                            image,
-                            broker_policy: BrokerProducePolicy {
-                                node_id: krabka_audit::NodeId(1),
-                                default_min_insync_replicas: 1,
-                                is_witness: false,
-                            },
-                            record_decompression_policy: RecordDecompressionPolicy::default(),
-                            metrics,
-                            phases: &crate::metrics::RequestPhases::default(),
                             unstable_api_versions: unstable,
+                            ..fixture.services(image)
                         },
                     )
                     .await
@@ -1201,7 +982,8 @@ mod tests {
                 History::EntryExpired => {
                     assert!(produce(0).await == appended_at(0));
                     check!(
-                        producer_state
+                        fixture
+                            .producer_state
                             .expire_older_than(i64::MAX, krabka_units::millis(0))
                             .await
                             == 1

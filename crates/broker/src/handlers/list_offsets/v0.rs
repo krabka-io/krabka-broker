@@ -302,12 +302,7 @@ mod tests {
         put_i64(&mut request, LATEST_TIMESTAMP);
         put_i32(&mut request, 3);
 
-        let broker = broker_handle.broker_arc_for_test();
-        let admin = principal("admin");
-        let socket = peer();
-        let response = handle(&broker, &request, &test_context(&admin, &socket))
-            .await
-            .expect("ListOffsets v0");
+        let response = answer(&broker_handle, &request).await;
         let mut response: &[u8] = &response;
         assert!(get_array_len(&mut response, false).unwrap() == 1);
         assert!(get_string_owned(&mut response).unwrap() == TOPIC);
@@ -328,22 +323,7 @@ mod tests {
     /// denied_topic_rows_are_appended_after_authorized_rows_regardless_of_request_order`):
     /// a denied topic's row always lands last, regardless of where it sat in
     /// the v0 request.
-    #[derive(Debug)]
-    struct DenyNamed(std::collections::HashSet<&'static str>);
-
-    impl crate::authorizer::Authorizer for DenyNamed {
-        fn authorize(
-            &self,
-            _source: &dyn krabka_authz::AclSource,
-            req: &crate::authorizer::AuthorizationRequest<'_>,
-        ) -> crate::authorizer::AuthorizationResult {
-            if self.0.contains(req.resource_name) {
-                crate::authorizer::AuthorizationResult::Deny
-            } else {
-                crate::authorizer::AuthorizationResult::Allow
-            }
-        }
-    }
+    use crate::handlers::list_offsets::test_support::DenyNamed;
 
     #[tokio::test]
     async fn denied_topic_row_is_appended_last_regardless_of_request_order() {
@@ -416,12 +396,7 @@ mod tests {
         put_i64(&mut request, LATEST_TIMESTAMP);
         put_i32(&mut request, 1);
 
-        let broker = broker_handle.broker_arc_for_test();
-        let admin = principal("admin");
-        let socket = peer();
-        let response = handle(&broker, &request, &test_context(&admin, &socket))
-            .await
-            .expect("ListOffsets v0");
+        let response = answer(&broker_handle, &request).await;
         let mut response: &[u8] = &response;
         assert!(get_array_len(&mut response, false).unwrap() == 1);
         assert!(get_string_owned(&mut response).unwrap() == TOPIC);
@@ -434,5 +409,13 @@ mod tests {
         assert!(response.is_empty());
 
         broker_handle.shutdown().await;
+    }
+    async fn answer(broker: &crate::broker::BrokerHandle, request: &[u8]) -> Bytes {
+        let shared = broker.broker_arc_for_test();
+        let admin = principal("admin");
+        let socket = peer();
+        handle(&shared, request, &test_context(&admin, &socket))
+            .await
+            .expect("ListOffsets v0")
     }
 }

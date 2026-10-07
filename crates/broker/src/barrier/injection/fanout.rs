@@ -217,6 +217,50 @@ mod tests {
         partition_registry::PartitionRegistry,
     };
 
+    fn test_fanout<'a>(
+        partitions: &'a PartitionRegistry,
+        controller: &'a Arc<dyn crate::metadata_source::MetadataSource>,
+        remote: Option<&'a Arc<dyn RemoteMarkerWriter>>,
+        metrics: &'a BrokerBarrierMetrics,
+        config: &'a BarrierConfig,
+    ) -> MarkerFanout<'a> {
+        MarkerFanout {
+            node_id: NodeId(1),
+            partitions,
+            controller,
+            remote,
+            metrics,
+            config,
+        }
+    }
+
+    async fn place_local(
+        registry: &PartitionRegistry,
+    ) -> BTreeMap<crate::barrier::state::TargetPartition, Offset> {
+        let controller = source(&topic_records("orders", 2, NodeId(1)));
+        let metrics = BrokerBarrierMetrics::new(BrokerMetrics::new());
+        let config = fast_config();
+        test_fanout(registry, &controller, None, &metrics, &config)
+            .run(
+                &marker(),
+                vec![at("orders", 0), at("orders", 1)],
+                config.injection_timeout,
+            )
+            .await
+    }
+
+    async fn place_one(
+        fanout: MarkerFanout<'_>,
+    ) -> BTreeMap<crate::barrier::state::TargetPartition, Offset> {
+        fanout
+            .run(
+                &marker(),
+                vec![at("orders", 0)],
+                fanout.config.injection_timeout,
+            )
+            .await
+    }
+
     #[tokio::test]
     async fn a_local_fan_out_marks_every_partition_and_returns_its_offset() {
         let dir = tempdir().expect("tempdir");
@@ -229,25 +273,7 @@ mod tests {
                 .install_leader_change(NodeId(1).get(), 3)
                 .await;
         }
-        let controller = source(&topic_records("orders", 2, NodeId(1)));
-        let metrics = BrokerBarrierMetrics::new(BrokerMetrics::new());
-        let config = fast_config();
-        let fanout = MarkerFanout {
-            node_id: NodeId(1),
-            partitions: &registry,
-            controller: &controller,
-            remote: None,
-            metrics: &metrics,
-            config: &config,
-        };
-
-        let placed = fanout
-            .run(
-                &marker(),
-                vec![at("orders", 0), at("orders", 1)],
-                config.injection_timeout,
-            )
-            .await;
+        let placed = place_local(&registry).await;
         assert!(placed.len() == 2);
         assert!(placed[&at("orders", 0)] == Offset(0));
         assert!(placed[&at("orders", 1)] == Offset(0));
@@ -277,25 +303,7 @@ mod tests {
             .expect("the partition is open")
             .install_leader_change(NodeId(1).get(), 3)
             .await;
-        let controller = source(&topic_records("orders", 2, NodeId(1)));
-        let metrics = BrokerBarrierMetrics::new(BrokerMetrics::new());
-        let config = fast_config();
-        let fanout = MarkerFanout {
-            node_id: NodeId(1),
-            partitions: &registry,
-            controller: &controller,
-            remote: None,
-            metrics: &metrics,
-            config: &config,
-        };
-
-        let placed = fanout
-            .run(
-                &marker(),
-                vec![at("orders", 0), at("orders", 1)],
-                config.injection_timeout,
-            )
-            .await;
+        let placed = place_local(&registry).await;
         assert!(placed.keys().cloned().collect::<Vec<_>>() == vec![at("orders", 0)]);
     }
 
@@ -322,17 +330,8 @@ mod tests {
             });
         let remote: Arc<dyn RemoteMarkerWriter> = Arc::new(remote);
 
-        let fanout = MarkerFanout {
-            node_id: NodeId(1),
-            partitions: &registry,
-            controller: &controller,
-            remote: Some(&remote),
-            metrics: &metrics,
-            config: &config,
-        };
-        let placed = fanout
-            .run(&marker(), vec![at("orders", 0)], config.injection_timeout)
-            .await;
+        let fanout = test_fanout(&registry, &controller, Some(&remote), &metrics, &config);
+        let placed = place_one(fanout).await;
         assert!(placed == maplit::btreemap! {at("orders", 0) => Offset(77)});
     }
 
@@ -360,14 +359,7 @@ mod tests {
                 ])
             });
         let remote: Arc<dyn RemoteMarkerWriter> = Arc::new(remote);
-        let fanout = MarkerFanout {
-            node_id: NodeId(1),
-            partitions: &registry,
-            controller: &controller,
-            remote: Some(&remote),
-            metrics: &metrics,
-            config: &config,
-        };
+        let fanout = test_fanout(&registry, &controller, Some(&remote), &metrics, &config);
         let mut placed = BTreeMap::new();
 
         fanout
@@ -409,17 +401,8 @@ mod tests {
             });
         let remote: Arc<dyn RemoteMarkerWriter> = Arc::new(remote);
 
-        let fanout = MarkerFanout {
-            node_id: NodeId(1),
-            partitions: &registry,
-            controller: &controller,
-            remote: Some(&remote),
-            metrics: &metrics,
-            config: &config,
-        };
-        let placed = fanout
-            .run(&marker(), vec![at("orders", 0)], config.injection_timeout)
-            .await;
+        let fanout = test_fanout(&registry, &controller, Some(&remote), &metrics, &config);
+        let placed = place_one(fanout).await;
         assert!(placed == maplit::btreemap! {at("orders", 0) => Offset(12)});
     }
 
@@ -438,17 +421,8 @@ mod tests {
             });
         let remote: Arc<dyn RemoteMarkerWriter> = Arc::new(remote);
 
-        let fanout = MarkerFanout {
-            node_id: NodeId(1),
-            partitions: &registry,
-            controller: &controller,
-            remote: Some(&remote),
-            metrics: &metrics,
-            config: &config,
-        };
-        let placed = fanout
-            .run(&marker(), vec![at("orders", 0)], config.injection_timeout)
-            .await;
+        let fanout = test_fanout(&registry, &controller, Some(&remote), &metrics, &config);
+        let placed = place_one(fanout).await;
         assert!(placed.is_empty());
     }
 }

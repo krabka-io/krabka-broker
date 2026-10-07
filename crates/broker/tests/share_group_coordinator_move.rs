@@ -139,20 +139,7 @@ async fn a_join_that_does_not_commit_is_not_answered() {
     let lookup = client(&cluster[0].0).await;
     let coordinator = coordinator_of(&lookup, None).await;
     lookup.close();
-    let raft_leader = cluster[0].0.wait_until_controller_leader().await.0;
-    let follower = cluster
-        .iter()
-        .position(|(handle, _, _)| {
-            handle.node_id() != coordinator && handle.node_id() != raft_leader
-        })
-        .unwrap_or_else(|| {
-            cluster
-                .iter()
-                .position(|(handle, _, _)| handle.node_id() != coordinator)
-                .expect("a follower")
-        });
-    let (stopped, _, stopped_dir) = cluster.remove(follower);
-    stopped.crash_for_test().await;
+    let stopped_dir = crate::support::share::crash_follower(&mut cluster, coordinator).await;
 
     let member = client(&cluster[position_of(&cluster, coordinator)].0).await;
     let joined = heartbeat_once_loaded(&member, heartbeat("member-1", 0)).await;

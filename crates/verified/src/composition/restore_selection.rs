@@ -37,6 +37,17 @@ pub(super) fn restore_source_selected(
     }
 }
 
+// cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
+#[cfg(creusot)]
+#[cfg_attr(test, mutants::skip)]
+#[logic(open)]
+pub(super) fn selection_ordered(selected: Seq<usize>, count: Int) -> bool {
+    pearlite! {
+        (forall<j: Int> 0 <= j && j < selected.len() ==> selected[j]@ < count)
+        && (forall<j: Int, k: Int> 0 <= j && j < k && k < selected.len() ==> selected[j]@ < selected[k]@)
+    }
+}
+
 /// Return the original indices of exactly every selected record, in source
 /// order, alongside the complete archived span and whole-batch decision.
 /// Invalid coordinates reject the complete input, including excluded rows.
@@ -73,8 +84,7 @@ pub(super) fn restore_selection_respects_batch_extent(
     let mut i = 0usize;
     #[invariant(i@ <= records@.len() && selected@.len() <= i@)]
     #[invariant(selection_input_valid(frame, records@.subsequence(0, i@)))]
-    #[invariant(forall<j: Int> 0 <= j && j < selected@.len() ==> selected@[j]@ < i@)]
-    #[invariant(forall<j: Int, k: Int> 0 <= j && j < k && k < selected@.len() ==> selected@[j]@ < selected@[k]@)]
+    #[invariant(selection_ordered(selected@, i@))]
     #[invariant(forall<j: Int> 0 <= j && j < selected@.len() ==>
         restore_source_selected(frame, records@[selected@[j]@], offset_bound, timestamp_bound)
         && frame.base_offset@ <= frame.base_offset@ + records@[selected@[j]@].0.offset_delta@

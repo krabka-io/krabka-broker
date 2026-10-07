@@ -1,11 +1,11 @@
-(* #"/workspace/crates/verified/src/broker/trim_admission.rs" 127 0 131 33 *)
+(* #"/workspace/crates/verified/src/broker/trim_admission.rs" 128 0 132 33 *)
 
-let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
-let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
-let%span strim_admission = "/workspace/crates/verified/src/broker/trim_admission.rs" 132 19 132 20
-let%span strim_admission'0 = "/workspace/crates/verified/src/broker/trim_admission.rs" 132 36 132 37
-let%span strim_admission'1 = "/workspace/crates/verified/src/broker/trim_admission.rs" 132 55 132 56
-let%span strim_admission'2 = "/workspace/crates/verified/src/broker/trim_admission.rs" 100 4 106 6
+let%span sord = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span sord'0 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span strim_admission = "/workspace/crates/verified/src/broker/trim_admission.rs" 133 19 133 20
+let%span strim_admission'0 = "/workspace/crates/verified/src/broker/trim_admission.rs" 133 36 133 37
+let%span strim_admission'1 = "/workspace/crates/verified/src/broker/trim_admission.rs" 133 55 133 56
+let%span strim_admission'2 = "/workspace/crates/verified/src/broker/trim_admission.rs" 101 4 107 6
 
 use creusot.int.Int64
 use creusot.prelude.Any
@@ -25,7 +25,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let delete_records_trim_application [#"/workspace/crates/verified/src/broker/trim_admission.rs" 127 0 131 33]
+let delete_records_trim_application [#"/workspace/crates/verified/src/broker/trim_admission.rs" 128 0 132 33]
   (requested: Int64.t) (wal_start: Int64.t) (local_start: Int64.t) (return (x: t_DeleteRecordsTrimApplication)) = (! bb0
   [ bb0 = s0
     [ s0 = [ &_9 <- Int64.lt requested ([%#strim_admission] (0: Int64.t)) ] s1

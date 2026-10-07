@@ -1,28 +1,28 @@
-(* #"/workspace/crates/verified/src/broker/coordinator_partition.rs" 57 0 64 9 *)
+(* #"/workspace/crates/verified/src/broker/coordinator_partition.rs" 58 0 65 9 *)
 
-let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
-let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
-let%span swell_founded = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/well_founded.rs" 43 8 43 33
-let%span sslice = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 331 18 331 22
-let%span scoordinator_partition = "/workspace/crates/verified/src/broker/coordinator_partition.rs" 67 11 67 34
-let%span scoordinator_partition'0 = "/workspace/crates/verified/src/broker/coordinator_partition.rs" 67 38 67 60
-let%span scoordinator_partition'1 = "/workspace/crates/verified/src/broker/coordinator_partition.rs" 69 15 69 20
-let%span scoordinator_partition'2 = "/workspace/crates/verified/src/broker/coordinator_partition.rs" 72 30 72 35
-let%span scoordinator_partition'3 = "/workspace/crates/verified/src/broker/coordinator_partition.rs" 73 16 73 22
-let%span scoordinator_partition'4 = "/workspace/crates/verified/src/broker/coordinator_partition.rs" 80 32 80 61
-let%span scoordinator_partition'5 = "/workspace/crates/verified/src/broker/coordinator_partition.rs" 81 14 81 37
-let%span scoordinator_partition'6 = "/workspace/crates/verified/src/broker/coordinator_partition.rs" 78 34 79 59
-let%span scoordinator_partition'7 = "/workspace/crates/verified/src/broker/coordinator_partition.rs" 76 34 77 57
-let%span scoordinator_partition'8 = "/workspace/crates/verified/src/broker/coordinator_partition.rs" 75 34 75 85
-let%span scoordinator_partition'9 = "/workspace/crates/verified/src/broker/coordinator_partition.rs" 74 34 74 64
-let%span scoordinator_partition'10 = "/workspace/crates/verified/src/broker/coordinator_partition.rs" 82 11 82 31
-let%span scoordinator_partition'11 = "/workspace/crates/verified/src/broker/coordinator_partition.rs" 82 35 82 54
-let%span scoordinator_partition'12 = "/workspace/crates/verified/src/broker/coordinator_partition.rs" 85 11 85 30
-let%span scoordinator_partition'13 = "/workspace/crates/verified/src/broker/coordinator_partition.rs" 86 30 86 34
-let%span scoordinator_partition'14 = "/workspace/crates/verified/src/broker/coordinator_partition.rs" 88 13 88 14
-let%span scoordinator_partition'15 = "/workspace/crates/verified/src/broker/coordinator_partition.rs" 88 8 88 14
-let%span scoordinator_partition'16 = "/workspace/crates/verified/src/broker/coordinator_partition.rs" 83 19 83 24
-let%span scoordinator_partition'17 = "/workspace/crates/verified/src/broker/coordinator_partition.rs" 51 10 55 43
+let%span sord = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sord'0 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span swell_founded = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/well_founded.rs" 43 8 43 33
+let%span sslice = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 331 18 331 22
+let%span scoordinator_partition = "/workspace/crates/verified/src/broker/coordinator_partition.rs" 68 11 68 34
+let%span scoordinator_partition'0 = "/workspace/crates/verified/src/broker/coordinator_partition.rs" 68 38 68 60
+let%span scoordinator_partition'1 = "/workspace/crates/verified/src/broker/coordinator_partition.rs" 70 15 70 20
+let%span scoordinator_partition'2 = "/workspace/crates/verified/src/broker/coordinator_partition.rs" 73 30 73 35
+let%span scoordinator_partition'3 = "/workspace/crates/verified/src/broker/coordinator_partition.rs" 74 16 74 22
+let%span scoordinator_partition'4 = "/workspace/crates/verified/src/broker/coordinator_partition.rs" 81 32 81 61
+let%span scoordinator_partition'5 = "/workspace/crates/verified/src/broker/coordinator_partition.rs" 82 14 82 37
+let%span scoordinator_partition'6 = "/workspace/crates/verified/src/broker/coordinator_partition.rs" 79 34 80 59
+let%span scoordinator_partition'7 = "/workspace/crates/verified/src/broker/coordinator_partition.rs" 77 34 78 57
+let%span scoordinator_partition'8 = "/workspace/crates/verified/src/broker/coordinator_partition.rs" 76 34 76 85
+let%span scoordinator_partition'9 = "/workspace/crates/verified/src/broker/coordinator_partition.rs" 75 34 75 64
+let%span scoordinator_partition'10 = "/workspace/crates/verified/src/broker/coordinator_partition.rs" 83 11 83 31
+let%span scoordinator_partition'11 = "/workspace/crates/verified/src/broker/coordinator_partition.rs" 83 35 83 54
+let%span scoordinator_partition'12 = "/workspace/crates/verified/src/broker/coordinator_partition.rs" 86 11 86 30
+let%span scoordinator_partition'13 = "/workspace/crates/verified/src/broker/coordinator_partition.rs" 87 30 87 34
+let%span scoordinator_partition'14 = "/workspace/crates/verified/src/broker/coordinator_partition.rs" 89 13 89 14
+let%span scoordinator_partition'15 = "/workspace/crates/verified/src/broker/coordinator_partition.rs" 89 8 89 14
+let%span scoordinator_partition'16 = "/workspace/crates/verified/src/broker/coordinator_partition.rs" 84 19 84 24
+let%span scoordinator_partition'17 = "/workspace/crates/verified/src/broker/coordinator_partition.rs" 52 10 56 43
 
 use creusot.slice.Slice64
 use creusot.int.UInt64
@@ -53,7 +53,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let unclean_recovery_commit_admission [#"/workspace/crates/verified/src/broker/coordinator_partition.rs" 57 0 64 9]
+let unclean_recovery_commit_admission [#"/workspace/crates/verified/src/broker/coordinator_partition.rs" 58 0 65 9]
   (selected_partition_epoch: Int32.t) (current_partition_epoch: Int32.t) (selected_replicas: Slice64.slice UInt64.t)
   (current_replicas: Slice64.slice UInt64.t) (winner: UInt64.t) (current_leader_alive: bool) (return (x: bool)) = (! bb0
   [ bb0 = s0

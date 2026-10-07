@@ -7,6 +7,11 @@ use crate::{
     types::{NodeId, QuorumState},
 };
 
+/// Voter 1 in the standard three-voter quorum, fresh for each case.
+fn three_voter_machine() -> QuorumStateMachine {
+    machine(NodeId(1), &[NodeId(1), NodeId(2), NodeId(3)])
+}
+
 fn dynamic_machine() -> (QuorumStateMachine, uuid::Uuid, uuid::Uuid, uuid::Uuid) {
     let cluster_id = uuid::Uuid::from_u128(1);
     let voter_directory_id = uuid::Uuid::from_u128(11);
@@ -45,27 +50,13 @@ fn dynamic_machine() -> (QuorumStateMachine, uuid::Uuid, uuid::Uuid, uuid::Uuid)
 fn an_observer_denies_a_vote_request() {
     // Not in its own voter set: an observer.
     let mut m = machine(NodeId(9), &[NodeId(1), NodeId(2), NodeId(3)]);
-    let log = FakeLog {
-        end: 5,
-        last_epoch: 1,
-    };
-    let actions = m.on_event(
-        Event::ReceiveVoteRequest {
-            from: NodeId(2),
-            cluster_id: None,
+    let actions = receive_vote(
+        &mut m,
+        VoteRequest {
             voter_id: NodeId(9),
-            voter_directory_id: uuid::Uuid::nil(),
-            candidate_epoch: 1,
-            candidate: NodeId(2),
-            candidate_directory_id: uuid::Uuid::nil(),
-            candidate_log_end: LogEnd {
-                last_epoch: 1,
-                last_offset: 5,
-            },
-            pre_vote: false,
-        },
-        &log,
-        SimInstant(0),
+            ..VoteRequest::default()
+        }
+        .event(),
     );
     check!(
         actions
@@ -85,31 +76,14 @@ fn an_observer_denies_a_vote_request() {
 /// epoch E asks replicas still at E.
 #[test]
 fn a_candidate_at_our_own_epoch_is_not_fenced() {
-    let mut m = machine(NodeId(1), &[NodeId(1), NodeId(2), NodeId(3)]);
+    let mut m = three_voter_machine();
     let log = FakeLog {
         end: 5,
         last_epoch: 0,
     };
     // Both sides at epoch 0, the bootstrap epoch.
     check!(m.quorum_state().leader_epoch == 0);
-    let actions = m.on_event(
-        Event::ReceiveVoteRequest {
-            from: NodeId(2),
-            cluster_id: None,
-            voter_id: NodeId(1),
-            voter_directory_id: uuid::Uuid::nil(),
-            candidate_epoch: 0,
-            candidate: NodeId(2),
-            candidate_directory_id: uuid::Uuid::nil(),
-            candidate_log_end: LogEnd {
-                last_epoch: 0,
-                last_offset: 5,
-            },
-            pre_vote: false,
-        },
-        &log,
-        SimInstant(0),
-    );
+    let actions = m.on_event(vote_event(NodeId(2), 0, false, 0, 5), &log, SimInstant(0));
     check!(
         actions
             .iter()
@@ -121,30 +95,9 @@ fn a_candidate_at_our_own_epoch_is_not_fenced() {
 /// grant is decided, as `KafkaRaftClient.handleVoteRequest` does for both.
 #[test]
 fn a_vote_or_pre_vote_from_a_higher_epoch_advances_our_epoch() {
-    let log = FakeLog {
-        end: 5,
-        last_epoch: 1,
-    };
     for (pre_vote, want_epoch) in [(false, 7), (true, 7)] {
-        let mut m = machine(NodeId(1), &[NodeId(1), NodeId(2), NodeId(3)]);
-        m.on_event(
-            Event::ReceiveVoteRequest {
-                from: NodeId(2),
-                cluster_id: None,
-                voter_id: NodeId(1),
-                voter_directory_id: uuid::Uuid::nil(),
-                candidate_epoch: 7,
-                candidate: NodeId(2),
-                candidate_directory_id: uuid::Uuid::nil(),
-                candidate_log_end: LogEnd {
-                    last_epoch: 1,
-                    last_offset: 5,
-                },
-                pre_vote,
-            },
-            &log,
-            SimInstant(0),
-        );
+        let mut m = three_voter_machine();
+        receive_vote(&mut m, vote_event(NodeId(2), 7, pre_vote, 1, 5));
         check!(
             m.quorum_state().leader_epoch == want_epoch,
             "pre_vote={pre_vote}: epoch {}",
@@ -155,65 +108,20 @@ fn a_vote_or_pre_vote_from_a_higher_epoch_advances_our_epoch() {
 
 #[test]
 fn grants_standard_vote_when_log_up_to_date_and_not_voted() {
-    let mut m = machine(NodeId(1), &[NodeId(1), NodeId(2), NodeId(3)]);
-    let log = FakeLog {
-        end: 5,
-        last_epoch: 1,
-    };
-    let actions = m.on_event(
-        Event::ReceiveVoteRequest {
-            from: NodeId(2),
-            cluster_id: None,
-            voter_id: NodeId(1),
-            voter_directory_id: uuid::Uuid::nil(),
-            candidate_epoch: 1,
-            candidate: NodeId(2),
-            candidate_directory_id: uuid::Uuid::nil(),
-            candidate_log_end: LogEnd {
-                last_epoch: 1,
-                last_offset: 5,
-            },
-            pre_vote: false,
-        },
-        &log,
-        SimInstant(0),
-    );
-    assert2::assert!(actions.iter().any(|a| matches!(
-        a,
-        Action::ReplyVote {
-            to: NodeId(2),
-            granted: true,
-            ..
-        }
-    )));
+    let mut m = three_voter_machine();
+    let actions = receive_vote(&mut m, vote_event(NodeId(2), 1, false, 1, 5));
+    assert2::assert!(has_vote_reply(&actions, NodeId(2), true));
     assert2::assert!(m.quorum_state().voted_key.map(|k| k.id) == Some(NodeId(2))); // binding
 }
 
 #[test]
 fn denies_standard_vote_when_candidate_log_behind() {
-    let mut m = machine(NodeId(1), &[NodeId(1), NodeId(2), NodeId(3)]);
+    let mut m = three_voter_machine();
     let log = FakeLog {
         end: 10,
         last_epoch: 2,
     };
-    let actions = m.on_event(
-        Event::ReceiveVoteRequest {
-            from: NodeId(2),
-            cluster_id: None,
-            voter_id: NodeId(1),
-            voter_directory_id: uuid::Uuid::nil(),
-            candidate_epoch: 2,
-            candidate: NodeId(2),
-            candidate_directory_id: uuid::Uuid::nil(),
-            candidate_log_end: LogEnd {
-                last_epoch: 1,
-                last_offset: 3,
-            },
-            pre_vote: false,
-        },
-        &log,
-        SimInstant(0),
-    );
+    let actions = m.on_event(vote_event(NodeId(2), 2, false, 1, 3), &log, SimInstant(0));
     assert2::assert!(
         actions
             .iter()
@@ -223,35 +131,73 @@ fn denies_standard_vote_when_candidate_log_behind() {
 
 #[test]
 fn pre_vote_grant_is_non_binding() {
-    let mut m = machine(NodeId(1), &[NodeId(1), NodeId(2), NodeId(3)]);
-    let log = FakeLog {
-        end: 5,
-        last_epoch: 1,
-    };
-    m.on_event(
-        Event::ReceiveVoteRequest {
-            from: NodeId(2),
-            cluster_id: None,
-            voter_id: NodeId(1),
-            voter_directory_id: uuid::Uuid::nil(),
-            candidate_epoch: 1,
-            candidate: NodeId(2),
-            candidate_directory_id: uuid::Uuid::nil(),
-            candidate_log_end: LogEnd {
-                last_epoch: 1,
-                last_offset: 5,
-            },
-            pre_vote: true,
-        },
-        &log,
-        SimInstant(0),
-    );
+    let mut m = three_voter_machine();
+    receive_vote(&mut m, vote_event(NodeId(2), 1, true, 1, 5));
     // The epoch is adopted, but the pre-vote is not a vote: none is recorded.
     assert2::assert!((m.quorum_state().voted_key, m.quorum_state().leader_epoch) == (None, 1));
 }
 
-/// One inbound Vote or pre-vote of `epoch` from `candidate`, whose log ends at
-/// `(last_epoch, last_offset)`.
+/// Deliver a vote against voter 1's canonical log at time zero.
+fn receive_vote(m: &mut QuorumStateMachine, event: Event) -> Vec<Action> {
+    m.on_event(event, &OUR_LOG, SimInstant(0))
+}
+
+fn has_vote_reply(actions: &[Action], to: NodeId, granted: bool) -> bool {
+    actions.iter().any(|action| {
+        matches!(
+            action,
+            Action::ReplyVote { to: reply_to, granted: reply_granted, .. }
+                if *reply_to == to && *reply_granted == granted
+        )
+    })
+}
+
+struct VoteRequest {
+    cluster_id: Option<uuid::Uuid>,
+    voter_id: NodeId,
+    voter_directory_id: uuid::Uuid,
+    candidate: NodeId,
+    candidate_directory_id: uuid::Uuid,
+    epoch: u32,
+    log_end: LogEnd,
+    pre_vote: bool,
+}
+
+impl Default for VoteRequest {
+    fn default() -> Self {
+        Self {
+            cluster_id: None,
+            voter_id: NodeId(1),
+            voter_directory_id: uuid::Uuid::nil(),
+            candidate: NodeId(2),
+            candidate_directory_id: uuid::Uuid::nil(),
+            epoch: 1,
+            log_end: LogEnd {
+                last_epoch: 1,
+                last_offset: 5,
+            },
+            pre_vote: false,
+        }
+    }
+}
+
+impl VoteRequest {
+    fn event(self) -> Event {
+        Event::ReceiveVoteRequest {
+            from: self.candidate,
+            cluster_id: self.cluster_id,
+            voter_id: self.voter_id,
+            voter_directory_id: self.voter_directory_id,
+            candidate_epoch: self.epoch,
+            candidate: self.candidate,
+            candidate_directory_id: self.candidate_directory_id,
+            candidate_log_end: self.log_end,
+            pre_vote: self.pre_vote,
+        }
+    }
+}
+
+/// One inbound Vote or pre-vote from a candidate with the given log end.
 fn vote_event(
     candidate: NodeId,
     epoch: u32,
@@ -259,20 +205,17 @@ fn vote_event(
     last_epoch: u32,
     last_offset: i64,
 ) -> Event {
-    Event::ReceiveVoteRequest {
-        from: candidate,
-        cluster_id: None,
-        voter_id: NodeId(1),
-        voter_directory_id: uuid::Uuid::nil(),
-        candidate_epoch: epoch,
+    VoteRequest {
         candidate,
-        candidate_directory_id: uuid::Uuid::nil(),
-        candidate_log_end: LogEnd {
+        epoch,
+        pre_vote,
+        log_end: LogEnd {
             last_epoch,
             last_offset,
         },
-        pre_vote,
+        ..VoteRequest::default()
     }
+    .event()
 }
 
 /// Voter 1's log ends at offset 5 in epoch 1: node 2's log is up to date at
@@ -291,11 +234,7 @@ fn vote_answer(
     up_to_date: bool,
 ) -> (bool, u32) {
     let last_offset = if up_to_date { 5 } else { 4 };
-    let actions = m.on_event(
-        vote_event(NodeId(2), epoch, pre_vote, 1, last_offset),
-        &OUR_LOG,
-        SimInstant(0),
-    );
+    let actions = receive_vote(m, vote_event(NodeId(2), epoch, pre_vote, 1, last_offset));
     actions
         .iter()
         .find_map(|action| match action {
@@ -311,7 +250,7 @@ type Build = Box<dyn Fn() -> QuorumStateMachine>;
 /// A machine for voter 1 in a three-voter quorum that follows node 3 at epoch
 /// 4, and has fetched from it when `fetched`.
 fn follower_of_three(fetched: bool) -> QuorumStateMachine {
-    let mut m = machine(NodeId(1), &[NodeId(1), NodeId(2), NodeId(3)]);
+    let mut m = three_voter_machine();
     m.on_event(
         Event::ReceiveBeginQuorumEpoch {
             leader_id: NodeId(3),
@@ -337,7 +276,7 @@ fn follower_of_three(fetched: bool) -> QuorumStateMachine {
 
 /// A machine for voter 1 in a three-voter quorum that leads epoch 1.
 fn leader_of_three() -> QuorumStateMachine {
-    let mut m = machine(NodeId(1), &[NodeId(1), NodeId(2), NodeId(3)]);
+    let mut m = three_voter_machine();
     m.on_event(Event::ElectionTimeout, &OUR_LOG, SimInstant(0));
     for epoch in [0, 1] {
         m.on_event(
@@ -361,7 +300,7 @@ fn leader_of_three() -> QuorumStateMachine {
 /// replica grants a binding vote.
 #[test]
 fn each_state_grants_pre_votes_and_votes_by_its_own_rule() {
-    let unattached = || machine(NodeId(1), &[NodeId(1), NodeId(2), NodeId(3)]);
+    let unattached = three_voter_machine;
     let candidate = || {
         let mut m = leader_of_three();
         m.on_event(Event::CheckQuorumTimeout, &OUR_LOG, SimInstant(2));
@@ -461,17 +400,13 @@ fn a_pre_vote_from_a_higher_epoch_steps_down_a_stale_leader_or_follower() {
 /// the candidate's log compares, as `unattachedOrProspectiveCanGrantVote` says.
 #[test]
 fn a_vote_is_granted_again_only_to_the_candidate_it_went_to() {
-    let mut m = machine(NodeId(1), &[NodeId(1), NodeId(2), NodeId(3)]);
+    let mut m = three_voter_machine();
     check!(vote_answer(&mut m, 1, false, true) == (true, 1));
     check!(
         vote_answer(&mut m, 1, false, false) == (true, 1),
         "same candidate"
     );
-    let actions = m.on_event(
-        vote_event(NodeId(3), 1, false, 1, 5),
-        &OUR_LOG,
-        SimInstant(0),
-    );
+    let actions = receive_vote(&mut m, vote_event(NodeId(3), 1, false, 1, 5));
     check!(
         actions
             .iter()
@@ -483,17 +418,13 @@ fn a_vote_is_granted_again_only_to_the_candidate_it_went_to() {
 /// Whether `m` grants a binding vote from `candidate` at `epoch`, with the
 /// candidate's log level with ours.
 fn grants_vote_to(m: &mut QuorumStateMachine, candidate: NodeId, epoch: u32) -> bool {
-    m.on_event(
-        vote_event(candidate, epoch, false, 1, 5),
-        &OUR_LOG,
-        SimInstant(0),
-    )
-    .iter()
-    .find_map(|action| match action {
-        Action::ReplyVote { granted, .. } => Some(*granted),
-        _ => None,
-    })
-    .expect("a vote request is answered")
+    receive_vote(m, vote_event(candidate, epoch, false, 1, 5))
+        .iter()
+        .find_map(|action| match action {
+            Action::ReplyVote { granted, .. } => Some(*granted),
+            _ => None,
+        })
+        .expect("a vote request is answered")
 }
 
 /// A vote belongs to its epoch. A replica that votes for node 2, and then hears
@@ -520,7 +451,7 @@ fn a_vote_survives_following_the_leader_of_its_epoch() {
         ("the fetch times out", Event::FetchTimeout),
     ];
     for (label, event) in cases {
-        let mut m = machine(NodeId(1), &[NodeId(1), NodeId(2), NodeId(3)]);
+        let mut m = three_voter_machine();
         check!(vote_answer(&mut m, 4, false, true) == (true, 4), "{label}");
         m.on_event(
             Event::ReceiveBeginQuorumEpoch {
@@ -556,7 +487,7 @@ fn a_vote_survives_following_the_leader_of_its_epoch() {
 /// has no vote left at epoch 5.
 #[test]
 fn a_vote_does_not_outlive_its_epoch() {
-    let mut m = machine(NodeId(1), &[NodeId(1), NodeId(2), NodeId(3)]);
+    let mut m = three_voter_machine();
     check!(vote_answer(&mut m, 4, false, true) == (true, 4));
     m.on_event(
         Event::ReceiveBeginQuorumEpoch {
@@ -624,85 +555,23 @@ fn a_second_pre_vote_round_still_remembers_the_abandoned_leader() {
 
 #[test]
 fn denies_standard_vote_when_already_voted_for_other() {
-    let mut m = machine(NodeId(1), &[NodeId(1), NodeId(2), NodeId(3)]);
-    let log = FakeLog {
-        end: 5,
-        last_epoch: 1,
-    };
+    let mut m = three_voter_machine();
     // vote for 2 first
-    m.on_event(
-        Event::ReceiveVoteRequest {
-            from: NodeId(2),
-            cluster_id: None,
-            voter_id: NodeId(1),
-            voter_directory_id: uuid::Uuid::nil(),
-            candidate_epoch: 1,
-            candidate: NodeId(2),
-            candidate_directory_id: uuid::Uuid::nil(),
-            candidate_log_end: LogEnd {
-                last_epoch: 1,
-                last_offset: 5,
-            },
-            pre_vote: false,
-        },
-        &log,
-        SimInstant(0),
-    );
+    receive_vote(&mut m, vote_event(NodeId(2), 1, false, 1, 5));
     // now 3 asks in the same epoch
-    let actions = m.on_event(
-        Event::ReceiveVoteRequest {
-            from: NodeId(3),
-            cluster_id: None,
-            voter_id: NodeId(1),
-            voter_directory_id: uuid::Uuid::nil(),
-            candidate_epoch: 1,
-            candidate: NodeId(3),
-            candidate_directory_id: uuid::Uuid::nil(),
-            candidate_log_end: LogEnd {
-                last_epoch: 1,
-                last_offset: 5,
-            },
-            pre_vote: false,
-        },
-        &log,
-        SimInstant(0),
-    );
-    assert2::assert!(actions.iter().any(|a| matches!(
-        a,
-        Action::ReplyVote {
-            to: NodeId(3),
-            granted: false,
-            ..
-        }
-    )));
+    let actions = receive_vote(&mut m, vote_event(NodeId(3), 1, false, 1, 5));
+    assert2::assert!(has_vote_reply(&actions, NodeId(3), false));
 }
 
 #[test]
 fn fenced_when_candidate_epoch_below_current() {
-    let mut m = machine(NodeId(1), &[NodeId(1), NodeId(2), NodeId(3)]);
+    let mut m = three_voter_machine();
     m.force_epoch(5); // test helper
     let log = FakeLog {
         end: 5,
         last_epoch: 5,
     };
-    let actions = m.on_event(
-        Event::ReceiveVoteRequest {
-            from: NodeId(2),
-            cluster_id: None,
-            voter_id: NodeId(1),
-            voter_directory_id: uuid::Uuid::nil(),
-            candidate_epoch: 3,
-            candidate: NodeId(2),
-            candidate_directory_id: uuid::Uuid::nil(),
-            candidate_log_end: LogEnd {
-                last_epoch: 5,
-                last_offset: 5,
-            },
-            pre_vote: false,
-        },
-        &log,
-        SimInstant(0),
-    );
+    let actions = m.on_event(vote_event(NodeId(2), 3, false, 5, 5), &log, SimInstant(0));
     assert2::assert!(
         actions
             .iter()
@@ -714,30 +583,9 @@ fn fenced_when_candidate_epoch_below_current() {
 fn vote_from_adjacent_voter_view_is_granted_when_up_to_date() {
     // KIP-853 permits an up-to-date candidate from an adjacent voter view;
     // only the local latest set determines whether this replica may vote.
-    let mut m = machine(NodeId(1), &[NodeId(1), NodeId(2), NodeId(3)]);
+    let mut m = three_voter_machine();
     let _ = m.apply_voter_set(voters(&[NodeId(1), NodeId(2), NodeId(99)]), SimInstant(0));
-    let log = FakeLog {
-        end: 5,
-        last_epoch: 1,
-    };
-    let actions = m.on_event(
-        Event::ReceiveVoteRequest {
-            from: NodeId(99),
-            cluster_id: None,
-            voter_id: NodeId(1), // addressed to us
-            voter_directory_id: uuid::Uuid::nil(),
-            candidate_epoch: 1,
-            candidate: NodeId(99), // not a voter
-            candidate_directory_id: uuid::Uuid::nil(),
-            candidate_log_end: LogEnd {
-                last_epoch: 1,
-                last_offset: 5,
-            },
-            pre_vote: false,
-        },
-        &log,
-        SimInstant(0),
-    );
+    let actions = receive_vote(&mut m, vote_event(NodeId(99), 1, false, 1, 5));
     assert2::assert!(
         m.quorum_state()
             .voted_key
@@ -754,28 +602,14 @@ fn vote_from_adjacent_voter_view_is_granted_when_up_to_date() {
 fn vote_addressed_to_other_voter_rejected() {
     // C-2: a Vote addressed (voter_id) to a different node than us is
     // ignored, even if the candidate is a legitimate voter.
-    let mut m = machine(NodeId(1), &[NodeId(1), NodeId(2), NodeId(3)]);
-    let log = FakeLog {
-        end: 5,
-        last_epoch: 1,
-    };
-    let actions = m.on_event(
-        Event::ReceiveVoteRequest {
-            from: NodeId(2),
-            cluster_id: None,
-            voter_id: NodeId(3), // addressed to node 3, not us (node 1)
-            voter_directory_id: uuid::Uuid::nil(),
-            candidate_epoch: 1,
-            candidate: NodeId(2),
-            candidate_directory_id: uuid::Uuid::nil(),
-            candidate_log_end: LogEnd {
-                last_epoch: 1,
-                last_offset: 5,
-            },
-            pre_vote: false,
-        },
-        &log,
-        SimInstant(0),
+    let mut m = three_voter_machine();
+    let actions = receive_vote(
+        &mut m,
+        VoteRequest {
+            voter_id: NodeId(3),
+            ..VoteRequest::default()
+        }
+        .event(),
     );
     assert2::assert!((actions.is_empty(), m.quorum_state().voted_key) == (true, None));
 }
@@ -784,64 +618,22 @@ fn vote_addressed_to_other_voter_rejected() {
 fn vote_from_voter_addressed_to_us_still_granted() {
     // C-2 must not break the legitimate path: a voter candidate addressing
     // us is still granted.
-    let mut m = machine(NodeId(1), &[NodeId(1), NodeId(2), NodeId(3)]);
-    let log = FakeLog {
-        end: 5,
-        last_epoch: 1,
-    };
-    let actions = m.on_event(
-        Event::ReceiveVoteRequest {
-            from: NodeId(2),
-            cluster_id: None,
-            voter_id: NodeId(1), // addressed to us
-            voter_directory_id: uuid::Uuid::nil(),
-            candidate_epoch: 1,
-            candidate: NodeId(2),
-            candidate_directory_id: uuid::Uuid::nil(),
-            candidate_log_end: LogEnd {
-                last_epoch: 1,
-                last_offset: 5,
-            },
-            pre_vote: false,
-        },
-        &log,
-        SimInstant(0),
-    );
-    assert2::assert!(actions.iter().any(|a| matches!(
-        a,
-        Action::ReplyVote {
-            to: NodeId(2),
-            granted: true,
-            ..
-        }
-    )));
+    let mut m = three_voter_machine();
+    let actions = receive_vote(&mut m, vote_event(NodeId(2), 1, false, 1, 5));
+    assert2::assert!(has_vote_reply(&actions, NodeId(2), true));
     assert2::assert!(m.quorum_state().voted_key.map(|k| k.id) == Some(NodeId(2)));
 }
 
 #[test]
 fn zero_target_is_not_a_wildcard_for_a_nonzero_voter() {
     let mut m = machine(NodeId(1), &[NodeId(1), NodeId(2)]);
-    let log = FakeLog {
-        end: 5,
-        last_epoch: 1,
-    };
-    let actions = m.on_event(
-        Event::ReceiveVoteRequest {
-            from: NodeId(2),
-            cluster_id: None,
+    let actions = receive_vote(
+        &mut m,
+        VoteRequest {
             voter_id: NodeId(0),
-            voter_directory_id: uuid::Uuid::nil(),
-            candidate_epoch: 1,
-            candidate: NodeId(2),
-            candidate_directory_id: uuid::Uuid::nil(),
-            candidate_log_end: LogEnd {
-                last_epoch: 1,
-                last_offset: 5,
-            },
-            pre_vote: false,
-        },
-        &log,
-        SimInstant(0),
+            ..VoteRequest::default()
+        }
+        .event(),
     );
     assert2::assert!((actions.is_empty(), m.quorum_state().voted_key) == (true, None));
 }
@@ -849,27 +641,13 @@ fn zero_target_is_not_a_wildcard_for_a_nonzero_voter() {
 #[test]
 fn zero_target_is_valid_for_voter_zero() {
     let mut m = machine(NodeId(0), &[NodeId(0), NodeId(2)]);
-    let log = FakeLog {
-        end: 5,
-        last_epoch: 1,
-    };
-    let actions = m.on_event(
-        Event::ReceiveVoteRequest {
-            from: NodeId(2),
-            cluster_id: None,
+    let actions = receive_vote(
+        &mut m,
+        VoteRequest {
             voter_id: NodeId(0),
-            voter_directory_id: uuid::Uuid::nil(),
-            candidate_epoch: 1,
-            candidate: NodeId(2),
-            candidate_directory_id: uuid::Uuid::nil(),
-            candidate_log_end: LogEnd {
-                last_epoch: 1,
-                last_offset: 5,
-            },
-            pre_vote: false,
-        },
-        &log,
-        SimInstant(0),
+            ..VoteRequest::default()
+        }
+        .event(),
     );
     assert2::assert!(
         actions
@@ -882,27 +660,16 @@ fn zero_target_is_valid_for_voter_zero() {
 #[test]
 fn stale_target_directory_is_ignored_before_epoch_mutation() {
     let (mut m, cluster_id, _voter_directory_id, candidate_directory_id) = dynamic_machine();
-    let log = FakeLog {
-        end: 5,
-        last_epoch: 1,
-    };
-    let actions = m.on_event(
-        Event::ReceiveVoteRequest {
-            from: NodeId(2),
+    let actions = receive_vote(
+        &mut m,
+        VoteRequest {
             cluster_id: Some(cluster_id),
-            voter_id: NodeId(1),
             voter_directory_id: uuid::Uuid::from_u128(99),
-            candidate_epoch: 7,
-            candidate: NodeId(2),
             candidate_directory_id,
-            candidate_log_end: LogEnd {
-                last_epoch: 1,
-                last_offset: 5,
-            },
-            pre_vote: false,
-        },
-        &log,
-        SimInstant(0),
+            epoch: 7,
+            ..VoteRequest::default()
+        }
+        .event(),
     );
     assert2::assert!(actions.is_empty());
     assert2::assert!((m.quorum_state().leader_epoch, m.quorum_state().voted_key) == (0, None));
@@ -911,27 +678,16 @@ fn stale_target_directory_is_ignored_before_epoch_mutation() {
 #[test]
 fn stale_candidate_directory_is_denied_before_epoch_mutation() {
     let (mut m, cluster_id, voter_directory_id, _candidate_directory_id) = dynamic_machine();
-    let log = FakeLog {
-        end: 5,
-        last_epoch: 1,
-    };
-    let actions = m.on_event(
-        Event::ReceiveVoteRequest {
-            from: NodeId(2),
+    let actions = receive_vote(
+        &mut m,
+        VoteRequest {
             cluster_id: Some(cluster_id),
-            voter_id: NodeId(1),
             voter_directory_id,
-            candidate_epoch: 7,
-            candidate: NodeId(2),
             candidate_directory_id: uuid::Uuid::from_u128(99),
-            candidate_log_end: LogEnd {
-                last_epoch: 1,
-                last_offset: 5,
-            },
-            pre_vote: false,
-        },
-        &log,
-        SimInstant(0),
+            epoch: 7,
+            ..VoteRequest::default()
+        }
+        .event(),
     );
     assert2::assert!(
         actions
@@ -944,27 +700,16 @@ fn stale_candidate_directory_is_denied_before_epoch_mutation() {
 #[test]
 fn foreign_cluster_is_denied_before_epoch_mutation() {
     let (mut m, _cluster_id, voter_directory_id, candidate_directory_id) = dynamic_machine();
-    let log = FakeLog {
-        end: 5,
-        last_epoch: 1,
-    };
-    let actions = m.on_event(
-        Event::ReceiveVoteRequest {
-            from: NodeId(2),
+    let actions = receive_vote(
+        &mut m,
+        VoteRequest {
             cluster_id: Some(uuid::Uuid::from_u128(99)),
-            voter_id: NodeId(1),
             voter_directory_id,
-            candidate_epoch: 7,
-            candidate: NodeId(2),
             candidate_directory_id,
-            candidate_log_end: LogEnd {
-                last_epoch: 1,
-                last_offset: 5,
-            },
-            pre_vote: false,
-        },
-        &log,
-        SimInstant(0),
+            epoch: 7,
+            ..VoteRequest::default()
+        }
+        .event(),
     );
     assert2::assert!(
         actions
@@ -976,29 +721,12 @@ fn foreign_cluster_is_denied_before_epoch_mutation() {
 
 #[test]
 fn prevote_rejected_when_candidate_log_is_not_up_to_date() {
-    let mut m = machine(NodeId(1), &[NodeId(1), NodeId(2), NodeId(3)]);
+    let mut m = three_voter_machine();
     let log = FakeLog {
         end: 10,
         last_epoch: 2,
     };
-    let actions = m.on_event(
-        Event::ReceiveVoteRequest {
-            from: NodeId(2),
-            cluster_id: None,
-            voter_id: NodeId(1),
-            voter_directory_id: uuid::Uuid::nil(),
-            candidate_epoch: 2,
-            candidate: NodeId(2),
-            candidate_directory_id: uuid::Uuid::nil(),
-            candidate_log_end: LogEnd {
-                last_epoch: 1,
-                last_offset: 5,
-            },
-            pre_vote: true,
-        },
-        &log,
-        SimInstant(0),
-    );
+    let actions = m.on_event(vote_event(NodeId(2), 2, true, 1, 5), &log, SimInstant(0));
     assert2::assert!(
         actions
             .iter()

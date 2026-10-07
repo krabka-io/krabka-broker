@@ -1,29 +1,29 @@
-(* #"/workspace/crates/verified/src/consensus/watermark.rs" 139 0 144 8 *)
+(* #"/workspace/crates/verified/src/consensus/watermark.rs" 140 0 145 8 *)
 
-let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
-let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
-let%span swatermark = "/workspace/crates/verified/src/consensus/watermark.rs" 145 84 145 88
-let%span swatermark'0 = "/workspace/crates/verified/src/consensus/watermark.rs" 145 4 145 89
-let%span swatermark'1 = "/workspace/crates/verified/src/consensus/watermark.rs" 128 11 128 69
-let%span swatermark'2 = "/workspace/crates/verified/src/consensus/watermark.rs" 129 11 129 31
-let%span swatermark'3 = "/workspace/crates/verified/src/consensus/watermark.rs" 130 11 131 41
-let%span swatermark'4 = "/workspace/crates/verified/src/consensus/watermark.rs" 132 10 132 29
-let%span swatermark'5 = "/workspace/crates/verified/src/consensus/watermark.rs" 133 10 133 29
-let%span swatermark'6 = "/workspace/crates/verified/src/consensus/watermark.rs" 134 10 135 20
-let%span swatermark'7 = "/workspace/crates/verified/src/consensus/watermark.rs" 136 10 137 73
-let%span swatermark'8 = "/workspace/crates/verified/src/consensus/watermark.rs" 55 11 55 69
-let%span swatermark'9 = "/workspace/crates/verified/src/consensus/watermark.rs" 56 11 56 64
-let%span swatermark'10 = "/workspace/crates/verified/src/consensus/watermark.rs" 57 11 57 35
-let%span swatermark'11 = "/workspace/crates/verified/src/consensus/watermark.rs" 58 11 59 41
-let%span swatermark'12 = "/workspace/crates/verified/src/consensus/watermark.rs" 60 10 60 33
-let%span swatermark'13 = "/workspace/crates/verified/src/consensus/watermark.rs" 61 10 61 29
-let%span swatermark'14 = "/workspace/crates/verified/src/consensus/watermark.rs" 62 10 64 20
-let%span swatermark'15 = "/workspace/crates/verified/src/consensus/watermark.rs" 65 10 67 85
-let%span sfailover = "/workspace/crates/verified/src/consensus/failover.rs" 202 10 202 17
-let%span sfailover'0 = "/workspace/crates/verified/src/consensus/failover.rs" 204 16 204 74
-let%span sfailover'1 = "/workspace/crates/verified/src/consensus/failover.rs" 185 10 185 15
-let%span sfailover'2 = "/workspace/crates/verified/src/consensus/failover.rs" 188 8 194 9
-let%span sfailover'3 = "/workspace/crates/verified/src/consensus/failover.rs" 177 8 177 48
+let%span sord = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sord'0 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span sfailover = "/workspace/crates/verified/src/consensus/failover.rs" 203 10 203 17
+let%span sfailover'0 = "/workspace/crates/verified/src/consensus/failover.rs" 205 16 205 74
+let%span sfailover'1 = "/workspace/crates/verified/src/consensus/failover.rs" 186 10 186 15
+let%span sfailover'2 = "/workspace/crates/verified/src/consensus/failover.rs" 189 8 195 9
+let%span sfailover'3 = "/workspace/crates/verified/src/consensus/failover.rs" 178 8 178 48
+let%span swatermark = "/workspace/crates/verified/src/consensus/watermark.rs" 146 84 146 88
+let%span swatermark'0 = "/workspace/crates/verified/src/consensus/watermark.rs" 146 4 146 89
+let%span swatermark'1 = "/workspace/crates/verified/src/consensus/watermark.rs" 129 11 129 69
+let%span swatermark'2 = "/workspace/crates/verified/src/consensus/watermark.rs" 130 11 130 31
+let%span swatermark'3 = "/workspace/crates/verified/src/consensus/watermark.rs" 131 11 132 41
+let%span swatermark'4 = "/workspace/crates/verified/src/consensus/watermark.rs" 133 10 133 29
+let%span swatermark'5 = "/workspace/crates/verified/src/consensus/watermark.rs" 134 10 134 29
+let%span swatermark'6 = "/workspace/crates/verified/src/consensus/watermark.rs" 135 10 136 20
+let%span swatermark'7 = "/workspace/crates/verified/src/consensus/watermark.rs" 137 10 138 73
+let%span swatermark'8 = "/workspace/crates/verified/src/consensus/watermark.rs" 56 11 56 69
+let%span swatermark'9 = "/workspace/crates/verified/src/consensus/watermark.rs" 57 11 57 64
+let%span swatermark'10 = "/workspace/crates/verified/src/consensus/watermark.rs" 58 11 58 35
+let%span swatermark'11 = "/workspace/crates/verified/src/consensus/watermark.rs" 59 11 60 41
+let%span swatermark'12 = "/workspace/crates/verified/src/consensus/watermark.rs" 61 10 61 33
+let%span swatermark'13 = "/workspace/crates/verified/src/consensus/watermark.rs" 62 10 62 29
+let%span swatermark'14 = "/workspace/crates/verified/src/consensus/watermark.rs" 63 10 65 20
+let%span swatermark'15 = "/workspace/crates/verified/src/consensus/watermark.rs" 66 10 68 85
 
 use creusot.int.Int64
 use creusot.slice.Slice64
@@ -40,10 +40,10 @@ predicate gt_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord'0] oth
 
 meta "rewrite_def" predicate gt_log_Int
 
-function hwm_member_at [#"/workspace/crates/verified/src/consensus/failover.rs" 175 0 175 62] (log_end: int) (s: Seq.seq Int64.t) (k: int) : int
+function hwm_member_at [#"/workspace/crates/verified/src/consensus/failover.rs" 176 0 176 62] (log_end: int) (s: Seq.seq Int64.t) (k: int) : int
  = [%#sfailover'3] if k = 0 then log_end else Int64.to_int (Seq.get s (k - 1))
 
-function count_ge_prefix [#"/workspace/crates/verified/src/consensus/failover.rs" 186 0 186 97] (log_end: int) (s: Seq.seq Int64.t) (v: int) (limit: int) (leader_counts: bool) : int
+function count_ge_prefix [#"/workspace/crates/verified/src/consensus/failover.rs" 187 0 187 97] (log_end: int) (s: Seq.seq Int64.t) (v: int) (limit: int) (leader_counts: bool) : int
 
 axiom count_ge_prefix_def:
   forall log_end: int, s: Seq.seq Int64.t, v: int, limit: int, leader_counts: bool [count_ge_prefix log_end s v limit leader_counts]. count_ge_prefix log_end s v limit leader_counts
@@ -54,7 +54,7 @@ axiom count_ge_prefix_def:
       + (if (leader_counts \/ gt_log_Int limit 1) /\ ge_log_Int (hwm_member_at log_end s (limit - 1)) v then 1 else 0)
     )
 
-function count_ge [#"/workspace/crates/verified/src/consensus/failover.rs" 203 0 203 78] (log_end: int) (s: Seq.seq Int64.t) (v: int) (leader_counts: bool) : int
+function count_ge [#"/workspace/crates/verified/src/consensus/failover.rs" 204 0 204 78] (log_end: int) (s: Seq.seq Int64.t) (v: int) (leader_counts: bool) : int
 
 axiom count_ge_def:
   forall log_end: int, s: Seq.seq Int64.t, v: int, leader_counts: bool [count_ge log_end s v leader_counts]. count_ge log_end s v leader_counts
@@ -89,9 +89,8 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let majority_watermark [#"/workspace/crates/verified/src/consensus/watermark.rs" 139 0 144 8]
-  (log_end: Int64.t) (follower_offsets: Slice64.slice Int64.t) (majority: UInt64.t) (current': Int64.t)
-  (return (x: Int64.t)) =
+let majority_watermark [#"/workspace/crates/verified/src/consensus/watermark.rs" 140 0 145 8] (log_end: Int64.t)
+  (follower_offsets: Slice64.slice Int64.t) (majority: UInt64.t) (current': Int64.t) (return (x: Int64.t)) =
 {[@stop_split] [@expl:majority_watermark requires] ([@stop_split] [@expl:majority_watermark requires #0] [%#swatermark'1] 1
       <= UInt64.t'int majority
     /\ UInt64.t'int majority <= Seq.length (Slice64.view follower_offsets) + 1)

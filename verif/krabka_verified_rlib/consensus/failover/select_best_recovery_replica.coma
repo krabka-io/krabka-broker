@@ -1,23 +1,23 @@
-(* #"/workspace/crates/verified/src/consensus/failover.rs" 141 0 141 86 *)
+(* #"/workspace/crates/verified/src/consensus/failover.rs" 142 0 142 86 *)
 
-let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
-let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
-let%span swell_founded = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/well_founded.rs" 43 8 43 33
-let%span sslice = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 331 18 331 22
-let%span sfailover = "/workspace/crates/verified/src/consensus/failover.rs" 142 12 142 28
-let%span sfailover'0 = "/workspace/crates/verified/src/consensus/failover.rs" 143 12 143 13
-let%span sfailover'1 = "/workspace/crates/verified/src/consensus/failover.rs" 146 19 146 25
-let%span sfailover'2 = "/workspace/crates/verified/src/consensus/failover.rs" 147 16 147 22
-let%span sfailover'3 = "/workspace/crates/verified/src/consensus/failover.rs" 151 14 151 21
-let%span sfailover'4 = "/workspace/crates/verified/src/consensus/failover.rs" 150 16 150 96
-let%span sfailover'5 = "/workspace/crates/verified/src/consensus/failover.rs" 149 16 149 26
-let%span sfailover'6 = "/workspace/crates/verified/src/consensus/failover.rs" 148 16 148 35
-let%span sfailover'7 = "/workspace/crates/verified/src/consensus/failover.rs" 153 24 153 37
-let%span sfailover'8 = "/workspace/crates/verified/src/consensus/failover.rs" 154 22 154 38
-let%span sfailover'9 = "/workspace/crates/verified/src/consensus/failover.rs" 164 13 164 14
-let%span sfailover'10 = "/workspace/crates/verified/src/consensus/failover.rs" 164 8 164 14
-let%span sfailover'11 = "/workspace/crates/verified/src/consensus/failover.rs" 134 10 139 1
-let%span sfailover'12 = "/workspace/crates/verified/src/consensus/failover.rs" 121 8 124 97
+let%span sord = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sord'0 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span swell_founded = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/well_founded.rs" 43 8 43 33
+let%span sslice = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 331 18 331 22
+let%span sfailover = "/workspace/crates/verified/src/consensus/failover.rs" 143 12 143 28
+let%span sfailover'0 = "/workspace/crates/verified/src/consensus/failover.rs" 144 12 144 13
+let%span sfailover'1 = "/workspace/crates/verified/src/consensus/failover.rs" 147 19 147 25
+let%span sfailover'2 = "/workspace/crates/verified/src/consensus/failover.rs" 148 16 148 22
+let%span sfailover'3 = "/workspace/crates/verified/src/consensus/failover.rs" 152 14 152 21
+let%span sfailover'4 = "/workspace/crates/verified/src/consensus/failover.rs" 151 16 151 96
+let%span sfailover'5 = "/workspace/crates/verified/src/consensus/failover.rs" 150 16 150 26
+let%span sfailover'6 = "/workspace/crates/verified/src/consensus/failover.rs" 149 16 149 35
+let%span sfailover'7 = "/workspace/crates/verified/src/consensus/failover.rs" 154 24 154 37
+let%span sfailover'8 = "/workspace/crates/verified/src/consensus/failover.rs" 155 22 155 38
+let%span sfailover'9 = "/workspace/crates/verified/src/consensus/failover.rs" 165 13 165 14
+let%span sfailover'10 = "/workspace/crates/verified/src/consensus/failover.rs" 165 8 165 14
+let%span sfailover'11 = "/workspace/crates/verified/src/consensus/failover.rs" 135 10 140 1
+let%span sfailover'12 = "/workspace/crates/verified/src/consensus/failover.rs" 122 8 125 97
 
 use creusot.slice.Slice64
 use creusot.int.Int32
@@ -49,7 +49,7 @@ predicate well_founded_relation_Int [@inline:trivial] (self: int) (other: int) =
 
 meta "rewrite_def" predicate well_founded_relation_Int
 
-predicate ranks_ge [#"/workspace/crates/verified/src/consensus/failover.rs" 119 0 119 67] (a: t_RecoveryCandidate) (b: t_RecoveryCandidate) =
+predicate ranks_ge [#"/workspace/crates/verified/src/consensus/failover.rs" 120 0 120 67] (a: t_RecoveryCandidate) (b: t_RecoveryCandidate) =
   [%#sfailover'12] gt_log_Int (Int32.to_int a.last_epoch) (Int32.to_int b.last_epoch)
   \/ Int32.to_int a.last_epoch = Int32.to_int b.last_epoch
   /\ (gt_log_Int (Int64.to_int a.log_end_offset) (Int64.to_int b.log_end_offset)
@@ -60,7 +60,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let select_best_recovery_replica [#"/workspace/crates/verified/src/consensus/failover.rs" 141 0 141 86]
+let select_best_recovery_replica [#"/workspace/crates/verified/src/consensus/failover.rs" 142 0 142 86]
   (candidates: Slice64.slice t_RecoveryCandidate) (return (x: t_Option_usize)) = (! bb0
   [ bb0 = s0
     [ s0 = len_RecoveryCandidate [%#sfailover] {candidates} (fun (_x: UInt64.t) -> [ &n <- _x ] s1)

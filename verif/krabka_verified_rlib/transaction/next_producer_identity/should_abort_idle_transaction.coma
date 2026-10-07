@@ -1,19 +1,19 @@
-(* #"/workspace/crates/verified/src/transaction/next_producer_identity.rs" 120 0 125 9 *)
+(* #"/workspace/crates/verified/src/transaction/next_producer_identity.rs" 121 0 126 9 *)
 
-let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
-let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
-let%span sconvert = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/convert.rs" 274 26 274 51
-let%span snum = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 347 20 348 51
-let%span snum'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 351 26 351 83
-let%span snum'1 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 352 26 352 83
-let%span snext_producer_identity = "/workspace/crates/verified/src/transaction/next_producer_identity.rs" 128 39 128 44
-let%span snext_producer_identity'0 = "/workspace/crates/verified/src/transaction/next_producer_identity.rs" 127 41 127 45
-let%span snext_producer_identity'1 = "/workspace/crates/verified/src/transaction/next_producer_identity.rs" 133 29 133 54
-let%span snext_producer_identity'2 = "/workspace/crates/verified/src/transaction/next_producer_identity.rs" 134 11 134 42
-let%span snext_producer_identity'3 = "/workspace/crates/verified/src/transaction/next_producer_identity.rs" 134 45 134 70
-let%span snext_producer_identity'4 = "/workspace/crates/verified/src/transaction/next_producer_identity.rs" 132 4 134 70
-let%span snext_producer_identity'5 = "/workspace/crates/verified/src/transaction/next_producer_identity.rs" 115 10 117 45
-let%span snext_producer_identity'6 = "/workspace/crates/verified/src/transaction/next_producer_identity.rs" 118 10 118 66
+let%span sord = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sord'0 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span snum = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 347 20 348 51
+let%span snum'0 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 351 26 351 83
+let%span snum'1 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 352 26 352 83
+let%span sconvert = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/convert.rs" 274 26 274 51
+let%span snext_producer_identity = "/workspace/crates/verified/src/transaction/next_producer_identity.rs" 129 39 129 44
+let%span snext_producer_identity'0 = "/workspace/crates/verified/src/transaction/next_producer_identity.rs" 128 41 128 45
+let%span snext_producer_identity'1 = "/workspace/crates/verified/src/transaction/next_producer_identity.rs" 134 29 134 54
+let%span snext_producer_identity'2 = "/workspace/crates/verified/src/transaction/next_producer_identity.rs" 135 11 135 42
+let%span snext_producer_identity'3 = "/workspace/crates/verified/src/transaction/next_producer_identity.rs" 135 45 135 70
+let%span snext_producer_identity'4 = "/workspace/crates/verified/src/transaction/next_producer_identity.rs" 133 4 135 70
+let%span snext_producer_identity'5 = "/workspace/crates/verified/src/transaction/next_producer_identity.rs" 116 10 118 45
+let%span snext_producer_identity'6 = "/workspace/crates/verified/src/transaction/next_producer_identity.rs" 119 10 119 66
 let%span stransaction = "/workspace/crates/verified/src/transaction.rs" 165 43 165 51
 
 use creusot.int.Int32
@@ -60,7 +60,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let should_abort_idle_transaction [#"/workspace/crates/verified/src/transaction/next_producer_identity.rs" 120 0 125 9]
+let should_abort_idle_transaction [#"/workspace/crates/verified/src/transaction/next_producer_identity.rs" 121 0 126 9]
   (state: t_IdleTransactionState) (txn_timeout_ms: Int32.t) (start_ms: Int64.t) (now_ms: Int64.t) (return (x: bool)) =
 (! bb0
   [ bb0 = any [ br0 -> {state = Ongoing} (! bb4) | br1 -> {state = Other} (! bb3) ]

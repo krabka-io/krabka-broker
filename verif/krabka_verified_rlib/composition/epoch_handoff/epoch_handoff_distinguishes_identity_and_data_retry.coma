@@ -1,14 +1,14 @@
-(* #"/workspace/crates/verified/src/composition/epoch_handoff.rs" 33 0 40 17 *)
+(* #"/workspace/crates/verified/src/composition/epoch_handoff.rs" 47 0 54 17 *)
 
-let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
-let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span sord = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sord'0 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span soption = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/option.rs" 137 19 137 23
+let%span soption'0 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/option.rs" 138 34 138 38
 let%span snext_producer_identity = "/workspace/crates/verified/src/transaction/next_producer_identity.rs" 142 10 142 52
 let%span snext_producer_identity'0 = "/workspace/crates/verified/src/transaction/next_producer_identity.rs" 143 10 147 5
 let%span snext_producer_identity'1 = "/workspace/crates/verified/src/transaction/next_producer_identity.rs" 148 10 152 5
 let%span snext_producer_identity'2 = "/workspace/crates/verified/src/transaction/next_producer_identity.rs" 153 10 160 5
-let%span soption = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/option.rs" 137 19 137 23
-let%span soption'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/option.rs" 138 34 138 38
-let%span svec = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 18 14 18 41
+let%span svec = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 18 14 18 41
 let%span sreplay_start = "/workspace/crates/verified/src/producer_snapshot/replay_start.rs" 19 8 24 65
 let%span ssequence_decision = "/workspace/crates/verified/src/producer/sequence_decision.rs" 11 16 11 47
 let%span ssnapshot_transaction_valid = "/workspace/crates/verified/src/producer_snapshot/snapshot_transaction_valid.rs" 203 8 208 56
@@ -30,22 +30,19 @@ let%span scompleted_producer'12 = "/workspace/crates/verified/src/composition/co
 let%span scompleted_producer'13 = "/workspace/crates/verified/src/composition/completed_producer.rs" 18 16 18 72
 let%span scompleted_producer'14 = "/workspace/crates/verified/src/composition/completed_producer.rs" 31 16 31 63
 let%span scompletion = "/workspace/crates/verified/src/producer/completion.rs" 19 10 19 91
-let%span sepoch_handoff = "/workspace/crates/verified/src/composition/epoch_handoff.rs" 42 31 42 35
-let%span sepoch_handoff'0 = "/workspace/crates/verified/src/composition/epoch_handoff.rs" 42 37 42 42
-let%span sepoch_handoff'1 = "/workspace/crates/verified/src/composition/epoch_handoff.rs" 42 8 42 75
-let%span sepoch_handoff'2 = "/workspace/crates/verified/src/composition/epoch_handoff.rs" 42 8 42 84
-let%span sepoch_handoff'3 = "/workspace/crates/verified/src/composition/epoch_handoff.rs" 44 67 44 69
-let%span sepoch_handoff'4 = "/workspace/crates/verified/src/composition/epoch_handoff.rs" 44 8 44 96
-let%span sepoch_handoff'5 = "/workspace/crates/verified/src/composition/epoch_handoff.rs" 46 37 53 5
-let%span sepoch_handoff'6 = "/workspace/crates/verified/src/composition/epoch_handoff.rs" 21 11 21 74
-let%span sepoch_handoff'7 = "/workspace/crates/verified/src/composition/epoch_handoff.rs" 22 11 22 27
-let%span sepoch_handoff'8 = "/workspace/crates/verified/src/composition/epoch_handoff.rs" 23 11 24 36
-let%span sepoch_handoff'9 = "/workspace/crates/verified/src/composition/epoch_handoff.rs" 25 11 27 84
-let%span sepoch_handoff'10 = "/workspace/crates/verified/src/composition/epoch_handoff.rs" 28 11 28 118
-let%span sepoch_handoff'11 = "/workspace/crates/verified/src/composition/epoch_handoff.rs" 29 10 29 58
-let%span sepoch_handoff'12 = "/workspace/crates/verified/src/composition/epoch_handoff.rs" 30 10 30 59
-let%span sepoch_handoff'13 = "/workspace/crates/verified/src/composition/epoch_handoff.rs" 31 10 31 62
-let%span sepoch_handoff'14 = "/workspace/crates/verified/src/composition/epoch_handoff.rs" 32 10 32 46
+let%span sepoch_handoff = "/workspace/crates/verified/src/composition/epoch_handoff.rs" 56 31 56 35
+let%span sepoch_handoff'0 = "/workspace/crates/verified/src/composition/epoch_handoff.rs" 56 37 56 42
+let%span sepoch_handoff'1 = "/workspace/crates/verified/src/composition/epoch_handoff.rs" 56 8 56 75
+let%span sepoch_handoff'2 = "/workspace/crates/verified/src/composition/epoch_handoff.rs" 56 8 56 84
+let%span sepoch_handoff'3 = "/workspace/crates/verified/src/composition/epoch_handoff.rs" 58 67 58 69
+let%span sepoch_handoff'4 = "/workspace/crates/verified/src/composition/epoch_handoff.rs" 58 8 58 96
+let%span sepoch_handoff'5 = "/workspace/crates/verified/src/composition/epoch_handoff.rs" 60 37 67 5
+let%span sepoch_handoff'6 = "/workspace/crates/verified/src/composition/epoch_handoff.rs" 42 11 42 64
+let%span sepoch_handoff'7 = "/workspace/crates/verified/src/composition/epoch_handoff.rs" 43 10 43 58
+let%span sepoch_handoff'8 = "/workspace/crates/verified/src/composition/epoch_handoff.rs" 44 10 44 59
+let%span sepoch_handoff'9 = "/workspace/crates/verified/src/composition/epoch_handoff.rs" 45 10 45 62
+let%span sepoch_handoff'10 = "/workspace/crates/verified/src/composition/epoch_handoff.rs" 46 10 46 46
+let%span sepoch_handoff'11 = "/workspace/crates/verified/src/composition/epoch_handoff.rs" 28 8 32 121
 let%span sproducer_identity = "/workspace/crates/verified/src/transaction/producer_identity.rs" 39 10 40 27
 let%span sproducer_identity'0 = "/workspace/crates/verified/src/transaction/producer_identity.rs" 41 10 44 42
 let%span sproducer_identity'1 = "/workspace/crates/verified/src/transaction/producer_identity.rs" 45 10 51 41
@@ -386,52 +383,50 @@ type tup4_i16_InitProducerIdIdentityDecision_Vec_usize_Global_ProducerDecision =
   f2'6: t_Vec_usize_Global;
   f3'6: t_ProducerDecision }
 
+predicate handoff_input_valid [#"/workspace/crates/verified/src/composition/epoch_handoff.rs" 20 0 26 9] (end': int) (hwm: int) (epoch: int) (rows: Seq.seq t_ProducerSnapshotEntryFacts) (first: t_ProducerSnapshotEntryFacts) =
+  [%#sepoch_handoff'11] 0 <= end'
+  /\ 0 <= hwm
+  /\ 0 <= epoch
+  /\ epoch < Int16.to_int const_MAX - 1
+  /\ Seq.length rows <= 5
+  /\ snapshot_entry_valid_model end' first
+  /\ ge_log_Int (Int64.to_int first.last_offset) 0
+  /\ Int16.to_int first.producer_epoch = epoch
+  /\ (forall i: int. 0 <= i /\ i < Seq.length rows
+      -> snapshot_entry_valid_model end' (Seq.get rows i)
+      /\ ge_log_Int (Int64.to_int (Seq.get rows i).last_offset) 0
+      /\ (Seq.get rows i).producer_id = first.producer_id /\ Int16.to_int (Seq.get rows i).producer_epoch = epoch)
+  /\ (forall i: int, j: int. 0 <= i /\ i < j /\ j < Seq.length rows
+    -> Int64.to_int (Seq.get rows i).last_offset < Int64.to_int (Seq.get rows j).last_offset)
+
 meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let epoch_handoff_distinguishes_identity_and_data_retry [#"/workspace/crates/verified/src/composition/epoch_handoff.rs" 33 0 40 17]
+let epoch_handoff_distinguishes_identity_and_data_retry [#"/workspace/crates/verified/src/composition/epoch_handoff.rs" 47 0 54 17]
   (end': Int64.t) (hwm: Int64.t) (epoch: Int16.t) (rows: Slice64.slice t_ProducerSnapshotEntryFacts)
   (first: t_ProducerSnapshotEntryFacts) (request: tup2_i32_i32)
   (return (x: tup4_i16_InitProducerIdIdentityDecision_Vec_usize_Global_ProducerDecision)) =
-{[@stop_split] [@expl:epoch_handoff_distinguishes_identity_and_data_retry requires] ([@stop_split] [@expl:epoch_handoff_distinguishes_identity_and_data_retry requires #0] [%#sepoch_handoff'6] 0
-      <= Int64.to_int end'
-    /\ 0 <= Int64.to_int hwm /\ 0 <= Int16.to_int epoch /\ Int16.to_int epoch < Int16.to_int const_MAX - 1)
-  /\ ([@stop_split] [@expl:epoch_handoff_distinguishes_identity_and_data_retry requires #1] [%#sepoch_handoff'7] Seq.length (Slice64.view rows)
-    <= 5)
-  /\ ([@stop_split] [@expl:epoch_handoff_distinguishes_identity_and_data_retry requires #2] [%#sepoch_handoff'8] snapshot_entry_valid_model (Int64.to_int end') first
-    /\ ge_log_Int (Int64.to_int first.last_offset) 0 /\ first.producer_epoch = epoch)
-  /\ ([@stop_split] [@expl:epoch_handoff_distinguishes_identity_and_data_retry requires #3] [%#sepoch_handoff'9] forall i: int. 0
-          <= i
-        /\ i < Seq.length (Slice64.view rows)
-      -> snapshot_entry_valid_model (Int64.to_int end') (Seq.get (Slice64.view rows) i)
-      /\ ge_log_Int (Int64.to_int (Seq.get (Slice64.view rows) i).last_offset) 0
-      /\ (Seq.get (Slice64.view rows) i).producer_id = first.producer_id
-      /\ (Seq.get (Slice64.view rows) i).producer_epoch = epoch)
-  /\ ([@stop_split] [@expl:epoch_handoff_distinguishes_identity_and_data_retry requires #4] [%#sepoch_handoff'10] forall i: int, j: int. 0
-        <= i
-      /\ i < j /\ j < Seq.length (Slice64.view rows)
-    -> Int64.to_int (Seq.get (Slice64.view rows) i).last_offset
-    < Int64.to_int (Seq.get (Slice64.view rows) j).last_offset)}
+{[@stop_split] [@expl:epoch_handoff_distinguishes_identity_and_data_retry requires] [%#sepoch_handoff'6] handoff_input_valid (Int64.to_int end') (Int64.to_int hwm) (Int16.to_int epoch) (Slice64.view rows) first}
   (! set_EXHAUSTED_PRODUCER_EPOCH
     (bb0
     [ bb0 = s0
-      [ s0 = [ &_36 <- None ] s1
+      [ s0 = [ &_25 <- None ] s1
       | s1 = next_producer_identity [%#sepoch_handoff'1] {[%#sepoch_handoff] true} {[%#sepoch_handoff'0] false}
-          {first.producer_id} {epoch} {_36} (fun (_x: t_Option_tup2_i64_i16) -> [ &_33 <- _x ] s2)
-      | s2 = unwrap_tup2_i64_i16 [%#sepoch_handoff'2] {_33} (fun (_x: tup2_i64_i16) -> [ &_32 <- _x ] s3)
-      | s3 = [ &pid <- _32.f0 ] s4
-      | s4 = [ &next_epoch <- _32.f1 ] s5
+          {first.producer_id} {epoch} {_25} (fun (_x: t_Option_tup2_i64_i16) -> [ &_22 <- _x ] s2)
+      | s2 = unwrap_tup2_i64_i16 [%#sepoch_handoff'2] {_22} (fun (_x: tup2_i64_i16) -> [ &_21 <- _x ] s3)
+      | s3 = [ &pid <- _21.f0 ] s4
+      | s4 = [ &next_epoch <- _21.f1 ] s5
       | s5 = init_producer_id_identity_decision [%#sepoch_handoff'4] {pid} {next_epoch} {epoch}
           {[%#sepoch_handoff'3] (-1: Int64.t)} {first.producer_id} {epoch}
           (fun (_x: t_InitProducerIdIdentityDecision) -> [ &identity <- _x ] s6)
       | s6 = [ &first <- { first with producer_epoch = next_epoch } ] s7
-      | s7 = [ &_49 <- Some'1 epoch ] s8
-      | s8 = [ &_53 <- { f0'2 = epoch; f1'2 = request.f0'3; f2'2 = request.f1'3 } ] s9
-      | s9 = completed_batches_preserve_first_retry [%#sepoch_handoff'5] {end'} {hwm} {_49} {rows} {first} {_53}
-          (fun (_x: tup4_bool_Vec_usize_Global_ProducerDecision_Option_tup4_usize_i64_i64_bool) -> [ &_46 <- _x ] s10)
-      | s10 = [ &selected <- _46.f1'5 ] s11
-      | s11 = [ &decision <- _46.f2'5 ] s12
+      | s7 = [ &_38 <- Some'1 epoch ] s8
+      | s8 = [ &_42 <- { f0'2 = epoch; f1'2 = request.f0'3; f2'2 = request.f1'3 } ] s9
+      | s9 = completed_batches_preserve_first_retry [%#sepoch_handoff'5] {end'} {hwm} {_38} {rows} {first} {_42}
+          (fun (_x: tup4_bool_Vec_usize_Global_ProducerDecision_Option_tup4_usize_i64_i64_bool) -> [ &_35 <- _x ] s10)
+      | s10 = [ &selected <- _35.f1'5 ] s11
+      | s11 = [ &decision <- _35.f2'5 ] s12
       | s12 = [ &_ret <- { f0'6 = next_epoch; f1'6 = identity; f2'6 = selected; f3'6 = decision } ] s13
       | s13 = return {_ret} ] ]
     [ & _ret: tup4_i16_InitProducerIdIdentityDecision_Vec_usize_Global_ProducerDecision = Any.any_l ()
@@ -443,24 +438,24 @@ let epoch_handoff_distinguishes_identity_and_data_retry [#"/workspace/crates/ver
     | & request: tup2_i32_i32 = request
     | & pid: Int64.t = Any.any_l ()
     | & next_epoch: Int16.t = Any.any_l ()
-    | & _32: tup2_i64_i16 = Any.any_l ()
-    | & _33: t_Option_tup2_i64_i16 = Any.any_l ()
-    | & _36: t_Option_i64 = Any.any_l ()
+    | & _21: tup2_i64_i16 = Any.any_l ()
+    | & _22: t_Option_tup2_i64_i16 = Any.any_l ()
+    | & _25: t_Option_i64 = Any.any_l ()
     | & identity: t_InitProducerIdIdentityDecision = Any.any_l ()
     | & selected: t_Vec_usize_Global = Any.any_l ()
     | & decision: t_ProducerDecision = Any.any_l ()
-    | & _46: tup4_bool_Vec_usize_Global_ProducerDecision_Option_tup4_usize_i64_i64_bool = Any.any_l ()
-    | & _49: t_Option_i16 = Any.any_l ()
-    | & _53: tup3_i16_i32_i32 = Any.any_l () ]))
+    | & _35: tup4_bool_Vec_usize_Global_ProducerDecision_Option_tup4_usize_i64_i64_bool = Any.any_l ()
+    | & _38: t_Option_i16 = Any.any_l ()
+    | & _42: tup3_i16_i32_i32 = Any.any_l () ]))
   [ return (result: tup4_i16_InitProducerIdIdentityDecision_Vec_usize_Global_ProducerDecision) ->
-  {[@stop_split] [@expl:epoch_handoff_distinguishes_identity_and_data_retry ensures] ([@stop_split] [@expl:epoch_handoff_distinguishes_identity_and_data_retry ensures #0] [%#sepoch_handoff'11] Int16.to_int result.f0'6
+  {[@stop_split] [@expl:epoch_handoff_distinguishes_identity_and_data_retry ensures] ([@stop_split] [@expl:epoch_handoff_distinguishes_identity_and_data_retry ensures #0] [%#sepoch_handoff'7] Int16.to_int result.f0'6
         = Int16.to_int epoch + 1
       /\ Int16.to_int result.f0'6 < Int16.to_int const_MAX)
-    /\ ([@stop_split] [@expl:epoch_handoff_distinguishes_identity_and_data_retry ensures #1] [%#sepoch_handoff'12] result.f1'6
+    /\ ([@stop_split] [@expl:epoch_handoff_distinguishes_identity_and_data_retry ensures #1] [%#sepoch_handoff'8] result.f1'6
       = Retry)
-    /\ ([@stop_split] [@expl:epoch_handoff_distinguishes_identity_and_data_retry ensures #2] [%#sepoch_handoff'13] Seq.length (view_Vec_usize_Global result.f2'6)
+    /\ ([@stop_split] [@expl:epoch_handoff_distinguishes_identity_and_data_retry ensures #2] [%#sepoch_handoff'9] Seq.length (view_Vec_usize_Global result.f2'6)
         = 1
       /\ UInt64.t'int (Seq.get (view_Vec_usize_Global result.f2'6) 0) = Seq.length (Slice64.view rows))
-    /\ ([@stop_split] [@expl:epoch_handoff_distinguishes_identity_and_data_retry ensures #3] [%#sepoch_handoff'14] result.f3'6
+    /\ ([@stop_split] [@expl:epoch_handoff_distinguishes_identity_and_data_retry ensures #3] [%#sepoch_handoff'10] result.f3'6
     = Fenced'0)}
     (! return {result}) ]

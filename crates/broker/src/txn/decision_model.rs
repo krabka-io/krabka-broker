@@ -81,14 +81,13 @@ use super::{
         coordinator::completion::{apply_completion, completion_decision, completion_for},
         handlers::end_txn::{
             completion_producer_identity, prepare_completion_identities_with_fresh,
-            prepare_server_abort_identities_with_fresh,
         },
         state::{TxnEntry, TxnState},
         version::TxnVersion,
     },
     CompletionDecision, decide_end_txn_completion, decide_phase1_transition,
 };
-use crate::model_check::run_bfs;
+use crate::{model_check::run_bfs, txn::decision_model_support::initialize};
 
 const MAX_STATES: usize = 200_000;
 const MAX_DEPTH: usize = 60;
@@ -220,55 +219,14 @@ fn is_prepared(state: TxnState) -> bool {
     matches!(state, TxnState::PrepareCommit | TxnState::PrepareAbort)
 }
 
-/// Kafka's fence of an `Ongoing` transaction, restated from
-/// `TransactionMetadata` (`prepareFenceProducerEpoch`, then `prepareAbortOrCommit`
-/// from `endTransaction(isFromClient = false)` at the cluster's version)
-/// instead of read back from the function under test. The producer epoch moves
-/// from `held` to `held + 1` once, and the producer continues at that epoch.
-/// `TV_2` records the epoch it held as the last epoch, and stamps `TV_2`. Below
-/// it the last epoch is cleared and the record carries `TV_0`.
-fn fenced_as_kafka(entry: &TxnEntry, held: i16, version: TxnVersion) -> bool {
-    let verified = version == TxnVersion::Verified;
-    entry.producer_epoch == held + 1
-        && entry.last_producer_epoch == if verified { held } else { -1 }
-        && entry.client_transaction_version == if verified { 2 } else { 0 }
-        && completion_producer_identity(entry) == (entry.producer_id, held + 1)
-}
-
 impl TxnModel {
     /// `InitProducerId` over the live entry, in the handler's order.
     fn init(&self, s: &mut TxnProj) -> Option<()> {
-        let mut entry = rebuild(s);
-        // `pending_completion_response`: a durable `Prepare*` answers
-        // `CONCURRENT_TRANSACTIONS` to a request that names no identity, and
-        // nothing is written.
-        if completion_for(entry.state).is_some() {
-            return None;
+        let initialized = initialize(rebuild(s), self.fence_version, 60_000, 1)?;
+        if !initialized.fence_matches {
+            s.violations.insert(Violation::FenceDiverged);
         }
-        if entry.state == TxnState::Ongoing {
-            // `prepareFenceProducerEpoch` and the server's abort at the
-            // cluster's version: the epoch moves once, whichever version. The
-            // client is answered `CONCURRENT_TRANSACTIONS` and retries after
-            // the completion.
-            let held = entry.producer_epoch;
-            entry.state = TxnState::PrepareAbort;
-            prepare_server_abort_identities_with_fresh(&mut entry, self.fence_version, None)
-                .expect("model epochs never reach the rotation boundary");
-            if !fenced_as_kafka(&entry, held, self.fence_version) {
-                s.violations.insert(Violation::FenceDiverged);
-            }
-        } else {
-            // `prepareIncrementProducerEpoch` on a terminal or empty entry.
-            let (pid, epoch) = krabka_verified::transaction::next_producer_identity(
-                true,
-                false,
-                entry.producer_id.get(),
-                entry.producer_epoch,
-                None,
-            )
-            .expect("model epochs never reach the rotation boundary");
-            entry = TxnEntry::new_empty("tid".to_string(), ProducerId(pid), epoch, 60_000, 1);
-        }
+        let entry = initialized.entry;
         project(s, &entry);
         Some(())
     }

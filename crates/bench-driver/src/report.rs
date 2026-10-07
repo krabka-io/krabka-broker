@@ -79,28 +79,6 @@ impl Render {
 /// # Errors
 /// Returns an error when input data is invalid, required I/O fails, or the destination rejects the generated report or audit event.
 pub fn render_markdown(input_dir: &Path, strict: bool) -> Result<String> {
-    let mut runs: Vec<(PathBuf, RunOutput)> = Vec::new();
-    let entries = std::fs::read_dir(input_dir)
-        .with_context(|| format!("read_dir {}", input_dir.display()))?;
-    for e in entries {
-        let e = e.context("dir entry")?;
-        let path = e.path();
-        if path.extension().and_then(|s| s.to_str()) != Some("json") {
-            continue;
-        }
-        let body =
-            std::fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?;
-        match serde_json::from_str::<RunOutput>(&body) {
-            Ok(r) => runs.push((path, r)),
-            Err(e) => {
-                if strict {
-                    return Err(anyhow::anyhow!("failed to parse {}: {e}", path.display()));
-                }
-                eprintln!("warn: skipping unparseable {}: {e}", path.display());
-            }
-        }
-    }
-
     // Group by `CellKey`: the scenario name with the whole topology. That keeps
     // the same scenario run at two topologies in separate cells, and collects
     // every repeated run of one cell together to average. The key carries the
@@ -108,7 +86,7 @@ pub fn render_markdown(input_dir: &Path, strict: bool) -> Result<String> {
     // so a rerun after a topology change cannot be averaged into the old
     // numbers.
     let mut by_group: BTreeMap<CellKey, Vec<RunOutput>> = BTreeMap::new();
-    for (_p, r) in runs {
+    for (_p, r) in collect_runs(input_dir, strict)? {
         by_group.entry(CellKey::of(&r)).or_default().push(r);
     }
 
@@ -943,12 +921,8 @@ fn csv_field(s: &str) -> String {
     }
 }
 
-/// One wide row per run, where every aggregate metric is a column. Group by
-/// `(scenario, stack, broker_count)` in any tool to draw krabka-vs-kafka bars
-/// with run-to-run error bars.
-/// # Errors
-/// Returns an error when input data is invalid, required I/O fails, or the destination rejects the generated report or audit event.
-pub fn render_csv(input_dir: &Path, strict: bool) -> Result<String> {
+/// Both CSV exports use the same stable ordering of runs.
+fn collect_csv_runs(input_dir: &Path, strict: bool) -> Result<Vec<(PathBuf, RunOutput)>> {
     let mut runs = collect_runs(input_dir, strict)?;
     runs.sort_by(|(pa, a), (pb, b)| {
         (
@@ -965,6 +939,16 @@ pub fn render_csv(input_dir: &Path, strict: bool) -> Result<String> {
             ))
     });
 
+    Ok(runs)
+}
+
+/// One wide row per run, where every aggregate metric is a column. Group by
+/// `(scenario, stack, broker_count)` in any tool to draw krabka-vs-kafka bars
+/// with run-to-run error bars.
+/// # Errors
+/// Returns an error when input data is invalid, required I/O fails, or the destination rejects the generated report or audit event.
+pub fn render_csv(input_dir: &Path, strict: bool) -> Result<String> {
+    let runs = collect_csv_runs(input_dir, strict)?;
     // Every column names the unit it is written in, because a CSV cell is a
     // bare number: sizes in bytes or MiB, extents in ms.
     let mut out = String::new();
@@ -1055,22 +1039,7 @@ notes,errors_count\n",
 /// # Errors
 /// Returns an error when input data is invalid, required I/O fails, or the destination rejects the generated report or audit event.
 pub fn render_timeseries_csv(input_dir: &Path, strict: bool) -> Result<String> {
-    let mut runs = collect_runs(input_dir, strict)?;
-    runs.sort_by(|(pa, a), (pb, b)| {
-        (
-            a.scenario.name.as_str(),
-            a.topology.broker_count,
-            a.stack.as_str(),
-            run_tag_from_path(pa),
-        )
-            .cmp(&(
-                b.scenario.name.as_str(),
-                b.topology.broker_count,
-                b.stack.as_str(),
-                run_tag_from_path(pb),
-            ))
-    });
-
+    let runs = collect_csv_runs(input_dir, strict)?;
     let mut out = String::new();
     out.push_str("scenario,stack,broker_count,partitions,replication_factor,run_tag,t_offset_ms,metric,value\n");
     for (path, r) in &runs {
@@ -1355,18 +1324,11 @@ mod tests {
     #[test]
     fn failover_summary_compares_recovery_and_rate_over_time() {
         let dir = tempdir().unwrap();
-        std::fs::write(
-            dir.path().join("krabka-failover-3broker-rf3-run01.json"),
-            serde_json::to_string(&fake_failover_run(Stack::Krabka, secs(2), per_sec(8_000)))
-                .unwrap(),
-        )
-        .unwrap();
-        std::fs::write(
-            dir.path().join("kafka-failover-3broker-rf3-run01.json"),
-            serde_json::to_string(&fake_failover_run(Stack::Kafka, secs(3), per_sec(6_000)))
-                .unwrap(),
-        )
-        .unwrap();
+        write_failover_runs(
+            dir.path(),
+            &fake_failover_run(Stack::Krabka, secs(2), per_sec(8_000)),
+            &fake_failover_run(Stack::Kafka, secs(3), per_sec(6_000)),
+        );
 
         let md = render_markdown(dir.path(), true).unwrap();
 
@@ -1384,38 +1346,35 @@ mod tests {
     #[test]
     fn failover_gate_passes_when_krabka_recovers_no_slower_with_rate_samples() {
         let dir = tempdir().unwrap();
-        std::fs::write(
-            dir.path().join("krabka-failover-3broker-rf3-run01.json"),
-            serde_json::to_string(&fake_failover_run(Stack::Krabka, secs(2), per_sec(8_000)))
-                .unwrap(),
-        )
-        .unwrap();
-        std::fs::write(
-            dir.path().join("kafka-failover-3broker-rf3-run01.json"),
-            serde_json::to_string(&fake_failover_run(Stack::Kafka, secs(3), per_sec(6_000)))
-                .unwrap(),
-        )
-        .unwrap();
+        write_failover_runs(
+            dir.path(),
+            &fake_failover_run(Stack::Krabka, secs(2), per_sec(8_000)),
+            &fake_failover_run(Stack::Kafka, secs(3), per_sec(6_000)),
+        );
 
         let violations = failover_gate_violations(dir.path(), true).unwrap();
 
         assert2::assert!(violations.is_empty());
     }
 
+    fn write_failover_runs(dir: &Path, krabka: &RunOutput, kafka: &RunOutput) {
+        for (name, run) in [("krabka", krabka), ("kafka", kafka)] {
+            std::fs::write(
+                dir.join(format!("{name}-failover-3broker-rf3-run01.json")),
+                serde_json::to_string(run).unwrap(),
+            )
+            .unwrap();
+        }
+    }
+
     /// Write one krabka run and one kafka run into `dir`, so a gate test only
     /// has to say how it damaged the krabka half.
     fn write_failover_pair(dir: &Path, krabka: &RunOutput) {
-        std::fs::write(
-            dir.join("krabka-failover-3broker-rf3-run01.json"),
-            serde_json::to_string(krabka).unwrap(),
-        )
-        .unwrap();
-        std::fs::write(
-            dir.join("kafka-failover-3broker-rf3-run01.json"),
-            serde_json::to_string(&fake_failover_run(Stack::Kafka, secs(3), per_sec(6_000)))
-                .unwrap(),
-        )
-        .unwrap();
+        write_failover_runs(
+            dir,
+            krabka,
+            &fake_failover_run(Stack::Kafka, secs(3), per_sec(6_000)),
+        );
     }
 
     /// A run whose producer tasks failed still writes a `RunOutput`. Its
@@ -1559,17 +1518,11 @@ mod tests {
         let dir = tempdir().unwrap();
         let mut kafka = fake_failover_run(Stack::Kafka, secs(2), per_sec(6_000));
         kafka.samples.clear();
-        std::fs::write(
-            dir.path().join("krabka-failover-3broker-rf3-run01.json"),
-            serde_json::to_string(&fake_failover_run(Stack::Krabka, secs(4), per_sec(8_000)))
-                .unwrap(),
-        )
-        .unwrap();
-        std::fs::write(
-            dir.path().join("kafka-failover-3broker-rf3-run01.json"),
-            serde_json::to_string(&kafka).unwrap(),
-        )
-        .unwrap();
+        write_failover_runs(
+            dir.path(),
+            &fake_failover_run(Stack::Krabka, secs(4), per_sec(8_000)),
+            &kafka,
+        );
 
         let violations = failover_gate_violations(dir.path(), true).unwrap();
 
@@ -1585,28 +1538,26 @@ mod tests {
         );
     }
 
+    fn rate_recovery_tail() -> Sample {
+        Sample {
+            t_offset_ms: TimeOffsetMs(8_000),
+            producer_rate: per_sec(9_500),
+            consumer_rate: per_sec(9_200),
+            ..Sample::default()
+        }
+    }
+
     #[test]
     fn failover_gate_fails_when_krabka_message_rate_recovers_slower_than_kafka() {
         let dir = tempdir().unwrap();
         let mut krabka = fake_failover_run(Stack::Krabka, secs(2), per_sec(8_000));
         krabka.samples[3].producer_rate = per_sec(8_500);
-        krabka.samples.push(Sample {
-            t_offset_ms: TimeOffsetMs(8_000),
-            producer_rate: per_sec(9_500),
-            consumer_rate: per_sec(9_200),
-            ..Sample::default()
-        });
-        std::fs::write(
-            dir.path().join("krabka-failover-3broker-rf3-run01.json"),
-            serde_json::to_string(&krabka).unwrap(),
-        )
-        .unwrap();
-        std::fs::write(
-            dir.path().join("kafka-failover-3broker-rf3-run01.json"),
-            serde_json::to_string(&fake_failover_run(Stack::Kafka, secs(3), per_sec(6_000)))
-                .unwrap(),
-        )
-        .unwrap();
+        krabka.samples.push(rate_recovery_tail());
+        write_failover_runs(
+            dir.path(),
+            &krabka,
+            &fake_failover_run(Stack::Kafka, secs(3), per_sec(6_000)),
+        );
 
         let violations = failover_gate_violations(dir.path(), true).unwrap();
 
@@ -1636,16 +1587,7 @@ mod tests {
         {
             sample.producer_rate = per_sec(8_500);
         }
-        std::fs::write(
-            dir.path().join("krabka-failover-3broker-rf3-run01.json"),
-            serde_json::to_string(&krabka).unwrap(),
-        )
-        .unwrap();
-        std::fs::write(
-            dir.path().join("kafka-failover-3broker-rf3-run01.json"),
-            serde_json::to_string(&kafka).unwrap(),
-        )
-        .unwrap();
+        write_failover_runs(dir.path(), &krabka, &kafka);
 
         let violations = failover_gate_violations(dir.path(), true).unwrap();
 
@@ -1661,23 +1603,12 @@ mod tests {
         let dir = tempdir().unwrap();
         let mut krabka = fake_failover_run(Stack::Krabka, secs(2), per_sec(8_000));
         krabka.samples[3].consumer_rate = per_sec(8_000);
-        krabka.samples.push(Sample {
-            t_offset_ms: TimeOffsetMs(8_000),
-            producer_rate: per_sec(9_500),
-            consumer_rate: per_sec(9_200),
-            ..Sample::default()
-        });
-        std::fs::write(
-            dir.path().join("krabka-failover-3broker-rf3-run01.json"),
-            serde_json::to_string(&krabka).unwrap(),
-        )
-        .unwrap();
-        std::fs::write(
-            dir.path().join("kafka-failover-3broker-rf3-run01.json"),
-            serde_json::to_string(&fake_failover_run(Stack::Kafka, secs(3), per_sec(6_000)))
-                .unwrap(),
-        )
-        .unwrap();
+        krabka.samples.push(rate_recovery_tail());
+        write_failover_runs(
+            dir.path(),
+            &krabka,
+            &fake_failover_run(Stack::Kafka, secs(3), per_sec(6_000)),
+        );
 
         let violations = failover_gate_violations(dir.path(), true).unwrap();
 
@@ -1693,17 +1624,11 @@ mod tests {
         let dir = tempdir().unwrap();
         let mut krabka = fake_failover_run(Stack::Krabka, secs(2), per_sec(8_000));
         krabka.disturbance.as_mut().unwrap().dropped = MessageCount(5);
-        std::fs::write(
-            dir.path().join("krabka-failover-3broker-rf3-run01.json"),
-            serde_json::to_string(&krabka).unwrap(),
-        )
-        .unwrap();
-        std::fs::write(
-            dir.path().join("kafka-failover-3broker-rf3-run01.json"),
-            serde_json::to_string(&fake_failover_run(Stack::Kafka, secs(3), per_sec(6_000)))
-                .unwrap(),
-        )
-        .unwrap();
+        write_failover_runs(
+            dir.path(),
+            &krabka,
+            &fake_failover_run(Stack::Kafka, secs(3), per_sec(6_000)),
+        );
 
         let violations = failover_gate_violations(dir.path(), true).unwrap();
 
@@ -1719,17 +1644,11 @@ mod tests {
         let dir = tempdir().unwrap();
         let mut krabka = fake_failover_run(Stack::Krabka, secs(2), per_sec(8_000));
         krabka.disturbance.as_mut().unwrap().latency_spike_max = millis(90);
-        std::fs::write(
-            dir.path().join("krabka-failover-3broker-rf3-run01.json"),
-            serde_json::to_string(&krabka).unwrap(),
-        )
-        .unwrap();
-        std::fs::write(
-            dir.path().join("kafka-failover-3broker-rf3-run01.json"),
-            serde_json::to_string(&fake_failover_run(Stack::Kafka, secs(3), per_sec(6_000)))
-                .unwrap(),
-        )
-        .unwrap();
+        write_failover_runs(
+            dir.path(),
+            &krabka,
+            &fake_failover_run(Stack::Kafka, secs(3), per_sec(6_000)),
+        );
 
         let violations = failover_gate_violations(dir.path(), true).unwrap();
 

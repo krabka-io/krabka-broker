@@ -219,62 +219,14 @@ async fn replay_uses_per_record_and_inter_batch_offsets() {
         .get(bootstrap::TOPIC, state_partition)
         .expect("state partition open");
 
-    let snap_key = encode_state_key(&ShareStateKey {
-        record_type: KEY_SHARE_SNAPSHOT,
-        group_id: "g".to_string(),
-        topic_id: tid,
-        partition: 0,
-    })
-    .unwrap();
-    let upd_key = encode_state_key(&ShareStateKey {
-        record_type: KEY_SHARE_UPDATE,
-        group_id: "g".to_string(),
-        topic_id: tid,
-        partition: 0,
-    })
-    .unwrap();
+    let (snap_key, upd_key) = state_keys(tid);
 
     // Batch A (base_offset 0): an UPDATE at delta 0, then a SNAPSHOT at
     // delta 1 (last_offset_delta = 1). The snapshot's rec_offset is
     // `base_offset + 1 == 1`.
-    let mut batch_a = RecordBatch {
-        last_offset_delta: 1,
-        ..RecordBatch::default()
-    };
-    batch_a.records.push(Record {
-        offset_delta: 0,
-        key: Some(upd_key.clone()),
-        value: Some(
-            ShareUpdateValue {
-                snapshot_epoch: 0,
-                leader_epoch: 1,
-                start_offset: Offset(0),
-                delivery_complete_count: 0,
-                state_batches: vec![],
-            }
-            .encode(),
-        ),
-        ..Default::default()
-    });
-    batch_a.records.push(Record {
-        offset_delta: 1,
-        key: Some(snap_key.clone()),
-        value: Some(
-            ShareSnapshotValue {
-                snapshot_epoch: 5,
-                state_epoch: 2,
-                leader_epoch: 3,
-                start_offset: Offset(20),
-                delivery_complete_count: 4,
-                create_timestamp: 0,
-                write_timestamp: 0,
-                state_batches: vec![batch(20, 29)],
-            }
-            .encode(),
-        ),
-        ..Default::default()
-    });
-    part.produce_batch(batch_a).await.unwrap();
+    part.produce_batch(update_then_snapshot(snap_key.clone(), upd_key))
+        .await
+        .unwrap();
 
     // Batch B (base_offset 2): a later SNAPSHOT. Only reached if the cursor
     // advanced past batch A by `last_offset_delta + 1`.
@@ -327,61 +279,13 @@ async fn replay_snapshot_offset_is_base_plus_delta() {
         .get(bootstrap::TOPIC, state_partition)
         .expect("state partition open");
 
-    let snap_key = encode_state_key(&ShareStateKey {
-        record_type: KEY_SHARE_SNAPSHOT,
-        group_id: "g".to_string(),
-        topic_id: tid,
-        partition: 0,
-    })
-    .unwrap();
-    let upd_key = encode_state_key(&ShareStateKey {
-        record_type: KEY_SHARE_UPDATE,
-        group_id: "g".to_string(),
-        topic_id: tid,
-        partition: 0,
-    })
-    .unwrap();
+    let (snap_key, upd_key) = state_keys(tid);
 
     // Single batch, base_offset 0: an UPDATE at delta 0 then a SNAPSHOT at
     // delta 1. The snapshot's rec_offset is `0 + 1 == 1`.
-    let mut batch_a = RecordBatch {
-        last_offset_delta: 1,
-        ..RecordBatch::default()
-    };
-    batch_a.records.push(Record {
-        offset_delta: 0,
-        key: Some(upd_key),
-        value: Some(
-            ShareUpdateValue {
-                snapshot_epoch: 0,
-                leader_epoch: 1,
-                start_offset: Offset(0),
-                delivery_complete_count: 0,
-                state_batches: vec![],
-            }
-            .encode(),
-        ),
-        ..Default::default()
-    });
-    batch_a.records.push(Record {
-        offset_delta: 1,
-        key: Some(snap_key),
-        value: Some(
-            ShareSnapshotValue {
-                snapshot_epoch: 5,
-                state_epoch: 2,
-                leader_epoch: 3,
-                start_offset: Offset(20),
-                delivery_complete_count: 4,
-                create_timestamp: 0,
-                write_timestamp: 0,
-                state_batches: vec![batch(20, 29)],
-            }
-            .encode(),
-        ),
-        ..Default::default()
-    });
-    part.produce_batch(batch_a).await.unwrap();
+    part.produce_batch(update_then_snapshot(snap_key.clone(), upd_key))
+        .await
+        .unwrap();
 
     coord.reload_all_partitions_for_test().await;
 
@@ -717,4 +621,59 @@ async fn failed_load_serves_nothing_and_the_next_refresh_loads_again() {
         .await;
     check!(coordinator.load_status(state_partition).await == Some(super::LoadStatus::Active));
     check!(coordinator.read_summary("g", topic_id, 0).await == Ok(None));
+}
+
+fn state_keys(topic_id: uuid::Uuid) -> (bytes::Bytes, bytes::Bytes) {
+    let key = |record_type| {
+        encode_state_key(&ShareStateKey {
+            record_type,
+            group_id: "g".to_string(),
+            topic_id,
+            partition: 0,
+        })
+        .unwrap()
+    };
+    (key(KEY_SHARE_SNAPSHOT), key(KEY_SHARE_UPDATE))
+}
+
+/// An update at delta zero followed by the same persisted snapshot at delta one.
+fn update_then_snapshot(snap_key: bytes::Bytes, upd_key: bytes::Bytes) -> RecordBatch {
+    let mut batch_a = RecordBatch {
+        last_offset_delta: 1,
+        ..RecordBatch::default()
+    };
+    batch_a.records.push(Record {
+        offset_delta: 0,
+        key: Some(upd_key),
+        value: Some(
+            ShareUpdateValue {
+                snapshot_epoch: 0,
+                leader_epoch: 1,
+                start_offset: Offset(0),
+                delivery_complete_count: 0,
+                state_batches: vec![],
+            }
+            .encode(),
+        ),
+        ..Default::default()
+    });
+    batch_a.records.push(Record {
+        offset_delta: 1,
+        key: Some(snap_key),
+        value: Some(
+            ShareSnapshotValue {
+                snapshot_epoch: 5,
+                state_epoch: 2,
+                leader_epoch: 3,
+                start_offset: Offset(20),
+                delivery_complete_count: 4,
+                create_timestamp: 0,
+                write_timestamp: 0,
+                state_batches: vec![batch(20, 29)],
+            }
+            .encode(),
+        ),
+        ..Default::default()
+    });
+    batch_a
 }

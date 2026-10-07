@@ -445,6 +445,58 @@ pub(crate) fn put_bytes<B: BufMut>(buf: &mut B, b: &Bytes) {
 }
 
 #[cfg(test)]
+macro_rules! key_string_boundaries {
+    ($pending:ty, $factory:expr) => {
+        #[test]
+        fn a_key_string_over_32767_bytes_does_not_encode() {
+            type Field = (&'static str, fn(&mut $pending, String));
+            let fields: [Field; 3] = [
+                ("member id of a member record", |pending, value| {
+                    pending.member_metadata[0].0 = value
+                }),
+                ("member id of a target assignment", |pending, value| {
+                    pending.target_per_member[0].0 = value
+                }),
+                ("member id of a current assignment", |pending, value| {
+                    pending.current_per_member[0].0 = value
+                }),
+            ];
+            let limit = $crate::coordinator::unified::persistence::MAX_STRING_BYTES;
+            for (name, set) in fields {
+                for (length, encodes) in [(limit, true), (limit + 1, false)] {
+                    let mut pending: $pending = ($factory)();
+                    set(&mut pending, "a".repeat(length));
+                    let outcome = pending.into_batch("g", 0);
+                    assert2::assert!(outcome.is_ok() == encodes, "{name} of {length} bytes");
+                    assert2::assert!(
+                        encodes || matches!(outcome, Err($crate::error::BrokerError::Protocol(_))),
+                        "{name} of {length} bytes is a protocol error"
+                    );
+                }
+            }
+            for (length, encodes) in [(limit, true), (limit + 1, false)] {
+                let outcome = ($factory)().into_batch(&"g".repeat(length), 0);
+                assert2::assert!(outcome.is_ok() == encodes, "group id of {length} bytes");
+            }
+        }
+    };
+}
+#[cfg(test)]
+pub(crate) use key_string_boundaries;
+
+/// Queue all three member-record tombstones in the caller's member order.
+macro_rules! tombstone_members {
+    ($pending:expr, $members:expr) => {
+        for member in $members {
+            $pending.member_metadata.push((member.clone(), None));
+            $pending.target_per_member.push((member.clone(), None));
+            $pending.current_per_member.push((member.clone(), None));
+        }
+    };
+}
+pub(crate) use tombstone_members;
+
+#[cfg(test)]
 mod tests {
     use assert2::assert;
 

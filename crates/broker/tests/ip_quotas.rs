@@ -19,6 +19,7 @@ mod cluster;
 mod kafka_wire;
 #[path = "ip_quotas/quota_admin.rs"]
 mod quota_admin;
+mod support;
 
 /// The client id every request header in this suite carries.
 const CLIENT_ID: &str = "krabka-ip-quota-test";

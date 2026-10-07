@@ -8,7 +8,7 @@
 
 use assert2::assert;
 use bytes::BytesMut;
-use krabka_broker::{Broker, BrokerConfig, config::ListenerSpec};
+use krabka_broker::Broker;
 use krabka_protocol::{
     Decode, Encode,
     owned::{
@@ -17,7 +17,7 @@ use krabka_protocol::{
         sasl_handshake_response::SaslHandshakeResponse,
     },
 };
-use krabka_security::{ListenerProtocol, SaslMechanism};
+use krabka_security::SaslMechanism;
 use tokio::net::TcpStream;
 
 use crate::{
@@ -36,17 +36,7 @@ use crate::{
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn gssapi_handshake_advertised_when_enabled() {
     let log_dir = tempfile::tempdir().unwrap();
-    let mut cfg = BrokerConfig::for_tests(log_dir.path().to_path_buf());
-    cfg.listeners = vec![ListenerSpec {
-        name: "SASL_PLAINTEXT".to_string(),
-        bind_addr: "127.0.0.1:0".parse().unwrap(),
-        advertised: "127.0.0.1:0".to_string(),
-        protocol: ListenerProtocol::SaslPlaintext,
-        tls_config: None,
-        sasl_mechanisms: None,
-        principal_mapper: krabka_broker::SslPrincipalMapper::default(),
-    }];
-    cfg.inter_broker_listener_name = "SASL_PLAINTEXT".to_string();
+    let mut cfg = crate::support::sasl_plaintext_config(log_dir.path().to_path_buf());
     cfg.enabled_sasl_mechanisms = vec![SaslMechanism::Gssapi];
     cfg.gssapi = Some(krabka_broker::GssapiConfig {
         // Points at the committed fixture, but the handshake path never reads
@@ -126,17 +116,7 @@ async fn gssapi_inter_broker_client_authenticates_from_keytab() {
         std::env::var("SSPI_KDC_URL").unwrap_or_else(|_| "tcp://localhost:88".to_string());
 
     let log_dir = tempfile::tempdir().unwrap();
-    let mut cfg = BrokerConfig::for_tests(log_dir.path().to_path_buf());
-    cfg.listeners = vec![ListenerSpec {
-        name: "SASL_PLAINTEXT".to_string(),
-        bind_addr: "127.0.0.1:0".parse().unwrap(),
-        advertised: "127.0.0.1:0".to_string(),
-        protocol: ListenerProtocol::SaslPlaintext,
-        tls_config: None,
-        sasl_mechanisms: None,
-        principal_mapper: krabka_broker::SslPrincipalMapper::default(),
-    }];
-    cfg.inter_broker_listener_name = "SASL_PLAINTEXT".to_string();
+    let mut cfg = crate::support::sasl_plaintext_config(log_dir.path().to_path_buf());
     cfg.enabled_sasl_mechanisms = vec![SaslMechanism::Gssapi];
     cfg.gssapi = Some(krabka_broker::GssapiConfig {
         keytab_path: fixtures.join("kafka.keytab"),

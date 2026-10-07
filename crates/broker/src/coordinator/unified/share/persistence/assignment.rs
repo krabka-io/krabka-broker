@@ -31,8 +31,9 @@ use krabka_protocol::primitives::uuid::Uuid;
 use crate::{
     coordinator::unified::persistence::{
         flex::{
-            get_compact_array_len, get_i8, get_i32_array, get_uuid, put_compact_array_len,
-            put_empty_tagged_fields, put_i32_array, put_uuid, skip_tagged_fields,
+            array_value_codec, get_compact_array, get_i8, get_i32_array, get_uuid,
+            put_compact_array, put_empty_tagged_fields, put_i32_array, put_uuid,
+            skip_tagged_fields,
         },
         get_i16, get_i32,
     },
@@ -47,24 +48,12 @@ pub struct ShareGroupTargetAssignmentMemberValue {
     pub topic_partitions: Vec<(Uuid, Vec<i32>)>,
 }
 
-impl ShareGroupTargetAssignmentMemberValue {
-    #[must_use]
-    pub fn encode(&self) -> Bytes {
-        let mut buf = BytesMut::new();
-        buf.put_i16(0);
-        encode_topic_partitions(&mut buf, &self.topic_partitions);
-        put_empty_tagged_fields(&mut buf);
-        buf.freeze()
-    }
-    /// # Errors
-    /// Returns an error when log I/O fails, a record or index is corrupt, or the requested offset violates the segment state.
-    pub fn decode(mut buf: &[u8]) -> Result<Self, BrokerError> {
-        let _v = get_i16(&mut buf)?;
-        let topic_partitions = decode_topic_partitions(&mut buf)?;
-        skip_tagged_fields(&mut buf)?;
-        Ok(Self { topic_partitions })
-    }
-}
+array_value_codec!(
+    ShareGroupTargetAssignmentMemberValue,
+    topic_partitions,
+    encode_topic_partitions,
+    decode_topic_partitions
+);
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct ShareGroupCurrentMemberAssignmentValue {
@@ -103,24 +92,20 @@ impl ShareGroupCurrentMemberAssignmentValue {
 }
 
 fn encode_topic_partitions(buf: &mut BytesMut, items: &[(Uuid, Vec<i32>)]) {
-    put_compact_array_len(buf, items.len());
-    for (topic_id, partitions) in items {
+    put_compact_array(buf, items.iter(), |buf, (topic_id, partitions)| {
         put_uuid(buf, topic_id.0);
         put_i32_array(buf, partitions);
         put_empty_tagged_fields(buf);
-    }
+    });
 }
 
 fn decode_topic_partitions(buf: &mut &[u8]) -> Result<Vec<(Uuid, Vec<i32>)>, BrokerError> {
-    let n = get_compact_array_len(buf)?;
-    let mut out = Vec::with_capacity(n);
-    for _ in 0..n {
+    get_compact_array(buf, |buf| {
         let topic_id = Uuid(get_uuid(buf)?);
         let partitions = get_i32_array(buf)?;
         skip_tagged_fields(buf)?;
-        out.push((topic_id, partitions));
-    }
-    Ok(out)
+        Ok((topic_id, partitions))
+    })
 }
 
 #[cfg(test)]

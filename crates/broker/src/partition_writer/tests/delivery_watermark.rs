@@ -4,13 +4,9 @@
 use assert2::check;
 use krabka_log::{LogConfig, Offset};
 use tempfile::tempdir;
-use tokio::sync::oneshot;
 
 use super::*;
-use crate::{
-    partition::{ProduceData, ProduceJob},
-    partition_writer::test_support::sample_batch,
-};
+use crate::partition_writer::test_support::sample_batch;
 
 #[tokio::test]
 async fn a_produce_to_a_scheduled_topic_refreshes_the_mirror_and_rearms_the_scheduler() {
@@ -35,32 +31,19 @@ async fn a_produce_to_a_scheduled_topic_refreshes_the_mirror_and_rearms_the_sche
     delivery.adopt(&waker);
 
     let (tx, rx) = mpsc::channel(1);
-    let writer = tokio::spawn(run_writer!(
-        "scheduled".to_string(),
-        PartitionIndex(0),
+    let writer = spawn_writer(
+        dir.path(),
         log.clone(),
-        Arc::new(ArcSwap::from_pointee(dir.path().to_path_buf())),
         rx,
-        Arc::new(Notify::new()),
-        Arc::new(tokio::sync::Mutex::new(
-            crate::replica_state::ReplicaState::new(),
-        )),
-        Arc::new(Notify::new()),
-        delivery.clone(),
-        crate::log_dir_status::LogDirRegistry::default(),
-        Arc::new(ProducerState::new()),
-        None,
-    ));
+        WriterOptions {
+            topic: "scheduled".to_string(),
+            delivery: delivery.clone(),
+            ..Default::default()
+        },
+    );
 
     // A batch that is already active moves the watermark to the log end.
-    let (ack, ack_rx) = oneshot::channel();
-    tx.send(WriterMessage::Produce(ProduceJob {
-        data: ProduceData::Owned(batch_at(NOW_MS - 60_000)),
-        ack,
-        producer_check: None,
-    }))
-    .await
-    .expect("send the active batch");
+    let ack_rx = queue_batch(&tx, batch_at(NOW_MS - 60_000)).await;
     ack_rx.await.expect("ack").expect("append ok");
     // The writer publishes the watermark after it acks, so poll for it.
     check!(wait_until(|| delivery.watermark() == Offset(2)).await);
@@ -68,14 +51,7 @@ async fn a_produce_to_a_scheduled_topic_refreshes_the_mirror_and_rearms_the_sche
     // A batch that comes due inside the scheduler's sleep re-arms it.
     let woken = waker.woken();
     tokio::pin!(woken);
-    let (ack, ack_rx) = oneshot::channel();
-    tx.send(WriterMessage::Produce(ProduceJob {
-        data: ProduceData::Owned(batch_at(NOW_MS + 200)),
-        ack,
-        producer_check: None,
-    }))
-    .await
-    .expect("send the scheduled batch");
+    let ack_rx = queue_batch(&tx, batch_at(NOW_MS + 200)).await;
     ack_rx.await.expect("ack").expect("append ok");
 
     // The pending batch holds the watermark where it was.
@@ -91,14 +67,7 @@ async fn a_produce_to_a_scheduled_topic_refreshes_the_mirror_and_rearms_the_sche
             u64::try_from(200 + BOUND_MS).expect("positive"),
         ))
         .expect("manual time moves forward");
-    let (ack, ack_rx) = oneshot::channel();
-    tx.send(WriterMessage::Produce(ProduceJob {
-        data: ProduceData::Owned(batch_at(NOW_MS - 60_000)),
-        ack,
-        producer_check: None,
-    }))
-    .await
-    .expect("send a third batch");
+    let ack_rx = queue_batch(&tx, batch_at(NOW_MS - 60_000)).await;
     ack_rx.await.expect("ack").expect("append ok");
     check!(wait_until(|| delivery.watermark() == Offset(6)).await);
 
@@ -109,36 +78,21 @@ async fn a_produce_to_a_scheduled_topic_refreshes_the_mirror_and_rearms_the_sche
 #[tokio::test]
 async fn a_produce_to_an_immediate_topic_keeps_the_mirror_at_the_log_end() {
     let dir = tempdir().expect("tempdir");
-    let log = Arc::new(Mutex::new(
-        Log::open(dir.path(), LogConfig::default()).expect("open log"),
-    ));
+    let log = open_default_log(dir.path());
     let delivery = DeliveryHandles::new();
     let (tx, rx) = mpsc::channel(1);
-    let writer = tokio::spawn(run_writer!(
-        "immediate".to_string(),
-        PartitionIndex(0),
+    let writer = spawn_writer(
+        dir.path(),
         log.clone(),
-        Arc::new(ArcSwap::from_pointee(dir.path().to_path_buf())),
         rx,
-        Arc::new(Notify::new()),
-        Arc::new(tokio::sync::Mutex::new(
-            crate::replica_state::ReplicaState::new(),
-        )),
-        Arc::new(Notify::new()),
-        delivery.clone(),
-        crate::log_dir_status::LogDirRegistry::default(),
-        Arc::new(ProducerState::new()),
-        None,
-    ));
+        WriterOptions {
+            topic: "immediate".to_string(),
+            delivery: delivery.clone(),
+            ..Default::default()
+        },
+    );
 
-    let (ack, ack_rx) = oneshot::channel();
-    tx.send(WriterMessage::Produce(ProduceJob {
-        data: ProduceData::Owned(sample_batch(3)),
-        ack,
-        producer_check: None,
-    }))
-    .await
-    .expect("send job");
+    let ack_rx = queue_batch(&tx, sample_batch(3)).await;
     ack_rx.await.expect("ack").expect("append ok");
 
     check!(crate::delivery::test_support::wait_until(|| delivery.watermark() == Offset(3)).await);

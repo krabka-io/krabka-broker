@@ -199,6 +199,42 @@ fn snapshot_fetch_response_is_invalid_unless_success_from_active_leader() {
     }
 }
 
+fn elect_with_peer(engine: &mut super::Engine, peer: NodeId) {
+    engine.on_event(Event::ElectionTimeout);
+    for epoch in [0, 1] {
+        engine.on_event(Event::ReceiveVoteResponse {
+            from: peer,
+            epoch,
+            vote_granted: true,
+        });
+    }
+    assert!(engine.core.role().is_leader());
+}
+
+fn fetch_at_tip(
+    engine: &mut super::Engine,
+    peer: NodeId,
+    fetch_epoch: u32,
+) -> oneshot::Receiver<bytes::Bytes> {
+    let (reply, receiver) = oneshot::channel();
+    engine.on_inbound(Inbound::Fetch {
+        version: crate::kraft::transport::wire::FETCH_VERSION,
+        req: wire::PeerRequest::Fetch {
+            cluster_id: None,
+            max_wait_ms: 0,
+            high_watermark: -1,
+            from: peer,
+            current_leader_epoch: i32::try_from(engine.core.quorum_state().leader_epoch).unwrap(),
+            fetch_epoch,
+            fetch_offset: engine.log.log_end_offset().0,
+            replica_directory_id: uuid::Uuid::nil(),
+        }
+        .encode(),
+        reply,
+    });
+    receiver
+}
+
 /// A Fetch response from a newer epoch moves a follower or an observer to the
 /// leader it names, as `KafkaRaftClient.maybeHandleCommonResponse` does.
 ///
@@ -1127,18 +1163,7 @@ async fn a_leader_answers_a_diverging_fetch_without_truncating_its_own_log() {
 #[tokio::test]
 async fn quorum_state_snapshot_tracks_fetch_timestamps_and_observers() {
     let (mut engine, _dir) = build_engine_only(NodeId(1), &[NodeId(1), NodeId(2)]);
-    engine.on_event(Event::ElectionTimeout);
-    engine.on_event(Event::ReceiveVoteResponse {
-        from: NodeId(2),
-        epoch: 0,
-        vote_granted: true,
-    });
-    engine.on_event(Event::ReceiveVoteResponse {
-        from: NodeId(2),
-        epoch: 1,
-        vote_granted: true,
-    });
-    assert!(engine.core.role().is_leader());
+    elect_with_peer(&mut engine, NodeId(2));
 
     // 1. Before Node 2 fetches, fetch_ms and caught_up_ms are -1
     let snap1 = engine.quorum_state_snapshot();
@@ -1160,22 +1185,7 @@ async fn quorum_state_snapshot_tracks_fetch_timestamps_and_observers() {
 
     // 2. After Node 2 fetches at the current log end offset:
     tokio::time::sleep(StdDuration::from_millis(10)).await;
-    let (reply, _rx) = oneshot::channel();
-    engine.on_inbound(Inbound::Fetch {
-        version: crate::kraft::transport::wire::FETCH_VERSION,
-        req: wire::PeerRequest::Fetch {
-            cluster_id: None,
-            max_wait_ms: 0,
-            high_watermark: -1,
-            from: NodeId(2),
-            current_leader_epoch: i32::try_from(engine.core.quorum_state().leader_epoch).unwrap(),
-            fetch_epoch: 1,
-            fetch_offset: engine.log.log_end_offset().0,
-            replica_directory_id: uuid::Uuid::nil(),
-        }
-        .encode(),
-        reply,
-    });
+    let _rx = fetch_at_tip(&mut engine, NodeId(2), 1);
 
     let snap2 = engine.quorum_state_snapshot();
     let peer_fetch_ms = snap2
@@ -1368,39 +1378,14 @@ async fn kraft_controller_metadata_fetch_returns_slice() {
 #[tokio::test]
 async fn quorum_state_snapshot_negative_timestamp_fallback() {
     let (mut engine, _dir) = build_engine_only(NodeId(1), &[NodeId(1), NodeId(2)]);
-    engine.on_event(Event::ElectionTimeout);
-    engine.on_event(Event::ReceiveVoteResponse {
-        from: NodeId(2),
-        epoch: 0,
-        vote_granted: true,
-    });
-    engine.on_event(Event::ReceiveVoteResponse {
-        from: NodeId(2),
-        epoch: 1,
-        vote_granted: true,
-    });
-    assert!(engine.core.role().is_leader());
+    elect_with_peer(&mut engine, NodeId(2));
 
     // When wall_clock_base is before UNIX_EPOCH, duration_since returns Err,
     // so map_or fallback -1 must be returned for all timestamps.
     engine.wall_clock_base = std::time::UNIX_EPOCH - StdDuration::from_secs(100_000);
     // Shift clock_base back so engine.now() > 0 and progress.last_fetch / progress.last_caught_up > 0
     engine.clock_base = Instant::now() - StdDuration::from_millis(50);
-    engine.on_inbound(Inbound::Fetch {
-        version: crate::kraft::transport::wire::FETCH_VERSION,
-        req: wire::PeerRequest::Fetch {
-            cluster_id: None,
-            max_wait_ms: 0,
-            high_watermark: -1,
-            from: NodeId(2),
-            current_leader_epoch: i32::try_from(engine.core.quorum_state().leader_epoch).unwrap(),
-            fetch_epoch: 1,
-            fetch_offset: engine.log.log_end_offset().0,
-            replica_directory_id: uuid::Uuid::nil(),
-        }
-        .encode(),
-        reply: oneshot::channel().0,
-    });
+    drop(fetch_at_tip(&mut engine, NodeId(2), 1));
 
     let snap = engine.quorum_state_snapshot();
     assert2::assert!(snap.per_replica_last_fetch_ms.get(&NodeId(1)) == Some(&-1));

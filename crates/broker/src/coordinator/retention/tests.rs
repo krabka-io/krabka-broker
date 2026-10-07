@@ -12,10 +12,7 @@ use krabka_ids::PartitionIndex;
 use krabka_protocol::owned::{
     create_topics_request::{self, CreatableTopic, CreateTopicsRequest},
     leave_group_request::LeaveGroupRequest,
-    offset_commit_request::{
-        OffsetCommitRequest, OffsetCommitRequestPartition, OffsetCommitRequestTopic,
-    },
-    offset_fetch_request::{OffsetFetchRequest, OffsetFetchRequestTopic},
+    offset_commit_request::OffsetCommitRequest,
 };
 use krabka_units::mebibytes;
 use tokio::sync::oneshot;
@@ -170,21 +167,10 @@ async fn empty_since_ms(broker: &Broker) -> i64 {
 /// Commit one offset through the `OffsetCommit` handler.
 async fn commit_offset(broker: &Broker, offset: i64, retention_time_ms: i64) {
     let request = OffsetCommitRequest {
-        group_id: GROUP.into(),
         generation_id_or_member_epoch: GENERATION,
         member_id: MEMBER.into(),
         retention_time_ms,
-        topics: vec![OffsetCommitRequestTopic {
-            name: TOPIC.into(),
-            partitions: vec![OffsetCommitRequestPartition {
-                partition_index: 0,
-                committed_offset: offset,
-                committed_leader_epoch: -1,
-                ..Default::default()
-            }],
-            ..Default::default()
-        }],
-        ..Default::default()
+        ..crate::coordinator::test_support::commit_request(GROUP, TOPIC, offset)
     };
     let principal = principal("admin");
     let peer = peer();
@@ -198,22 +184,7 @@ async fn commit_offset(broker: &Broker, offset: i64, retention_time_ms: i64) {
 
 /// The committed offset the `OffsetFetch` handler reports, `-1` for none.
 async fn fetched_offset(broker: &Broker) -> i64 {
-    let request = OffsetFetchRequest {
-        group_id: GROUP.into(),
-        topics: Some(vec![OffsetFetchRequestTopic {
-            name: TOPIC.into(),
-            partition_indexes: vec![0],
-            ..Default::default()
-        }]),
-        ..Default::default()
-    };
-    let principal = principal("admin");
-    let peer = peer();
-    let ctx = request_context(&principal, &peer, "consumer");
-    let response = crate::handlers::offset_fetch::handle(broker, request, FETCH_VERSION, &ctx)
-        .await
-        .expect("OffsetFetch");
-    response.topics[0].partitions[0].committed_offset
+    crate::coordinator::test_support::fetch_offset(broker, GROUP, TOPIC, FETCH_VERSION).await
 }
 
 /// Remove the group's last member through the classic `LeaveGroup` path.
@@ -795,22 +766,7 @@ async fn an_acknowledged_commit_is_never_reaped_by_a_concurrent_sweep() {
 /// Commit one offset for `group` through the `OffsetCommit` handler as a
 /// simple consumer, and return the per-partition error code.
 async fn simple_commit(broker: &Broker, group: &str, offset: i64) -> i16 {
-    let request = OffsetCommitRequest {
-        group_id: group.to_string(),
-        generation_id_or_member_epoch: -1,
-        member_id: String::new(),
-        topics: vec![OffsetCommitRequestTopic {
-            name: TOPIC.into(),
-            partitions: vec![OffsetCommitRequestPartition {
-                partition_index: 0,
-                committed_offset: offset,
-                committed_leader_epoch: -1,
-                ..Default::default()
-            }],
-            ..Default::default()
-        }],
-        ..Default::default()
-    };
+    let request = crate::coordinator::test_support::commit_request(group, TOPIC, offset);
     let principal = principal("admin");
     let peer = peer();
     let ctx = request_context(&principal, &peer, "consumer");
@@ -822,20 +778,5 @@ async fn simple_commit(broker: &Broker, group: &str, offset: i64) -> i16 {
 
 /// The committed offset `OffsetFetch` reports for `group`, `-1` for none.
 async fn simple_fetch(broker: &Broker, group: &str) -> i64 {
-    let request = OffsetFetchRequest {
-        group_id: group.to_string(),
-        topics: Some(vec![OffsetFetchRequestTopic {
-            name: TOPIC.into(),
-            partition_indexes: vec![0],
-            ..Default::default()
-        }]),
-        ..Default::default()
-    };
-    let principal = principal("admin");
-    let peer = peer();
-    let ctx = request_context(&principal, &peer, "consumer");
-    let response = crate::handlers::offset_fetch::handle(broker, request, FETCH_VERSION, &ctx)
-        .await
-        .expect("OffsetFetch");
-    response.topics[0].partitions[0].committed_offset
+    crate::coordinator::test_support::fetch_offset(broker, group, TOPIC, FETCH_VERSION).await
 }

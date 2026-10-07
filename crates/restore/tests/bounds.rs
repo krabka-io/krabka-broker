@@ -11,6 +11,9 @@
 //! KIP-405 archive, then drives `restore()` and reads the restored
 //! partition back with a fresh `krabka_log::Log`.
 
+#[path = "support/archive_fixture.rs"]
+mod archive_fixture;
+
 #[path = "bounds/archive.rs"]
 mod archive;
 #[path = "bounds/exclude_producer.rs"]

@@ -1,23 +1,23 @@
-(* #"/workspace/crates/verified/src/storage/future_log_swap_admission.rs" 50 0 54 24 *)
+(* #"/workspace/crates/verified/src/storage/future_log_swap_admission.rs" 51 0 55 24 *)
 
-let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
-let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
-let%span swell_founded = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/well_founded.rs" 43 8 43 33
-let%span sslice = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 331 18 331 22
-let%span sfuture_log_swap_admission = "/workspace/crates/verified/src/storage/future_log_swap_admission.rs" 55 30 55 36
-let%span sfuture_log_swap_admission'0 = "/workspace/crates/verified/src/storage/future_log_swap_admission.rs" 59 14 59 52
-let%span sfuture_log_swap_admission'1 = "/workspace/crates/verified/src/storage/future_log_swap_admission.rs" 60 28 60 46
-let%span sfuture_log_swap_admission'2 = "/workspace/crates/verified/src/storage/future_log_swap_admission.rs" 57 16 58 32
-let%span sfuture_log_swap_admission'3 = "/workspace/crates/verified/src/storage/future_log_swap_admission.rs" 56 16 56 55
-let%span sfuture_log_swap_admission'4 = "/workspace/crates/verified/src/storage/future_log_swap_admission.rs" 60 50 60 79
-let%span sfuture_log_swap_admission'5 = "/workspace/crates/verified/src/storage/future_log_swap_admission.rs" 61 27 61 28
-let%span sfuture_log_swap_admission'6 = "/workspace/crates/verified/src/storage/future_log_swap_admission.rs" 61 8 61 28
-let%span sfuture_log_swap_admission'7 = "/workspace/crates/verified/src/storage/future_log_swap_admission.rs" 67 20 67 25
-let%span sfuture_log_swap_admission'8 = "/workspace/crates/verified/src/storage/future_log_swap_admission.rs" 38 11 39 86
-let%span sfuture_log_swap_admission'9 = "/workspace/crates/verified/src/storage/future_log_swap_admission.rs" 40 10 40 56
-let%span sfuture_log_swap_admission'10 = "/workspace/crates/verified/src/storage/future_log_swap_admission.rs" 41 10 42 28
-let%span sfuture_log_swap_admission'11 = "/workspace/crates/verified/src/storage/future_log_swap_admission.rs" 43 10 44 29
-let%span sfuture_log_swap_admission'12 = "/workspace/crates/verified/src/storage/future_log_swap_admission.rs" 45 10 48 1
+let%span sord = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sord'0 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span swell_founded = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/well_founded.rs" 43 8 43 33
+let%span sslice = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 331 18 331 22
+let%span sfuture_log_swap_admission = "/workspace/crates/verified/src/storage/future_log_swap_admission.rs" 56 30 56 36
+let%span sfuture_log_swap_admission'0 = "/workspace/crates/verified/src/storage/future_log_swap_admission.rs" 60 14 60 52
+let%span sfuture_log_swap_admission'1 = "/workspace/crates/verified/src/storage/future_log_swap_admission.rs" 61 28 61 46
+let%span sfuture_log_swap_admission'2 = "/workspace/crates/verified/src/storage/future_log_swap_admission.rs" 58 16 59 32
+let%span sfuture_log_swap_admission'3 = "/workspace/crates/verified/src/storage/future_log_swap_admission.rs" 57 16 57 55
+let%span sfuture_log_swap_admission'4 = "/workspace/crates/verified/src/storage/future_log_swap_admission.rs" 61 50 61 79
+let%span sfuture_log_swap_admission'5 = "/workspace/crates/verified/src/storage/future_log_swap_admission.rs" 62 27 62 28
+let%span sfuture_log_swap_admission'6 = "/workspace/crates/verified/src/storage/future_log_swap_admission.rs" 62 8 62 28
+let%span sfuture_log_swap_admission'7 = "/workspace/crates/verified/src/storage/future_log_swap_admission.rs" 68 20 68 25
+let%span sfuture_log_swap_admission'8 = "/workspace/crates/verified/src/storage/future_log_swap_admission.rs" 39 11 40 86
+let%span sfuture_log_swap_admission'9 = "/workspace/crates/verified/src/storage/future_log_swap_admission.rs" 41 10 41 56
+let%span sfuture_log_swap_admission'10 = "/workspace/crates/verified/src/storage/future_log_swap_admission.rs" 42 10 43 28
+let%span sfuture_log_swap_admission'11 = "/workspace/crates/verified/src/storage/future_log_swap_admission.rs" 44 10 45 29
+let%span sfuture_log_swap_admission'12 = "/workspace/crates/verified/src/storage/future_log_swap_admission.rs" 46 10 49 1
 
 use creusot.int.UInt64
 use seq.Seq
@@ -60,7 +60,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let local_truncation_plan [#"/workspace/crates/verified/src/storage/future_log_swap_admission.rs" 50 0 54 24]
+let local_truncation_plan [#"/workspace/crates/verified/src/storage/future_log_swap_admission.rs" 51 0 55 24]
   (sealed_bases: Slice64.slice Int64.t) (active_base: t_Option_i64) (cut: Int64.t) (return (x: t_LocalTruncationPlan)) =
 {[@stop_split] [@expl:local_truncation_plan requires] [%#sfuture_log_swap_admission'8] forall i: int, j: int. 0 <= i
       /\ i < j /\ j < Seq.length (Slice64.view sealed_bases)

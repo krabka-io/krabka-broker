@@ -61,3 +61,6 @@ mod txnver_sequence_epoch_bump;
 mod txnver_verify_only;
 
 mod support;
+
+#[path = "transactions/txn_consumer_fixture.rs"]
+mod txn_consumer_fixture;

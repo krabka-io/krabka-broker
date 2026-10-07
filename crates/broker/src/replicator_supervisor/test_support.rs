@@ -4,6 +4,7 @@
 
 use std::{
     net::SocketAddr,
+    path::PathBuf,
     sync::{
         Arc,
         atomic::{AtomicUsize, Ordering},
@@ -22,6 +23,7 @@ use uuid::Uuid;
 
 use super::{
     ReplicatorSupervisor, ReplicatorSupervisorConfig, dir_assignments::AssignDirsReporter,
+    materialize::MaterializePartitionConfig,
 };
 use crate::{
     config::ReplicationRuntimeConfig, partition_registry::PartitionRegistry,
@@ -50,12 +52,74 @@ pub(super) fn image_with(records: &[MetadataRecord]) -> MetadataImage {
 }
 
 pub(super) fn topic_record(name: &str, partitions: i32) -> MetadataRecord {
+    topic_record_with_id(name, Uuid::new_v4(), partitions, 3)
+}
+
+pub(super) fn topic_record_with_id(
+    name: &str,
+    topic_id: Uuid,
+    partitions: i32,
+    replication_factor: i16,
+) -> MetadataRecord {
     MetadataRecord::V1Topic(TopicRecord {
         name: name.into(),
-        topic_id: Uuid::new_v4(),
+        topic_id,
         partitions,
-        replication_factor: 3,
+        replication_factor,
     })
+}
+
+pub(super) fn single_partition_image(topic: &str, topic_id: Uuid, leader: NodeId) -> MetadataImage {
+    image_with(&[
+        topic_record_with_id(topic, topic_id, 1, 1),
+        partition_record(topic, 0, leader, vec![leader], 0),
+    ])
+}
+
+pub(super) fn follower_promotion_images() -> (MetadataImage, MetadataImage) {
+    let replicas = vec![NodeId(1), NodeId(2)];
+    let topic = topic_record("t", 1);
+    (
+        image_with(&[
+            topic.clone(),
+            partition_record("t", 0, NodeId(1), replicas.clone(), 3),
+        ]),
+        image_with(&[topic, partition_record("t", 0, NodeId(2), replicas, 7)]),
+    )
+}
+
+#[derive(Default)]
+pub(super) struct MaterializeFixture {
+    log_dir_status: crate::log_dir_status::LogDirRegistry,
+    producer_state: Arc<crate::producer_state::ProducerState>,
+}
+
+impl MaterializeFixture {
+    pub(super) fn config<'a>(
+        &'a self,
+        partitions: &'a PartitionRegistry,
+        topic: &'a str,
+        log_dirs: &'a [PathBuf],
+        log_config: &'a LogConfig,
+    ) -> MaterializePartitionConfig<'a> {
+        MaterializePartitionConfig {
+            partitions,
+            topic,
+            topic_id: None,
+            partition: 0,
+            log_dirs,
+            log_config,
+            log_dir_status: &self.log_dir_status,
+            producer_state: &self.producer_state,
+            max_produce_group: 1_024,
+            partition_writer_queue_depth: 64,
+            diskless_wal_local_replica_count: 3,
+            diskless: false,
+            hot_tail: None,
+            wal_shards: None,
+            sequencer: None,
+        }
+    }
 }
 
 pub(super) fn partition_record(

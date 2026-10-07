@@ -14,7 +14,7 @@ use uuid::Uuid;
 use crate::{
     log::{InProcessMetadataEventLog, MetadataEventLog},
     manager::test_support::{
-        HwmFlakyLog, finish, on_blocking, start_manager, start_manager_all, started, tp, wait_ready,
+        HwmFlakyLog, on_blocking, start_manager, start_manager_all, tp, wait_ready,
     },
 };
 
@@ -24,18 +24,7 @@ async fn add_then_remove_drives_assignment_and_readiness() {
 
     let log: Arc<dyn MetadataEventLog> = InProcessMetadataEventLog::new(4);
     // Pre-seed a finished segment for `tp()` so a ready read returns Some.
-    {
-        let writer = start_manager_all(log.clone()).await;
-        let w2 = writer.clone();
-        on_blocking(move || {
-            w2.add_remote_log_segment_metadata(started(10, 0, 99))
-                .unwrap();
-        })
-        .await;
-        let w2 = writer.clone();
-        on_blocking(move || w2.update_remote_log_segment_metadata(finish(10)).unwrap()).await;
-        writer.shutdown();
-    }
+    crate::manager::test_support::seed_log(log.clone()).await;
 
     let mp = metadata_partition_for(&tp(), log.partition_count());
     let m = start_manager(log);
@@ -210,18 +199,7 @@ async fn reassignment_remove_then_readd_applies_no_duplicates() {
 
     let log: Arc<dyn MetadataEventLog> = InProcessMetadataEventLog::new(4);
     // Pre-seed a single finished segment for `tp()`.
-    {
-        let writer = start_manager_all(log.clone()).await;
-        let w2 = writer.clone();
-        on_blocking(move || {
-            w2.add_remote_log_segment_metadata(started(10, 0, 99))
-                .unwrap();
-        })
-        .await;
-        let w2 = writer.clone();
-        on_blocking(move || w2.update_remote_log_segment_metadata(finish(10)).unwrap()).await;
-        writer.shutdown();
-    }
+    crate::manager::test_support::seed_log(log.clone()).await;
 
     let mp = metadata_partition_for(&tp(), log.partition_count());
     let m = start_manager(log);
@@ -270,18 +248,7 @@ async fn hwm_fetch_failure_gates_not_ready_then_self_heals() {
 
     // Pre-seed a finished segment for `tp()` via a healthy writer (HWM
     // not failing yet), so a ready read would return Some.
-    {
-        let writer = start_manager_all(log.clone()).await;
-        let w2 = writer.clone();
-        on_blocking(move || {
-            w2.add_remote_log_segment_metadata(started(10, 0, 99))
-                .unwrap();
-        })
-        .await;
-        let w2 = writer.clone();
-        on_blocking(move || w2.update_remote_log_segment_metadata(finish(10)).unwrap()).await;
-        writer.shutdown();
-    }
+    crate::manager::test_support::seed_log(log.clone()).await;
 
     let mp = metadata_partition_for(&tp(), log.partition_count());
     let m = start_manager(log);

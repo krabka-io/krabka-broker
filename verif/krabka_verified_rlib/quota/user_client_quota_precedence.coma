@@ -1,14 +1,14 @@
-(* #"/workspace/crates/verified/src/quota.rs" 171 0 171 93 *)
+(* #"/workspace/crates/verified/src/quota.rs" 174 0 174 93 *)
 
-let%span squota = "/workspace/crates/verified/src/quota.rs" 117 10 118 60
-let%span squota'0 = "/workspace/crates/verified/src/quota.rs" 119 10 121 78
-let%span squota'1 = "/workspace/crates/verified/src/quota.rs" 122 10 125 63
-let%span squota'2 = "/workspace/crates/verified/src/quota.rs" 126 10 130 78
-let%span squota'3 = "/workspace/crates/verified/src/quota.rs" 131 10 136 65
-let%span squota'4 = "/workspace/crates/verified/src/quota.rs" 137 10 143 65
-let%span squota'5 = "/workspace/crates/verified/src/quota.rs" 144 10 151 65
-let%span squota'6 = "/workspace/crates/verified/src/quota.rs" 152 10 160 67
-let%span squota'7 = "/workspace/crates/verified/src/quota.rs" 161 10 169 67
+let%span squota = "/workspace/crates/verified/src/quota.rs" 120 10 121 60
+let%span squota'0 = "/workspace/crates/verified/src/quota.rs" 122 10 124 78
+let%span squota'1 = "/workspace/crates/verified/src/quota.rs" 125 10 128 63
+let%span squota'2 = "/workspace/crates/verified/src/quota.rs" 129 10 133 78
+let%span squota'3 = "/workspace/crates/verified/src/quota.rs" 134 10 139 65
+let%span squota'4 = "/workspace/crates/verified/src/quota.rs" 140 10 146 65
+let%span squota'5 = "/workspace/crates/verified/src/quota.rs" 147 10 154 65
+let%span squota'6 = "/workspace/crates/verified/src/quota.rs" 155 10 163 67
+let%span squota'7 = "/workspace/crates/verified/src/quota.rs" 164 10 172 67
 
 use creusot.prelude.Any
 
@@ -39,7 +39,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let user_client_quota_precedence [#"/workspace/crates/verified/src/quota.rs" 171 0 171 93]
+let user_client_quota_precedence [#"/workspace/crates/verified/src/quota.rs" 174 0 174 93]
   (facts: t_UserClientQuotaFacts) (return (x: t_UserClientQuotaPrecedence)) = (! bb0
   [ bb0 = any [ br0 -> {facts.exact_pair = Absent} (! bb1) | br1 -> {facts.exact_pair = Present} (! bb3) ]
   | bb1 = s0 [ s0 = [ &_55 <- false ] s1 | s1 = bb4 ]

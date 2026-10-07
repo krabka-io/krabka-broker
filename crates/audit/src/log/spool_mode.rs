@@ -145,17 +145,34 @@ mod tests {
         stats::AuditStats,
     };
 
+    type FailingSpoolFixture = (
+        Arc<AuditLog>,
+        Arc<FailableSink>,
+        Arc<AuditStats>,
+        Arc<qubit_clock::ManualMonotonicClock>,
+        tokio::task::JoinHandle<()>,
+    );
+
+    fn failing_spool(directory: &std::path::Path) -> FailingSpoolFixture {
+        let sink = Arc::new(FailableSink::default());
+        sink.set_fail(true);
+        let stats = Arc::new(AuditStats::new());
+        let (log, rx) = AuditLog::new(64);
+        let spool = Spool::open(directory, ROOMY_CAP).unwrap();
+        let (params, clock) = params_with_clock(sink.clone(), spool, stats.clone());
+        (
+            log,
+            sink,
+            stats,
+            clock,
+            tokio::spawn(AuditWriter::new(rx, params).run()),
+        )
+    }
+
     #[tokio::test]
     async fn records_spool_on_sink_failure_then_replay_to_sink() {
         let dir = tempfile::tempdir().unwrap();
-        let sink = Arc::new(FailableSink::default());
-        sink.set_fail(true); // topic "down"
-        let stats = Arc::new(AuditStats::new());
-        let (log, rx) = AuditLog::new(64);
-        let spool = Spool::open(dir.path(), ROOMY_CAP).unwrap();
-        let (p, clock) = params_with_clock(sink.clone(), spool, stats.clone());
-        let writer = AuditWriter::new(rx, p);
-        let h = tokio::spawn(writer.run());
+        let (log, sink, stats, clock, h) = failing_spool(dir.path());
 
         log.emit(life(1));
         log.emit(life(2));
@@ -460,14 +477,7 @@ mod tests {
     #[tokio::test]
     async fn partial_replay_keeps_remainder_then_drains() {
         let dir = tempfile::tempdir().unwrap();
-        let sink = Arc::new(FailableSink::default());
-        sink.set_fail(true);
-        let stats = Arc::new(AuditStats::new());
-        let (log, rx) = AuditLog::new(64);
-        let spool = Spool::open(dir.path(), ROOMY_CAP).unwrap();
-        let (p, clock) = params_with_clock(sink.clone(), spool, stats.clone());
-        let writer = AuditWriter::new(rx, p);
-        let h = tokio::spawn(writer.run());
+        let (log, sink, stats, clock, h) = failing_spool(dir.path());
         log.emit(life(0));
         log.emit(life(1));
         log.emit(life(2));

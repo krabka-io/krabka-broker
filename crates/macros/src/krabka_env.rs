@@ -5,6 +5,8 @@ use moxy::{
     token::{LitStr, Spanner, ToTokenStream, TokenStream},
 };
 
+use crate::meta::compact;
+
 /// The prefix of every environment variable when the attribute names none.
 const DEFAULT_PREFIX: &str = "KRABKA_";
 
@@ -62,15 +64,6 @@ fn type_arguments(ty: &str) -> Option<TokenStream> {
     })
 }
 
-/// The type of a field as written, without whitespace.
-fn type_key(ty: &impl ToTokenStream) -> String {
-    ty.to_token_stream()
-        .to_string()
-        .chars()
-        .filter(|c| !c.is_whitespace())
-        .collect()
-}
-
 /// Expands `#[krabka_env]` on `item`.
 pub(crate) fn expand(meta: TokenStream, item: TokenStream) -> Result<TokenStream, ParseError> {
     let prefix = prefix(&{ meta })?;
@@ -92,7 +85,7 @@ pub(crate) fn expand(meta: TokenStream, item: TokenStream) -> Result<TokenStream
         let Some(ident) = field.ident.as_ref() else {
             continue;
         };
-        let ty = type_key(&field.ty);
+        let ty = compact(&field.ty.to_token_stream());
         let Some(arguments) = type_arguments(&ty) else {
             return Err(ParseError::new(
                 field.ty.span(),
@@ -116,6 +109,7 @@ mod tests {
     use moxy::token::TokenStream;
 
     use super::{env_name, expand, type_arguments};
+    use crate::meta::compact;
 
     /// `#[krabka_env($meta)]` on `item`, expanded and printed without
     /// whitespace, or the message of the error it raises.
@@ -123,12 +117,7 @@ mod tests {
         let meta: TokenStream = meta.parse().expect("meta tokenizes");
         let item: TokenStream = item.parse().expect("item tokenizes");
         expand(meta, item)
-            .map(|out| {
-                out.to_string()
-                    .chars()
-                    .filter(|c| !c.is_whitespace())
-                    .collect()
-            })
+            .map(|out| compact(&out))
             .map_err(|error| error.message().to_owned())
     }
 

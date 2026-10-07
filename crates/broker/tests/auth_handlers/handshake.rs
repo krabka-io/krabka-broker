@@ -8,7 +8,7 @@
 
 use assert2::{assert, check};
 use bytes::{BufMut, BytesMut};
-use krabka_broker::{Broker, BrokerConfig, config::ListenerSpec};
+use krabka_broker::Broker;
 use krabka_protocol::{
     Decode, Encode,
     owned::{
@@ -17,7 +17,7 @@ use krabka_protocol::{
         sasl_handshake_response::SaslHandshakeResponse,
     },
 };
-use krabka_security::{ListenerProtocol, SaslMechanism};
+use krabka_security::SaslMechanism;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::TcpStream,
@@ -34,37 +34,27 @@ use crate::harness::round_trip;
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn api_versions_reachable_pre_auth_on_sasl_listener() {
     let log_dir = tempfile::tempdir().unwrap();
-    let mut cfg = BrokerConfig::for_tests(log_dir.path().to_path_buf());
-    cfg.listeners = vec![ListenerSpec {
-        name: "SASL_PLAINTEXT".to_string(),
-        bind_addr: "127.0.0.1:0".parse().unwrap(),
-        advertised: "127.0.0.1:0".to_string(),
-        protocol: ListenerProtocol::SaslPlaintext,
-        tls_config: None,
-        sasl_mechanisms: None,
-        principal_mapper: krabka_broker::SslPrincipalMapper::default(),
-    }];
-    cfg.inter_broker_listener_name = "SASL_PLAINTEXT".to_string();
-    cfg.enabled_sasl_mechanisms = vec![SaslMechanism::Plain];
-    // A listener that offers PLAIN needs a credential table to pass validation.
-    cfg.plain_credentials
-        .insert("alice".to_string(), "alice-secret".to_string());
+    let cfg = crate::harness::alice_plain_config(
+        log_dir.path().to_path_buf(),
+        "alice-secret".to_string(),
+    );
 
     let handle = Broker::start(cfg).await.expect("broker must start");
     let addr = handle.listen_addr();
 
     let mut stream = TcpStream::connect(addr).await.unwrap();
 
-    let av_req = ApiVersionsRequest::default();
-    let mut av_body = BytesMut::new();
-    av_req.encode(&mut av_body, 0).unwrap();
-    let av_resp_bytes = round_trip(&mut stream, 18, 0, 1, false, &av_body)
-        .await
-        .expect("ApiVersions must succeed pre-auth on SASL listener");
-
-    let mut cur: &[u8] = &av_resp_bytes;
-    let av_resp = ApiVersionsResponse::decode(&mut cur, 0)
-        .expect("ApiVersionsResponse must decode successfully");
+    let av_resp: ApiVersionsResponse = crate::kafka_wire::exchange(
+        &mut stream,
+        &ApiVersionsRequest::default(),
+        18,
+        0,
+        1,
+        "krabka-sasl-test",
+        false,
+    )
+    .await
+    .expect("ApiVersions round-trip");
 
     check!(
         av_resp.error_code == 0,
@@ -94,21 +84,10 @@ async fn api_versions_reachable_pre_auth_on_sasl_listener() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn metadata_rejected_pre_auth_on_sasl_listener() {
     let log_dir = tempfile::tempdir().unwrap();
-    let mut cfg = BrokerConfig::for_tests(log_dir.path().to_path_buf());
-    cfg.listeners = vec![ListenerSpec {
-        name: "SASL_PLAINTEXT".to_string(),
-        bind_addr: "127.0.0.1:0".parse().unwrap(),
-        advertised: "127.0.0.1:0".to_string(),
-        protocol: ListenerProtocol::SaslPlaintext,
-        tls_config: None,
-        sasl_mechanisms: None,
-        principal_mapper: krabka_broker::SslPrincipalMapper::default(),
-    }];
-    cfg.inter_broker_listener_name = "SASL_PLAINTEXT".to_string();
-    cfg.enabled_sasl_mechanisms = vec![SaslMechanism::Plain];
-    // A listener that offers PLAIN needs a credential table to pass validation.
-    cfg.plain_credentials
-        .insert("alice".to_string(), "alice-secret".to_string());
+    let cfg = crate::harness::alice_plain_config(
+        log_dir.path().to_path_buf(),
+        "alice-secret".to_string(),
+    );
 
     let handle = Broker::start(cfg).await.expect("broker must start");
     let addr = handle.listen_addr();
@@ -156,21 +135,10 @@ async fn metadata_rejected_pre_auth_on_sasl_listener() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn unsupported_mechanism_answers_33_then_closes() {
     let log_dir = tempfile::tempdir().unwrap();
-    let mut cfg = BrokerConfig::for_tests(log_dir.path().to_path_buf());
-    cfg.listeners = vec![ListenerSpec {
-        name: "SASL_PLAINTEXT".to_string(),
-        bind_addr: "127.0.0.1:0".parse().unwrap(),
-        advertised: "127.0.0.1:0".to_string(),
-        protocol: ListenerProtocol::SaslPlaintext,
-        tls_config: None,
-        sasl_mechanisms: None,
-        principal_mapper: krabka_broker::SslPrincipalMapper::default(),
-    }];
-    cfg.inter_broker_listener_name = "SASL_PLAINTEXT".to_string();
-    cfg.enabled_sasl_mechanisms = vec![SaslMechanism::Plain];
-    // A listener that offers PLAIN needs a credential table to pass validation.
-    cfg.plain_credentials
-        .insert("alice".to_string(), "alice-secret".to_string());
+    let cfg = crate::harness::alice_plain_config(
+        log_dir.path().to_path_buf(),
+        "alice-secret".to_string(),
+    );
 
     let handle = Broker::start(cfg).await.expect("broker must start");
     let addr = handle.listen_addr();
@@ -232,17 +200,7 @@ async fn unsupported_mechanism_answers_33_then_closes() {
 }
 
 async fn start_plain_sasl_broker(log_dir: &std::path::Path) -> krabka_broker::BrokerHandle {
-    let mut cfg = BrokerConfig::for_tests(log_dir.to_path_buf());
-    cfg.listeners = vec![ListenerSpec {
-        name: "SASL_PLAINTEXT".to_string(),
-        bind_addr: "127.0.0.1:0".parse().unwrap(),
-        advertised: "127.0.0.1:0".to_string(),
-        protocol: ListenerProtocol::SaslPlaintext,
-        tls_config: None,
-        sasl_mechanisms: None,
-        principal_mapper: krabka_broker::SslPrincipalMapper::default(),
-    }];
-    cfg.inter_broker_listener_name = "SASL_PLAINTEXT".to_string();
+    let mut cfg = crate::support::sasl_plaintext_config(log_dir.to_path_buf());
     cfg.enabled_sasl_mechanisms = vec![SaslMechanism::Plain];
     cfg.plain_credentials
         .insert("alice".to_string(), crate::harness::alice_password());

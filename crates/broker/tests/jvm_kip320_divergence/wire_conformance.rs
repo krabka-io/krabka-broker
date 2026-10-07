@@ -13,7 +13,6 @@ use std::{
 };
 
 use krabka_broker::{BootstrapMode, Broker, BrokerConfig, BrokerHandle};
-use krabka_log::LogConfig;
 use krabka_metadata::MetadataRecord;
 use tempfile::TempDir;
 
@@ -33,13 +32,6 @@ async fn start_host_broker_on(client_port: u16, controller_port: u16) -> (Broker
     support::init_tracing();
     let dir = TempDir::new().expect("tempdir");
     let config = BrokerConfig {
-        broker_id: 1,
-        listen_addr: format!("0.0.0.0:{client_port}").parse().expect("addr"),
-        advertised_listener: format!("host.docker.internal:{client_port}"),
-        log_dir: dir.path().to_path_buf(),
-        log_config: LogConfig::default(),
-        node_id: krabka_broker::NodeId(1),
-        controller_listen_addr: format!("0.0.0.0:{controller_port}").parse().expect("addr"),
         controller_quorum_voters: vec![(
             krabka_broker::NodeId(1),
             format!("127.0.0.1:{controller_port}"),
@@ -49,11 +41,18 @@ async fn start_host_broker_on(client_port: u16, controller_port: u16) -> (Broker
         // heartbeat client cannot loop back through the advertised listener.
         // Keep it alive for the bounded in-container Java compile and probe.
         heartbeat_timeout: krabka_units::secs(120),
-        replica_lag_time_max: krabka_units::millis(30_000),
-        controller_election_timeout: krabka_units::secs(5),
-        controller_heartbeat_interval: krabka_units::millis(500),
         bootstrap_mode: BootstrapMode::Bootstrap,
-        ..BrokerConfig::default().with_internal_topics_for(1)
+        ..crate::support::jvm_broker_config(
+            1,
+            format!("0.0.0.0:{client_port}").parse().expect("addr"),
+            format!("0.0.0.0:{controller_port}").parse().expect("addr"),
+            &format!("host.docker.internal:{client_port}"),
+            dir.path().to_path_buf(),
+            &[(
+                1,
+                format!("0.0.0.0:{controller_port}").parse().expect("addr"),
+            )],
+        )
     };
     let handle = Broker::start(config).await.expect("start broker");
     (handle, dir)

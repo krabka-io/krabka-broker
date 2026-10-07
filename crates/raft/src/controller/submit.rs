@@ -654,22 +654,24 @@ mod tests {
         ctrl.shutdown().await;
     }
 
-    #[tokio::test]
-    async fn forward_raw_with_no_known_leader_rejects_not_leader() {
-        use tempfile::TempDir;
-
+    async fn joining_controller() -> (tempfile::TempDir, crate::controller::ControllerHandle) {
         use crate::{
             config::{BootstrapMode, ControllerConfig},
             controller::Controller,
         };
-
-        let dir = TempDir::new().unwrap();
+        let dir = tempfile::TempDir::new().unwrap();
         let cfg = ControllerConfig {
             bootstrap_mode: BootstrapMode::Join,
             initial_voters: krabka_metadata::VoterSet::from_voters(std::iter::empty()),
             ..ControllerConfig::for_tests(NodeId(1), dir.path().to_path_buf())
         };
         let ctrl = Controller::start(cfg).await.expect("join start");
+        (dir, ctrl)
+    }
+
+    #[tokio::test]
+    async fn forward_raw_with_no_known_leader_rejects_not_leader() {
+        let (_dir, ctrl) = joining_controller().await;
 
         let err = ctrl
             .forward_raw(crate::wire::API_KEY_METADATA_FETCH, 0, bytes::Bytes::new())
@@ -686,20 +688,7 @@ mod tests {
 
     #[tokio::test]
     async fn submit_delegation_token_mutations_on_join_node_rejects_not_leader() {
-        use tempfile::TempDir;
-
-        use crate::{
-            config::{BootstrapMode, ControllerConfig},
-            controller::Controller,
-        };
-
-        let dir = TempDir::new().unwrap();
-        let cfg = ControllerConfig {
-            bootstrap_mode: BootstrapMode::Join,
-            initial_voters: krabka_metadata::VoterSet::from_voters(std::iter::empty()),
-            ..ControllerConfig::for_tests(NodeId(1), dir.path().to_path_buf())
-        };
-        let ctrl = Controller::start(cfg).await.expect("join start");
+        let (_dir, ctrl) = joining_controller().await;
         let res = ctrl.submit_delegation_token_mutations(vec![]).await;
         assert2::assert!(matches!(
             res,

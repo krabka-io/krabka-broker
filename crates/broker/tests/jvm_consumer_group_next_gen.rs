@@ -7,8 +7,6 @@ mod support;
 use std::process::{Command, Stdio};
 
 use assert2::assert;
-use krabka_broker::{Broker, BrokerConfig};
-use krabka_log::LogConfig;
 
 /// Ports for this test process, allocated once rather than fixed at 9092.
 ///
@@ -18,29 +16,10 @@ use krabka_log::LogConfig;
 /// time. A port per process lets them overlap.
 ///
 /// `&'static str`, so these read as the constants they replaced.
-fn ports() -> &'static (String, String, String) {
-    static PORTS: std::sync::OnceLock<(String, String, String)> = std::sync::OnceLock::new();
-    PORTS.get_or_init(|| {
-        let (client, controller) = (support::free_port(), support::free_port());
-        (
-            format!("host.docker.internal:{client}"),
-            format!("0.0.0.0:{client}"),
-            format!("0.0.0.0:{controller}"),
-        )
-    })
-}
-
 fn bootstrap_addr() -> &'static str {
-    &ports().0
+    &support::jvm_listeners().advertised
 }
 
-fn listen_addr() -> &'static str {
-    &ports().1
-}
-
-fn controller_listen() -> &'static str {
-    &ports().2
-}
 const KAFKA_IMAGE_NEXT_GEN: &str = "mirror.gcr.io/apache/kafka:4.0.0";
 /// Kafka 4.3.1 is the oracle for broker-side subscription regexes: from 4.1 the
 /// console consumer subscribes with `SubscriptionPattern` when
@@ -49,41 +28,8 @@ const KAFKA_IMAGE_NEXT_GEN: &str = "mirror.gcr.io/apache/kafka:4.0.0";
 const KAFKA_IMAGE_CLASSIC: &str = "mirror.gcr.io/confluentinc/cp-kafka:7.4.0";
 
 async fn start_host_broker() -> (krabka_broker::BrokerHandle, tempfile::TempDir) {
-    let bootstrap = bootstrap_addr();
-    let listen = listen_addr();
-    let _ = tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("krabka_broker=info,info")),
-        )
-        .with_test_writer()
-        .try_init();
-    let dir = tempfile::tempdir().expect("tempdir");
-    let listen_addr: std::net::SocketAddr = listen_addr().parse().expect("static addr");
-    let controller_addr: std::net::SocketAddr =
-        controller_listen().parse().expect("allocated addr");
-    let config = BrokerConfig {
-        broker_id: 1,
-        listen_addr,
-        advertised_listener: bootstrap_addr().into(),
-        log_dir: dir.path().to_path_buf(),
-        log_config: LogConfig::default(),
-        node_id: krabka_broker::NodeId(1),
-        controller_listen_addr: controller_addr,
-        controller_quorum_voters: vec![(krabka_broker::NodeId(1), controller_addr.to_string())],
-        heartbeat_interval: krabka_units::millis(3_000),
-        heartbeat_timeout: krabka_units::millis(9_000),
-        replica_lag_time_max: krabka_units::millis(30_000),
-        controller_election_timeout: krabka_units::secs(5),
-        controller_heartbeat_interval: krabka_units::millis(500),
-        bootstrap_mode: krabka_broker::BootstrapMode::Bootstrap,
-        ..BrokerConfig::default().with_internal_topics_for(1)
-    };
-    let handle = Broker::start(config).await.expect("start broker");
-    eprintln!("KRABKA[test] broker started listen={listen} advertised={bootstrap}");
-    (handle, dir)
+    support::start_jvm_single("krabka_broker=info,info", |_| {}).await
 }
-
 /// Pre-create a topic with the classic admin tooling. Krabka's broker does
 /// not auto-create topics on the produce path, so tests must create them
 /// explicitly. This matches the existing `jvm_acceptance.rs` convention.

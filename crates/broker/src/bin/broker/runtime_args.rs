@@ -21,6 +21,7 @@ fn parse_streams_assignor(value: &str) -> Result<StreamsAssignorKind, String> {
 /// and the value parser of its type from `#[krabka_env]`, and every field not
 /// marked `skip` is copied onto the same-named `RuntimeFileConfig` field by
 /// `copy_into`. The `krabka-macros` crate documentation lists both.
+#[krabka_macros::runtime_policy_fields(cli)]
 #[krabka_macros::krabka_env]
 #[derive(Debug, clap::Args, krabka_macros::RuntimeOverlay)]
 #[overlay(target = krabka_broker::file_config::RuntimeFileConfig)]
@@ -41,19 +42,6 @@ pub struct RuntimeArgs {
     )]
     #[overlay(skip)]
     pub client_frame_max: ByteSize,
-    pub startup_leader_wait_timeout: Option<Time>,
-    pub self_registration_backoff_min: Option<Time>,
-    pub self_registration_backoff_max: Option<Time>,
-    pub observer_poll_interval: Option<Time>,
-    pub audit_spool_replay_interval: Option<Time>,
-    pub audit_stats_poll_interval: Option<Time>,
-    pub audit_partition_wait_timeout: Option<Time>,
-    pub liveness_tick_interval: Option<Time>,
-    pub gauge_poll_interval: Option<Time>,
-    pub isr_scan_interval: Option<Time>,
-    pub cleaner_interval: Option<Time>,
-    pub log_retention_check_interval: Option<Time>,
-    pub future_log_move_retry_backoff: Option<Time>,
     pub client_metrics_eviction_tick: Option<Time>,
     pub client_metrics_stale_floor: Option<Time>,
     pub client_metrics_default_interval: Option<Time>,
@@ -67,24 +55,6 @@ pub struct RuntimeArgs {
     pub oauth_jwks_http_timeout: Option<Time>,
     pub auto_join_retry_backoff: Option<Time>,
     pub auto_join_voter_request_timeout: Option<Time>,
-    pub replication_fetch_max: Option<ByteSize>,
-    pub replication_fetch_max_wait: Option<Time>,
-    pub replication_fetch_min: Option<ByteSize>,
-    pub replication_throttle_exhausted_backoff: Option<Time>,
-    pub replication_send_error_backoff: Option<Time>,
-    pub replication_unknown_topic_retry_delay: Option<Time>,
-    pub replication_epoch_fence_backoff: Option<Time>,
-    pub replication_unexpected_error_backoff: Option<Time>,
-    pub replication_reconnect_initial_delay: Option<Time>,
-    pub replication_reconnect_delay_cap: Option<Time>,
-    pub coordinator_session_expiry_tick: Option<Time>,
-    pub coordinator_shutdown_ack_timeout: Option<Time>,
-    pub consumer_group_session_timeout: Option<Time>,
-    pub consumer_group_heartbeat_interval: Option<Time>,
-    pub consumer_group_min_session_timeout: Option<Time>,
-    pub consumer_group_max_session_timeout: Option<Time>,
-    pub consumer_group_min_heartbeat_interval: Option<Time>,
-    pub consumer_group_max_heartbeat_interval: Option<Time>,
     #[overlay(refined)]
     pub consumer_group_max_size: Option<PositiveCount>,
     #[arg(long, env = "KRABKA_CLASSIC_GROUP_INITIAL_REBALANCE_DELAY", value_parser = krabka_units::parse::non_negative_time)]

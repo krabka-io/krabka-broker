@@ -277,26 +277,7 @@ async fn handle_rejects_cidr_host_below_the_cidr_metadata_version() {
         })])
         .await
         .expect("seed pre-cidr metadata.version");
-    test_ctx!(ctx, "admin");
-    let mut cidr_creation = creation("topic-a", "User:alice", OPERATION_READ);
-    cidr_creation.host = "10.0.0.0/8".into();
-    let req = request(vec![cidr_creation]);
-
-    let resp = handle(&broker, req, VERSION, &ctx).await.expect("handle");
-
-    let expected = CreateAclsResponse {
-        throttle_time_ms: 0,
-        results: vec![AclCreationResult {
-            error_code: codes::UNSUPPORTED_VERSION,
-            error_message: Some(
-                "CIDR-based ACL host patterns require metadata version 4.4-IV1 or higher.".into(),
-            ),
-            unknown_tagged_fields: UnknownTaggedFields(Vec::new()),
-        }],
-        unknown_tagged_fields: UnknownTaggedFields(Vec::new()),
-    };
-    assert!(resp == expected);
-    assert!(all_acls(&broker_handle).is_empty());
+    check_cidr_refusal(&broker_handle).await;
     broker_handle.shutdown().await;
 }
 
@@ -474,27 +455,8 @@ async fn handle_bounds_a_request_to_ten_thousand_new_acls() {
 #[tokio::test]
 async fn handle_rejects_cidr_host_on_a_freshly_bootstrapped_cluster() {
     let (broker_handle, _dir) = start_trunk_broker().await;
-    let broker = broker_handle.broker_arc_for_test();
-    test_ctx!(ctx, "admin");
-    let mut cidr_creation = creation("topic-a", "User:alice", OPERATION_READ);
-    cidr_creation.host = "10.0.0.0/8".into();
-    let req = request(vec![cidr_creation]);
-
-    let resp = handle(&broker, req, VERSION, &ctx).await.expect("handle");
-
-    let expected = CreateAclsResponse {
-        throttle_time_ms: 0,
-        results: vec![AclCreationResult {
-            error_code: codes::UNSUPPORTED_VERSION,
-            error_message: Some(
-                "CIDR-based ACL host patterns require metadata version 4.4-IV1 or higher.".into(),
-            ),
-            unknown_tagged_fields: UnknownTaggedFields(Vec::new()),
-        }],
-        unknown_tagged_fields: UnknownTaggedFields(Vec::new()),
-    };
-    assert!(resp == expected);
-    assert!(all_acls(&broker_handle).is_empty());
+    let _broker = broker_handle.broker_arc_for_test();
+    check_cidr_refusal(&broker_handle).await;
     broker_handle.shutdown().await;
 }
 
@@ -528,4 +490,28 @@ fn count_new_acls_counts_distinct_new_acls_in_linear_time() {
 
     check!(counted == 10_000);
     check!(elapsed < std::time::Duration::from_secs(5), "{elapsed:?}");
+}
+
+async fn check_cidr_refusal(broker_handle: &crate::broker::BrokerHandle) {
+    let broker = broker_handle.broker_arc_for_test();
+    test_ctx!(ctx, "admin");
+    let mut cidr_creation = creation("topic-a", "User:alice", OPERATION_READ);
+    cidr_creation.host = "10.0.0.0/8".into();
+    let req = request(vec![cidr_creation]);
+
+    let resp = handle(&broker, req, VERSION, &ctx).await.expect("handle");
+
+    let expected = CreateAclsResponse {
+        throttle_time_ms: 0,
+        results: vec![AclCreationResult {
+            error_code: codes::UNSUPPORTED_VERSION,
+            error_message: Some(
+                "CIDR-based ACL host patterns require metadata version 4.4-IV1 or higher.".into(),
+            ),
+            unknown_tagged_fields: UnknownTaggedFields(Vec::new()),
+        }],
+        unknown_tagged_fields: UnknownTaggedFields(Vec::new()),
+    };
+    assert!(resp == expected);
+    assert!(all_acls(broker_handle).is_empty());
 }

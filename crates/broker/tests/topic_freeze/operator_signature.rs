@@ -73,16 +73,8 @@ async fn require_signature_decides_whether_an_unsigned_freeze_is_accepted() {
     ] {
         let keys = tempfile::tempdir().expect("tempdir");
         let logs = tempfile::tempdir().expect("tempdir");
-        let key = support::mint_operator_key(keys.path(), "alice-yubi", support::ANONYMOUS);
-        let (broker, client) = if require_signature {
-            start_requiring_signatures(logs.path(), &key).await
-        } else {
-            let (broker, client, _config) =
-                support::start_with_operator_key(logs.path(), &key).await;
-            (broker, client)
-        };
-        let frozen = create_topic(&broker, &client, "orders").await;
-        let control = create_topic(&broker, &client, CONTROL).await;
+        let (broker, client, _key, frozen, control) =
+            operator_fixture(keys.path(), logs.path(), require_signature).await;
         check!(
             produce_outcome(&broker, &client, "orders", frozen).await == accepted(1),
             "{label}"
@@ -121,10 +113,8 @@ async fn require_signature_decides_whether_an_unsigned_freeze_is_accepted() {
 async fn a_signed_freeze_round_trips_with_its_key_id_and_signature_intact() {
     let keys = tempfile::tempdir().expect("tempdir");
     let logs = tempfile::tempdir().expect("tempdir");
-    let key = support::mint_operator_key(keys.path(), "alice-yubi", support::ANONYMOUS);
-    let (broker, client, _config) = support::start_with_operator_key(logs.path(), &key).await;
-    let frozen = create_topic(&broker, &client, "orders").await;
-    let control = create_topic(&broker, &client, CONTROL).await;
+    let (broker, client, key, frozen, control) =
+        operator_fixture(keys.path(), logs.path(), false).await;
 
     let cluster = cluster_id(&client).await;
     let set_at_ms = now_ms();
@@ -187,16 +177,8 @@ async fn an_unsigned_thaw_is_refused_whatever_require_signature_says() {
     ] {
         let keys = tempfile::tempdir().expect("tempdir");
         let logs = tempfile::tempdir().expect("tempdir");
-        let key = support::mint_operator_key(keys.path(), "alice-yubi", support::ANONYMOUS);
-        let (broker, client) = if require_signature {
-            start_requiring_signatures(logs.path(), &key).await
-        } else {
-            let (broker, client, _config) =
-                support::start_with_operator_key(logs.path(), &key).await;
-            (broker, client)
-        };
-        let frozen = create_topic(&broker, &client, "orders").await;
-        let control = create_topic(&broker, &client, CONTROL).await;
+        let (broker, client, key, frozen, control) =
+            operator_fixture(keys.path(), logs.path(), require_signature).await;
 
         let cluster = cluster_id(&client).await;
         let response = set_freeze(
@@ -265,10 +247,8 @@ async fn an_unsigned_thaw_is_refused_whatever_require_signature_says() {
 async fn a_signature_captured_from_a_freeze_is_refused_as_a_thaw() {
     let keys = tempfile::tempdir().expect("tempdir");
     let logs = tempfile::tempdir().expect("tempdir");
-    let key = support::mint_operator_key(keys.path(), "alice-yubi", support::ANONYMOUS);
-    let (broker, client, _config) = support::start_with_operator_key(logs.path(), &key).await;
-    let frozen = create_topic(&broker, &client, "orders").await;
-    let control = create_topic(&broker, &client, CONTROL).await;
+    let (broker, client, key, frozen, control) =
+        operator_fixture(keys.path(), logs.path(), false).await;
 
     let cluster = cluster_id(&client).await;
     let set_at_ms = now_ms();
@@ -396,4 +376,21 @@ async fn a_signature_survives_a_controller_restart_and_still_verifies() {
     );
     check!(produce_outcome(&broker, &client, CONTROL, control).await == accepted(1));
     broker.shutdown().await;
+}
+
+async fn operator_fixture(
+    keys: &Path,
+    logs: &Path,
+    require_signature: bool,
+) -> (BrokerHandle, Client, OperatorKey, WireUuid, WireUuid) {
+    let key = support::mint_operator_key(keys, "alice-yubi", support::ANONYMOUS);
+    let (broker, client) = if require_signature {
+        start_requiring_signatures(logs, &key).await
+    } else {
+        let (broker, client, _) = support::start_with_operator_key(logs, &key).await;
+        (broker, client)
+    };
+    let frozen = create_topic(&broker, &client, "orders").await;
+    let control = create_topic(&broker, &client, CONTROL).await;
+    (broker, client, key, frozen, control)
 }

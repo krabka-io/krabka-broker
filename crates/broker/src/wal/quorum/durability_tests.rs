@@ -15,7 +15,7 @@ use uuid::Uuid;
 use super::{
     HotTailTarget, QuorumWalStore,
     engine::{self, WalShardEngine},
-    test_support::{append_source, batch},
+    test_support::{append_source, batch, local_replicas, open_log, partition_store, source_log},
 };
 use crate::{error::BrokerError, wal::WalStore};
 
@@ -51,24 +51,8 @@ fn split_batches_preserves_compressed_wire_boundaries() {
 #[tokio::test]
 async fn quorum_wal_store_commits_on_f_plus_1_and_survives_one_loss() {
     let source_dir = tempfile::tempdir().unwrap();
-    let source = Arc::new(Mutex::new(
-        Log::open(source_dir.path(), LogConfig::default()).unwrap(),
-    ));
-    let replica_dirs = [
-        tempfile::tempdir().unwrap(),
-        tempfile::tempdir().unwrap(),
-        tempfile::tempdir().unwrap(),
-    ];
-    let engine = Arc::new(WalShardEngine::for_logs(
-        [NodeId(1), NodeId(2), NodeId(3)]
-            .into_iter()
-            .zip(replica_dirs.iter().map(|dir| {
-                Arc::new(Mutex::new(
-                    Log::open(dir.path(), LogConfig::default()).unwrap(),
-                ))
-            }))
-            .collect(),
-    ));
+    let source = open_log(source_dir.path());
+    let (_replica_dirs, engine) = local_replicas(3);
     let store = QuorumWalStore::new(source.clone(), engine.clone());
 
     let (results, leo) = append_source(&store, 3).await;
@@ -96,22 +80,8 @@ async fn quorum_wal_store_commits_on_f_plus_1_and_survives_one_loss() {
 #[tokio::test]
 async fn five_voter_quorum_requires_three_durable_copies() {
     let source_dir = tempfile::tempdir().unwrap();
-    let source = Arc::new(Mutex::new(
-        Log::open(source_dir.path(), LogConfig::default()).unwrap(),
-    ));
-    let replica_dirs = (0..5)
-        .map(|_| tempfile::tempdir().unwrap())
-        .collect::<Vec<_>>();
-    let engine = Arc::new(WalShardEngine::for_logs(
-        (1_u64..=5)
-            .map(NodeId)
-            .zip(replica_dirs.iter().map(|dir| {
-                Arc::new(Mutex::new(
-                    Log::open(dir.path(), LogConfig::default()).unwrap(),
-                ))
-            }))
-            .collect(),
-    ));
+    let source = open_log(source_dir.path());
+    let (_replica_dirs, engine) = local_replicas(5);
     let store = QuorumWalStore::new(source, engine.clone());
     for voter in [NodeId(3), NodeId(4), NodeId(5)] {
         engine.set_replica_alive(voter, false);
@@ -128,24 +98,8 @@ async fn five_voter_quorum_requires_three_durable_copies() {
 #[tokio::test]
 async fn quorum_wal_store_populates_hot_tail_after_durable_sync() {
     let source_dir = tempfile::tempdir().unwrap();
-    let source = Arc::new(Mutex::new(
-        Log::open(source_dir.path(), LogConfig::default()).unwrap(),
-    ));
-    let replica_dirs = [
-        tempfile::tempdir().unwrap(),
-        tempfile::tempdir().unwrap(),
-        tempfile::tempdir().unwrap(),
-    ];
-    let engine = Arc::new(WalShardEngine::for_logs(
-        [NodeId(1), NodeId(2), NodeId(3)]
-            .into_iter()
-            .zip(replica_dirs.iter().map(|dir| {
-                Arc::new(Mutex::new(
-                    Log::open(dir.path(), LogConfig::default()).unwrap(),
-                ))
-            }))
-            .collect(),
-    ));
+    let source = open_log(source_dir.path());
+    let (_replica_dirs, engine) = local_replicas(3);
     let cache = Arc::new(crate::diskless::hot_tail::HotTailCache::default());
     let topic_id = Uuid::from_u128(9);
     let partition = PartitionIndex(0);
@@ -174,19 +128,8 @@ async fn quorum_wal_store_populates_hot_tail_after_durable_sync() {
 #[tokio::test]
 async fn quorum_wal_store_can_commit_a_source_prefix_without_regressing() {
     let dir = tempfile::tempdir().unwrap();
-    let source = Arc::new(Mutex::new(
-        Log::open(dir.path().join("source"), LogConfig::default()).unwrap(),
-    ));
-    let store = QuorumWalStore::for_partition(
-        "topic",
-        None,
-        PartitionIndex(0),
-        dir.path(),
-        source,
-        None,
-        3,
-    )
-    .unwrap();
+    let source = source_log(dir.path());
+    let store = partition_store(dir.path(), source, 3);
 
     let (_results, first) = append_source(&store, 1).await;
     let (_results, second) = append_source(&store, 1).await;
@@ -199,9 +142,7 @@ async fn quorum_wal_store_can_commit_a_source_prefix_without_regressing() {
 #[tokio::test]
 async fn quorum_wal_store_trims_every_replica_before_the_source() {
     let dir = tempfile::tempdir().unwrap();
-    let source = Arc::new(Mutex::new(
-        Log::open(dir.path().join("source"), LogConfig::default()).unwrap(),
-    ));
+    let source = source_log(dir.path());
     let topic_id = Uuid::from_u128(10);
     let partition = PartitionIndex(0);
     let cache = Arc::new(crate::diskless::hot_tail::HotTailCache::default());
@@ -238,9 +179,7 @@ async fn quorum_wal_store_trims_every_replica_before_the_source() {
 #[tokio::test]
 async fn quorum_wal_store_rejects_a_source_outside_the_voter_set() {
     let dir = tempfile::tempdir().unwrap();
-    let source = Arc::new(Mutex::new(
-        Log::open(dir.path().join("source"), LogConfig::default()).unwrap(),
-    ));
+    let source = source_log(dir.path());
     let replica = Arc::new(Mutex::new(
         Log::open(dir.path().join("replica"), LogConfig::default()).unwrap(),
     ));

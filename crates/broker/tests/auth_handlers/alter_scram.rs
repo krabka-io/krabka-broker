@@ -10,7 +10,7 @@ use std::{io, net::SocketAddr};
 
 use assert2::{assert, check};
 use bytes::BytesMut;
-use krabka_broker::{Broker, BrokerConfig, authorizer::SimpleAclAuthorizer, config::ListenerSpec};
+use krabka_broker::{Broker, authorizer::SimpleAclAuthorizer};
 use krabka_protocol::{
     Decode, Encode,
     owned::{
@@ -25,7 +25,7 @@ use krabka_protocol::{
         sasl_handshake_response::SaslHandshakeResponse,
     },
 };
-use krabka_security::{ListenerProtocol, SaslMechanism};
+use krabka_security::SaslMechanism;
 use tokio::net::TcpStream;
 
 use crate::{
@@ -51,24 +51,12 @@ pub const KAFKA_MAX_SCRAM_ITERATIONS: i32 = 16_384;
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn alter_scram_creds_super_user_can_provision() {
     let log_dir = tempfile::tempdir().unwrap();
-    let mut cfg = BrokerConfig::for_tests(log_dir.path().to_path_buf());
-    cfg.listeners = vec![ListenerSpec {
-        name: "SASL_PLAINTEXT".to_string(),
-        bind_addr: "127.0.0.1:0".parse().unwrap(),
-        advertised: "127.0.0.1:0".to_string(),
-        protocol: ListenerProtocol::SaslPlaintext,
-        tls_config: None,
-        sasl_mechanisms: None,
-        principal_mapper: krabka_broker::SslPrincipalMapper::default(),
-    }];
-    cfg.inter_broker_listener_name = "SASL_PLAINTEXT".to_string();
-    cfg.enabled_sasl_mechanisms = vec![SaslMechanism::Plain, SaslMechanism::ScramSha512];
-    cfg.plain_credentials
-        .insert("admin".to_string(), admin_plain_password());
-    cfg.super_users = maplit::hashset! {"admin".to_string()};
-
-    let handle = Broker::start(cfg).await.expect("broker must start");
-    let addr = handle.listen_addr();
+    let (handle, addr) = crate::harness::start_scram_admin(
+        log_dir.path(),
+        &admin_plain_password(),
+        vec![SaslMechanism::Plain, SaslMechanism::ScramSha512],
+    )
+    .await;
 
     let (salt, salted) = pbkdf2_salt_and_salted(alice_password().as_bytes(), 4096);
     let req = AlterUserScramCredentialsRequest {
@@ -123,24 +111,12 @@ async fn alter_scram_creds_super_user_can_provision() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn alter_scram_creds_super_user_can_provision_sha256() {
     let log_dir = tempfile::tempdir().unwrap();
-    let mut cfg = BrokerConfig::for_tests(log_dir.path().to_path_buf());
-    cfg.listeners = vec![ListenerSpec {
-        name: "SASL_PLAINTEXT".to_string(),
-        bind_addr: "127.0.0.1:0".parse().unwrap(),
-        advertised: "127.0.0.1:0".to_string(),
-        protocol: ListenerProtocol::SaslPlaintext,
-        tls_config: None,
-        sasl_mechanisms: None,
-        principal_mapper: krabka_broker::SslPrincipalMapper::default(),
-    }];
-    cfg.inter_broker_listener_name = "SASL_PLAINTEXT".to_string();
-    cfg.enabled_sasl_mechanisms = vec![SaslMechanism::Plain, SaslMechanism::ScramSha256];
-    cfg.plain_credentials
-        .insert("admin".to_string(), admin_plain_password());
-    cfg.super_users = maplit::hashset! {"admin".to_string()};
-
-    let handle = Broker::start(cfg).await.expect("broker must start");
-    let addr = handle.listen_addr();
+    let (handle, addr) = crate::harness::start_scram_admin(
+        log_dir.path(),
+        &admin_plain_password(),
+        vec![SaslMechanism::Plain, SaslMechanism::ScramSha256],
+    )
+    .await;
 
     let (salt, salted) = pbkdf2_salt_and_salted_sha256(alice_password().as_bytes(), 4096);
     let req = AlterUserScramCredentialsRequest {
@@ -193,17 +169,7 @@ async fn alter_scram_creds_super_user_can_provision_sha256() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn alter_scram_creds_non_super_user_rejected() {
     let log_dir = tempfile::tempdir().unwrap();
-    let mut cfg = BrokerConfig::for_tests(log_dir.path().to_path_buf());
-    cfg.listeners = vec![ListenerSpec {
-        name: "SASL_PLAINTEXT".to_string(),
-        bind_addr: "127.0.0.1:0".parse().unwrap(),
-        advertised: "127.0.0.1:0".to_string(),
-        protocol: ListenerProtocol::SaslPlaintext,
-        tls_config: None,
-        sasl_mechanisms: None,
-        principal_mapper: krabka_broker::SslPrincipalMapper::default(),
-    }];
-    cfg.inter_broker_listener_name = "SASL_PLAINTEXT".to_string();
+    let mut cfg = crate::support::sasl_plaintext_config(log_dir.path().to_path_buf());
     cfg.enabled_sasl_mechanisms = vec![SaslMechanism::Plain];
     cfg.plain_credentials
         .insert("bob".to_string(), wrong_scram_password());
@@ -267,17 +233,19 @@ pub async fn drive_alter_user_scram_credentials_as_plain(
     let _ = round_trip(&mut stream, 18, 0, 1, false, &av_body).await?;
 
     // ── 2. SaslHandshake v1.
-    let mut sh_body = BytesMut::new();
-    SaslHandshakeRequest {
-        mechanism: "PLAIN".to_string(),
-        ..Default::default()
-    }
-    .encode(&mut sh_body, 1)
-    .map_err(|e| io::Error::other(format!("SaslHandshake encode: {e}")))?;
-    let sh_resp_bytes = round_trip(&mut stream, 17, 1, 2, false, &sh_body).await?;
-    let mut cur: &[u8] = &sh_resp_bytes;
-    let sh_resp = SaslHandshakeResponse::decode(&mut cur, 1)
-        .map_err(|e| io::Error::other(format!("SaslHandshake decode: {e}")))?;
+    let sh_resp: SaslHandshakeResponse = crate::kafka_wire::exchange(
+        &mut stream,
+        &SaslHandshakeRequest {
+            mechanism: "PLAIN".to_string(),
+            ..Default::default()
+        },
+        17,
+        1,
+        2,
+        "krabka-sasl-test",
+        false,
+    )
+    .await?;
     if sh_resp.error_code != 0 {
         return Err(io::Error::other(format!(
             "SaslHandshake failed: error_code={}",

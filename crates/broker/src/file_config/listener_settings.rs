@@ -355,6 +355,30 @@ mod tests {
 
     use crate::file_config::FileConfig;
 
+    fn file_outcome<T>(
+        source: &str,
+        read: impl FnOnce(&crate::config::BrokerConfig) -> T,
+    ) -> Result<T, String> {
+        let file: FileConfig = toml::from_str(source).expect("parse");
+        let mut cfg = crate::config::BrokerConfig::default();
+        file.apply_to(&mut cfg)
+            .map(|()| read(&cfg))
+            .map_err(|error| error.to_string())
+    }
+
+    fn check_config_cases<const N: usize, S: AsRef<str>, T: std::fmt::Debug + PartialEq>(
+        cases: [(&str, S, Result<T, String>); N],
+        read: impl Fn(&crate::config::BrokerConfig) -> T,
+    ) {
+        let mut actual = Vec::with_capacity(N);
+        let mut expected = Vec::with_capacity(N);
+        for (label, source, want) in cases {
+            actual.push((label, file_outcome(source.as_ref(), &read)));
+            expected.push((label, want));
+        }
+        assert!(actual == expected);
+    }
+
     #[test]
     fn apply_to_populates_listeners() {
         use crate::config::BrokerConfig;
@@ -591,12 +615,7 @@ connections_max_idle = "5s"
         let mut actual = Vec::with_capacity(cases.len());
         let mut expected = Vec::with_capacity(cases.len());
         for (label, read, src, want) in cases {
-            let file: FileConfig = toml::from_str(src).expect("parse");
-            let mut cfg = crate::config::BrokerConfig::default();
-            let result = file
-                .apply_to(&mut cfg)
-                .map(|()| read(&cfg))
-                .map_err(|error| error.to_string());
+            let result = file_outcome(src, read);
             actual.push((label, result));
             expected.push((label, want));
         }
@@ -648,26 +667,14 @@ connections_max_idle = "5s"
                 ),
             ),
         ];
-        let mut actual = Vec::with_capacity(cases.len());
-        let mut expected = Vec::with_capacity(cases.len());
-        for (label, src, want) in cases {
-            let file: FileConfig = toml::from_str(&src).expect("parse");
-            let mut cfg = crate::config::BrokerConfig::default();
-            let result = file
-                .apply_to(&mut cfg)
-                .map(|()| {
-                    (
-                        cfg.log_config.segment_roll_interval.millis_i64(),
-                        cfg.static_config_origins
-                            .supplied_kafka_keys
-                            .contains("log.roll.ms"),
-                    )
-                })
-                .map_err(|error| error.to_string());
-            actual.push((label, result));
-            expected.push((label, want));
-        }
-        assert!(actual == expected);
+        check_config_cases(cases, |cfg| {
+            (
+                cfg.log_config.segment_roll_interval.millis_i64(),
+                cfg.static_config_origins
+                    .supplied_kafka_keys
+                    .contains("log.roll.ms"),
+            )
+        });
     }
 
     #[test]
@@ -710,26 +717,14 @@ connections_max_idle = "5s"
                 ),
             ),
         ];
-        let mut actual = Vec::with_capacity(cases.len());
-        let mut expected = Vec::with_capacity(cases.len());
-        for (label, src, want) in cases {
-            let file: FileConfig = toml::from_str(&src).expect("parse");
-            let mut cfg = crate::config::BrokerConfig::default();
-            let result = file
-                .apply_to(&mut cfg)
-                .map(|()| {
-                    (
-                        cfg.next_gen_consumer_group.migration_policy,
-                        cfg.static_config_origins
-                            .supplied_kafka_keys
-                            .contains("group.consumer.migration.policy"),
-                    )
-                })
-                .map_err(|error| error.to_string());
-            actual.push((label, result));
-            expected.push((label, want));
-        }
-        assert!(actual == expected);
+        check_config_cases(cases, |cfg| {
+            (
+                cfg.next_gen_consumer_group.migration_policy,
+                cfg.static_config_origins
+                    .supplied_kafka_keys
+                    .contains("group.consumer.migration.policy"),
+            )
+        });
     }
 
     /// `transaction.partition.verification.enable`, the static layer of a
@@ -771,24 +766,12 @@ connections_max_idle = "5s"
                 Ok((false, true)),
             ),
         ];
-        let mut actual = Vec::with_capacity(cases.len());
-        let mut expected = Vec::with_capacity(cases.len());
-        for (label, src, want) in cases {
-            let file: FileConfig = toml::from_str(&src).expect("parse");
-            let mut cfg = crate::config::BrokerConfig::default();
-            let result = file
-                .apply_to(&mut cfg)
-                .map(|()| {
-                    (
-                        cfg.transaction_partition_verification_enable,
-                        cfg.static_config_origins.supplied_kafka_keys.contains(KEY),
-                    )
-                })
-                .map_err(|error| error.to_string());
-            actual.push((label, result));
-            expected.push((label, want));
-        }
-        assert!(actual == expected);
+        check_config_cases(cases, |cfg| {
+            (
+                cfg.transaction_partition_verification_enable,
+                cfg.static_config_origins.supplied_kafka_keys.contains(KEY),
+            )
+        });
     }
 
     /// Omitted everywhere, the broker keeps Kafka's 600000 default and no

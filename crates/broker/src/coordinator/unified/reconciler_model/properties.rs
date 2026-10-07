@@ -5,24 +5,20 @@
 //! The helpers the transitions call live in the sibling modules. This file only
 //! sequences them and states what must hold.
 
-use std::{
-    collections::{BTreeSet, HashSet},
-    time::Instant,
-};
+use std::collections::BTreeMap;
 
 use stateright::{Model, Property};
 
 use super::{
-    config::{ReconModel, config},
-    heartbeat::{advertised_of, hb_request, keepalive_request},
+    config::ReconModel,
     projection::{assert_epoch_monotonic, project, rebuild_group},
-    state::{
-        ReconAction, ReconState, advertised_for, advertised_map, member, owned_map, owned_to_vec,
-    },
+    state::{ReconAction, ReconState, member},
 };
 use crate::coordinator::unified::{
-    ClientIdentity,
-    actor::{RegexResolution, step_heartbeat},
+    actor::reconciliation_model_support::{
+        MemberHeartbeat, apply_client_move, apply_member_heartbeat, client_moves,
+        exclusive_ownership, overlaps_others, owned_map,
+    },
     persistence_next_gen::MemberAssignmentState,
 };
 
@@ -60,180 +56,76 @@ impl Model for ReconModel {
             }
             // Faithful-client moves gate on the ADVERTISED assignment (what the
             // member was last told), not the raw target. No cross-member check.
-            let advertised = advertised_for(state, &m.id);
-            let owned: BTreeSet<i32> = state
-                .client_owned
-                .iter()
-                .find(|(k, _)| k == &m.id)
-                .map(|(_, v)| v.iter().copied().collect())
-                .unwrap_or_default();
-            for &tp in &advertised {
-                if !owned.contains(&tp) {
-                    actions.push(ReconAction::ClientAdd(m.id.clone(), tp));
-                }
-            }
-            for &tp in &owned {
-                if !advertised.contains(&tp) {
-                    actions.push(ReconAction::ClientRevoke(m.id.clone(), tp));
-                }
+            for (add, partition) in client_moves(&state.advertised, &state.client_owned, &m.id) {
+                actions.push(if add {
+                    ReconAction::ClientAdd(m.id.clone(), partition)
+                } else {
+                    ReconAction::ClientRevoke(m.id.clone(), partition)
+                });
             }
         }
     }
 
     fn next_state(&self, last: &Self::State, action: Self::Action) -> Option<Self::State> {
-        let mut owned = owned_map(last);
-        let mut adv = advertised_map(last);
-        match action {
-            ReconAction::ClientAdd(id, tp) => {
-                let advertised_has = advertised_for(last, &id).contains(&tp);
-                let entry = owned.entry(id).or_default();
-                if !advertised_has || entry.contains(&tp) {
-                    return None;
-                }
-                entry.insert(tp);
+        let mut owned = owned_map(&last.client_owned);
+        let mut adv: BTreeMap<_, _> = last.advertised.iter().cloned().collect();
+        let add = matches!(action, ReconAction::ClientAdd(..));
+        let event = match action {
+            ReconAction::ClientAdd(id, partition) | ReconAction::ClientRevoke(id, partition) => {
                 let mut next = last.clone();
-                next.client_owned = owned_to_vec(&owned);
-                Some(next)
-            }
-            ReconAction::ClientRevoke(id, tp) => {
-                let advertised_has = advertised_for(last, &id).contains(&tp);
-                let entry = owned.entry(id).or_default();
-                if advertised_has || !entry.contains(&tp) {
-                    return None;
-                }
-                entry.remove(&tp);
-                let mut next = last.clone();
-                next.client_owned = owned_to_vec(&owned);
-                Some(next)
+                next.client_owned =
+                    apply_client_move(&last.advertised, &mut owned, id, partition, add)?;
+                return Some(next);
             }
             ReconAction::Join(id) => {
                 if member(last, &id).is_some() {
                     return None;
                 }
-                let mut g = rebuild_group(last);
-                let req = hb_request(&id, 0, &BTreeSet::new());
-                let step = step_heartbeat(
-                    &mut g,
-                    &config(),
-                    &self.metadata(),
-                    &req,
-                    ClientIdentity { id: "", host: "" },
-                    Instant::now(),
-                    &RegexResolution::none(),
-                );
-                assert_epoch_monotonic(last, &g);
-                owned.entry(id.clone()).or_default(); // new member owns nothing yet
-                adv.insert(id, advertised_of(&step).unwrap_or_default());
-                Some(project(&g, &owned, &adv))
+                MemberHeartbeat::Join(id)
             }
             ReconAction::Leave(id) => {
                 member(last, &id)?;
-                let mut g = rebuild_group(last);
-                let req = hb_request(&id, -1, &BTreeSet::new());
-                let _ = step_heartbeat(
-                    &mut g,
-                    &config(),
-                    &self.metadata(),
-                    &req,
-                    ClientIdentity { id: "", host: "" },
-                    Instant::now(),
-                    &RegexResolution::none(),
-                );
-                assert_epoch_monotonic(last, &g);
-                owned.remove(&id);
-                adv.remove(&id);
-                Some(project(&g, &owned, &adv))
+                MemberHeartbeat::Leave(id)
             }
             ReconAction::Heartbeat(id) => {
                 let epoch = member(last, &id)?.member_epoch;
-                let cur_owned: BTreeSet<i32> = owned.get(&id).cloned().unwrap_or_default();
-                let mut g = rebuild_group(last);
-                let req = hb_request(&id, epoch, &cur_owned);
-                let step = step_heartbeat(
-                    &mut g,
-                    &config(),
-                    &self.metadata(),
-                    &req,
-                    ClientIdentity { id: "", host: "" },
-                    Instant::now(),
-                    &RegexResolution::none(),
-                );
-                assert_epoch_monotonic(last, &g);
-                adv.insert(id, advertised_of(&step).unwrap_or_default());
-                Some(project(&g, &owned, &adv))
+                MemberHeartbeat::Heartbeat(id, epoch)
             }
             ReconAction::Keepalive(id) => {
                 let epoch = member(last, &id)?.member_epoch;
-                let mut g = rebuild_group(last);
-                let req = keepalive_request(&id, epoch);
-                let step = step_heartbeat(
-                    &mut g,
-                    &config(),
-                    &self.metadata(),
-                    &req,
-                    ClientIdentity { id: "", host: "" },
-                    Instant::now(),
-                    &RegexResolution::none(),
-                );
-                assert_epoch_monotonic(last, &g);
-                // Without an assignment in the answer, the member keeps the one
-                // it was last told.
-                if let Some(assignment) = advertised_of(&step) {
-                    adv.insert(id, assignment);
-                }
-                Some(project(&g, &owned, &adv))
+                MemberHeartbeat::Keepalive(id, epoch)
             }
-        }
+        };
+        let mut group = rebuild_group(last);
+        apply_member_heartbeat(&mut group, &self.metadata(), event, &mut owned, &mut adv);
+        assert_epoch_monotonic(last, &group);
+        Some(project(&group, &owned, &adv))
     }
 
     fn properties(&self) -> Vec<Property<Self>> {
         vec![
             // HEADLINE: no two members ever simultaneously own the same partition.
             Property::always("no_double_ownership", |_, s: &ReconState| {
-                let mut seen: HashSet<i32> = HashSet::new();
-                for (_, parts) in &s.client_owned {
-                    for &p in parts {
-                        if !seen.insert(p) {
-                            return false;
-                        }
-                    }
-                }
-                true
+                exclusive_ownership(&s.client_owned)
             }),
             // A member is never advertised a partition another member currently
             // owns — the coordinator-side withholding invariant.
             Property::always(
                 "advertised_disjoint_from_others_owned",
                 |_, s: &ReconState| {
-                    for (mid, adv) in &s.advertised {
-                        for &p in adv {
-                            let owned_by_other = s
-                                .client_owned
-                                .iter()
-                                .any(|(k, v)| k != mid && v.contains(&p));
-                            if owned_by_other {
-                                return false;
-                            }
-                        }
-                    }
-                    true
+                    !overlaps_others(
+                        s.advertised.iter().map(|(id, parts)| (id, parts)),
+                        &s.client_owned,
+                    )
                 },
             ),
             // Non-vacuity: a handoff state is reachable (a partition is in one
             // member's target while another member currently owns it).
             Property::sometimes("handoff_witness", |_, s: &ReconState| {
-                for m in &s.members {
-                    for &tp in &m.target {
-                        let owned_by_other = s
-                            .client_owned
-                            .iter()
-                            .any(|(k, v)| k != &m.id && v.contains(&tp));
-                        if owned_by_other {
-                            return true;
-                        }
-                    }
-                }
-                false
+                overlaps_others(
+                    s.members.iter().map(|m| (&m.id, &m.target)),
+                    &s.client_owned,
+                )
             }),
             // Non-vacuity: a fully-converged state is reachable (every member
             // owns exactly its target and is Stable).

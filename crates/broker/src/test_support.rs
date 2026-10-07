@@ -33,8 +33,22 @@ use std::{
 };
 
 use bytes::{Bytes, BytesMut};
-use krabka_metadata::{MetadataImage, MetadataRecord};
-use krabka_protocol::{Decode, Encode};
+use krabka_metadata::{
+    BrokerConfigRecord, DEFAULT_BROKER_CONFIG_NODE_ID, MetadataImage, MetadataRecord,
+    PartitionRecord, TopicConfigRecord, TopicRecord,
+};
+use krabka_protocol::{
+    Decode, Encode,
+    owned::{
+        alter_partition_request::{
+            AlterPartitionRequest, PartitionData as AlterPartitionPartition,
+            TopicData as AlterPartitionTopic,
+        },
+        alter_partition_response::AlterPartitionResponse,
+    },
+    primitives::uuid::Uuid as WireUuid,
+    records::{Attributes, Record, RecordBatch},
+};
 use krabka_raft::{
     AddVoter, Node, NodeId, QuorumState, RaftError, ReconfigOutcome, RemoveVoter, SnapshotRange,
     SubmitChangeResult, UpdateVoter,
@@ -44,7 +58,9 @@ use qubit_clock::{
     MonotonicClock, MonotonicInstant, StdMonotonicClock, TimeError, Timer, TimerFuture,
     TimerUnavailableError,
 };
+use rustls::pki_types::{CertificateDer, PrivateKeyDer, pem::PemObject};
 use tokio::sync::watch;
+use tokio_rustls::TlsAcceptor;
 use tracing_subscriber::{
     Layer,
     layer::{Context, SubscriberExt as _},
@@ -54,9 +70,267 @@ use tracing_subscriber::{
 use crate::{
     broker::{Broker, BrokerHandle},
     config::BrokerConfig,
+    config_keys::MIN_INSYNC_REPLICAS,
     handlers::RequestContext,
     metadata_source::MetadataSource,
 };
+
+/// Binds an HTTPS fixture with a fresh loopback certificate and returns the
+/// trust bundle path. The directory stays alive for background client requests.
+pub(crate) async fn loopback_tls_listener()
+-> (tokio::net::TcpListener, TlsAcceptor, std::path::PathBuf) {
+    let _ = rustls::crypto::ring::default_provider().install_default();
+    let params = rcgen::CertificateParams::new(vec!["127.0.0.1".to_string()]).unwrap();
+    let key = rcgen::KeyPair::generate_for(&rcgen::PKCS_ECDSA_P256_SHA256).unwrap();
+    let cert = params.self_signed(&key).unwrap();
+    let dir = Box::leak(Box::new(tempfile::tempdir().unwrap()));
+    let cert_path = dir.path().join("cert.pem");
+    std::fs::write(&cert_path, cert.pem()).unwrap();
+    let key_path = dir.path().join("key.pem");
+    std::fs::write(&key_path, key.serialize_pem()).unwrap();
+    let certs: Vec<CertificateDer<'static>> = CertificateDer::pem_file_iter(&cert_path)
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    let priv_key = PrivateKeyDer::from_pem_file(&key_path).unwrap();
+    let server_cfg = rustls::ServerConfig::builder()
+        .with_no_client_auth()
+        .with_single_cert(certs, priv_key)
+        .unwrap();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    (listener, TlsAcceptor::from(Arc::new(server_cfg)), cert_path)
+}
+
+/// Opens a local replica with a running writer in the supplied log directory.
+pub(crate) fn open_partition(
+    log_dir: &std::path::Path,
+    topic: &str,
+    partition: i32,
+) -> Arc<crate::partition::Partition> {
+    let path = crate::log_dir::partition_dir(log_dir, topic, partition);
+    std::fs::create_dir_all(&path).expect("create partition directory");
+    let log = krabka_log::Log::open(&path, krabka_log::LogConfig::default()).expect("open log");
+    crate::broker::spawn_partition(
+        topic.to_owned(),
+        krabka_ids::PartitionIndex(partition),
+        log_dir.to_path_buf(),
+        log,
+        crate::log_dir_status::LogDirRegistry::default(),
+        Arc::new(crate::producer_state::ProducerState::new()),
+        false,
+    )
+}
+
+/// Block an artifact rewrite or deletion using a real filesystem directory collision.
+pub(crate) fn block_log_artifact_paths(
+    root: &std::path::Path,
+    topic: &str,
+    extension: &str,
+    expectation: &str,
+) -> Vec<std::path::PathBuf> {
+    let directory = crate::log_dir::partition_dir(root, topic, 0);
+    let mut blocked = Vec::new();
+    for entry in std::fs::read_dir(&directory).expect("read partition dir") {
+        let path = entry.expect("partition dir entry").path();
+        if path.extension().is_some_and(|extension| extension == "log") {
+            let artifact = path.with_extension(extension);
+            std::fs::create_dir(&artifact).expect(expectation);
+            blocked.push(artifact);
+        }
+    }
+    assert2::assert!(
+        !blocked.is_empty(),
+        "the fixture sealed no segment to block"
+    );
+    blocked
+}
+
+/// Boot a broker leading a single-voter quorum with separate loopback listeners.
+pub(crate) async fn start_controller() -> (BrokerHandle, SocketAddr, tempfile::TempDir) {
+    let dir = tempfile::TempDir::new().expect("tempdir");
+    let data_listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind data listener");
+    let controller_listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind controller listener");
+    let data_addr = data_listener.local_addr().expect("data addr");
+    let controller_addr = controller_listener.local_addr().expect("controller addr");
+    let mut config = crate::config::BrokerConfig::for_tests(dir.path().to_path_buf());
+    config.listen_addr = data_addr;
+    config.advertised_listener = data_addr.to_string();
+    config.controller_listen_addr = controller_addr;
+    config.controller_quorum_voters = vec![(NodeId(1), controller_addr.to_string())];
+    let broker =
+        crate::Broker::start_with_listeners(config, Some(controller_listener), Some(data_listener))
+            .await
+            .expect("broker start");
+    broker.wait_until_controller_leader().await;
+    (broker, controller_addr, dir)
+}
+
+/// Builds non-transactional records with explicit values and a shared timestamp.
+pub(crate) fn static_records_batch(values: &[&'static [u8]], timestamp_ms: i64) -> RecordBatch {
+    let records = values
+        .iter()
+        .enumerate()
+        .map(|(index, value)| Record {
+            attributes: 0,
+            offset_delta: i32::try_from(index).expect("record offset fits i32"),
+            timestamp_delta: 0,
+            key: None,
+            value: Some(Bytes::from_static(value)),
+            headers: vec![],
+        })
+        .collect();
+    fixture_records_batch(
+        records,
+        i32::try_from(values.len()).expect("record count fits i32") - 1,
+        timestamp_ms,
+    )
+}
+
+/// Builds a batch of identical values, preserving the explicit count header.
+pub(crate) fn repeated_records_batch(count: i32, timestamp_ms: i64) -> RecordBatch {
+    let records = (0..count)
+        .map(|offset_delta| Record {
+            attributes: 0,
+            offset_delta,
+            timestamp_delta: 0,
+            key: None,
+            value: Some(Bytes::from_static(b"v")),
+            headers: vec![],
+        })
+        .collect();
+    fixture_records_batch(records, count - 1, timestamp_ms)
+}
+
+/// Supplies the common non-transactional header for fixture records.
+pub(crate) fn fixture_records_batch(
+    records: Vec<Record>,
+    last_offset_delta: i32,
+    timestamp_ms: i64,
+) -> RecordBatch {
+    RecordBatch {
+        base_offset: 0,
+        partition_leader_epoch: -1,
+        attributes: Attributes::default(),
+        last_offset_delta,
+        base_timestamp: timestamp_ms,
+        max_timestamp: timestamp_ms,
+        producer_id: -1,
+        producer_epoch: -1,
+        base_sequence: -1,
+        records,
+    }
+}
+
+/// Seeds the one-partition reassignment fixtures with the fixed leader epoch.
+pub(crate) fn reassignment_partition(
+    replicas: &[u64],
+    isr: &[u64],
+    changing: (&[u64], &[u64]),
+    leader: u64,
+) -> PartitionRecord {
+    let (adding, removing) = changing;
+    PartitionRecord {
+        topic: "foo".into(),
+        partition: 0,
+        leader: NodeId(leader),
+        replicas: replicas.iter().copied().map(NodeId).collect(),
+        isr: isr.iter().copied().map(NodeId).collect(),
+        leader_epoch: krabka_metadata::LeaderEpoch(5),
+        adding_replicas: adding.iter().copied().map(NodeId).collect(),
+        removing_replicas: removing.iter().copied().map(NodeId).collect(),
+        directories: vec![],
+        partition_epoch: 0,
+    }
+}
+
+/// Metadata defaults used by both ELR models, without finalizing a feature version.
+pub(crate) fn elr_model_image(
+    topic: &str,
+    replication_factor: i16,
+    min_isr: usize,
+) -> MetadataImage {
+    let mut image = MetadataImage::new(uuid::Uuid::nil());
+    image.apply(&MetadataRecord::V1Topic(TopicRecord {
+        name: topic.to_string(),
+        topic_id: uuid::Uuid::from_u128(1),
+        partitions: 1,
+        replication_factor,
+    }));
+    image.apply(&MetadataRecord::V1TopicConfig(TopicConfigRecord {
+        topic: topic.to_string(),
+        overrides: [(MIN_INSYNC_REPLICAS.to_string(), min_isr.to_string())]
+            .into_iter()
+            .collect(),
+    }));
+    image.apply(&MetadataRecord::V1BrokerConfig(BrokerConfigRecord {
+        node_id: DEFAULT_BROKER_CONFIG_NODE_ID,
+        config_name: MIN_INSYNC_REPLICAS.to_string(),
+        config_value: Some(min_isr.to_string()),
+    }));
+    image
+}
+
+/// A single-partition ISR proposal with epochs read explicitly by its caller.
+pub(crate) fn alter_partition_request(
+    topic_id: WireUuid,
+    broker: (i32, i64),
+    partition: (i32, i32),
+    new_isr: &[i32],
+) -> AlterPartitionRequest {
+    AlterPartitionRequest {
+        broker_id: broker.0,
+        broker_epoch: broker.1,
+        topics: vec![AlterPartitionTopic {
+            topic_id,
+            partitions: vec![AlterPartitionPartition {
+                partition_index: 0,
+                leader_epoch: partition.0,
+                partition_epoch: partition.1,
+                new_isr: new_isr.to_vec(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        }],
+        ..Default::default()
+    }
+}
+
+/// Send a real ISR proposal using the caller's wire identity and separate epoch snapshots.
+pub(crate) async fn propose_isr(
+    broker: &Arc<Broker>,
+    topic: &str,
+    identity: (WireUuid, i32, i16),
+    new_isr: &[i32],
+) -> AlterPartitionResponse {
+    let (topic_id, leader_epoch, version) = identity;
+    let principal = principal("replica");
+    let peer = peer();
+    let ctx = request_context(&principal, &peer, "broker-client");
+    // The controller checks the sender's broker epoch and the row's partition
+    // epoch. Keep the two image snapshots in the original request-read order.
+    let image = broker.controller.current_image();
+    let request = alter_partition_request(
+        topic_id,
+        (1, image.broker_epoch(NodeId(1)).unwrap_or(-1)),
+        (
+            leader_epoch,
+            broker
+                .controller
+                .current_image()
+                .partition(topic, 0)
+                .expect("partition")
+                .partition_epoch,
+        ),
+        new_isr,
+    );
+    crate::handlers::alter_partition::handle(broker, request, version, &ctx)
+        .await
+        .expect("AlterPartition")
+}
 
 /// Authorizer that denies every request. It drives the authorization-failure
 /// path in every handler that consults the cluster authorizer.
@@ -89,6 +363,31 @@ impl crate::authorizer::Authorizer for DenyAll {
 #[derive(Debug)]
 pub(crate) struct ControllerPeerAllowed<A>(pub(crate) A);
 
+// Wrappers customize individual authorization while forwarding metadata and scans.
+macro_rules! delegate_authorizer_metadata {
+    () => {
+        fn is_configured(&self) -> bool {
+            self.0.is_configured()
+        }
+
+        fn decision_ttl(&self) -> Option<std::time::Duration> {
+            self.0.decision_ttl()
+        }
+
+        fn authorize_by_resource_type(
+            &self,
+            source: &dyn crate::authorizer::AclSource,
+            principal: &krabka_security::Principal,
+            host: &std::net::SocketAddr,
+            resource_type: krabka_metadata::ResourceType,
+            operation: krabka_metadata::AclOperation,
+        ) -> crate::authorizer::AuthorizationResult {
+            self.0
+                .authorize_by_resource_type(source, principal, host, resource_type, operation)
+        }
+    };
+}
+
 impl<A: crate::authorizer::Authorizer> crate::authorizer::Authorizer for ControllerPeerAllowed<A> {
     fn authorize(
         &self,
@@ -109,25 +408,7 @@ impl<A: crate::authorizer::Authorizer> crate::authorizer::Authorizer for Control
         }
     }
 
-    fn is_configured(&self) -> bool {
-        self.0.is_configured()
-    }
-
-    fn decision_ttl(&self) -> Option<std::time::Duration> {
-        self.0.decision_ttl()
-    }
-
-    fn authorize_by_resource_type(
-        &self,
-        source: &dyn crate::authorizer::AclSource,
-        principal: &krabka_security::Principal,
-        host: &std::net::SocketAddr,
-        resource_type: krabka_metadata::ResourceType,
-        operation: krabka_metadata::AclOperation,
-    ) -> crate::authorizer::AuthorizationResult {
-        self.0
-            .authorize_by_resource_type(source, principal, host, resource_type, operation)
-    }
+    delegate_authorizer_metadata!();
 }
 
 /// An authorizer that a fixture holds as a trait object, so that it can go
@@ -144,25 +425,7 @@ impl crate::authorizer::Authorizer for SharedAuthorizer {
         self.0.authorize(source, request)
     }
 
-    fn is_configured(&self) -> bool {
-        self.0.is_configured()
-    }
-
-    fn decision_ttl(&self) -> Option<std::time::Duration> {
-        self.0.decision_ttl()
-    }
-
-    fn authorize_by_resource_type(
-        &self,
-        source: &dyn crate::authorizer::AclSource,
-        principal: &krabka_security::Principal,
-        host: &std::net::SocketAddr,
-        resource_type: krabka_metadata::ResourceType,
-        operation: krabka_metadata::AclOperation,
-    ) -> crate::authorizer::AuthorizationResult {
-        self.0
-            .authorize_by_resource_type(source, principal, host, resource_type, operation)
-    }
+    delegate_authorizer_metadata!();
 }
 
 /// Wraps `authorizer` in [`ControllerPeerAllowed`].

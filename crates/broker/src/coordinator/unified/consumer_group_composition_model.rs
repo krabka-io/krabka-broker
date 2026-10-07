@@ -38,11 +38,11 @@
 //! whole model shares, and the two tests that run the checker. Each child holds
 //! one concern: `config` the bounded model shape and the metadata and
 //! coordinator config the driven code needs, `state` the enumerated state and
-//! actions, `projection` the two-way mapping onto the real `GroupState`,
-//! `heartbeat` the request and advertised-assignment wire helpers, `commit` the
+//! actions, `projection` the two-way mapping onto the real `GroupState`, `commit` the
 //! `OffsetCommit` fence oracle and the transition that drives the real fence,
 //! `properties` the stateright [`Model`](stateright::Model) implementation, and
-//! `runner` the checker bounds.
+//! `runner` the checker bounds. `reconciliation_model_support` provides the
+//! shared wire requests and ownership oracles.
 
 // Each child is declared with an explicit `#[path]`, because this root is
 // itself reached through a `#[path]` and so owns its declaring directory.
@@ -50,8 +50,6 @@
 mod commit;
 #[path = "consumer_group_composition_model/config.rs"]
 mod config;
-#[path = "consumer_group_composition_model/heartbeat.rs"]
-mod heartbeat;
 #[path = "consumer_group_composition_model/projection.rs"]
 mod projection;
 #[path = "consumer_group_composition_model/properties.rs"]
@@ -62,15 +60,12 @@ mod runner;
 mod state;
 
 use krabka_log::Offset;
-use krabka_protocol::primitives::uuid::Uuid;
 
 use self::{
     config::CgcModel,
     runner::{PINNED_UNIQUE_STATES_BASIC, PINNED_UNIQUE_STATES_WIDE, run},
 };
-
-const TOPIC: Uuid = Uuid([7; 16]);
-const TOPIC_NAME: &str = "t";
+use super::reconciliation_model_support::TOPIC;
 const MAX_OFFSET: Offset = Offset(2); // bound the committed offset so the state space stays finite
 
 #[test]

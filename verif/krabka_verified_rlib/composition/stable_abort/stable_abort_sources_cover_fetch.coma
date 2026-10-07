@@ -1,20 +1,20 @@
 (* #"/workspace/crates/verified/src/composition/stable_abort.rs" 53 0 61 29 *)
 
-let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
-let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
-let%span sops = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/ops.rs" 688 18 691 9
-let%span sops'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/ops.rs" 702 25 702 33
-let%span sops'1 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/ops.rs" 701 18 701 32
-let%span svec = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 18 14 18 41
-let%span sfuture_log_swap_admission = "/workspace/crates/verified/src/storage/future_log_swap_admission.rs" 107 10 107 30
-let%span sfuture_log_swap_admission'0 = "/workspace/crates/verified/src/storage/future_log_swap_admission.rs" 108 10 108 29
-let%span sfuture_log_swap_admission'1 = "/workspace/crates/verified/src/storage/future_log_swap_admission.rs" 109 10 109 53
-let%span stransaction_fetch = "/workspace/crates/verified/src/composition/transaction_fetch.rs" 11 10 27 1
-let%span stransaction_fetch'0 = "/workspace/crates/verified/src/composition/transaction_fetch.rs" 28 10 34 1
+let%span sord = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sord'0 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span sops = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/ops.rs" 688 18 691 9
+let%span sops'0 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/ops.rs" 702 25 702 33
+let%span sops'1 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/ops.rs" 701 18 701 32
+let%span svec = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 18 14 18 41
+let%span sfuture_log_swap_admission = "/workspace/crates/verified/src/storage/future_log_swap_admission.rs" 108 10 108 30
+let%span sfuture_log_swap_admission'0 = "/workspace/crates/verified/src/storage/future_log_swap_admission.rs" 109 10 109 29
+let%span sfuture_log_swap_admission'1 = "/workspace/crates/verified/src/storage/future_log_swap_admission.rs" 110 10 110 53
+let%span stransaction_fetch = "/workspace/crates/verified/src/composition/transaction_fetch.rs" 12 10 28 1
+let%span stransaction_fetch'0 = "/workspace/crates/verified/src/composition/transaction_fetch.rs" 29 10 35 1
 let%span sabort_union = "/workspace/crates/verified/src/composition/abort_union.rs" 19 11 19 21
 let%span sabort_union'0 = "/workspace/crates/verified/src/composition/abort_union.rs" 20 10 41 1
-let%span srestored_aborts = "/workspace/crates/verified/src/composition/restored_aborts.rs" 16 16 20 76
-let%span srestored_aborts'0 = "/workspace/crates/verified/src/composition/restored_aborts.rs" 28 16 28 85
+let%span srestored_aborts = "/workspace/crates/verified/src/composition/restored_aborts.rs" 19 16 23 76
+let%span srestored_aborts'0 = "/workspace/crates/verified/src/composition/restored_aborts.rs" 31 16 31 85
 let%span sstable_abort = "/workspace/crates/verified/src/composition/stable_abort.rs" 62 28 62 72
 let%span sstable_abort'0 = "/workspace/crates/verified/src/composition/stable_abort.rs" 62 28 62 73
 let%span sstable_abort'1 = "/workspace/crates/verified/src/composition/stable_abort.rs" 63 16 63 65
@@ -181,7 +181,7 @@ type tup2_RestoreSegmentExtent_RestoreSegmentExtent = { f0'1: t_RestoreSegmentEx
 
 type t_Option_Vec_tup2_i64_i64_Global = None'2 | Some'2 t_Vec_tup2_i64_i64_Global
 
-predicate restored_abort_index_valid [#"/workspace/crates/verified/src/composition/restored_aborts.rs" 12 0 15 9] (entries: Seq.seq t_RestoreAbortedTxn) (owner: t_RestoreSegmentExtent) =
+predicate restored_abort_index_valid [#"/workspace/crates/verified/src/composition/restored_aborts.rs" 15 0 18 9] (entries: Seq.seq t_RestoreAbortedTxn) (owner: t_RestoreSegmentExtent) =
   [%#srestored_aborts] forall i: int. 0 <= i /\ i < Seq.length entries
     -> ge_log_Int (Int64.to_int (Seq.get entries i).producer_id) 0
     /\ ge_log_Int (Int64.to_int owner.base_offset'0) 0
@@ -202,7 +202,7 @@ axiom view_Vec_tup2_i64_i64_Global_spec:
   forall self: t_Vec_tup2_i64_i64_Global [view_Vec_tup2_i64_i64_Global self]. [%#svec] Seq.length (view_Vec_tup2_i64_i64_Global self)
     <= UInt64.t'int const_MAX
 
-predicate abort_intersects_fetch [#"/workspace/crates/verified/src/composition/restored_aborts.rs" 27 0 27 91] (entry: t_RestoreAbortedTxn) (from: int) (end': int) =
+predicate abort_intersects_fetch [#"/workspace/crates/verified/src/composition/restored_aborts.rs" 30 0 30 91] (entry: t_RestoreAbortedTxn) (from: int) (end': int) =
   [%#srestored_aborts'0] from < end'
   /\ Int64.to_int entry.start_offset < end' /\ ge_log_Int (Int64.to_int entry.last_offset) from
 

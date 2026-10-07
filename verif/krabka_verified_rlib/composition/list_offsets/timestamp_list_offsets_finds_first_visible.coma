@@ -1,43 +1,42 @@
-(* #"/workspace/crates/verified/src/composition/list_offsets.rs" 48 0 56 33 *)
+(* #"/workspace/crates/verified/src/composition/list_offsets.rs" 46 0 54 33 *)
 
-let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
-let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
-let%span sconvert = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/convert.rs" 274 26 274 51
-let%span slist_offsets = "/workspace/crates/verified/src/composition/list_offsets.rs" 57 14 57 56
-let%span slist_offsets'0 = "/workspace/crates/verified/src/composition/list_offsets.rs" 57 64 57 89
-let%span slist_offsets'1 = "/workspace/crates/verified/src/composition/list_offsets.rs" 57 14 57 90
-let%span slist_offsets'2 = "/workspace/crates/verified/src/composition/list_offsets.rs" 58 22 64 6
-let%span slist_offsets'3 = "/workspace/crates/verified/src/composition/list_offsets.rs" 71 14 71 89
-let%span slist_offsets'4 = "/workspace/crates/verified/src/composition/list_offsets.rs" 72 52 72 66
-let%span slist_offsets'5 = "/workspace/crates/verified/src/composition/list_offsets.rs" 72 42 72 67
-let%span slist_offsets'6 = "/workspace/crates/verified/src/composition/list_offsets.rs" 72 28 72 67
-let%span slist_offsets'7 = "/workspace/crates/verified/src/composition/list_offsets.rs" 72 69 72 86
-let%span slist_offsets'8 = "/workspace/crates/verified/src/composition/list_offsets.rs" 73 21 73 23
-let%span slist_offsets'9 = "/workspace/crates/verified/src/composition/list_offsets.rs" 73 25 73 27
-let%span slist_offsets'10 = "/workspace/crates/verified/src/composition/list_offsets.rs" 76 43 76 45
-let%span slist_offsets'11 = "/workspace/crates/verified/src/composition/list_offsets.rs" 76 14 76 46
-let%span slist_offsets'12 = "/workspace/crates/verified/src/composition/list_offsets.rs" 75 4 81 6
-let%span slist_offsets'13 = "/workspace/crates/verified/src/composition/list_offsets.rs" 14 11 14 46
-let%span slist_offsets'14 = "/workspace/crates/verified/src/composition/list_offsets.rs" 15 11 16 56
-let%span slist_offsets'15 = "/workspace/crates/verified/src/composition/list_offsets.rs" 17 11 17 52
-let%span slist_offsets'16 = "/workspace/crates/verified/src/composition/list_offsets.rs" 18 11 19 50
-let%span slist_offsets'17 = "/workspace/crates/verified/src/composition/list_offsets.rs" 20 11 21 35
-let%span slist_offsets'18 = "/workspace/crates/verified/src/composition/list_offsets.rs" 22 11 23 55
-let%span slist_offsets'19 = "/workspace/crates/verified/src/composition/list_offsets.rs" 24 11 25 40
-let%span slist_offsets'20 = "/workspace/crates/verified/src/composition/list_offsets.rs" 26 11 28 41
-let%span slist_offsets'21 = "/workspace/crates/verified/src/composition/list_offsets.rs" 29 10 47 1
-let%span snext_producer_identity = "/workspace/crates/verified/src/transaction/next_producer_identity.rs" 9 10 17 1
-let%span soption = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/option.rs" 127 19 127 23
-let%span soption'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/option.rs" 128 34 128 38
-let%span sselection_model = "/workspace/crates/verified/src/list_offsets/selection_model.rs" 65 10 84 1
-let%span sselection_model'0 = "/workspace/crates/verified/src/list_offsets/selection_model.rs" 11 10 24 1
-let%span sselection_model'1 = "/workspace/crates/verified/src/list_offsets/selection_model.rs" 160 8 194 9
-let%span stimestamp = "/workspace/crates/verified/src/composition/timestamp.rs" 34 11 34 46
-let%span stimestamp'0 = "/workspace/crates/verified/src/composition/timestamp.rs" 35 11 36 35
-let%span stimestamp'1 = "/workspace/crates/verified/src/composition/timestamp.rs" 37 11 38 40
-let%span stimestamp'2 = "/workspace/crates/verified/src/composition/timestamp.rs" 39 11 41 41
-let%span stimestamp'3 = "/workspace/crates/verified/src/composition/timestamp.rs" 42 10 46 1
-let%span sselection_decision = "/workspace/crates/verified/src/list_offsets/selection_decision.rs" 11 10 11 55
+let%span sord = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sord'0 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span soption = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/option.rs" 127 19 127 23
+let%span soption'0 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/option.rs" 128 34 128 38
+let%span sconvert = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/convert.rs" 274 26 274 51
+let%span slist_offsets = "/workspace/crates/verified/src/composition/list_offsets.rs" 55 14 55 56
+let%span slist_offsets'0 = "/workspace/crates/verified/src/composition/list_offsets.rs" 55 64 55 89
+let%span slist_offsets'1 = "/workspace/crates/verified/src/composition/list_offsets.rs" 55 14 55 90
+let%span slist_offsets'2 = "/workspace/crates/verified/src/composition/list_offsets.rs" 56 22 62 6
+let%span slist_offsets'3 = "/workspace/crates/verified/src/composition/list_offsets.rs" 69 14 69 89
+let%span slist_offsets'4 = "/workspace/crates/verified/src/composition/list_offsets.rs" 70 52 70 66
+let%span slist_offsets'5 = "/workspace/crates/verified/src/composition/list_offsets.rs" 70 42 70 67
+let%span slist_offsets'6 = "/workspace/crates/verified/src/composition/list_offsets.rs" 70 28 70 67
+let%span slist_offsets'7 = "/workspace/crates/verified/src/composition/list_offsets.rs" 70 69 70 86
+let%span slist_offsets'8 = "/workspace/crates/verified/src/composition/list_offsets.rs" 71 21 71 23
+let%span slist_offsets'9 = "/workspace/crates/verified/src/composition/list_offsets.rs" 71 25 71 27
+let%span slist_offsets'10 = "/workspace/crates/verified/src/composition/list_offsets.rs" 74 43 74 45
+let%span slist_offsets'11 = "/workspace/crates/verified/src/composition/list_offsets.rs" 74 14 74 46
+let%span slist_offsets'12 = "/workspace/crates/verified/src/composition/list_offsets.rs" 73 4 79 6
+let%span slist_offsets'13 = "/workspace/crates/verified/src/composition/list_offsets.rs" 16 11 16 46
+let%span slist_offsets'14 = "/workspace/crates/verified/src/composition/list_offsets.rs" 17 11 18 56
+let%span slist_offsets'15 = "/workspace/crates/verified/src/composition/list_offsets.rs" 19 11 19 52
+let%span slist_offsets'16 = "/workspace/crates/verified/src/composition/list_offsets.rs" 20 11 21 50
+let%span slist_offsets'17 = "/workspace/crates/verified/src/composition/list_offsets.rs" 22 11 23 35
+let%span slist_offsets'18 = "/workspace/crates/verified/src/composition/list_offsets.rs" 24 11 25 55
+let%span slist_offsets'19 = "/workspace/crates/verified/src/composition/list_offsets.rs" 26 11 26 70
+let%span slist_offsets'20 = "/workspace/crates/verified/src/composition/list_offsets.rs" 27 10 45 1
+let%span snext_producer_identity = "/workspace/crates/verified/src/transaction/next_producer_identity.rs" 10 10 18 1
+let%span sselection_model = "/workspace/crates/verified/src/list_offsets/selection_model.rs" 66 10 85 1
+let%span sselection_model'0 = "/workspace/crates/verified/src/list_offsets/selection_model.rs" 12 10 25 1
+let%span sselection_model'1 = "/workspace/crates/verified/src/list_offsets/selection_model.rs" 161 8 195 9
+let%span stimestamp = "/workspace/crates/verified/src/composition/timestamp.rs" 52 11 52 46
+let%span stimestamp'0 = "/workspace/crates/verified/src/composition/timestamp.rs" 53 11 54 35
+let%span stimestamp'1 = "/workspace/crates/verified/src/composition/timestamp.rs" 55 11 55 70
+let%span stimestamp'2 = "/workspace/crates/verified/src/composition/timestamp.rs" 56 10 60 1
+let%span stimestamp'3 = "/workspace/crates/verified/src/composition/timestamp.rs" 42 8 45 48
+let%span sselection_decision = "/workspace/crates/verified/src/list_offsets/selection_decision.rs" 12 10 12 55
 
 use creusot.slice.Slice64
 use creusot.int.Int64
@@ -130,6 +129,14 @@ type tup2_i64_u32 = { f0'1: Int64.t; f1'1: UInt32.t }
 
 type t_Option_usize = None'0 | Some'0 UInt64.t
 
+predicate sparse_maxima_bound_prefix [#"/workspace/crates/verified/src/composition/timestamp.rs" 36 0 40 9] (entries: Seq.seq tup2_i64_u32) (offsets: Seq.seq UInt32.t) (timestamps: Seq.seq Int64.t) =
+  [%#stimestamp'3] (forall i: int, j: int. 0 <= i /\ i < j /\ j < Seq.length entries
+      -> Int64.to_int (Seq.get entries i).f0'1 <= Int64.to_int (Seq.get entries j).f0'1)
+  /\ (forall i: int, j: int. 0 <= i
+      /\ i < Seq.length entries
+      /\ 0 <= j /\ j < Seq.length offsets /\ UInt32.t'int (Seq.get offsets j) < UInt32.t'int (Seq.get entries i).f1'1
+    -> Int64.to_int (Seq.get timestamps j) <= Int64.to_int (Seq.get entries i).f0'1)
+
 let indexed_timestamp_scan_finds_first (entries: Slice64.slice tup2_i64_u32) (offsets: Slice64.slice UInt32.t)
   (timestamps: Slice64.slice Int64.t) (target: Int64.t) (return (x: t_Option_usize)) =
 {[@stop_split] [@expl:indexed_timestamp_scan_finds_first requires] ([@stop_split] [@expl:indexed_timestamp_scan_finds_first requires #0] [%#stimestamp] Seq.length (Slice64.view offsets)
@@ -138,20 +145,10 @@ let indexed_timestamp_scan_finds_first (entries: Slice64.slice tup2_i64_u32) (of
           <= i
         /\ i < j /\ j < Seq.length (Slice64.view offsets)
       -> UInt32.t'int (Seq.get (Slice64.view offsets) i) < UInt32.t'int (Seq.get (Slice64.view offsets) j))
-  /\ ([@stop_split] [@expl:indexed_timestamp_scan_finds_first requires #2] [%#stimestamp'1] forall i: int, j: int. 0
-          <= i
-        /\ i < j /\ j < Seq.length (Slice64.view entries)
-      -> Int64.to_int (Seq.get (Slice64.view entries) i).f0'1 <= Int64.to_int (Seq.get (Slice64.view entries) j).f0'1)
-  /\ ([@stop_split] [@expl:indexed_timestamp_scan_finds_first requires #3] [%#stimestamp'2] forall i: int, j: int. 0
-        <= i
-      /\ i < Seq.length (Slice64.view entries)
-      /\ 0 <= j
-      /\ j < Seq.length (Slice64.view offsets)
-      /\ UInt32.t'int (Seq.get (Slice64.view offsets) j) < UInt32.t'int (Seq.get (Slice64.view entries) i).f1'1
-    -> Int64.to_int (Seq.get (Slice64.view timestamps) j) <= Int64.to_int (Seq.get (Slice64.view entries) i).f0'1)}
+  /\ ([@stop_split] [@expl:indexed_timestamp_scan_finds_first requires #2] [%#stimestamp'1] sparse_maxima_bound_prefix (Slice64.view entries) (Slice64.view offsets) (Slice64.view timestamps))}
   any
   [ return (result: t_Option_usize) ->
-  {[@stop_split] [@expl:indexed_timestamp_scan_finds_first ensures] [%#stimestamp'3] match result with
+  {[@stop_split] [@expl:indexed_timestamp_scan_finds_first ensures] [%#stimestamp'2] match result with
       | Some'0 index -> UInt64.t'int index < Seq.length (Slice64.view timestamps)
       /\ ge_log_Int (Int64.to_int (Seq.get (Slice64.view timestamps) (UInt64.t'int index))) (Int64.to_int target)
       /\ (forall i: int. 0 <= i /\ i < UInt64.t'int index
@@ -213,7 +210,7 @@ type t_ListOffsetsSelectionFacts = {
 
 type t_ListOffsetsSelectionDecision = RejectMalformed'0 | Unknown'0 | Resolved'0 Int64.t Int64.t Int32.t
 
-function list_offsets_selection_model [#"/workspace/crates/verified/src/list_offsets/selection_model.rs" 156 0 158 33] (facts: t_ListOffsetsSelectionFacts) : t_ListOffsetsSelectionDecision
+function list_offsets_selection_model [#"/workspace/crates/verified/src/list_offsets/selection_model.rs" 157 0 159 33] (facts: t_ListOffsetsSelectionFacts) : t_ListOffsetsSelectionDecision
  = [%#sselection_model'1] if facts.kind = Unsupported
   \/ Int64.to_int facts.candidate_offset < - 1
   \/ Int32.to_int facts.candidate_epoch < - 1 \/ Int64.to_int facts.last_fetchable < 0 then
@@ -253,7 +250,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let timestamp_list_offsets_finds_first_visible [#"/workspace/crates/verified/src/composition/list_offsets.rs" 48 0 56 33]
+let timestamp_list_offsets_finds_first_visible [#"/workspace/crates/verified/src/composition/list_offsets.rs" 46 0 54 33]
   (entries: Slice64.slice tup2_i64_u32) (offsets: Slice64.slice UInt32.t) (timestamps: Slice64.slice Int64.t)
   (starts: Slice64.slice Int64.t) (frontiers: tup3_i64_i64_i64) (request: tup3_i32_i8_i64) (candidate_epoch'0: Int32.t)
   (return (x: t_ListOffsetsSelectionDecision)) =
@@ -278,66 +275,56 @@ let timestamp_list_offsets_finds_first_visible [#"/workspace/crates/verified/src
         /\ i < Seq.length (Slice64.view starts)
       -> 0 <= Int64.to_int (Seq.get (Slice64.view starts) i)
       /\ Int64.to_int (Seq.get (Slice64.view starts) i) <= Int64.to_int frontiers.f1)
-  /\ ([@stop_split] [@expl:timestamp_list_offsets_finds_first_visible requires #6] [%#slist_offsets'19] forall i: int, j: int. 0
-          <= i
-        /\ i < j /\ j < Seq.length (Slice64.view entries)
-      -> Int64.to_int (Seq.get (Slice64.view entries) i).f0'1 <= Int64.to_int (Seq.get (Slice64.view entries) j).f0'1)
-  /\ ([@stop_split] [@expl:timestamp_list_offsets_finds_first_visible requires #7] [%#slist_offsets'20] forall i: int, j: int. 0
-        <= i
-      /\ i < Seq.length (Slice64.view entries)
-      /\ 0 <= j
-      /\ j < Seq.length (Slice64.view offsets)
-      /\ UInt32.t'int (Seq.get (Slice64.view offsets) j) < UInt32.t'int (Seq.get (Slice64.view entries) i).f1'1
-    -> Int64.to_int (Seq.get (Slice64.view timestamps) j) <= Int64.to_int (Seq.get (Slice64.view entries) i).f0'1)}
+  /\ ([@stop_split] [@expl:timestamp_list_offsets_finds_first_visible requires #6] [%#slist_offsets'19] sparse_maxima_bound_prefix (Slice64.view entries) (Slice64.view offsets) (Slice64.view timestamps))}
   (! bb0
   [ bb0 = s0
-    [ s0 = first_unstable_offset [%#slist_offsets] {starts} {frontiers.f1} (fun (_x: t_Option_i64) -> [ &_45 <- _x ] s1)
-    | s1 = [ &_49 <- [%#slist_offsets'0] "coherent pending starts" ] s2
-    | s2 = expect_i64 [%#slist_offsets'1] {_45} {_49} (fun (_x: Int64.t) -> [ &lso <- _x ] s3)
-    | s3 = [ &_52 <- { replica_id = request.f0'0;
+    [ s0 = first_unstable_offset [%#slist_offsets] {starts} {frontiers.f1} (fun (_x: t_Option_i64) -> [ &_43 <- _x ] s1)
+    | s1 = [ &_47 <- [%#slist_offsets'0] "coherent pending starts" ] s2
+    | s2 = expect_i64 [%#slist_offsets'1] {_43} {_47} (fun (_x: Int64.t) -> [ &lso <- _x ] s3)
+    | s3 = [ &_50 <- { replica_id = request.f0'0;
                        isolation_level = request.f1'0;
                        log_end = frontiers.f1;
                        high_watermark = frontiers.f2;
                        last_stable = lso } ] s4
-    | s4 = list_offsets_bound_decision [%#slist_offsets'2] {_52}
-        (fun (_x: t_ListOffsetsBoundDecision) -> [ &_51 <- _x ] s5)
-    | s5 = any [ br0 -> {_51 = RejectMalformed} (! bb6) | br1 (x0: Int64.t) -> {_51 = Bound x0} (! bb7) ] ]
+    | s4 = list_offsets_bound_decision [%#slist_offsets'2] {_50}
+        (fun (_x: t_ListOffsetsBoundDecision) -> [ &_49 <- _x ] s5)
+    | s5 = any [ br0 -> {_49 = RejectMalformed} (! bb6) | br1 (x0: Int64.t) -> {_49 = Bound x0} (! bb7) ] ]
   | bb7 = s0
-    [ s0 = elim_Bound {_51} (fun (roffset: Int64.t) -> [ &offset <- roffset ] s1)
+    [ s0 = elim_Bound {_49} (fun (roffset: Int64.t) -> [ &offset <- roffset ] s1)
     | s1 = [ &bound <- offset ] s2
     | s2 = indexed_timestamp_scan_finds_first [%#slist_offsets'3] {entries} {offsets} {timestamps} {request.f2'0}
-        (fun (_x: t_Option_usize) -> [ &_64 <- _x ] s3)
-    | s3 = any [ br0 -> {_64 = None'0} (! bb11) | br1 (x0: UInt64.t) -> {_64 = Some'0 x0} (! bb12) ] ]
+        (fun (_x: t_Option_usize) -> [ &_62 <- _x ] s3)
+    | s3 = any [ br0 -> {_62 = None'0} (! bb11) | br1 (x0: UInt64.t) -> {_62 = Some'0 x0} (! bb12) ] ]
   | bb12 = s0
-    [ s0 = elim_Some {_64} (fun (r0: UInt64.t) -> [ &index <- r0 ] s1)
-    | s1 = [ &_75 <- index ] s2
-    | s2 = [ &_76 <- Slice64.length offsets ] s3
-    | s3 = [ &_77 <- UInt64.lt _75 _76 ] s4
-    | s4 = {[@expl:index in bounds] [%#slist_offsets'4] _77} s5
-    | s5 = Slice64.get [%#slist_offsets'4] <UInt32.t> {offsets} {_75} (fun (r: UInt32.t) -> [ &_74 <- r ] s6)
-    | s6 = from_i64 [%#slist_offsets'5] {_74} (fun (_x: Int64.t) -> [ &_73 <- _x ] s7)
-    | s7 = Int64.add [%#slist_offsets'6] {frontiers.f0} {_73} (fun (_x: Int64.t) -> [ &_71 <- _x ] s8)
-    | s8 = [ &_79 <- index ] s9
-    | s9 = [ &_80 <- Slice64.length timestamps ] s10
-    | s10 = [ &_81 <- UInt64.lt _79 _80 ] s11
-    | s11 = {[@expl:index in bounds] [%#slist_offsets'7] _81} s12
-    | s12 = Slice64.get [%#slist_offsets'7] <Int64.t> {timestamps} {_79} (fun (r: Int64.t) -> [ &_78 <- r ] s13)
-    | s13 = [ &_63 <- { f0'2 = _71; f1'2 = _78 } ] s14
+    [ s0 = elim_Some {_62} (fun (r0: UInt64.t) -> [ &index <- r0 ] s1)
+    | s1 = [ &_73 <- index ] s2
+    | s2 = [ &_74 <- Slice64.length offsets ] s3
+    | s3 = [ &_75 <- UInt64.lt _73 _74 ] s4
+    | s4 = {[@expl:index in bounds] [%#slist_offsets'4] _75} s5
+    | s5 = Slice64.get [%#slist_offsets'4] <UInt32.t> {offsets} {_73} (fun (r: UInt32.t) -> [ &_72 <- r ] s6)
+    | s6 = from_i64 [%#slist_offsets'5] {_72} (fun (_x: Int64.t) -> [ &_71 <- _x ] s7)
+    | s7 = Int64.add [%#slist_offsets'6] {frontiers.f0} {_71} (fun (_x: Int64.t) -> [ &_69 <- _x ] s8)
+    | s8 = [ &_77 <- index ] s9
+    | s9 = [ &_78 <- Slice64.length timestamps ] s10
+    | s10 = [ &_79 <- UInt64.lt _77 _78 ] s11
+    | s11 = {[@expl:index in bounds] [%#slist_offsets'7] _79} s12
+    | s12 = Slice64.get [%#slist_offsets'7] <Int64.t> {timestamps} {_77} (fun (r: Int64.t) -> [ &_76 <- r ] s13)
+    | s13 = [ &_61 <- { f0'2 = _69; f1'2 = _76 } ] s14
     | s14 = bb16 ]
   | bb11 = s0
-    [ s0 = [ &_63 <- { f0'2 = ([%#slist_offsets'8] (-1: Int64.t)); f1'2 = ([%#slist_offsets'9] (-1: Int64.t)) } ] s1
+    [ s0 = [ &_61 <- { f0'2 = ([%#slist_offsets'8] (-1: Int64.t)); f1'2 = ([%#slist_offsets'9] (-1: Int64.t)) } ] s1
     | s1 = bb16 ]
   | bb16 = s0
-    [ s0 = [ &offset'0 <- _63.f0'2 ] s1
-    | s1 = [ &timestamp <- _63.f1'2 ] s2
+    [ s0 = [ &offset'0 <- _61.f0'2 ] s1
+    | s1 = [ &timestamp <- _61.f1'2 ] s2
     | s2 = list_offsets_kind [%#slist_offsets'11] {request.f2'0} {[%#slist_offsets'10] (11: Int16.t)}
-        (fun (_x: t_ListOffsetsKind) -> [ &_83 <- _x ] s3)
-    | s3 = [ &_82 <- { kind = _83;
+        (fun (_x: t_ListOffsetsKind) -> [ &_81 <- _x ] s3)
+    | s3 = [ &_80 <- { kind = _81;
                        candidate_offset = offset'0;
                        candidate_timestamp = timestamp;
                        candidate_epoch = candidate_epoch'0;
                        last_fetchable = bound } ] s4
-    | s4 = list_offsets_selection_decision [%#slist_offsets'12] {_82}
+    | s4 = list_offsets_selection_decision [%#slist_offsets'12] {_80}
         (fun (_x: t_ListOffsetsSelectionDecision) -> [ &_ret <- _x ] s5)
     | s5 = return {_ret} ]
   | bb6 = s0 [ s0 = [ &_ret <- RejectMalformed'0 ] s1 | s1 = return {_ret} ] ]
@@ -350,31 +337,31 @@ let timestamp_list_offsets_finds_first_visible [#"/workspace/crates/verified/src
   | & request: tup3_i32_i8_i64 = request
   | & candidate_epoch'0: Int32.t = candidate_epoch'0
   | & lso: Int64.t = Any.any_l ()
-  | & _45: t_Option_i64 = Any.any_l ()
-  | & _49: string = Any.any_l ()
+  | & _43: t_Option_i64 = Any.any_l ()
+  | & _47: string = Any.any_l ()
   | & bound: Int64.t = Any.any_l ()
-  | & _51: t_ListOffsetsBoundDecision = Any.any_l ()
-  | & _52: t_ListOffsetsBoundFacts = Any.any_l ()
+  | & _49: t_ListOffsetsBoundDecision = Any.any_l ()
+  | & _50: t_ListOffsetsBoundFacts = Any.any_l ()
   | & offset: Int64.t = Any.any_l ()
   | & offset'0: Int64.t = Any.any_l ()
   | & timestamp: Int64.t = Any.any_l ()
-  | & _63: tup2_i64_i64 = Any.any_l ()
-  | & _64: t_Option_usize = Any.any_l ()
+  | & _61: tup2_i64_i64 = Any.any_l ()
+  | & _62: t_Option_usize = Any.any_l ()
   | & index: UInt64.t = Any.any_l ()
+  | & _69: Int64.t = Any.any_l ()
   | & _71: Int64.t = Any.any_l ()
-  | & _73: Int64.t = Any.any_l ()
-  | & _74: UInt32.t = Any.any_l ()
-  | & _75: UInt64.t = Any.any_l ()
-  | & _76: UInt64.t = Any.any_l ()
-  | & _77: bool = Any.any_l ()
-  | & _78: Int64.t = Any.any_l ()
-  | & _79: UInt64.t = Any.any_l ()
-  | & _80: UInt64.t = Any.any_l ()
-  | & _81: bool = Any.any_l ()
-  | & _82: t_ListOffsetsSelectionFacts = Any.any_l ()
-  | & _83: t_ListOffsetsKind = Any.any_l () ])
+  | & _72: UInt32.t = Any.any_l ()
+  | & _73: UInt64.t = Any.any_l ()
+  | & _74: UInt64.t = Any.any_l ()
+  | & _75: bool = Any.any_l ()
+  | & _76: Int64.t = Any.any_l ()
+  | & _77: UInt64.t = Any.any_l ()
+  | & _78: UInt64.t = Any.any_l ()
+  | & _79: bool = Any.any_l ()
+  | & _80: t_ListOffsetsSelectionFacts = Any.any_l ()
+  | & _81: t_ListOffsetsKind = Any.any_l () ])
   [ return (result: t_ListOffsetsSelectionDecision) ->
-  {[@stop_split] [@expl:timestamp_list_offsets_finds_first_visible ensures] [%#slist_offsets'21] match result with
+  {[@stop_split] [@expl:timestamp_list_offsets_finds_first_visible ensures] [%#slist_offsets'20] match result with
       | RejectMalformed'0 -> false
       | Resolved'0 offset timestamp leader_epoch -> leader_epoch = candidate_epoch'0
       /\ (exists i: int. 0 <= i

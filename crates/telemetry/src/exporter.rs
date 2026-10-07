@@ -15,19 +15,18 @@ use crate::{
 };
 
 impl OtlpConfig {
+    fn configure_exporter<B: WithExportConfig>(&self, builder: B) -> B {
+        builder
+            .with_endpoint(self.endpoint.clone())
+            .with_timeout(self.timeout.to_std())
+    }
+
     pub(crate) fn build_exporter(&self) -> Result<SpanExporter, TelemetryError> {
         let builder = SpanExporter::builder();
         let exporter = match self.protocol {
-            OtlpProtocol::Grpc => builder
-                .with_tonic()
-                .with_endpoint(self.endpoint.clone())
-                .with_timeout(self.timeout.to_std())
-                .build()?,
-            OtlpProtocol::HttpProtobuf => builder
-                .with_http()
-                .with_protocol(Protocol::HttpBinary)
-                .with_endpoint(self.endpoint.clone())
-                .with_timeout(self.timeout.to_std())
+            OtlpProtocol::Grpc => self.configure_exporter(builder.with_tonic()).build()?,
+            OtlpProtocol::HttpProtobuf => self
+                .configure_exporter(builder.with_http().with_protocol(Protocol::HttpBinary))
                 .build()?,
         };
         Ok(exporter)
@@ -41,16 +40,9 @@ impl OtlpConfig {
     pub(crate) fn build_log_exporter(&self) -> Result<LogExporter, TelemetryError> {
         let builder = LogExporter::builder();
         let exporter = match self.protocol {
-            OtlpProtocol::Grpc => builder
-                .with_tonic()
-                .with_endpoint(self.endpoint.clone())
-                .with_timeout(self.timeout.to_std())
-                .build()?,
-            OtlpProtocol::HttpProtobuf => builder
-                .with_http()
-                .with_protocol(Protocol::HttpBinary)
-                .with_endpoint(self.endpoint.clone())
-                .with_timeout(self.timeout.to_std())
+            OtlpProtocol::Grpc => self.configure_exporter(builder.with_tonic()).build()?,
+            OtlpProtocol::HttpProtobuf => self
+                .configure_exporter(builder.with_http().with_protocol(Protocol::HttpBinary))
                 .build()?,
         };
         Ok(exporter)

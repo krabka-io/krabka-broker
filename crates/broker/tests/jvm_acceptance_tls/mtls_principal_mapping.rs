@@ -20,14 +20,10 @@
 //! authorization decision the mapping feeds is the same either way, so the
 //! case stays on the single fixture cert.
 
-use std::{
-    io::Write,
-    process::{Command, Stdio},
-};
+use std::process::Command;
 
 use assert2::assert;
 use krabka_broker::{Broker, BrokerConfig, SslPrincipalMapper, config::ListenerSpec};
-use krabka_log::LogConfig;
 use krabka_security::{ClientAuthMode, ListenerProtocol, TlsConfig};
 
 use crate::jvm_acceptance::{
@@ -110,13 +106,7 @@ fn prepare_client_keystore() -> std::path::PathBuf {
 /// certificate, trusts the fixture client CA, and maps the peer DN through
 /// KIP-371 rules. The mapped short name is the only super-user.
 async fn start_mtls_broker() -> (krabka_broker::BrokerHandle, tempfile::TempDir) {
-    let _ = tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("krabka_broker=debug,info")),
-        )
-        .with_test_writer()
-        .try_init();
+    crate::support::init_jvm_tracing("krabka_broker=debug,info");
     let dir = tempfile::tempdir().expect("tempdir");
     let listen_addr: std::net::SocketAddr = broker0_listen().parse().expect("allocated addr");
     let controller_addr: std::net::SocketAddr =
@@ -131,20 +121,6 @@ async fn start_mtls_broker() -> (krabka_broker::BrokerHandle, tempfile::TempDir)
     let principal_mapper = SslPrincipalMapper::parse(&["RULE:^CN=(.*?),.*$/$1/", "DEFAULT"])
         .expect("KIP-371 rules parse");
     let mut config = BrokerConfig {
-        broker_id: 1,
-        listen_addr,
-        advertised_listener: broker0_advertised().into(),
-        log_dir: dir.path().to_path_buf(),
-        log_config: LogConfig::default(),
-        node_id: krabka_broker::NodeId(1),
-        controller_listen_addr: controller_addr,
-        controller_quorum_voters: vec![(krabka_broker::NodeId(1), controller_addr.to_string())],
-        heartbeat_interval: krabka_units::millis(3_000),
-        heartbeat_timeout: krabka_units::millis(9_000),
-        replica_lag_time_max: krabka_units::millis(30_000),
-        controller_election_timeout: krabka_units::secs(5),
-        controller_heartbeat_interval: krabka_units::millis(500),
-        bootstrap_mode: krabka_broker::BootstrapMode::Bootstrap,
         listeners: vec![ListenerSpec {
             name: "SSL".to_string(),
             bind_addr: listen_addr,
@@ -157,7 +133,14 @@ async fn start_mtls_broker() -> (krabka_broker::BrokerHandle, tempfile::TempDir)
         inter_broker_listener_name: "SSL".to_string(),
         tls_config: Some(tls),
         super_users: maplit::hashset! {MAPPED_PRINCIPAL.to_string()},
-        ..BrokerConfig::default().with_internal_topics_for(1)
+        ..crate::support::jvm_broker_config(
+            1,
+            listen_addr,
+            controller_addr,
+            broker0_advertised(),
+            dir.path().to_path_buf(),
+            &[(1, controller_addr)],
+        )
     };
     // The PLAINTEXT controller listener carries `ANONYMOUS`, and the node's own
     // heartbeats reach it. Every data listener here authenticates, so this
@@ -201,60 +184,21 @@ async fn jvm_mtls_principal_mapping_rules_shorten_the_subject_dn() {
     // `CreateTopics` needs `Cluster Create`, which only the super-user has.
     // It passes only if the broker resolved this connection to the mapped
     // short name rather than to `CLIENT_DN`.
-    docker_run_kafka_tool_with_image_and_mounts(
+    crate::jvm_acceptance::create_console_topic(
         KAFKA_IMAGE_TXN,
         &[&props_mount, &ts_mount, &ks_mount],
-        &[
-            "kafka-topics",
-            "--create",
-            "--if-not-exists",
-            "--topic",
-            TOPIC,
-            "--partitions",
-            "1",
-            "--replication-factor",
-            "1",
-            "--bootstrap-server",
-            broker0_advertised(),
-            "--command-config",
-            "/client.properties",
-        ],
+        TOPIC,
+        1,
+        1,
     );
 
-    let mut child = Command::new("docker")
-        .args([
-            "run",
-            "--rm",
-            "-i",
-            "-v",
-            &props_mount,
-            "-v",
-            &ts_mount,
-            "-v",
-            &ks_mount,
-            "--add-host=host.docker.internal:host-gateway",
-            KAFKA_IMAGE_TXN,
-            "kafka-console-producer",
-            "--bootstrap-server",
-            broker0_advertised(),
-            "--topic",
-            TOPIC,
-            "--producer.config",
-            "/client.properties",
-        ])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("spawn producer");
-    child
-        .stdin
-        .as_mut()
-        .expect("stdin")
-        .write_all(b"msg-0\n")
-        .expect("write stdin");
-    drop(child.stdin.take());
-    let producer_out = child.wait_with_output().expect("wait producer");
+    let producer_out = crate::jvm_acceptance::produce_console(
+        KAFKA_IMAGE_TXN,
+        &[&props_mount, &ts_mount, &ks_mount],
+        TOPIC,
+        false,
+        b"msg-0\n",
+    );
     assert!(
         producer_out.status.success(),
         "producer failed for {CLIENT_DN}: stdout={} stderr={}",

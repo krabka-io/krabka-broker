@@ -6,11 +6,11 @@
 //! deletion whose target credential does not exist.
 
 use assert2::assert;
-use krabka_broker::{Broker, BrokerConfig, config::ListenerSpec};
+use krabka_broker::Broker;
 use krabka_protocol::owned::alter_user_scram_credentials_request::{
     AlterUserScramCredentialsRequest, ScramCredentialDeletion, ScramCredentialUpsertion,
 };
-use krabka_security::{ListenerProtocol, SaslMechanism};
+use krabka_security::SaslMechanism;
 
 use crate::{
     alter_scram::{
@@ -28,24 +28,12 @@ use crate::{
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn alter_scram_creds_low_iterations_rejected() {
     let log_dir = tempfile::tempdir().unwrap();
-    let mut cfg = BrokerConfig::for_tests(log_dir.path().to_path_buf());
-    cfg.listeners = vec![ListenerSpec {
-        name: "SASL_PLAINTEXT".to_string(),
-        bind_addr: "127.0.0.1:0".parse().unwrap(),
-        advertised: "127.0.0.1:0".to_string(),
-        protocol: ListenerProtocol::SaslPlaintext,
-        tls_config: None,
-        sasl_mechanisms: None,
-        principal_mapper: krabka_broker::SslPrincipalMapper::default(),
-    }];
-    cfg.inter_broker_listener_name = "SASL_PLAINTEXT".to_string();
-    cfg.enabled_sasl_mechanisms = vec![SaslMechanism::Plain];
-    cfg.plain_credentials
-        .insert("admin".to_string(), admin_plain_password());
-    cfg.super_users = maplit::hashset! {"admin".to_string()};
-
-    let handle = Broker::start(cfg).await.expect("broker must start");
-    let addr = handle.listen_addr();
+    let (handle, addr) = crate::harness::start_scram_admin(
+        log_dir.path(),
+        &admin_plain_password(),
+        vec![SaslMechanism::Plain],
+    )
+    .await;
 
     // 64-byte salted_password length is valid; only `iterations` violates.
     let req = AlterUserScramCredentialsRequest {
@@ -79,24 +67,12 @@ async fn alter_scram_creds_low_iterations_rejected() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn alter_scram_creds_high_iterations_rejected_but_max_allowed() {
     let log_dir = tempfile::tempdir().unwrap();
-    let mut cfg = BrokerConfig::for_tests(log_dir.path().to_path_buf());
-    cfg.listeners = vec![ListenerSpec {
-        name: "SASL_PLAINTEXT".to_string(),
-        bind_addr: "127.0.0.1:0".parse().unwrap(),
-        advertised: "127.0.0.1:0".to_string(),
-        protocol: ListenerProtocol::SaslPlaintext,
-        tls_config: None,
-        sasl_mechanisms: None,
-        principal_mapper: krabka_broker::SslPrincipalMapper::default(),
-    }];
-    cfg.inter_broker_listener_name = "SASL_PLAINTEXT".to_string();
-    cfg.enabled_sasl_mechanisms = vec![SaslMechanism::Plain];
-    cfg.plain_credentials
-        .insert("admin".to_string(), admin_plain_password());
-    cfg.super_users = maplit::hashset! {"admin".to_string()};
-
-    let handle = Broker::start(cfg).await.expect("broker must start");
-    let addr = handle.listen_addr();
+    let (handle, addr) = crate::harness::start_scram_admin(
+        log_dir.path(),
+        &admin_plain_password(),
+        vec![SaslMechanism::Plain],
+    )
+    .await;
     let req = AlterUserScramCredentialsRequest {
         upsertions: vec![
             ScramCredentialUpsertion {
@@ -154,7 +130,7 @@ async fn alter_scram_creds_high_iterations_rejected_but_max_allowed() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn alter_scram_creds_unknown_mechanism_returns_unsupported_sasl_mechanism() {
     let log_dir = tempfile::tempdir().unwrap();
-    let mut cfg = BrokerConfig::for_tests(log_dir.path().to_path_buf());
+    let mut cfg = crate::support::sasl_plaintext_config(log_dir.path().to_path_buf());
     let admin_password = format!(
         "test-pass-{}",
         std::time::SystemTime::now()
@@ -162,16 +138,7 @@ async fn alter_scram_creds_unknown_mechanism_returns_unsupported_sasl_mechanism(
             .unwrap()
             .as_nanos()
     );
-    cfg.listeners = vec![ListenerSpec {
-        name: "SASL_PLAINTEXT".to_string(),
-        bind_addr: "127.0.0.1:0".parse().unwrap(),
-        advertised: "127.0.0.1:0".to_string(),
-        protocol: ListenerProtocol::SaslPlaintext,
-        tls_config: None,
-        sasl_mechanisms: None,
-        principal_mapper: krabka_broker::SslPrincipalMapper::default(),
-    }];
-    cfg.inter_broker_listener_name = "SASL_PLAINTEXT".to_string();
+
     cfg.enabled_sasl_mechanisms = vec![SaslMechanism::Plain];
     cfg.plain_credentials
         .insert("admin".to_string(), admin_password.clone());
@@ -211,24 +178,12 @@ async fn alter_scram_creds_unknown_mechanism_returns_unsupported_sasl_mechanism(
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn alter_scram_creds_duplicate_resource_rejected() {
     let log_dir = tempfile::tempdir().unwrap();
-    let mut cfg = BrokerConfig::for_tests(log_dir.path().to_path_buf());
-    cfg.listeners = vec![ListenerSpec {
-        name: "SASL_PLAINTEXT".to_string(),
-        bind_addr: "127.0.0.1:0".parse().unwrap(),
-        advertised: "127.0.0.1:0".to_string(),
-        protocol: ListenerProtocol::SaslPlaintext,
-        tls_config: None,
-        sasl_mechanisms: None,
-        principal_mapper: krabka_broker::SslPrincipalMapper::default(),
-    }];
-    cfg.inter_broker_listener_name = "SASL_PLAINTEXT".to_string();
-    cfg.enabled_sasl_mechanisms = vec![SaslMechanism::Plain];
-    cfg.plain_credentials
-        .insert("admin".to_string(), admin_plain_password());
-    cfg.super_users = maplit::hashset! {"admin".to_string()};
-
-    let handle = Broker::start(cfg).await.expect("broker must start");
-    let addr = handle.listen_addr();
+    let (handle, addr) = crate::harness::start_scram_admin(
+        log_dir.path(),
+        &admin_plain_password(),
+        vec![SaslMechanism::Plain],
+    )
+    .await;
 
     let (salt, salted) = pbkdf2_salt_and_salted(alice_password().as_bytes(), 4096);
     let upsert = ScramCredentialUpsertion {
@@ -266,25 +221,13 @@ async fn alter_scram_creds_duplicate_resource_rejected() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn alter_scram_creds_duplicate_deletion_and_upsertion_rejected_per_user() {
     let log_dir = tempfile::tempdir().unwrap();
-    let mut cfg = BrokerConfig::for_tests(log_dir.path().to_path_buf());
-    cfg.listeners = vec![ListenerSpec {
-        name: "SASL_PLAINTEXT".to_string(),
-        bind_addr: "127.0.0.1:0".parse().unwrap(),
-        advertised: "127.0.0.1:0".to_string(),
-        protocol: ListenerProtocol::SaslPlaintext,
-        tls_config: None,
-        sasl_mechanisms: None,
-        principal_mapper: krabka_broker::SslPrincipalMapper::default(),
-    }];
-    cfg.inter_broker_listener_name = "SASL_PLAINTEXT".to_string();
-    cfg.enabled_sasl_mechanisms = vec![SaslMechanism::Plain];
     let admin_password = uuid::Uuid::new_v4().to_string();
-    cfg.plain_credentials
-        .insert("admin".to_string(), admin_password.clone());
-    cfg.super_users = maplit::hashset! {"admin".to_string()};
-
-    let handle = Broker::start(cfg).await.expect("broker must start");
-    let addr = handle.listen_addr();
+    let (handle, addr) = crate::harness::start_scram_admin(
+        log_dir.path(),
+        &admin_password,
+        vec![SaslMechanism::Plain],
+    )
+    .await;
     handle
         .submit_metadata_record_for_test(krabka_metadata::MetadataRecord::V1ScramCredential(
             krabka_metadata::ScramCredentialRecord {
@@ -340,25 +283,13 @@ async fn alter_scram_creds_duplicate_deletion_and_upsertion_rejected_per_user() 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn alter_scram_creds_missing_deletion_returns_resource_not_found_91() {
     let log_dir = tempfile::tempdir().unwrap();
-    let mut cfg = BrokerConfig::for_tests(log_dir.path().to_path_buf());
-    cfg.listeners = vec![ListenerSpec {
-        name: "SASL_PLAINTEXT".to_string(),
-        bind_addr: "127.0.0.1:0".parse().unwrap(),
-        advertised: "127.0.0.1:0".to_string(),
-        protocol: ListenerProtocol::SaslPlaintext,
-        tls_config: None,
-        sasl_mechanisms: None,
-        principal_mapper: krabka_broker::SslPrincipalMapper::default(),
-    }];
-    cfg.inter_broker_listener_name = "SASL_PLAINTEXT".to_string();
-    cfg.enabled_sasl_mechanisms = vec![SaslMechanism::Plain];
     let admin_password = uuid::Uuid::new_v4().to_string();
-    cfg.plain_credentials
-        .insert("admin".to_string(), admin_password.clone());
-    cfg.super_users = maplit::hashset! {"admin".to_string()};
-
-    let handle = Broker::start(cfg).await.expect("broker must start");
-    let addr = handle.listen_addr();
+    let (handle, addr) = crate::harness::start_scram_admin(
+        log_dir.path(),
+        &admin_password,
+        vec![SaslMechanism::Plain],
+    )
+    .await;
     let req = AlterUserScramCredentialsRequest {
         deletions: vec![ScramCredentialDeletion {
             name: "ghost".to_string(),

@@ -373,10 +373,9 @@ mod tests {
     use krabka_ids::LeaderEpoch;
     use krabka_remote_storage::{
         ChainHead, ChainStamp, CustomMetadata, EpochId, IndexType,
-        InmemoryRemoteLogMetadataManager, LocalTieredStorage, LogSegmentData, ManifestSeq,
-        RemoteLogMetadataManager, RemoteLogSegmentDetails, RemoteLogSegmentId,
-        RemoteLogSegmentMetadata, RemoteLogSegmentMetadataUpdate, RemoteStorageError,
-        RemoteStorageManager, WormChainRecord,
+        InmemoryRemoteLogMetadataManager, LogSegmentData, ManifestSeq, RemoteLogMetadataManager,
+        RemoteLogSegmentDetails, RemoteLogSegmentId, RemoteLogSegmentMetadata,
+        RemoteLogSegmentMetadataUpdate, RemoteStorageError, RemoteStorageManager, WormChainRecord,
     };
     use uuid::Uuid;
 
@@ -384,9 +383,10 @@ mod tests {
     use crate::{
         metrics::BrokerMetrics,
         remote_log_manager::{
-            ArchiveMode, RemoteTier,
+            ArchiveMode,
             test_support::{
-                FakeWormArchive, rolled_log, stuck_started_segment, synth_export, tier, tp,
+                FakeWormArchive, archived_backends, local_backends, missing_remote_reads,
+                rolled_log, stuck_started_segment, synth_export, tier, tier_with_metrics, tp,
             },
         },
     };
@@ -397,20 +397,14 @@ mod tests {
     /// visible only as consumer lag and a filling disk.
     #[tokio::test]
     async fn a_copy_round_records_its_requests_bytes_and_lag() {
-        let rsm: Arc<dyn RemoteStorageManager> = Arc::new(AcceptingRsm { receipt: None });
-        let rlmm: Arc<dyn RemoteLogMetadataManager> =
-            Arc::new(InmemoryRemoteLogMetadataManager::new());
+        let (rsm, rlmm) = accepting_backends(None);
         let metrics = BrokerMetrics::new();
-        let index_cache = Arc::new(krabka_remote_storage::RemoteIndexCache::disabled());
-        let tier = RemoteTier {
-            archive: ArchiveMode::Mutable,
-            rsm: &rsm,
-            rlmm: &rlmm,
-            metrics: &metrics,
-            index_cache: &index_cache,
-            copy_timeout: crate::remote_log_manager::test_support::TEST_COPY_TIMEOUT,
-            unstable_api_versions: crate::api_catalog::UnstableApiVersions::Disabled,
-        };
+        let tier = tier_with_metrics(
+            &rsm,
+            &rlmm,
+            &metrics,
+            crate::api_catalog::UnstableApiVersions::Disabled,
+        );
         let exports = vec![synth_export(0, 9, 100, 64), synth_export(10, 19, 200, 64)];
 
         let copied = copy_eligible(&tier, &tp(), 1, LeaderEpoch(0), exports).await;
@@ -453,20 +447,14 @@ mod tests {
             (30, 3),
             (i64::MAX, 3),
         ] {
-            let rsm: Arc<dyn RemoteStorageManager> = Arc::new(AcceptingRsm { receipt: None });
-            let rlmm: Arc<dyn RemoteLogMetadataManager> =
-                Arc::new(InmemoryRemoteLogMetadataManager::new());
+            let (rsm, rlmm) = accepting_backends(None);
             let metrics = BrokerMetrics::new();
-            let index_cache = Arc::new(krabka_remote_storage::RemoteIndexCache::disabled());
-            let tier = RemoteTier {
-                archive: ArchiveMode::Mutable,
-                rsm: &rsm,
-                rlmm: &rlmm,
-                metrics: &metrics,
-                index_cache: &index_cache,
-                copy_timeout: crate::remote_log_manager::test_support::TEST_COPY_TIMEOUT,
-                unstable_api_versions: crate::api_catalog::UnstableApiVersions::Disabled,
-            };
+            let tier = tier_with_metrics(
+                &rsm,
+                &rlmm,
+                &metrics,
+                crate::api_catalog::UnstableApiVersions::Disabled,
+            );
             let exports = vec![
                 synth_export(0, 9, 100, 64),
                 synth_export(10, 19, 200, 64),
@@ -537,20 +525,14 @@ mod tests {
             ("a size lag nothing has reached", 10_000, 193, 0),
             ("either check is enough", 700, 10_000, 3),
         ] {
-            let rsm: Arc<dyn RemoteStorageManager> = Arc::new(AcceptingRsm { receipt: None });
-            let rlmm: Arc<dyn RemoteLogMetadataManager> =
-                Arc::new(InmemoryRemoteLogMetadataManager::new());
+            let (rsm, rlmm) = accepting_backends(None);
             let metrics = BrokerMetrics::new();
-            let index_cache = Arc::new(krabka_remote_storage::RemoteIndexCache::disabled());
-            let tier = RemoteTier {
-                archive: ArchiveMode::Mutable,
-                rsm: &rsm,
-                rlmm: &rlmm,
-                metrics: &metrics,
-                index_cache: &index_cache,
-                copy_timeout: crate::remote_log_manager::test_support::TEST_COPY_TIMEOUT,
-                unstable_api_versions: crate::api_catalog::UnstableApiVersions::Enabled,
-            };
+            let tier = tier_with_metrics(
+                &rsm,
+                &rlmm,
+                &metrics,
+                crate::api_catalog::UnstableApiVersions::Enabled,
+            );
             let exports = vec![
                 synth_export(0, 9, 100, 64),
                 synth_export(10, 19, 200, 64),
@@ -637,16 +619,12 @@ mod tests {
         let rlmm: Arc<dyn RemoteLogMetadataManager> =
             Arc::new(InmemoryRemoteLogMetadataManager::new());
         let metrics = BrokerMetrics::new();
-        let index_cache = Arc::new(krabka_remote_storage::RemoteIndexCache::disabled());
-        let tier = RemoteTier {
-            archive: ArchiveMode::Mutable,
-            rsm: &rsm,
-            rlmm: &rlmm,
-            metrics: &metrics,
-            index_cache: &index_cache,
-            copy_timeout: crate::remote_log_manager::test_support::TEST_COPY_TIMEOUT,
-            unstable_api_versions: crate::api_catalog::UnstableApiVersions::Disabled,
-        };
+        let tier = tier_with_metrics(
+            &rsm,
+            &rlmm,
+            &metrics,
+            crate::api_catalog::UnstableApiVersions::Disabled,
+        );
 
         let copied = copy_eligible(
             &tier,
@@ -686,25 +664,7 @@ mod tests {
                 "the backend refused the copy",
             )))
         }
-        fn fetch_log_segment(
-            &self,
-            metadata: &RemoteLogSegmentMetadata,
-            _start: u32,
-            _end: Option<u32>,
-        ) -> Result<Vec<u8>, RemoteStorageError> {
-            Err(RemoteStorageError::SegmentNotFound(
-                metadata.remote_log_segment_id().clone(),
-            ))
-        }
-        fn fetch_index(
-            &self,
-            metadata: &RemoteLogSegmentMetadata,
-            _index_type: IndexType,
-        ) -> Result<Vec<u8>, RemoteStorageError> {
-            Err(RemoteStorageError::SegmentNotFound(
-                metadata.remote_log_segment_id().clone(),
-            ))
-        }
+        missing_remote_reads!();
         fn delete_log_segment_data(
             &self,
             _metadata: &RemoteLogSegmentMetadata,
@@ -728,31 +688,26 @@ mod tests {
         ) -> Result<Option<CustomMetadata>, RemoteStorageError> {
             Ok(self.receipt.clone())
         }
-        fn fetch_log_segment(
-            &self,
-            metadata: &RemoteLogSegmentMetadata,
-            _start: u32,
-            _end: Option<u32>,
-        ) -> Result<Vec<u8>, RemoteStorageError> {
-            Err(RemoteStorageError::SegmentNotFound(
-                metadata.remote_log_segment_id().clone(),
-            ))
-        }
-        fn fetch_index(
-            &self,
-            metadata: &RemoteLogSegmentMetadata,
-            _index_type: IndexType,
-        ) -> Result<Vec<u8>, RemoteStorageError> {
-            Err(RemoteStorageError::SegmentNotFound(
-                metadata.remote_log_segment_id().clone(),
-            ))
-        }
+        missing_remote_reads!();
         fn delete_log_segment_data(
             &self,
             _metadata: &RemoteLogSegmentMetadata,
         ) -> Result<(), RemoteStorageError> {
             Ok(())
         }
+    }
+
+    /// Fresh metadata and a backend that returns the chosen successful-copy receipt.
+    fn accepting_backends(
+        receipt: Option<CustomMetadata>,
+    ) -> (
+        Arc<dyn RemoteStorageManager>,
+        Arc<dyn RemoteLogMetadataManager>,
+    ) {
+        (
+            Arc::new(AcceptingRsm { receipt }),
+            Arc::new(InmemoryRemoteLogMetadataManager::new()),
+        )
     }
 
     /// Every WORM receipt the metadata manager holds for `tp()`, oldest
@@ -780,20 +735,7 @@ mod tests {
         let exports = log.tierable_segments();
         assert!(exports.len() >= 2, "test needs multiple sealed segments");
 
-        let rsm: Arc<dyn RemoteStorageManager> =
-            Arc::new(LocalTieredStorage::new(remote_dir.path()));
-        let rlmm: Arc<dyn RemoteLogMetadataManager> =
-            Arc::new(InmemoryRemoteLogMetadataManager::new());
-
-        let copied = copy_eligible(
-            &tier(ArchiveMode::Mutable, &rsm, &rlmm),
-            &tp(),
-            1,
-            LeaderEpoch(0),
-            exports.clone(),
-        )
-        .await;
-        assert!(copied == exports.len());
+        let (rsm, rlmm) = archived_backends(remote_dir.path(), &exports).await;
 
         let listed = rlmm.list_remote_log_segments(&tp()).unwrap();
         assert!(listed.len() == exports.len());
@@ -825,10 +767,7 @@ mod tests {
         let log = rolled_log(log_dir.path());
         let exports = log.tierable_segments();
 
-        let rsm: Arc<dyn RemoteStorageManager> =
-            Arc::new(LocalTieredStorage::new(remote_dir.path()));
-        let rlmm: Arc<dyn RemoteLogMetadataManager> =
-            Arc::new(InmemoryRemoteLogMetadataManager::new());
+        let (rsm, rlmm) = local_backends(remote_dir.path());
 
         let first = copy_eligible(
             &tier(ArchiveMode::Mutable, &rsm, &rlmm),
@@ -855,10 +794,7 @@ mod tests {
     #[tokio::test]
     async fn empty_exports_copies_nothing() {
         let remote_dir = tempfile::tempdir().unwrap();
-        let rsm: Arc<dyn RemoteStorageManager> =
-            Arc::new(LocalTieredStorage::new(remote_dir.path()));
-        let rlmm: Arc<dyn RemoteLogMetadataManager> =
-            Arc::new(InmemoryRemoteLogMetadataManager::new());
+        let (rsm, rlmm) = local_backends(remote_dir.path());
         let copied = copy_eligible(
             &tier(ArchiveMode::Mutable, &rsm, &rlmm),
             &tp(),
@@ -1212,9 +1148,7 @@ mod tests {
     /// the tier a hole.
     #[tokio::test]
     async fn a_new_leaders_misaligned_segments_below_the_watermark_are_not_re_copied() {
-        let rsm: Arc<dyn RemoteStorageManager> = Arc::new(AcceptingRsm { receipt: None });
-        let rlmm: Arc<dyn RemoteLogMetadataManager> =
-            Arc::new(InmemoryRemoteLogMetadataManager::new());
+        let (rsm, rlmm) = accepting_backends(None);
         finished_segment(&rlmm, 0xa1, 0, 99, LeaderEpoch(0));
         finished_segment(&rlmm, 0xa2, 100, 199, LeaderEpoch(0));
 
@@ -1245,9 +1179,7 @@ mod tests {
     /// from being uploaded a second time on the way.
     #[tokio::test]
     async fn a_hole_is_filled_without_re_copying_the_segments_above_it() {
-        let rsm: Arc<dyn RemoteStorageManager> = Arc::new(AcceptingRsm { receipt: None });
-        let rlmm: Arc<dyn RemoteLogMetadataManager> =
-            Arc::new(InmemoryRemoteLogMetadataManager::new());
+        let (rsm, rlmm) = accepting_backends(None);
         finished_segment(&rlmm, 0xb1, 0, 99, LeaderEpoch(0));
         finished_segment(&rlmm, 0xb2, 200, 299, LeaderEpoch(0));
 
@@ -1279,16 +1211,12 @@ mod tests {
             Arc::new(InmemoryRemoteLogMetadataManager::new());
         finished_segment(&rlmm, 0xc1, 0, 99, LeaderEpoch(0));
         let metrics = BrokerMetrics::new();
-        let index_cache = Arc::new(krabka_remote_storage::RemoteIndexCache::disabled());
-        let tier = RemoteTier {
-            archive: ArchiveMode::Mutable,
-            rsm: &rsm,
-            rlmm: &rlmm,
-            metrics: &metrics,
-            index_cache: &index_cache,
-            copy_timeout: crate::remote_log_manager::test_support::TEST_COPY_TIMEOUT,
-            unstable_api_versions: crate::api_catalog::UnstableApiVersions::Disabled,
-        };
+        let tier = tier_with_metrics(
+            &rsm,
+            &rlmm,
+            &metrics,
+            crate::api_catalog::UnstableApiVersions::Disabled,
+        );
 
         // 0..=49 the tier holds; 50..=149 it holds only through 99, and
         // 150..=249 not at all. The store refuses both, so the lag is what the

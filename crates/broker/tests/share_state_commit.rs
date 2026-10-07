@@ -349,20 +349,7 @@ async fn a_share_state_request_is_answered_only_when_committed() {
 
     // Stop a follower of the state partition. It stays in the ISR, so the
     // high watermark stops below every later record.
-    let raft_leader = cluster[0].0.wait_until_controller_leader().await.0;
-    let follower = cluster
-        .iter()
-        .position(|(handle, _, _)| {
-            handle.node_id() != coordinator && handle.node_id() != raft_leader
-        })
-        .unwrap_or_else(|| {
-            cluster
-                .iter()
-                .position(|(handle, _, _)| handle.node_id() != coordinator)
-                .expect("a follower")
-        });
-    let (stopped, _, stopped_dir) = cluster.remove(follower);
-    stopped.crash_for_test().await;
+    let stopped_dir = crate::support::share::crash_follower(&mut cluster, coordinator).await;
 
     let rows = [
         Rpc::Write { start_offset: 10 },

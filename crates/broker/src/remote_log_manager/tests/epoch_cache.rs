@@ -16,7 +16,7 @@ use krabka_remote_storage::{
 };
 
 use super::*;
-use crate::remote_log_manager::test_support::{batch, leading_partition_over};
+use crate::remote_log_manager::test_support::{batch, leading_partition_over, local_backends};
 
 /// The id and the `(first offset, last offset, epoch)` of each archive segment.
 ///
@@ -58,8 +58,7 @@ fn epoch_log(partition_dir: &std::path::Path) -> Log {
 /// the archive still holds.
 async fn survivors_of_a_tick(log_dir: &std::path::Path, log: Log) -> Vec<u128> {
     let remote_dir = tempfile::tempdir().unwrap();
-    let rsm: Arc<dyn RemoteStorageManager> = Arc::new(LocalTieredStorage::new(remote_dir.path()));
-    let rlmm: Arc<dyn RemoteLogMetadataManager> = Arc::new(InmemoryRemoteLogMetadataManager::new());
+    let (rsm, rlmm) = local_backends(remote_dir.path());
     for (id, first, last, epoch) in ARCHIVE {
         let segment_id = RemoteLogSegmentId::new(tp(), Uuid::from_u128(id));
         let started = RemoteLogSegmentMetadata::new(

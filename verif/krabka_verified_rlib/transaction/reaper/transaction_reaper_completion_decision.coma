@@ -1,30 +1,30 @@
-(* #"/workspace/crates/verified/src/transaction/reaper.rs" 52 0 57 40 *)
+(* #"/workspace/crates/verified/src/transaction/reaper.rs" 53 0 58 40 *)
 
-let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
-let%span smarker = "/workspace/crates/verified/src/transaction/marker.rs" 162 16 162 58
-let%span smarker'0 = "/workspace/crates/verified/src/transaction/marker.rs" 181 8 181 87
-let%span smarker'1 = "/workspace/crates/verified/src/transaction/marker.rs" 171 16 171 80
+let%span sord = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span smarker = "/workspace/crates/verified/src/transaction/marker.rs" 181 16 181 58
+let%span smarker'0 = "/workspace/crates/verified/src/transaction/marker.rs" 200 8 200 87
+let%span smarker'1 = "/workspace/crates/verified/src/transaction/marker.rs" 190 16 190 80
+let%span sproducer_identity = "/workspace/crates/verified/src/transaction/producer_identity.rs" 95 11 95 42
+let%span sproducer_identity'0 = "/workspace/crates/verified/src/transaction/producer_identity.rs" 96 10 97 77
+let%span sproducer_identity'1 = "/workspace/crates/verified/src/transaction/producer_identity.rs" 98 10 100 44
+let%span sproducer_identity'2 = "/workspace/crates/verified/src/transaction/producer_identity.rs" 101 10 104 42
+let%span sproducer_identity'3 = "/workspace/crates/verified/src/transaction/producer_identity.rs" 105 10 106 74
 let%span stransaction = "/workspace/crates/verified/src/transaction.rs" 194 14 194 66
-let%span sreaper = "/workspace/crates/verified/src/transaction/reaper.rs" 58 21 58 22
-let%span sreaper'0 = "/workspace/crates/verified/src/transaction/reaper.rs" 59 27 59 28
-let%span sreaper'1 = "/workspace/crates/verified/src/transaction/reaper.rs" 60 26 60 27
-let%span sreaper'2 = "/workspace/crates/verified/src/transaction/reaper.rs" 61 28 61 29
-let%span sreaper'3 = "/workspace/crates/verified/src/transaction/reaper.rs" 62 28 62 29
-let%span sreaper'4 = "/workspace/crates/verified/src/transaction/reaper.rs" 63 30 63 31
-let%span sreaper'5 = "/workspace/crates/verified/src/transaction/reaper.rs" 69 8 69 27
-let%span sreaper'6 = "/workspace/crates/verified/src/transaction/reaper.rs" 70 8 70 29
-let%span sreaper'7 = "/workspace/crates/verified/src/transaction/reaper.rs" 67 10 73 5
-let%span sreaper'8 = "/workspace/crates/verified/src/transaction/reaper.rs" 23 11 23 45
-let%span sreaper'9 = "/workspace/crates/verified/src/transaction/reaper.rs" 24 10 25 82
-let%span sreaper'10 = "/workspace/crates/verified/src/transaction/reaper.rs" 26 10 30 44
-let%span sreaper'11 = "/workspace/crates/verified/src/transaction/reaper.rs" 31 10 36 77
-let%span sreaper'12 = "/workspace/crates/verified/src/transaction/reaper.rs" 37 10 44 73
-let%span sreaper'13 = "/workspace/crates/verified/src/transaction/reaper.rs" 45 10 50 35
-let%span sproducer_identity = "/workspace/crates/verified/src/transaction/producer_identity.rs" 94 11 94 42
-let%span sproducer_identity'0 = "/workspace/crates/verified/src/transaction/producer_identity.rs" 95 10 96 77
-let%span sproducer_identity'1 = "/workspace/crates/verified/src/transaction/producer_identity.rs" 97 10 99 44
-let%span sproducer_identity'2 = "/workspace/crates/verified/src/transaction/producer_identity.rs" 100 10 103 42
-let%span sproducer_identity'3 = "/workspace/crates/verified/src/transaction/producer_identity.rs" 104 10 105 74
+let%span sreaper = "/workspace/crates/verified/src/transaction/reaper.rs" 59 21 59 22
+let%span sreaper'0 = "/workspace/crates/verified/src/transaction/reaper.rs" 60 27 60 28
+let%span sreaper'1 = "/workspace/crates/verified/src/transaction/reaper.rs" 61 26 61 27
+let%span sreaper'2 = "/workspace/crates/verified/src/transaction/reaper.rs" 62 28 62 29
+let%span sreaper'3 = "/workspace/crates/verified/src/transaction/reaper.rs" 63 28 63 29
+let%span sreaper'4 = "/workspace/crates/verified/src/transaction/reaper.rs" 64 30 64 31
+let%span sreaper'5 = "/workspace/crates/verified/src/transaction/reaper.rs" 70 8 70 27
+let%span sreaper'6 = "/workspace/crates/verified/src/transaction/reaper.rs" 71 8 71 29
+let%span sreaper'7 = "/workspace/crates/verified/src/transaction/reaper.rs" 68 10 74 5
+let%span sreaper'8 = "/workspace/crates/verified/src/transaction/reaper.rs" 24 11 24 45
+let%span sreaper'9 = "/workspace/crates/verified/src/transaction/reaper.rs" 25 10 26 82
+let%span sreaper'10 = "/workspace/crates/verified/src/transaction/reaper.rs" 27 10 31 44
+let%span sreaper'11 = "/workspace/crates/verified/src/transaction/reaper.rs" 32 10 37 77
+let%span sreaper'12 = "/workspace/crates/verified/src/transaction/reaper.rs" 38 10 45 73
+let%span sreaper'13 = "/workspace/crates/verified/src/transaction/reaper.rs" 46 10 51 35
 
 use creusot.int.Int64
 use creusot.int.Int16
@@ -51,7 +51,7 @@ let identity (self: t_TransactionSnapshot) (return (x: t_TransactionIdentity)) =
 
 type t_TransactionCompletionDecision = Proceed'0 | AlreadyComplete'0 | RejectStaleIdentity'0 | RejectState'0
 
-predicate has_identity [#"/workspace/crates/verified/src/transaction/marker.rs" 170 0 170 89] (snapshot: t_TransactionSnapshot) (identity'0: t_TransactionIdentity) =
+predicate has_identity [#"/workspace/crates/verified/src/transaction/marker.rs" 189 0 189 89] (snapshot: t_TransactionSnapshot) (identity'0: t_TransactionIdentity) =
   [%#smarker'1] snapshot.pid = identity'0.pid'0 /\ snapshot.epoch = identity'0.epoch'0
 
 let transaction_completion_decision (current': t_TransactionSnapshot) (expected: t_TransactionIdentity)
@@ -79,17 +79,17 @@ predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other
 
 meta "rewrite_def" predicate ge_log_Int
 
-predicate is_identity [#"/workspace/crates/verified/src/transaction/marker.rs" 161 0 161 57] (snapshot: t_TransactionSnapshot) =
+predicate is_identity [#"/workspace/crates/verified/src/transaction/marker.rs" 180 0 180 57] (snapshot: t_TransactionSnapshot) =
   [%#smarker] ge_log_Int (Int64.to_int snapshot.pid) 0 /\ ge_log_Int (Int16.to_int snapshot.epoch) 0
 
-predicate snapshot_eq [#"/workspace/crates/verified/src/transaction/marker.rs" 179 0 179 81] (left: t_TransactionSnapshot) (right: t_TransactionSnapshot) =
+predicate snapshot_eq [#"/workspace/crates/verified/src/transaction/marker.rs" 198 0 198 81] (left: t_TransactionSnapshot) (right: t_TransactionSnapshot) =
   [%#smarker'0] left.pid = right.pid /\ left.epoch = right.epoch /\ left.state = right.state
 
 meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let transaction_reaper_completion_decision [#"/workspace/crates/verified/src/transaction/reaper.rs" 52 0 57 40]
+let transaction_reaper_completion_decision [#"/workspace/crates/verified/src/transaction/reaper.rs" 53 0 58 40]
   (current': t_TransactionSnapshot) (prepared: t_TransactionSnapshot) (completion: t_TransactionSnapshot)
   (exact_prepared_snapshot: bool) (return (x: t_TransactionReaperCompletionDecision)) =
 {[@stop_split] [@expl:transaction_reaper_completion_decision requires] [%#sreaper'8] prepared.state <> completion.state}

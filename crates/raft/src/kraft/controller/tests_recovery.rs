@@ -22,12 +22,18 @@ use crate::kraft::{
     transport::NullPeerSender,
 };
 
+fn recovery_voters() -> (VoterSet, VoterSet, VoterSet) {
+    (
+        voter_set(&[NodeId(1)]),
+        voter_set(&[NodeId(1), NodeId(2)]),
+        voter_set(&[NodeId(1), NodeId(3)]),
+    )
+}
+
 #[test]
 fn restart_replays_control_records_only_through_persisted_high_watermark() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let initial = voter_set(&[NodeId(1)]);
-    let committed = voter_set(&[NodeId(1), NodeId(2)]);
-    let uncommitted = voter_set(&[NodeId(1), NodeId(3)]);
+    let (initial, committed, uncommitted) = recovery_voters();
     {
         let mut log =
             KraftLog::open(dir.path(), &crate::MetadataLogConfig::default()).expect("open log");
@@ -54,9 +60,7 @@ fn restart_replays_control_records_only_through_persisted_high_watermark() {
 #[test]
 fn control_replay_stops_inside_a_partially_committed_batch() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let initial = voter_set(&[NodeId(1)]);
-    let committed = voter_set(&[NodeId(1), NodeId(2)]);
-    let uncommitted = voter_set(&[NodeId(1), NodeId(3)]);
+    let (initial, committed, uncommitted) = recovery_voters();
     {
         let mut log =
             KraftLog::open(dir.path(), &crate::MetadataLogConfig::default()).expect("open log");

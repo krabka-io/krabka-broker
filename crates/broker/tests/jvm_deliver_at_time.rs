@@ -39,10 +39,7 @@
 mod jvm_acceptance;
 mod support;
 
-use std::{
-    io::Write as _,
-    process::{Command, Stdio},
-};
+use std::{io::Write as _, process::Stdio};
 
 use assert2::{assert, check};
 use jvm_acceptance::{
@@ -220,14 +217,7 @@ async fn wait_for_delivery_policy(broker: &BrokerHandle, topic: &str, policy: De
 
 // Compile and run the probe in the container, and return everything it printed.
 fn run_probe(bootstrap: &str) -> String {
-    let mut probe = Command::new("docker")
-        .args([
-            "run",
-            "--rm",
-            "-i",
-            "--add-host=host.docker.internal:host-gateway",
-            "--entrypoint",
-            "bash",
+    let mut probe = crate::support::jvm_docker_command("--entrypoint", &[], &["bash",
             KAFKA_IMAGE_TXN,
             "-c",
             r#"set -e; cat >/tmp/DeliverAtTimeProbe.java; \
@@ -239,7 +229,7 @@ fn run_probe(bootstrap: &str) -> String {
             SCHEDULED_TOPIC,
             IMMEDIATE_TOPIC,
             &DELAY_MS.to_string(),
-        ])
+        ], true)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())

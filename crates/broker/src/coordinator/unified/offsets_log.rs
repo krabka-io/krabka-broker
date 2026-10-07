@@ -351,22 +351,11 @@ pub mod fake {
         /// downgrade flip removed the next-gen group record atomically.
         /// `parse_key` dispatches version 3 to the next-gen family.
         pub async fn has_next_gen_group_metadata_tombstone(&self, group_id: &str) -> bool {
-            use crate::coordinator::unified::{
-                persistence::{Key, parse_key},
-                persistence_next_gen::NextGenKey,
-            };
-            self.appended.lock().await.iter().any(|batch| {
-                batch.records.iter().any(|rec| {
-                    rec.value.is_none()
-                        && rec.key.as_ref().is_some_and(|k| {
-                            matches!(
-                                parse_key(k),
-                                Ok(Key::NextGen(NextGenKey::GroupMetadata { group_id: ref gid }))
-                                    if gid == group_id
-                            )
-                        })
-                })
+            use crate::coordinator::unified::persistence_next_gen::NextGenKey;
+            self.has_next_gen_tombstone(&NextGenKey::GroupMetadata {
+                group_id: group_id.into(),
             })
+            .await
         }
 
         /// Returns `true` if and only if an appended record tombstones the
@@ -379,23 +368,28 @@ pub mod fake {
         /// log compaction and bring the group back as next-gen on replay.
         /// `parse_key` dispatches version 6 to the next-gen family.
         pub async fn has_next_gen_target_metadata_tombstone(&self, group_id: &str) -> bool {
-            use crate::coordinator::unified::{
-                persistence::{Key, parse_key},
-                persistence_next_gen::NextGenKey,
-            };
-            self.appended.lock().await.iter().any(|batch| {
-                batch.records.iter().any(|rec| {
-                    rec.value.is_none()
-                        && rec.key.as_ref().is_some_and(|k| {
-                            matches!(
-                                parse_key(k),
-                                Ok(Key::NextGen(NextGenKey::TargetAssignmentMetadata {
-                                    group_id: ref gid
-                                })) if gid == group_id
-                            )
-                        })
-                })
+            use crate::coordinator::unified::persistence_next_gen::NextGenKey;
+            self.has_next_gen_tombstone(&NextGenKey::TargetAssignmentMetadata {
+                group_id: group_id.into(),
             })
+            .await
+        }
+
+        async fn has_next_gen_tombstone(
+            &self,
+            expected: &crate::coordinator::unified::persistence_next_gen::NextGenKey,
+        ) -> bool {
+            use crate::coordinator::unified::persistence::{Key, parse_key};
+            self.appended
+                .lock()
+                .await
+                .iter()
+                .flat_map(|batch| &batch.records)
+                .any(|record| {
+                    record.value.is_none() && record.key.as_ref().is_some_and(|key| {
+                    matches!(parse_key(key), Ok(Key::NextGen(found)) if &found == expected)
+                })
+                })
         }
     }
 }

@@ -17,6 +17,26 @@ use spec::{copy_admitted, reference_valid};
 type WalCopyObservation = (Option<u64>, i32, bool, Vec<WalCopyBatch>);
 type ByteQuorum = (i64, i64, Vec<(u64, i64)>, Vec<i64>);
 
+// cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
+#[cfg(creusot)]
+#[cfg_attr(test, mutants::skip)]
+#[logic(open)]
+fn complete_copy(
+    observation: WalCopyObservation,
+    voter: u64,
+    epoch: i32,
+    source: Seq<WalCopyBatch>,
+) -> bool {
+    pearlite! {
+        observation.2 && observation.0 == Some(voter)
+        && (observation.1@ < 0 || observation.1 == epoch)
+        && observation.3@.len() == source.len()
+        && (forall<j: Int> 0 <= j && j < source.len() ==>
+            observation.3@[j].0 == source[j].0 && observation.3@[j].1 == source[j].1
+            && observation.3@[j].2@ == source[j].2@)
+    }
+}
+
 /// Derive explicit votes from admitted actual copies, then consume installed
 /// identities, quorum recomputation and consumer Fetch. A fresh advance exposing
 /// retained records carries a distinct majority of authenticated, durably
@@ -68,12 +88,7 @@ type ByteQuorum = (i64, i64, Vec<(u64, i64)>, Vec<i64>);
 #[ensures(match result {
     None => true,
     Some((hw, _, _, _)) => (forall<i: Int> 0 <= i && i < observations@.len() ==>
-        observations@[i].2 && observations@[i].0 == Some(voters@[i])
-        && (observations@[i].1@ < 0 || observations@[i].1 == placement.2)
-        && observations@[i].3@.len() == source@.len()
-        && (forall<j: Int> 0 <= j && j < source@.len() ==>
-            observations@[i].3@[j].0 == source@[j].0 && observations@[i].3@[j].1 == source@[j].1
-            && observations@[i].3@[j].2@ == source@[j].2@)) ==> hw == w.log_end,
+        complete_copy(observations@[i], voters@[i], placement.2, source@)) ==> hw == w.log_end,
 })]
 pub(super) fn durable_matching_copies_bound_fetch(
     voters: &[u64],
@@ -121,12 +136,7 @@ pub(super) fn durable_matching_copies_bound_fetch(
         i += 1;
     }
     proof_assert!(forall<i: Int> 0 <= i && i < observations@.len()
-        && observations@[i].2 && observations@[i].0 == Some(voters@[i])
-        && (observations@[i].1@ < 0 || observations@[i].1 == placement.2)
-        && observations@[i].3@.len() == source@.len()
-        && (forall<j: Int> 0 <= j && j < source@.len() ==>
-            observations@[i].3@[j].0 == source@[j].0 && observations@[i].3@[j].1 == source@[j].1
-            && observations@[i].3@[j].2@ == source@[j].2@)
+        && complete_copy(observations@[i], voters@[i], placement.2, source@)
         ==> reports@[i] == w.log_end);
     #[cfg(creusot)]
     proof_assert!({

@@ -10,7 +10,7 @@ use krabka_log::Offset;
 use krabka_metadata::{MetadataImage, MetadataRecord, PartitionRecord, TopicRecord};
 use krabka_protocol::{
     owned::fetch_response::{FetchableTopicResponse, PartitionData},
-    records::{Attributes, Record, RecordBatch},
+    records::RecordBatch,
 };
 
 use super::*;
@@ -39,19 +39,7 @@ const OTHER_BROKER: NodeId = NodeId(3);
 /// A partition backed by a real log under `dir`, registered as led by
 /// `LEADER` with `FOLLOWER` as its one in-sync follower.
 fn led_partition(dir: &Path, topic: &str, partition: i32) -> Arc<Partition> {
-    let partition_dir = crate::log_dir::partition_dir(dir, topic, partition);
-    std::fs::create_dir_all(&partition_dir).expect("partition dir");
-    let log = krabka_log::Log::open(&partition_dir, krabka_log::LogConfig::default())
-        .expect("open partition log");
-    let part = crate::broker::spawn_partition(
-        topic.to_string(),
-        PartitionIndex(partition),
-        dir.to_path_buf(),
-        log,
-        crate::log_dir_status::LogDirRegistry::default(),
-        Arc::new(crate::producer_state::ProducerState::new()),
-        false,
-    );
+    let part = crate::test_support::open_partition(dir, topic, partition);
     part.current_leader.store(LEADER.0, Ordering::Release);
     part
 }
@@ -71,25 +59,8 @@ async fn install_isr(partition: &Partition) {
 /// offset the way a produce does.
 fn append_records(partition: &Partition, count: i32) {
     let mut batch = RecordBatch {
-        base_offset: 0,
         partition_leader_epoch: -1,
-        attributes: Attributes::default(),
-        last_offset_delta: count - 1,
-        base_timestamp: 1_700_000_000,
-        max_timestamp: 1_700_000_000,
-        producer_id: -1,
-        producer_epoch: -1,
-        base_sequence: -1,
-        records: (0..count)
-            .map(|index| Record {
-                attributes: 0,
-                offset_delta: index,
-                timestamp_delta: 0,
-                key: None,
-                value: Some(bytes::Bytes::from_static(b"v")),
-                headers: vec![],
-            })
-            .collect(),
+        ..crate::test_support::repeated_records_batch(count, 1_700_000_000)
     };
     partition
         .log
@@ -142,6 +113,28 @@ async fn sample_replica_lag(partitions: &PartitionRegistry, metrics: &BrokerMetr
     metrics.publish_replica_lag(&replica_lag_samples(partitions, LEADER, &replica_image()).await);
 }
 
+async fn classic_group_poller(
+    dir: &Path,
+    high_watermark: i64,
+    committed: i64,
+) -> (LagPoller, BrokerMetrics) {
+    let metadata: Arc<dyn MetadataSource> = Arc::new(
+        FakeMetadataSource::builder()
+            .image(coordinator_image())
+            .leader(Some(LEADER))
+            .build(),
+    );
+    let partitions = partition_at_high_watermark(dir, high_watermark).await;
+    let coordinator = coordinator(Arc::clone(&metadata));
+    let handle = coordinator.get_or_create_classic("billing");
+    commit_offset(&handle, committed).await;
+    let metrics = BrokerMetrics::new();
+    (
+        poller(coordinator, metadata, partitions, metrics.clone()),
+        metrics,
+    )
+}
+
 /// The published lag of `FOLLOWER` on `TOPIC`-`partition`, or `None` when the
 /// family carries no such series.
 fn published_replica_lag(metrics: &BrokerMetrics, partition: i32) -> Option<i64> {
@@ -190,18 +183,23 @@ async fn a_paused_follower_fetch_makes_the_replica_lag_gauge_climb() {
     check!(metrics.replica_lag_max.get() == 0);
 }
 
+async fn two_follower_lags(dir: &Path) -> PartitionRegistry {
+    let partitions = PartitionRegistry::new();
+    for (index, records) in [(0, 3), (1, 40)] {
+        let partition = led_partition(dir, TOPIC, index);
+        install_isr(&partition).await;
+        append_records(&partition, records);
+        partitions.insert(TOPIC.into(), PartitionIndex(index), partition);
+    }
+    partitions
+}
+
 /// The max rollup is the largest lag across partitions, not the last one
 /// sampled.
 #[tokio::test]
 async fn the_max_rollup_reports_the_worst_follower_on_the_broker() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let partitions = PartitionRegistry::new();
-    for (index, records) in [(0, 3), (1, 40)] {
-        let partition = led_partition(dir.path(), TOPIC, index);
-        install_isr(&partition).await;
-        append_records(&partition, records);
-        partitions.insert(TOPIC.into(), PartitionIndex(index), partition);
-    }
+    let partitions = two_follower_lags(dir.path()).await;
     let metrics = BrokerMetrics::new();
 
     sample_replica_lag(&partitions, &metrics).await;
@@ -273,13 +271,7 @@ async fn an_assigned_follower_that_has_never_fetched_reports_the_whole_log() {
 #[tokio::test]
 async fn evicting_the_worst_follower_lowers_the_max_rollup() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let partitions = PartitionRegistry::new();
-    for (index, records) in [(0, 3), (1, 40)] {
-        let partition = led_partition(dir.path(), TOPIC, index);
-        install_isr(&partition).await;
-        append_records(&partition, records);
-        partitions.insert(TOPIC.into(), PartitionIndex(index), partition);
-    }
+    let partitions = two_follower_lags(dir.path()).await;
     let metrics = BrokerMetrics::new();
     sample_replica_lag(&partitions, &metrics).await;
     assert!(metrics.replica_lag_max.get() == 40);
@@ -557,19 +549,7 @@ fn a_probe_reply_is_read_by_topic_id_and_drops_only_the_failed_rows() {
 #[tokio::test]
 async fn an_uncommitted_partition_gets_no_series() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let metadata: Arc<dyn MetadataSource> = Arc::new(
-        FakeMetadataSource::builder()
-            .image(coordinator_image())
-            .leader(Some(LEADER))
-            .build(),
-    );
-    let partitions = partition_at_high_watermark(dir.path(), 40).await;
-    let coordinator = coordinator(Arc::clone(&metadata));
-    let handle = coordinator.get_or_create_classic("billing");
-    // The sentinel `OffsetFetch` returns for a partition with no commit.
-    commit_offset(&handle, -1).await;
-    let metrics = BrokerMetrics::new();
-    let poller = poller(coordinator, metadata, partitions, metrics.clone());
+    let (poller, metrics) = classic_group_poller(dir.path(), 40, -1).await;
 
     poller.sample().await;
 
@@ -678,19 +658,8 @@ async fn a_group_actor_that_never_answers_yields_no_offsets() {
 #[tokio::test(start_paused = true)]
 async fn the_poller_publishes_on_a_tick_and_releases_everything_on_shutdown() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let metadata: Arc<dyn MetadataSource> = Arc::new(
-        FakeMetadataSource::builder()
-            .image(coordinator_image())
-            .leader(Some(LEADER))
-            .build(),
-    );
-    let partitions = partition_at_high_watermark(dir.path(), 40).await;
-    let coordinator = coordinator(Arc::clone(&metadata));
-    let handle = coordinator.get_or_create_classic("billing");
-    commit_offset(&handle, 7).await;
-    let metrics = BrokerMetrics::new();
+    let (mut poller, metrics) = classic_group_poller(dir.path(), 40, 7).await;
     let shutdown = CancellationToken::new();
-    let mut poller = poller(coordinator, metadata, partitions, metrics.clone());
     poller.shutdown = shutdown.clone();
 
     poller.spawn();

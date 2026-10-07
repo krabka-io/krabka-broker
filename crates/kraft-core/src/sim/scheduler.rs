@@ -14,34 +14,9 @@ use super::{
 use crate::{
     action::Action,
     event::Event,
-    role::Role,
-    types::{Epoch, NodeId, SimInstant},
+    simulation_support::SimulationTimer as SimTimer,
+    types::{Epoch, NodeId},
 };
-
-/// Harness-level timer kinds.
-///
-/// This enum extends the core's `TimerKind`, which holds `Election`, `Fetch`
-/// and `CheckQuorum`, with the leader `Heartbeat`. The core does not model the
-/// heartbeat on a timer.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum SimTimer {
-    Election,
-    Fetch,
-    Heartbeat,
-    CheckQuorum,
-}
-
-fn consider(
-    best: &mut Option<(SimInstant, NodeId, SimTimer)>,
-    deadline: SimInstant,
-    id: NodeId,
-    kind: SimTimer,
-) {
-    match best {
-        Some((bd, _, _)) if *bd <= deadline => {}
-        _ => *best = Some((deadline, id, kind)),
-    }
-}
 
 impl Sim {
     // ---- fingerprint / stability ---------------------------------------------
@@ -50,16 +25,11 @@ impl Sim {
         self.nodes
             .values()
             .map(|n| {
-                let hwm = match n.machine.role() {
-                    Role::Leader { high_watermark, .. } => *high_watermark,
-                    _ => n.high_watermark,
-                };
-                (
+                crate::simulation_support::fingerprint(
                     n.id,
-                    n.machine.role().name(),
-                    n.machine.quorum_state().leader_epoch,
+                    &n.machine,
                     n.log.record_count(),
-                    hwm,
+                    n.high_watermark,
                 )
             })
             .collect()
@@ -96,21 +66,17 @@ impl Sim {
     }
 
     pub(super) fn fire_next_timer(&mut self) -> bool {
-        let mut best: Option<(SimInstant, NodeId, SimTimer)> = None;
-        for node in self.nodes.values() {
-            if let Some(d) = node.election_deadline {
-                consider(&mut best, d, node.id, SimTimer::Election);
-            }
-            if let Some(d) = node.fetch_deadline {
-                consider(&mut best, d, node.id, SimTimer::Fetch);
-            }
-            if let Some(d) = node.heartbeat_deadline {
-                consider(&mut best, d, node.id, SimTimer::Heartbeat);
-            }
-            if let Some(d) = node.check_quorum_deadline {
-                consider(&mut best, d, node.id, SimTimer::CheckQuorum);
-            }
-        }
+        let best = crate::simulation_support::earliest_timer(self.nodes.values().map(|node| {
+            (
+                node.id,
+                [
+                    node.election_deadline,
+                    node.fetch_deadline,
+                    node.heartbeat_deadline,
+                    node.check_quorum_deadline,
+                ],
+            )
+        }));
         let Some((deadline, id, kind)) = best else {
             return false;
         };
@@ -119,12 +85,13 @@ impl Sim {
         }
         {
             let node = self.nodes.get_mut(&id).unwrap();
-            match kind {
-                SimTimer::Election => node.election_deadline = None,
-                SimTimer::Fetch => node.fetch_deadline = None,
-                SimTimer::Heartbeat => node.heartbeat_deadline = None,
-                SimTimer::CheckQuorum => node.check_quorum_deadline = None,
-            }
+            crate::simulation_support::clear_timer(
+                kind,
+                &mut node.election_deadline,
+                &mut node.fetch_deadline,
+                &mut node.heartbeat_deadline,
+                &mut node.check_quorum_deadline,
+            );
         }
         match kind {
             SimTimer::Heartbeat => {
@@ -132,26 +99,22 @@ impl Sim {
                 true
             }
             SimTimer::Fetch => {
-                if let Role::Follower { leader_id, .. }
-                | Role::Observer {
-                    leader_id: Some(leader_id),
-                    ..
-                } = *self.nodes[&id].machine.role()
-                {
-                    let leader_alive = !self.partitioned.contains(&id)
-                        && !self.partitioned.contains(&leader_id)
-                        && self
-                            .nodes
-                            .get(&leader_id)
-                            .is_some_and(|n| n.machine.role().is_leader());
-                    if leader_alive {
-                        let deadline = self
-                            .now
-                            .saturating_add_ms(deadline_millis(election_timeout_of(id)));
-                        self.nodes.get_mut(&id).unwrap().fetch_deadline = Some(deadline);
-                        self.apply_action(id, Action::SendFetch { leader_id });
-                        return true;
-                    }
+                if let Some(leader_id) = crate::simulation_support::reachable_leader(
+                    self.nodes[&id].machine.role(),
+                    id,
+                    &self.partitioned,
+                    |leader| {
+                        self.nodes
+                            .get(&leader)
+                            .is_some_and(|node| node.machine.role().is_leader())
+                    },
+                ) {
+                    let deadline = self
+                        .now
+                        .saturating_add_ms(deadline_millis(election_timeout_of(id)));
+                    self.nodes.get_mut(&id).unwrap().fetch_deadline = Some(deadline);
+                    self.apply_action(id, Action::SendFetch { leader_id });
+                    return true;
                 }
                 self.record(
                     TraceAction::Timeout {
@@ -200,29 +163,13 @@ impl Sim {
 
     pub(super) fn reconcile_timers_for_role(&mut self, id: NodeId) {
         let node = self.nodes.get_mut(&id).unwrap();
-        match node.machine.role() {
-            Role::Leader { .. } => {
-                node.election_deadline = None;
-                node.fetch_deadline = None;
-                if node.heartbeat_deadline.is_none() {
-                    node.heartbeat_deadline =
-                        Some(self.now.saturating_add_ms(deadline_millis(HEARTBEAT)));
-                }
-            }
-            Role::Follower { .. } | Role::Observer { .. } => {
-                node.election_deadline = None;
-                node.heartbeat_deadline = None;
-                node.check_quorum_deadline = None;
-            }
-            Role::Unattached { .. }
-            | Role::Voted { .. }
-            | Role::Prospective { .. }
-            | Role::Candidate { .. }
-            | Role::Resigned => {
-                node.fetch_deadline = None;
-                node.heartbeat_deadline = None;
-                node.check_quorum_deadline = None;
-            }
-        }
+        crate::simulation_support::reconcile_timers(
+            node.machine.role(),
+            &mut node.election_deadline,
+            &mut node.fetch_deadline,
+            &mut node.heartbeat_deadline,
+            &mut node.check_quorum_deadline,
+            self.now.saturating_add_ms(deadline_millis(HEARTBEAT)),
+        );
     }
 }

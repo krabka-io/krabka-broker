@@ -30,9 +30,7 @@ pub(super) fn lemma_identity_window(selected: Seq<usize>) -> bool {
 #[requires(ends.len() <= 5 && 0 <= position && position <= ends.len())]
 #[requires(first == if ends.len() == 5 { 1 } else { 0 })]
 #[requires(selected.len() == ends.len() + 1 - first)]
-#[requires(forall<i: Int, j: Int> 0 <= i && i < j && j < ends.len() ==> ends[i]@ < ends[j]@)]
-#[requires(forall<i: Int> 0 <= i && i < position ==> ends[i]@ < incoming@)]
-#[requires(forall<i: Int> position <= i && i < ends.len() ==> incoming@ < ends[i]@)]
+#[requires(order::insertion_ordered(ends, incoming, position))]
 #[requires(forall<j: Int> 0 <= j && j < selected.len() ==> selected[j]@ ==
     if first + j == position { ends.len() }
     else if first + j > position { first + j - 1 } else { first + j })]

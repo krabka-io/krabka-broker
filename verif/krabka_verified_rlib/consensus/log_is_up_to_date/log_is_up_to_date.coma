@@ -1,10 +1,10 @@
-(* #"/workspace/crates/verified/src/consensus/log_is_up_to_date.rs" 184 0 189 9 *)
+(* #"/workspace/crates/verified/src/consensus/log_is_up_to_date.rs" 185 0 190 9 *)
 
-let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
-let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
-let%span slog_is_up_to_date = "/workspace/crates/verified/src/consensus/log_is_up_to_date.rs" 190 4 190 78
-let%span slog_is_up_to_date'0 = "/workspace/crates/verified/src/consensus/log_is_up_to_date.rs" 190 29 190 78
-let%span slog_is_up_to_date'1 = "/workspace/crates/verified/src/consensus/log_is_up_to_date.rs" 181 10 182 61
+let%span sord = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span sord'0 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span slog_is_up_to_date = "/workspace/crates/verified/src/consensus/log_is_up_to_date.rs" 191 4 191 78
+let%span slog_is_up_to_date'0 = "/workspace/crates/verified/src/consensus/log_is_up_to_date.rs" 191 29 191 78
+let%span slog_is_up_to_date'1 = "/workspace/crates/verified/src/consensus/log_is_up_to_date.rs" 182 10 183 61
 
 use creusot.int.UInt32
 use creusot.int.Int64
@@ -23,7 +23,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let log_is_up_to_date [#"/workspace/crates/verified/src/consensus/log_is_up_to_date.rs" 184 0 189 9]
+let log_is_up_to_date [#"/workspace/crates/verified/src/consensus/log_is_up_to_date.rs" 185 0 190 9]
   (my_epoch: UInt32.t) (my_end: Int64.t) (cand_epoch: UInt32.t) (cand_offset: Int64.t) (return (x: bool)) = (! bb0
   [ bb0 = s0
     [ s0 = [ &_10 <- UInt32.gt cand_epoch my_epoch ] s1

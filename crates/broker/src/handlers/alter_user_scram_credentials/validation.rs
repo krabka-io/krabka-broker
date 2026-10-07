@@ -171,13 +171,7 @@ mod tests {
 
     use assert2::assert;
     use krabka_metadata::{MetadataRecord, ScramCredentialRecord};
-    use krabka_protocol::{
-        UnknownTaggedFields,
-        owned::{
-            alter_user_scram_credentials_request::AlterUserScramCredentialsRequest,
-            alter_user_scram_credentials_response::AlterUserScramCredentialsResponse,
-        },
-    };
+    use krabka_protocol::owned::alter_user_scram_credentials_request::AlterUserScramCredentialsRequest;
 
     use super::*;
     use crate::{
@@ -371,61 +365,37 @@ mod tests {
 
     #[tokio::test]
     async fn handle_empty_deletion_username_is_unacceptable_credential() {
-        let (broker_handle, _dir) =
-            start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
-        let broker = broker_handle.broker_arc_for_test();
-        crate::test_support::wait_for_controller_leader(&broker).await;
-        test_ctx!(ctx, "admin");
-        let req = AlterUserScramCredentialsRequest {
+        check_empty_username(AlterUserScramCredentialsRequest {
             deletions: vec![deletion("")],
             ..Default::default()
-        };
-
-        let resp = answer(&broker, req, &ctx).await;
-
-        let expected = AlterUserScramCredentialsResponse {
-            throttle_time_ms: 0,
-            results: vec![expected_result(
-                "",
-                KAFKA_UNACCEPTABLE_CREDENTIAL,
-                Some("Username must not be empty"),
-            )],
-            unknown_tagged_fields: UnknownTaggedFields(Vec::new()),
-        };
-        assert!(resp == expected);
-        assert!(
-            broker
-                .controller
-                .current_image()
-                .scram_credential("", SaslMechanism::ScramSha256)
-                .is_none()
-        );
-        broker_handle.shutdown().await;
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn handle_empty_upsertion_username_is_unacceptable_credential() {
+        check_empty_username(AlterUserScramCredentialsRequest {
+            upsertions: vec![valid_upsertion("")],
+            ..Default::default()
+        })
+        .await;
+    }
+
+    async fn check_empty_username(req: AlterUserScramCredentialsRequest) {
         let (broker_handle, _dir) =
             start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
         let broker = broker_handle.broker_arc_for_test();
         crate::test_support::wait_for_controller_leader(&broker).await;
         test_ctx!(ctx, "admin");
-        let req = AlterUserScramCredentialsRequest {
-            upsertions: vec![valid_upsertion("")],
-            ..Default::default()
-        };
-
         let resp = answer(&broker, req, &ctx).await;
-
-        let expected = AlterUserScramCredentialsResponse {
-            throttle_time_ms: 0,
-            results: vec![expected_result(
-                "",
-                KAFKA_UNACCEPTABLE_CREDENTIAL,
-                Some("Username must not be empty"),
-            )],
-            unknown_tagged_fields: UnknownTaggedFields(Vec::new()),
-        };
+        let expected =
+            crate::handlers::alter_user_scram_credentials::test_support::expected_response(vec![
+                expected_result(
+                    "",
+                    KAFKA_UNACCEPTABLE_CREDENTIAL,
+                    Some("Username must not be empty"),
+                ),
+            ]);
         assert!(resp == expected);
         assert!(
             broker

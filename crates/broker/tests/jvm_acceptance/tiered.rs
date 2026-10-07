@@ -34,22 +34,12 @@ pub(crate) fn start_host_broker_with_minio_tier(
         krabka_broker::BrokerConfig,
     ),
 > {
-    let _ = tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("krabka_broker=debug,info")),
-        )
-        .with_test_writer()
-        .try_init();
+    crate::support::init_jvm_tracing("krabka_broker=debug,info");
     let dir = tempfile::tempdir().expect("tempdir");
     let listen_addr: std::net::SocketAddr = broker0_listen().parse().expect("static addr");
     let controller_addr: std::net::SocketAddr =
         controller_addr_0().parse().expect("allocated addr");
     let config = BrokerConfig {
-        broker_id: 1,
-        listen_addr,
-        advertised_listener: broker0_advertised().into(),
-        log_dir: dir.path().to_path_buf(),
         // The tiered topics these suites create override no segment size —
         // no old JVM `TopicCommand` can name a sub-1-MiB one — so they
         // inherit this broker default. See `TIERED_SEGMENT_SIZE`.
@@ -57,21 +47,19 @@ pub(crate) fn start_host_broker_with_minio_tier(
             segment_size: TIERED_SEGMENT_SIZE,
             ..LogConfig::default()
         },
-        node_id: krabka_broker::NodeId(1),
-        controller_listen_addr: controller_addr,
-        controller_quorum_voters: vec![(krabka_broker::NodeId(1), controller_addr.to_string())],
-        heartbeat_interval: krabka_units::millis(3_000),
-        heartbeat_timeout: krabka_units::millis(9_000),
-        replica_lag_time_max: krabka_units::millis(30_000),
-        controller_election_timeout: krabka_units::secs(5),
-        controller_heartbeat_interval: krabka_units::millis(500),
-        bootstrap_mode: krabka_broker::BootstrapMode::Bootstrap,
         remote_storage_backend: Some(krabka_broker::RemoteStorageBackend::S3(s3)),
         // 1s tick so the producer's sealed segments reach S3 (and the
         // local-retention pass evicts them) within the test's wall clock.
         remote_log_manager_interval: krabka_units::secs(1),
         remote_log_metadata: rlmm,
-        ..BrokerConfig::default().with_internal_topics_for(1)
+        ..crate::support::jvm_broker_config(
+            1,
+            listen_addr,
+            controller_addr,
+            broker0_advertised(),
+            dir.path().to_path_buf(),
+            &[(1, controller_addr)],
+        )
     };
     Box::pin(async move {
         let handle = Broker::start(config.clone()).await.expect("start broker");

@@ -283,25 +283,9 @@ async fn txn_offset_commit_runs_the_existence_check_after_the_topic_read_gate() 
             topics: case.topics.clone(),
             ..Default::default()
         };
-        let bytes = dispatch_context(
-            &broker,
-            txn_offset_commit_request::API_KEY,
-            version,
-            &encode_request(&request, version),
-            &ctx,
-        )
-        .await;
-        let response: TxnOffsetCommitResponse = decode_response(&bytes, version);
+        let response = commit_response(&broker, request, version, &ctx).await;
 
-        let got: Vec<(String, i32, i16)> = response
-            .topics
-            .iter()
-            .flat_map(|t| {
-                t.partitions
-                    .iter()
-                    .map(|p| (t.name.clone(), p.partition_index, p.error_code))
-            })
-            .collect();
+        let got = response_rows(&response);
         let expected: Vec<(String, i32, i16)> = case
             .expected
             .iter()
@@ -358,25 +342,9 @@ async fn unknown_rows_survive_a_group_fencing_failure() {
         topics: vec![topic("a", &[0]), topic("missing", &[0])],
         ..Default::default()
     };
-    let bytes = dispatch_context(
-        &broker,
-        txn_offset_commit_request::API_KEY,
-        version,
-        &encode_request(&request, version),
-        &ctx,
-    )
-    .await;
-    let response: TxnOffsetCommitResponse = decode_response(&bytes, version);
+    let response = commit_response(&broker, request, version, &ctx).await;
 
-    let got: Vec<(String, i32, i16)> = response
-        .topics
-        .iter()
-        .flat_map(|t| {
-            t.partitions
-                .iter()
-                .map(|p| (t.name.clone(), p.partition_index, p.error_code))
-        })
-        .collect();
+    let got = response_rows(&response);
     let expected = vec![
         ("missing".to_string(), 0, codes::UNKNOWN_TOPIC_OR_PARTITION),
         ("a".to_string(), 0, codes::ILLEGAL_GENERATION),
@@ -1117,4 +1085,37 @@ async fn a_v5_commit_records_the_topic_id_only_under_unstable_api_versions() {
 
         handle.shutdown().await;
     }
+}
+
+async fn commit_response(
+    broker: &crate::broker::Broker,
+    request: TxnOffsetCommitRequest,
+    version: i16,
+    context: &crate::handlers::RequestContext<'_>,
+) -> TxnOffsetCommitResponse {
+    let bytes = dispatch_context(
+        broker,
+        txn_offset_commit_request::API_KEY,
+        version,
+        &encode_request(&request, version),
+        context,
+    )
+    .await;
+    decode_response(&bytes, version)
+}
+
+fn response_rows(response: &TxnOffsetCommitResponse) -> Vec<(String, i32, i16)> {
+    response
+        .topics
+        .iter()
+        .flat_map(|topic| {
+            topic.partitions.iter().map(|partition| {
+                (
+                    topic.name.clone(),
+                    partition.partition_index,
+                    partition.error_code,
+                )
+            })
+        })
+        .collect()
 }

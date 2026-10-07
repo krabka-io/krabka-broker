@@ -19,13 +19,14 @@ use assert2::check;
 use krabka_ids::Offset;
 use krabka_metadata::{
     BreakGlassAction, BreakGlassProposalRecord, BrokerConfigRecord, BrokerRegistrationRecord,
-    FeatureLevelRecord, LeaderEpoch, MetadataImage, MetadataRecord, NodeId,
-    PartitionOffsetAdvanceRecord, PartitionRecord, PatternType, TopicConfigRecord,
-    TopicFreezeRecord, TopicRecord,
+    FeatureLevelRecord, MetadataImage, MetadataRecord, NodeId, PartitionOffsetAdvanceRecord,
+    PatternType, TopicConfigRecord, TopicFreezeRecord,
 };
 use krabka_protocol::records::{Record, RecordBatch};
 use krabka_raft::{kraft::KraftLog, serialize_metadata_snapshot};
 use uuid::Uuid;
+
+krabka_macros::snapshot_topic_fixture!(append_snapshot_topic);
 
 /// The create-time stamped on the metadata batch the snapshot below contains:
 /// a 2023 instant, so a header that still carried the KIP-630 default would
@@ -82,26 +83,7 @@ fn jvm_dump_log_parses_engine_snapshot() {
         config_value: Some("1048576".into()),
     }));
     // Topic (apiKey 2) + Partition (apiKey 3) ×2.
-    image.apply(&MetadataRecord::V1Topic(TopicRecord {
-        name: "orders".into(),
-        topic_id: Uuid::new_v4(),
-        partitions: 2,
-        replication_factor: 1,
-    }));
-    for p in 0..2 {
-        image.apply(&MetadataRecord::V1Partition(PartitionRecord {
-            topic: "orders".into(),
-            partition: p,
-            leader: NodeId(1),
-            replicas: vec![NodeId(1)],
-            isr: vec![NodeId(1)],
-            leader_epoch: LeaderEpoch(0),
-            adding_replicas: vec![],
-            removing_replicas: vec![],
-            directories: vec![],
-            partition_epoch: 0,
-        }));
-    }
+    append_snapshot_topic(&mut image);
     // Config (apiKey 4), topic scope.
     image.apply(&MetadataRecord::V1TopicConfig(TopicConfigRecord {
         topic: "orders".into(),

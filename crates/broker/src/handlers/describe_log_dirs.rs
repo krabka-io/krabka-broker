@@ -91,55 +91,49 @@ pub(crate) async fn handle(
         }
         // Group the partitions physically present in this dir by topic.
         let mut by_topic: BTreeMap<String, Vec<DescribeLogDirsPartition>> = BTreeMap::new();
-        let discovered = log_dir::scan(dir).unwrap_or_default();
-        for (topic, partition) in discovered {
-            if !filter.allows(&topic, partition) {
-                continue;
-            }
-            let part_dir = log_dir::partition_dir(dir, &topic, partition);
-            let size = sum_log_segments(&part_dir).unwrap_or(0);
-            let offset_lag = offset_lag_for(&partitions, &topic, partition).await;
-            by_topic
-                .entry(topic)
-                .or_default()
-                .push(DescribeLogDirsPartition {
-                    partition_index: partition,
-                    partition_size: i64::try_from(size).unwrap_or(i64::MAX),
-                    offset_lag,
-                    is_future_key: false,
-                    ..Default::default()
-                });
-        }
-
         // KIP-113: surface in-progress future logs (one per
         // `<topic>-<partition>-future` subdir) with
         // `is_future_key = true`. `offset_lag` is the gap between
         // the future log and the source log; while the move is
         // running this shrinks toward zero, then the directory
         // rename turns the entry into a regular current log.
-        let future_discovered = log_dir::scan_future(dir).unwrap_or_default();
-        for (topic, partition) in future_discovered {
-            if !filter.allows(&topic, partition) {
-                continue;
+        for is_future_key in [false, true] {
+            let discovered = if is_future_key {
+                log_dir::scan_future(dir)
+            } else {
+                log_dir::scan(dir)
+            };
+            for (topic, partition) in discovered.unwrap_or_default() {
+                if !filter.allows(&topic, partition) {
+                    continue;
+                }
+                let part_dir = if is_future_key {
+                    log_dir::future_partition_dir(dir, &topic, partition)
+                } else {
+                    log_dir::partition_dir(dir, &topic, partition)
+                };
+                let size = sum_log_segments(&part_dir).unwrap_or(0);
+                let offset_lag = if is_future_key {
+                    future_offset_lag(
+                        &partitions,
+                        &future_logs,
+                        &topic,
+                        krabka_ids::PartitionIndex(partition),
+                    )
+                } else {
+                    offset_lag_for(&partitions, &topic, partition).await
+                };
+                by_topic
+                    .entry(topic)
+                    .or_default()
+                    .push(DescribeLogDirsPartition {
+                        partition_index: partition,
+                        partition_size: i64::try_from(size).unwrap_or(i64::MAX),
+                        offset_lag,
+                        is_future_key,
+                        ..Default::default()
+                    });
             }
-            let future_path = log_dir::future_partition_dir(dir, &topic, partition);
-            let size = sum_log_segments(&future_path).unwrap_or(0);
-            let offset_lag = future_offset_lag(
-                &partitions,
-                &future_logs,
-                &topic,
-                krabka_ids::PartitionIndex(partition),
-            );
-            by_topic
-                .entry(topic)
-                .or_default()
-                .push(DescribeLogDirsPartition {
-                    partition_index: partition,
-                    partition_size: i64::try_from(size).unwrap_or(i64::MAX),
-                    offset_lag,
-                    is_future_key: true,
-                    ..Default::default()
-                });
         }
 
         let topics = by_topic

@@ -15,6 +15,8 @@
 
 mod kafka_wire;
 
+mod support;
+
 use std::{io, net::SocketAddr};
 
 use assert2::{assert, check};
@@ -30,15 +32,12 @@ use krabka_protocol::{
         assign_replicas_to_dirs_response::AssignReplicasToDirsResponse,
         broker_heartbeat_request::BrokerHeartbeatRequest,
         broker_heartbeat_response::BrokerHeartbeatResponse,
-        create_topics_request::{CreatableTopic, CreateTopicsRequest},
-        create_topics_response::CreateTopicsResponse,
         produce_request::{PartitionProduceData, ProduceRequest, TopicProduceData},
         produce_response::ProduceResponse,
     },
     primitives::uuid::Uuid as ProtocolUuid,
     records::{Record, RecordBatch},
 };
-use tempfile::TempDir;
 use tokio::net::TcpStream;
 
 const CLIENT_ID: &str = "krabka-jbod-disk-failure-test";
@@ -56,38 +55,9 @@ async fn round_trip(
     kafka_wire::round_trip(stream, api_key, api_version, 1, CLIENT_ID, true, body).await
 }
 
-fn start_two_dir_broker()
--> impl std::future::Future<Output = (BrokerHandle, TempDir, TempDir, SocketAddr)> {
-    let primary = tempfile::tempdir().unwrap();
-    let extra = tempfile::tempdir().unwrap();
-    let mut cfg = BrokerConfig::for_tests(primary.path().to_path_buf());
-    cfg.extra_log_dirs = vec![extra.path().to_path_buf()];
-    Box::pin(async move {
-        let handle = Broker::start(cfg).await.expect("broker start");
-        let addr = handle.listen_addr();
-        (handle, primary, extra, addr)
-    })
-}
-
 async fn create_topic(addr: SocketAddr, topic: &str, partitions: i32) {
-    const VERSION: i16 = 7;
-    let req = CreateTopicsRequest {
-        topics: vec![CreatableTopic {
-            name: topic.to_string(),
-            num_partitions: partitions,
-            replication_factor: 1,
-            ..Default::default()
-        }],
-        timeout_ms: 5_000,
-        ..Default::default()
-    };
-    let mut stream = TcpStream::connect(addr).await.unwrap();
-    let mut body = BytesMut::new();
-    req.encode(&mut body, VERSION).unwrap();
-    let resp_bytes = round_trip(&mut stream, 19, VERSION, &body).await.unwrap();
-    let mut cur: &[u8] = &resp_bytes;
-    let resp = CreateTopicsResponse::decode(&mut cur, VERSION).unwrap();
-    assert!(resp.topics[0].error_code == 0, "CreateTopics must succeed");
+    kafka_wire::create_topic_plaintext(addr, CLIENT_ID, kafka_wire::topic(topic, partitions, 1))
+        .await;
 }
 
 async fn wait_all_partitions(handle: &BrokerHandle, topic: &str, n: i32) {
@@ -353,7 +323,6 @@ async fn assign_replicas_to_dirs_reports_and_echoes() {
 #[tokio::test]
 async fn heartbeat_with_offline_log_dirs_is_accepted() {
     use krabka_protocol::owned::broker_heartbeat_request::MAX_VERSION as HB_MAX_VERSION;
-
     let primary = tempfile::tempdir().unwrap();
     let cfg = BrokerConfig::for_tests(primary.path().to_path_buf());
     let handle = Broker::start(cfg).await.expect("broker start");
@@ -401,3 +370,5 @@ async fn heartbeat_with_offline_log_dirs_is_accepted() {
 
     handle.shutdown().await;
 }
+
+pub use crate::support::storage::start_two_dir_broker;

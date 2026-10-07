@@ -8,7 +8,6 @@
 //! follower that appends verbatim keep the same batches.
 
 use bytes::Bytes;
-use krabka_ids::LeaderEpoch;
 use krabka_protocol::records::{Attributes, Record, RecordBatch};
 use krabka_units::prelude::{Time, mebibytes};
 use tempfile::tempdir;
@@ -17,69 +16,12 @@ use super::*;
 use crate::{
     CleanupPolicy,
     config::LogConfig,
-    log::test_support::{commit_marker, compaction_ctx, tiny_segments, verbatim_from},
+    log::test_support::{
+        AppendPath as Path, append_path as append, commit_marker, compaction_ctx, tiny_segments,
+    },
 };
 
-/// The path a batch takes into the log.
-#[derive(Debug, Clone, Copy)]
-enum Path {
-    /// `Log::append`, as a leader appends a client batch.
-    Leader,
-    /// `Log::append_at`, as a follower appends a decoded replicated batch.
-    Follower,
-    /// `Log::append_verbatim_at` for a data batch and `Log::append_at` for a
-    /// control batch, as a follower appends a passthrough fetch.
-    Verbatim,
-}
-
-/// One batch of the log after compaction. The compared fields are the ones
-/// that carry the state of a producer, and the records.
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct Kept {
-    base_offset: i64,
-    last_offset: i64,
-    producer_id: i64,
-    producer_epoch: i16,
-    base_sequence: i32,
-    control: bool,
-    records: Vec<(Option<Bytes>, Option<Bytes>)>,
-}
-
-impl Kept {
-    fn of(batch: &RecordBatch) -> Self {
-        Self {
-            base_offset: batch.base_offset,
-            last_offset: batch.base_offset + i64::from(batch.last_offset_delta),
-            producer_id: batch.producer_id,
-            producer_epoch: batch.producer_epoch,
-            base_sequence: batch.base_sequence,
-            control: batch.attributes.is_control_batch(),
-            records: batch
-                .records
-                .iter()
-                .map(|record| (record.key.clone(), record.value.clone()))
-                .collect(),
-        }
-    }
-
-    /// The one-record `batch` at `offset` with its record.
-    fn whole(offset: i64, batch: &RecordBatch) -> Self {
-        Self {
-            base_offset: offset,
-            last_offset: offset,
-            ..Self::of(batch)
-        }
-    }
-
-    /// The one-record `batch` at `offset` with no records: the bare header
-    /// that Kafka's `RETAIN_EMPTY` writes.
-    fn header(offset: i64, batch: &RecordBatch) -> Self {
-        Self {
-            records: Vec::new(),
-            ..Self::whole(offset, batch)
-        }
-    }
-}
+krabka_macros::compacted_batch!(Kept);
 
 /// A one-record data batch of `key` and `value`. `producer` is `(id, epoch,
 /// base_sequence)`, or `None` for a client with no idempotence.
@@ -100,21 +42,6 @@ fn record(
             ..Record::default()
         }],
         ..RecordBatch::default()
-    }
-}
-
-fn append(log: &mut Log, path: Path, mut batch: RecordBatch) {
-    let log_end = log.log_end_offset();
-    match path {
-        Path::Leader => {
-            log.append(&mut batch).unwrap();
-        }
-        Path::Verbatim if !batch.attributes.is_control_batch() => {
-            batch.base_offset = log_end.0;
-            let (_wire, verbatim) = verbatim_from(&batch, LeaderEpoch(0));
-            log.append_verbatim_at(&verbatim, log_end).unwrap();
-        }
-        Path::Follower | Path::Verbatim => log.append_at(&mut batch, log_end).unwrap(),
     }
 }
 

@@ -11,7 +11,7 @@ use krabka_protocol::{
     owned::{
         list_offsets_request::{ListOffsetsPartition, ListOffsetsRequest, ListOffsetsTopic},
         list_offsets_response::{
-            ListOffsetsPartitionResponse, ListOffsetsResponse, ListOffsetsTopicResponse,
+            self, ListOffsetsPartitionResponse, ListOffsetsResponse, ListOffsetsTopicResponse,
         },
     },
 };
@@ -19,10 +19,11 @@ use krabka_protocol::{
 use super::{
     handle,
     sentinels::{EARLIEST_TIMESTAMP, LATEST_TIMESTAMP},
-    test_support::{decode_response, encode_request, test_context},
+    test_support::{decode_response, encode_request},
 };
 use crate::{
     codes,
+    handlers::list_offsets::test_support::test_context,
     test_support::{
         DenyAll, peer, start_broker_with_authorizer_no_audit as start_broker, test_ctx,
     },
@@ -31,7 +32,7 @@ use crate::{
 #[test]
 fn topic_describe_denied_yields_topic_authorization_failed_rows() {
     use krabka_protocol::owned::list_offsets_response::{
-        self, ListOffsetsPartitionResponse, ListOffsetsResponse, ListOffsetsTopicResponse,
+        ListOffsetsPartitionResponse, ListOffsetsResponse, ListOffsetsTopicResponse,
     };
 
     let authorizer = crate::authorizer::SimpleAclAuthorizer::new(std::collections::HashSet::new());
@@ -141,22 +142,7 @@ async fn denied_handler_preserves_topic_and_partition_response_fields() {
 /// Authorizer that denies `Describe` on a fixed set of topic names and
 /// allows everything else. Drives the mixed authorized/denied scenarios
 /// below without needing real ACL records in the metadata image.
-#[derive(Debug)]
-struct DenyNamed(std::collections::HashSet<&'static str>);
-
-impl crate::authorizer::Authorizer for DenyNamed {
-    fn authorize(
-        &self,
-        _source: &dyn krabka_authz::AclSource,
-        req: &crate::authorizer::AuthorizationRequest<'_>,
-    ) -> crate::authorizer::AuthorizationResult {
-        if self.0.contains(req.resource_name) {
-            crate::authorizer::AuthorizationResult::Deny
-        } else {
-            crate::authorizer::AuthorizationResult::Allow
-        }
-    }
-}
+use crate::handlers::list_offsets::test_support::DenyNamed;
 
 /// Kafka's `handleListOffsetRequest` splits topics into authorized and
 /// unauthorized up front, processes only the authorized ones, and appends

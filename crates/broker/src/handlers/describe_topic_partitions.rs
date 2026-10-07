@@ -912,25 +912,7 @@ mod tests {
             start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
         seed_topic_with_elr(&broker_handle, "0:2:3").await;
         let broker = broker_handle.broker_arc_for_test();
-        test_ctx!(ctx, "admin");
-        let req = DescribeTopicPartitionsRequest {
-            topics: vec![
-                krabka_protocol::owned::describe_topic_partitions_request::TopicRequest {
-                    name: "orders".into(),
-                    ..Default::default()
-                },
-            ],
-            response_partition_limit: 2000,
-            ..Default::default()
-        };
-
-        let resp = handle(&broker, req, VERSION, &ctx).await.expect("handle");
-
-        let topic = resp
-            .topics
-            .iter()
-            .find(|t| t.name.as_deref() == Some("orders"))
-            .expect("orders topic row");
+        let topic = orders_topic(&broker).await;
         let row = |index: i32| DescribeTopicPartitionsResponsePartition {
             error_code: codes::NONE,
             partition_index: index,
@@ -957,6 +939,20 @@ mod tests {
             start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
         seed_topic_with_epoch(&broker_handle, 9).await;
         let broker = broker_handle.broker_arc_for_test();
+        let topic = orders_topic(&broker).await;
+        let part = topic
+            .partitions
+            .iter()
+            .find(|p| p.partition_index == 0)
+            .expect("partition 0 row");
+        assert!(
+            part.leader_epoch == 9,
+            "response must echo the image leader_epoch (9), got {}",
+            part.leader_epoch
+        );
+        broker_handle.shutdown().await;
+    }
+    async fn orders_topic(broker: &Broker) -> DescribeTopicPartitionsResponseTopic {
         test_ctx!(ctx, "admin");
         let req = DescribeTopicPartitionsRequest {
             topics: vec![
@@ -969,23 +965,11 @@ mod tests {
             ..Default::default()
         };
 
-        let resp = handle(&broker, req, VERSION, &ctx).await.expect("handle");
+        let resp = handle(broker, req, VERSION, &ctx).await.expect("handle");
 
-        let topic = resp
-            .topics
-            .iter()
+        resp.topics
+            .into_iter()
             .find(|t| t.name.as_deref() == Some("orders"))
-            .expect("orders topic row");
-        let part = topic
-            .partitions
-            .iter()
-            .find(|p| p.partition_index == 0)
-            .expect("partition 0 row");
-        assert!(
-            part.leader_epoch == 9,
-            "response must echo the image leader_epoch (9), got {}",
-            part.leader_epoch
-        );
-        broker_handle.shutdown().await;
+            .expect("orders topic row")
     }
 }

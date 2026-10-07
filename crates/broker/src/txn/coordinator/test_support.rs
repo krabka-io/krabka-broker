@@ -7,7 +7,7 @@
 use std::{path::Path, sync::Arc};
 
 use krabka_ids::PartitionIndex;
-use krabka_log::{Log, LogConfig, ProducerId};
+use krabka_log::ProducerId;
 use krabka_metadata::{MetadataImage, MetadataRecord, NodeId, PartitionRecord, TopicRecord};
 
 use super::TxnCoordinator;
@@ -20,20 +20,6 @@ use crate::{
 /// The topic of the data partition [`live_coordinator`] hosts.
 pub(super) const DATA_TOPIC: &str = "orders";
 
-fn open_partition(dir: &Path, topic: &str) -> Arc<Partition> {
-    let part_dir = crate::log_dir::partition_dir(dir, topic, 0);
-    std::fs::create_dir_all(&part_dir).expect("create partition dir");
-    crate::broker::spawn_partition(
-        topic.to_owned(),
-        PartitionIndex(0),
-        dir.to_path_buf(),
-        Log::open(&part_dir, LogConfig::default()).expect("open log"),
-        crate::log_dir_status::LogDirRegistry::default(),
-        Arc::new(crate::producer_state::ProducerState::new()),
-        false,
-    )
-}
-
 /// A coordinator that leads its one `__transaction_state` partition and hosts
 /// the data partition `orders-0`, both as real logs under `dir`, so a marker
 /// fan-out and an append succeed. It returns the data partition too, for a test
@@ -43,9 +29,9 @@ pub(super) async fn live_coordinator(dir: &Path) -> (Arc<TxnCoordinator>, Arc<Pa
     partitions.insert(
         bootstrap::TOPIC.into(),
         PartitionIndex(0),
-        open_partition(dir, bootstrap::TOPIC),
+        crate::test_support::open_partition(dir, bootstrap::TOPIC, 0),
     );
-    let data = open_partition(dir, DATA_TOPIC);
+    let data = crate::test_support::open_partition(dir, DATA_TOPIC, 0);
     // The metadata reconcile installs this broker, node 1, as the leader, so
     // the partition takes markers.
     data.install_leader_change(1, 0).await;

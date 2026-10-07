@@ -1,13 +1,13 @@
 (* #"/workspace/crates/verified/src/composition/covered_retention.rs" 73 0 78 21 *)
 
-let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
-let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
-let%span swell_founded = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/well_founded.rs" 43 8 43 33
-let%span sslice = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 331 18 331 22
-let%span svec = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 104 18 104 36
-let%span svec'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 18 14 18 41
-let%span svec'1 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 118 18 118 48
-let%span svec'2 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 202 18 202 34
+let%span sord = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span sord'0 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span swell_founded = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/well_founded.rs" 43 8 43 33
+let%span sslice = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 331 18 331 22
+let%span svec = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 104 18 104 36
+let%span svec'0 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 18 14 18 41
+let%span svec'1 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 118 18 118 48
+let%span svec'2 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 202 18 202 34
 let%span scovered_retention = "/workspace/crates/verified/src/composition/covered_retention.rs" 79 23 79 34
 let%span scovered_retention'0 = "/workspace/crates/verified/src/composition/covered_retention.rs" 81 19 81 20
 let%span scovered_retention'1 = "/workspace/crates/verified/src/composition/covered_retention.rs" 81 13 81 21
@@ -80,7 +80,7 @@ let%span slocal_bytes'0 = "/workspace/crates/verified/src/retention/local_bytes.
 let%span slocal_bytes'1 = "/workspace/crates/verified/src/retention/local_bytes.rs" 25 10 26 81
 let%span slocal_bytes'2 = "/workspace/crates/verified/src/retention/local_bytes.rs" 10 10 10 15
 let%span slocal_bytes'3 = "/workspace/crates/verified/src/retention/local_bytes.rs" 13 8 15 9
-let%span sdelete_target = "/workspace/crates/verified/src/retention/delete_target.rs" 58 10 62 1
+let%span sdelete_target = "/workspace/crates/verified/src/retention/delete_target.rs" 78 10 82 1
 
 use creusot.slice.Slice64
 use creusot.int.Int64

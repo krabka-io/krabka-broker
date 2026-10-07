@@ -7,76 +7,50 @@
 
 use creusot_std::prelude::*;
 
-/// The byte position to start reading at for `target`.
-///
-/// This is the position field of the largest entry with
-/// `relative_offset <= target`, or 0 if no such entry exists. `entries` must be
-/// strictly sorted by relative offset, which the construction of `OffsetIndex`
-/// guarantees.
-#[requires(forall<i: Int, j: Int> 0 <= i && i < j && j < entries@.len()
-    ==> entries@[i].0@ < entries@[j].0@)]
-#[ensures((exists<i: Int> 0 <= i && i < entries@.len() && entries@[i].0@ <= target@)
-    ==> exists<i: Int> 0 <= i && i < entries@.len()
-        && entries@[i].0@ <= target@
-        && result@ == entries@[i].1@
-        && (forall<j: Int> i < j && j < entries@.len() ==> entries@[j].0@ > target@))]
-#[ensures((forall<i: Int> 0 <= i && i < entries@.len() ==> entries@[i].0@ > target@)
-    ==> result@ == 0)]
-#[must_use]
-pub fn offset_index_lookup(entries: &[(u32, u32)], target: u32) -> u32 {
-    let mut lo = 0usize; // entries[..lo] all have rel <= target
-    let mut hi = entries.len(); // entries[hi..] all have rel > target
-    #[invariant(lo@ <= hi@ && hi@ <= entries@.len())]
-    #[invariant(forall<i: Int> 0 <= i && i < lo@ ==> entries@[i].0@ <= target@)]
-    #[invariant(forall<i: Int> hi@ <= i && i < entries@.len() ==> entries@[i].0@ > target@)]
-    #[variant(hi - lo)]
-    while lo < hi {
-        let mid = lo + (hi - lo) / 2;
-        if entries[mid].0 <= target {
-            lo = mid + 1;
-        } else {
-            hi = mid;
+macro_rules! floor_lookup {
+    ($(#[$doc:meta])* $name:ident, $key:ty, $order:tt) => {
+        $(#[$doc])*
+        #[requires(forall<i: Int, j: Int> 0 <= i && i < j && j < entries@.len()
+            ==> entries@[i].0@ $order entries@[j].0@)]
+        #[ensures((exists<i: Int> 0 <= i && i < entries@.len() && entries@[i].0@ <= target@)
+            ==> exists<i: Int> 0 <= i && i < entries@.len()
+                && entries@[i].0@ <= target@ && result@ == entries@[i].1@
+                && (forall<j: Int> i < j && j < entries@.len() ==> entries@[j].0@ > target@))]
+        #[ensures((forall<i: Int> 0 <= i && i < entries@.len() ==> entries@[i].0@ > target@) ==> result@ == 0)]
+        #[must_use]
+        pub fn $name(entries: &[($key, u32)], target: $key) -> u32 {
+            let mut lo = 0usize;
+            let mut hi = entries.len();
+            #[invariant(lo@ <= hi@ && hi@ <= entries@.len())]
+            #[invariant(forall<i: Int> 0 <= i && i < lo@ ==> entries@[i].0@ <= target@)]
+            #[invariant(forall<i: Int> hi@ <= i && i < entries@.len() ==> entries@[i].0@ > target@)]
+            #[variant(hi - lo)]
+            while lo < hi {
+                let mid = lo + (hi - lo) / 2;
+                if entries[mid].0 <= target { lo = mid + 1; } else { hi = mid; }
+            }
+            if lo == 0 { 0 } else { entries[lo - 1].1 }
         }
-    }
-    if lo == 0 { 0 } else { entries[lo - 1].1 }
+    };
 }
 
-/// The relative offset to start reading at for `target_timestamp`.
-///
-/// This is the offset field of the last entry with
-/// `timestamp <= target_timestamp`, or 0 if no such entry exists. `entries`
-/// must be sorted by timestamp; equal timestamps are allowed.
-#[requires(forall<i: Int, j: Int> 0 <= i && i < j && j < entries@.len()
-    ==> entries@[i].0@ <= entries@[j].0@)]
-#[ensures((exists<i: Int> 0 <= i && i < entries@.len()
-        && entries@[i].0@ <= target_timestamp@)
-    ==> exists<i: Int> 0 <= i && i < entries@.len()
-        && entries@[i].0@ <= target_timestamp@
-        && result@ == entries@[i].1@
-        && (forall<j: Int> i < j && j < entries@.len()
-            ==> entries@[j].0@ > target_timestamp@))]
-#[ensures((forall<i: Int> 0 <= i && i < entries@.len()
-        ==> entries@[i].0@ > target_timestamp@)
-    ==> result@ == 0)]
-#[must_use]
-pub fn time_index_lookup(entries: &[(i64, u32)], target_timestamp: i64) -> u32 {
-    let mut lo = 0usize; // entries[..lo] all have timestamp <= target
-    let mut hi = entries.len(); // entries[hi..] all have timestamp > target
-    #[invariant(lo@ <= hi@ && hi@ <= entries@.len())]
-    #[invariant(forall<i: Int> 0 <= i && i < lo@
-        ==> entries@[i].0@ <= target_timestamp@)]
-    #[invariant(forall<i: Int> hi@ <= i && i < entries@.len()
-        ==> entries@[i].0@ > target_timestamp@)]
-    #[variant(hi - lo)]
-    while lo < hi {
-        let mid = lo + (hi - lo) / 2;
-        if entries[mid].0 <= target_timestamp {
-            lo = mid + 1;
-        } else {
-            hi = mid;
-        }
-    }
-    if lo == 0 { 0 } else { entries[lo - 1].1 }
+floor_lookup! {
+#[doc = "The byte position to start reading at for `target`."]
+#[doc = ""]
+#[doc = "This is the position field of the largest entry with"]
+#[doc = "`relative_offset <= target`, or 0 if no such entry exists. `entries` must be"]
+#[doc = "strictly sorted by relative offset, which the construction of `OffsetIndex`"]
+#[doc = "guarantees."]
+offset_index_lookup, u32, <
+}
+
+floor_lookup! {
+#[doc = "The relative offset to start reading at for `target_timestamp`."]
+#[doc = ""]
+#[doc = "This is the offset field of the last entry with"]
+#[doc = "`timestamp <= target_timestamp`, or 0 if no such entry exists. `entries`"]
+#[doc = "must be sorted by timestamp; equal timestamps are allowed."]
+time_index_lookup, i64, <=
 }
 
 /// A safe sparse starting offset for a forward scan seeking `timestamp >= target`.

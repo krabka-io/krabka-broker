@@ -1,5 +1,7 @@
 use creusot_std::prelude::*;
 
+#[cfg(creusot)]
+use super::epoch_handoff::handoff_input_valid;
 use super::{
     ProducerDecision, ProducerSnapshotEntryFacts, completed_batches_preserve_first_retry,
     decrement_sequence, epoch_handoff_distinguishes_identity_and_data_retry,
@@ -19,14 +21,7 @@ type DelayedHandoff = (
 /// The old identity remains an initialization retry; old data remains fenced.
 /// Truthful same-PID projections, serialized installation and one HWM observation
 /// are host facts. New-epoch arrivals, truncation, expiry and persistence are outside.
-#[requires(0 <= end@ && 0 <= hwm@ && 0 <= epoch@ && epoch@ < i16::MAX@ - 1)]
-#[requires(rows@.len() <= 5)]
-#[requires(crate::producer_snapshot::snapshot_entry_valid_model(end@, first) && first.last_offset@ >= 0
-    && first.producer_epoch == epoch)]
-#[requires(forall<i: Int> 0 <= i && i < rows@.len() ==>
-    crate::producer_snapshot::snapshot_entry_valid_model(end@, rows@[i]) && rows@[i].last_offset@ >= 0
-    && rows@[i].producer_id == first.producer_id && rows@[i].producer_epoch == epoch)]
-#[requires(forall<i: Int, j: Int> 0 <= i && i < j && j < rows@.len() ==> rows@[i].last_offset@ < rows@[j].last_offset@)]
+#[requires(handoff_input_valid(end@, hwm@, epoch@, rows@, first))]
 #[requires(forall<i: Int> 0 <= i && i < delayed@.len() ==>
     crate::producer_snapshot::snapshot_entry_valid_model(end@, delayed@[i]) && delayed@[i].last_offset@ >= 0
     && delayed@[i].producer_id == first.producer_id && delayed@[i].producer_epoch@ <= epoch@)]

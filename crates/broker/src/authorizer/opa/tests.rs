@@ -77,65 +77,28 @@ async fn super_user_bypasses_opa_call() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn cache_hit_returns_cached_decision_without_http_call() {
-    let mock = MockServer::start().await;
-    Mock::given(method("POST"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"result": true})))
-        .expect(1) // exactly one call — second authorize() must hit cache.
-        .mount(&mock)
-        .await;
-
-    let auth = OpaAuthorizer::new(
-        HashSet::new(),
-        opa_url(&mock),
-        false,
-        100,
-        minutes(1),
-        secs(5),
-    )
-    .unwrap();
-    let image = img();
-    let p = test_principal("alice");
-    let h = host();
-    assert!(auth.authorize(&image, &req(&p, &h, "t")) == AuthorizationResult::Allow);
-    assert!(auth.authorize(&image, &req(&p, &h, "t")) == AuthorizationResult::Allow);
+    check_cached_decision("t", true, AuthorizationResult::Allow).await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
 async fn cache_hit_preserves_a_deny_decision() {
-    let mock = MockServer::start().await;
-    Mock::given(method("POST"))
-        .respond_with(
-            ResponseTemplate::new(200).set_body_json(serde_json::json!({"result": false})),
-        )
-        .expect(1)
-        .mount(&mock)
-        .await;
-
-    let auth = OpaAuthorizer::new(
-        HashSet::new(),
-        opa_url(&mock),
-        false,
-        100,
-        minutes(1),
-        secs(5),
-    )
-    .unwrap();
-    let image = img();
-    let p = test_principal("alice");
-    let h = host();
-    assert!(auth.authorize(&image, &req(&p, &h, "t")) == AuthorizationResult::Deny);
-    assert!(auth.authorize(&image, &req(&p, &h, "t")) == AuthorizationResult::Deny);
+    check_cached_decision("t", false, AuthorizationResult::Deny).await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
 async fn cache_miss_calls_opa_and_caches_result() {
+    check_cached_decision("fresh-topic", true, AuthorizationResult::Allow).await;
+}
+
+async fn check_cached_decision(topic: &str, allow: bool, expected: AuthorizationResult) {
     let mock = MockServer::start().await;
     Mock::given(method("POST"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"result": true})))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(serde_json::json!({"result": allow})),
+        )
         .expect(1)
         .mount(&mock)
         .await;
-
     let auth = OpaAuthorizer::new(
         HashSet::new(),
         opa_url(&mock),
@@ -146,12 +109,13 @@ async fn cache_miss_calls_opa_and_caches_result() {
     )
     .unwrap();
     let image = img();
-    let p = test_principal("alice");
-    let h = host();
-    assert!(auth.authorize(&image, &req(&p, &h, "fresh-topic")) == AuthorizationResult::Allow);
-    // Cache populated; introspect by asserting a second call doesn't
-    // bump the mock's request count when the assertion fires on drop.
-    assert!(auth.authorize(&image, &req(&p, &h, "fresh-topic")) == AuthorizationResult::Allow);
+    let principal = test_principal("alice");
+    let host = host();
+    // The second call must preserve the decision and use the cache: expect(1)
+    // verifies that only the initial authorization reached HTTP.
+    for _ in 0..2 {
+        assert!(auth.authorize(&image, &req(&principal, &host, topic)) == expected);
+    }
 }
 
 #[tokio::test(flavor = "multi_thread")]

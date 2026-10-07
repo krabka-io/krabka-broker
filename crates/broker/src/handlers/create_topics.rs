@@ -53,7 +53,7 @@ use crate::{authorizer::AuthorizationResult, broker::Broker, codes, error::Broke
 
 /// Leader epoch that a freshly created partition starts at. The committed
 /// `PartitionRecord` and the handler-side leader-cache install must agree.
-const INITIAL_LEADER_EPOCH: i32 = 0;
+pub(crate) const INITIAL_LEADER_EPOCH: i32 = 0;
 
 pub(crate) fn diskless_wal_placement_error(
     image: &krabka_metadata::MetadataImage,
@@ -283,17 +283,7 @@ const THROTTLING_QUOTA_EXCEEDED_MESSAGE: &str = "The throttling quota has been e
 /// The names that more than one request row carries, in the order of their
 /// first row.
 fn duplicate_names(topics: &[CreatableTopic]) -> Vec<String> {
-    let mut counts: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
-    for topic in topics {
-        *counts.entry(topic.name.as_str()).or_insert(0) += 1;
-    }
-    let mut seen = std::collections::HashSet::new();
-    topics
-        .iter()
-        .map(|topic| topic.name.as_str())
-        .filter(|name| counts[name] > 1 && seen.insert(*name))
-        .map(str::to_owned)
-        .collect()
+    crate::handlers::request_names::duplicate_names(topics.iter().map(|topic| topic.name.as_str()))
 }
 
 /// The partitions a request asks for, as Kafka's

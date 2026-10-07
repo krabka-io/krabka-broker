@@ -1,12 +1,12 @@
-(* #"/workspace/crates/verified/src/recovery/replay_cursor_decision.rs" 105 0 111 30 *)
+(* #"/workspace/crates/verified/src/recovery/replay_cursor_decision.rs" 106 0 112 30 *)
 
-let%span snum = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 27 28 27 33
-let%span scmp = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 14 26 14 75
-let%span smodel = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/model.rs" 37 8 37 28
-let%span soption = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/option.rs" 15 8 18 9
-let%span sreplay_cursor_decision = "/workspace/crates/verified/src/recovery/replay_cursor_decision.rs" 136 36 136 71
-let%span sreplay_cursor_decision'0 = "/workspace/crates/verified/src/recovery/replay_cursor_decision.rs" 127 22 127 57
-let%span sreplay_cursor_decision'1 = "/workspace/crates/verified/src/recovery/replay_cursor_decision.rs" 73 10 103 1
+let%span snum = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 27 28 27 33
+let%span soption = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/option.rs" 15 8 18 9
+let%span scmp = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 14 26 14 75
+let%span smodel = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/model.rs" 37 8 37 28
+let%span sreplay_cursor_decision = "/workspace/crates/verified/src/recovery/replay_cursor_decision.rs" 137 36 137 71
+let%span sreplay_cursor_decision'0 = "/workspace/crates/verified/src/recovery/replay_cursor_decision.rs" 128 22 128 57
+let%span sreplay_cursor_decision'1 = "/workspace/crates/verified/src/recovery/replay_cursor_decision.rs" 74 10 104 1
 
 use creusot.int.Int64
 use creusot.prelude.Any
@@ -51,7 +51,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let barrier_recovery_fold_action [#"/workspace/crates/verified/src/recovery/replay_cursor_decision.rs" 105 0 111 30]
+let barrier_recovery_fold_action [#"/workspace/crates/verified/src/recovery/replay_cursor_decision.rs" 106 0 112 30]
   (kind: t_BarrierRecoveryRecordKind) (value_present: bool) (record_epoch: Int64.t) (pending_epoch: t_Option_i64)
   (epoch_already_consumed: bool) (return (x: t_BarrierRecoveryFoldAction)) = (! bb0
   [ bb0 = any [ br0 -> {kind = Group} (! bb6) | br1 -> {kind = InjectionStart} (! bb5) | br2 -> {kind = Cut} (! bb4) ]

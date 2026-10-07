@@ -11,7 +11,7 @@ use assert2::assert;
 use krabka_protocol::records::RecordBatch;
 
 use super::{
-    replay::{Replayed, apply_record, apply_tombstone, finalize},
+    replay::{Replayed, apply_record, finalize},
     test_support::{bare_coordinator, classic_group_record},
 };
 use crate::coordinator::persistence::{self, GroupMetadataValue};
@@ -25,9 +25,7 @@ use crate::coordinator::persistence::{self, GroupMetadataValue};
 /// that comes later rebuilds the classic group. Log order wins.
 #[tokio::test]
 async fn downgraded_group_replays_as_classic() {
-    use crate::coordinator::unified::{
-        GroupType, persistence_next_gen as ng, persistence_next_gen,
-    };
+    use crate::coordinator::unified::{persistence_next_gen as ng, persistence_next_gen};
 
     let coord = bare_coordinator();
 
@@ -85,31 +83,13 @@ async fn downgraded_group_replays_as_classic() {
         (k2_key2, Some(k2_val2)),
     ];
 
-    let batch = RecordBatch::default();
-    let mut acc = Replayed::default();
-    for (k, v) in stream {
-        let key = persistence::parse_key(&k).unwrap();
-        match v {
-            Some(value) => apply_record(&coord, &mut acc, key, &value, &batch).unwrap(),
-            None => apply_tombstone(&coord, &mut acc, key),
-        }
-    }
+    let acc = super::test_support::replay_stream(&coord, stream);
     finalize(&coord, acc).await;
 
     // The group must NOT be next-gen, and the classic describe path must
     // surface it with member "m1".
-    assert!(coord.group_type("g") != Some(GroupType::NextGen));
-    let snap = coord
-        .describe_group("g")
-        .await
-        .expect("classic group present");
-    assert!(snap.members.iter().any(|m| m.member_id == "m1"));
+    super::test_support::assert_classic_replayed(&coord).await;
     // And there is no next-gen consumer actor for "g".
-    assert!(
-        coord
-            .find("g")
-            .is_some_and(|h| h.kind == crate::coordinator::unified::actor::GroupKindTag::Classic)
-    );
 }
 
 /// PROBLEM A under LOG COMPACTION, the resurrection trap.
@@ -132,7 +112,7 @@ async fn downgraded_group_replays_as_classic() {
 /// replays CLASSIC.
 #[tokio::test]
 async fn compacted_downgrade_residue_replays_as_classic() {
-    use crate::coordinator::unified::{GroupType, persistence_next_gen as ng};
+    use crate::coordinator::unified::persistence_next_gen as ng;
 
     let coord = bare_coordinator();
 
@@ -154,29 +134,11 @@ async fn compacted_downgrade_residue_replays_as_classic() {
         (k2_key, Some(k2_val)),
     ];
 
-    let batch = RecordBatch::default();
-    let mut acc = Replayed::default();
-    for (k, v) in stream {
-        let key = persistence::parse_key(&k).unwrap();
-        match v {
-            Some(value) => apply_record(&coord, &mut acc, key, &value, &batch).unwrap(),
-            None => apply_tombstone(&coord, &mut acc, key),
-        }
-    }
+    let acc = super::test_support::replay_stream(&coord, stream);
     finalize(&coord, acc).await;
 
     // The group must replay CLASSIC, not resurrect as next-gen.
-    assert!(coord.group_type("g") != Some(GroupType::NextGen));
-    let snap = coord
-        .describe_group("g")
-        .await
-        .expect("classic group present");
-    assert!(snap.members.iter().any(|m| m.member_id == "m1"));
-    assert!(
-        coord
-            .find("g")
-            .is_some_and(|h| h.kind == crate::coordinator::unified::actor::GroupKindTag::Classic)
-    );
+    super::test_support::assert_classic_replayed(&coord).await;
 }
 
 /// A child record without live k3 group metadata cannot claim the group.
@@ -207,15 +169,7 @@ async fn surviving_k6_write_cannot_resurrect_next_gen_ownership() {
         (k2_key, Some(k2_val)),
     ];
 
-    let batch = RecordBatch::default();
-    let mut acc = Replayed::default();
-    for (k, v) in stream {
-        let key = persistence::parse_key(&k).unwrap();
-        match v {
-            Some(value) => apply_record(&coord, &mut acc, key, &value, &batch).unwrap(),
-            None => apply_tombstone(&coord, &mut acc, key),
-        }
-    }
+    let acc = super::test_support::replay_stream(&coord, stream);
 
     assert!(!coord.seeds.contains_key("g"));
 

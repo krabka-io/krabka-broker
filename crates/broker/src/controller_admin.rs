@@ -548,29 +548,8 @@ mod tests {
     async fn a_context_kind_api_key_routes_to_the_broker_registry() {
         use krabka_protocol::{Decode as _, Encode as _};
 
-        let dir = tempfile::TempDir::new().expect("tempdir");
-        let data_listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-            .await
-            .expect("bind data listener");
-        let controller_listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-            .await
-            .expect("bind controller listener");
-        let data_addr = data_listener.local_addr().expect("data addr");
-        let controller_addr = controller_listener.local_addr().expect("controller addr");
-        let mut config = crate::config::BrokerConfig::for_tests(dir.path().to_path_buf());
-        config.listen_addr = data_addr;
-        config.advertised_listener = data_addr.to_string();
-        config.controller_listen_addr = controller_addr;
-        config.controller_quorum_voters =
-            vec![(krabka_raft::NodeId(1), controller_addr.to_string())];
-        let handle = crate::Broker::start_with_listeners(
-            config,
-            Some(controller_listener),
-            Some(data_listener),
-        )
-        .await
-        .expect("broker start");
-        handle.wait_until_controller_leader().await;
+        let (controller, _controller_addr, _dir) = crate::test_support::start_controller().await;
+        let handle = controller;
 
         let router = BrokerControllerAdminRouter::new();
         router.bind(handle.broker_for_test()).expect("bind once");

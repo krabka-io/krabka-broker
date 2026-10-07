@@ -30,7 +30,6 @@ use std::{
 
 use assert2::assert;
 use krabka_broker::{Broker, BrokerConfig, BrokerHandle, config::ListenerSpec};
-use krabka_log::LogConfig;
 use krabka_security::ListenerProtocol;
 
 use crate::{
@@ -80,9 +79,6 @@ pub(crate) async fn start_krabka(listeners: &JvmListeners) -> (BrokerHandle, tem
             .parse()
             .expect("allocated addr");
     let config = BrokerConfig {
-        broker_id: 1,
-        listen_addr: client_addr,
-        advertised_listener: listeners.advertised.clone(),
         listeners: vec![
             ListenerSpec {
                 name: "PLAINTEXT".to_string(),
@@ -104,18 +100,14 @@ pub(crate) async fn start_krabka(listeners: &JvmListeners) -> (BrokerHandle, tem
             },
         ],
         inter_broker_listener_name: "BROKER".to_string(),
-        log_dir: dir.path().to_path_buf(),
-        log_config: LogConfig::default(),
-        node_id: krabka_broker::NodeId(1),
-        controller_listen_addr: controller_addr,
-        controller_quorum_voters: vec![(krabka_broker::NodeId(1), controller_addr.to_string())],
-        heartbeat_interval: krabka_units::millis(3_000),
-        heartbeat_timeout: krabka_units::millis(9_000),
-        replica_lag_time_max: krabka_units::millis(30_000),
-        controller_election_timeout: krabka_units::secs(5),
-        controller_heartbeat_interval: krabka_units::millis(500),
-        bootstrap_mode: krabka_broker::BootstrapMode::Bootstrap,
-        ..BrokerConfig::default().with_internal_topics_for(1)
+        ..crate::support::jvm_broker_config(
+            1,
+            client_addr,
+            controller_addr,
+            &listeners.advertised,
+            dir.path().to_path_buf(),
+            &[(1, controller_addr)],
+        )
     };
     let handle = Broker::start(config).await.expect("start broker");
     eprintln!(
@@ -128,18 +120,14 @@ pub(crate) async fn start_krabka(listeners: &JvmListeners) -> (BrokerHandle, tem
 /// Run the tool from a throwaway container against the krabka broker that
 /// `listeners` advertises, and return its stdout.
 pub(crate) fn krabka_api_versions(listeners: &JvmListeners) -> String {
-    let out = Command::new("docker")
-        .args([
-            "run",
-            "--rm",
-            "--add-host=host.docker.internal:host-gateway",
-            ORACLE_IMAGE,
-            TOOL,
-            "--bootstrap-server",
-            &listeners.advertised,
-        ])
-        .output()
-        .expect("spawn docker run kafka-broker-api-versions");
+    let out = crate::support::jvm_docker_command(
+        ORACLE_IMAGE,
+        &[],
+        &[TOOL, "--bootstrap-server", &listeners.advertised],
+        false,
+    )
+    .output()
+    .expect("spawn docker run kafka-broker-api-versions");
     let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
     assert!(
         out.status.success(),

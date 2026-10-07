@@ -31,6 +31,7 @@ mod scram_cluster;
 mod scram_describe;
 #[path = "describe_user_scram_credentials/scram_driver.rs"]
 mod scram_driver;
+mod support;
 
 /// The client id every request header in this suite carries.
 const CLIENT_ID: &str = "krabka-scram-desc-test";

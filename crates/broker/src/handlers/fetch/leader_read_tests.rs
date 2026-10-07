@@ -20,9 +20,7 @@ use std::{sync::Arc, time::Duration};
 use assert2::assert;
 use bytes::Bytes;
 use krabka_log::Offset;
-use krabka_metadata::{MetadataRecord, PartitionRecord, TopicRecord};
 use krabka_protocol::{
-    Decode,
     owned::{
         fetch_request::{FetchPartition, FetchRequest, FetchTopic, ReplicaState},
         fetch_response::{FetchResponse, FetchableTopicResponse, LeaderIdAndEpoch, PartitionData},
@@ -30,13 +28,12 @@ use krabka_protocol::{
     records::{Record, RecordBatch, RecordsPayload},
 };
 
-use super::{encode_fetch_response, handle};
 use crate::{
     broker::BrokerHandle,
     codes,
     fetch_session::{FINAL_EPOCH, INVALID_SESSION_ID},
     partition::Partition,
-    test_support::{encode_request, peer, principal, request_context, start_broker_no_audit_with},
+    test_support::start_broker_no_audit_with,
 };
 
 /// The node id of the broker under test.
@@ -102,36 +99,7 @@ async fn partition(
     topic_id: u128,
     leader: u64,
 ) -> Arc<Partition> {
-    broker
-        .submit_metadata_record_for_test(MetadataRecord::V1Topic(TopicRecord {
-            name: topic.to_owned(),
-            topic_id: uuid::Uuid::from_u128(topic_id),
-            partitions: 1,
-            replication_factor: 2,
-        }))
-        .await
-        .expect("submit topic record");
-    broker
-        .submit_metadata_record_for_test(MetadataRecord::V1Partition(PartitionRecord {
-            topic: topic.to_owned(),
-            partition: 0,
-            leader: krabka_audit::NodeId(leader),
-            replicas: vec![
-                krabka_audit::NodeId(THIS_NODE),
-                krabka_audit::NodeId(OTHER_NODE),
-            ],
-            isr: vec![
-                krabka_audit::NodeId(THIS_NODE),
-                krabka_audit::NodeId(OTHER_NODE),
-            ],
-            leader_epoch: krabka_metadata::LeaderEpoch(0),
-            adding_replicas: Vec::new(),
-            removing_replicas: Vec::new(),
-            directories: vec![uuid::Uuid::nil(); 2],
-            partition_epoch: 0,
-        }))
-        .await
-        .expect("submit partition record");
+    crate::handlers::test_support::seed_replicated_topic(broker, topic, topic_id, leader).await;
 
     let shared = broker.broker_arc_for_test();
     let partition = tokio::time::timeout(Duration::from_secs(10), async {
@@ -226,19 +194,7 @@ fn request(version: i16, sender: Sender, topic: &str) -> FetchRequest {
 }
 
 async fn fetch(broker: &BrokerHandle, version: i16, request: &FetchRequest) -> FetchResponse {
-    let shared = broker.broker_arc_for_test();
-    let user = principal("client");
-    let address = peer();
-    let ctx = request_context(&user, &address, "fetch-client");
-    let request_bytes = encode_request(request, version);
-    let (response, response_version) = handle(&shared, version, 7, &request_bytes, &ctx)
-        .await
-        .expect("handle fetch");
-    let wire = encode_fetch_response(response, response_version).expect("encode response");
-    let mut cursor: &[u8] = wire.as_ref();
-    let decoded = FetchResponse::decode(&mut cursor, version).expect("decode response");
-    assert!(cursor.is_empty(), "the decoder consumed every byte");
-    decoded
+    super::test_support::fetch_wire(broker, version, "client", "fetch-client", request).await
 }
 
 fn expected(case: Case, label: String, topic: &str) -> Outcome {

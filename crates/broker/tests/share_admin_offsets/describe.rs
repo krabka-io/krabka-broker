@@ -26,8 +26,7 @@ use krabka_protocol::{
 
 use crate::harness::{
     ACCEPT, NONE, ShareAck, UNSUPPORTED_VERSION, acquired_count, bootstrap_share_state,
-    broker_config, broker_test_permit, connect, create_topic, fetch_until_acquired, join,
-    produce_n, share_ack, topic_id, wait_for_share_init,
+    broker_config, broker_test_permit, connect, create_topic, fetch_until_acquired, share_ack,
 };
 
 /// `UpdateFeatures` `UpgradeType` 2, `SAFE_DOWNGRADE`.
@@ -118,17 +117,8 @@ pub async fn describe_until(
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn describe_reflects_spso_after_consume() {
     let _permit = broker_test_permit().await;
-    let dir = tempfile::TempDir::new().unwrap();
-    let broker = Broker::start(broker_config(dir.path().to_path_buf()))
-        .await
-        .unwrap();
-    let client = connect(&broker.listen_addr().to_string()).await;
-    create_topic(&broker, &client, "t", 1).await;
-    let tid = topic_id(&broker, "t");
-    bootstrap_share_state(&broker, &client, "g1").await;
-    produce_n(&client, "t", tid, 0, 3).await;
-    let (member, _epoch) = join(&client, "g1", "t").await;
-    wait_for_share_init(&broker, "g1", tid, 0).await;
+    let (broker, client, _dir, tid) = crate::support::share::topic_fixture("t", 1, |_| {}).await;
+    let (member, _epoch) = crate::harness::initialize_consumption(&broker, &client, tid, 3).await;
 
     // Acquire 0..2, Accept all → SPSO advances to 3.
     let row = fetch_until_acquired(&client, "g1", &member, tid, 0, 0).await;

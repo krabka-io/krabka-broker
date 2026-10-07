@@ -363,7 +363,7 @@ mod tests {
     use tokio::sync::Notify;
 
     use super::*;
-    use crate::partition::test_support::test_partition;
+    use crate::partition::test_support::{EpochCheckpointFull, test_partition};
 
     #[tokio::test]
     async fn replication_target_guard_fences_stale_generation_and_topic_identity() {
@@ -601,24 +601,6 @@ mod tests {
 
         assert!(epoch_history(&partition) == [(0, 0), (7, 1)]);
         assert!(partition.replication_target_is(topic_id, 1, 7).await);
-    }
-
-    #[derive(Debug)]
-    struct EpochCheckpointFull;
-
-    impl krabka_log::LogIo for EpochCheckpointFull {
-        fn write_at(
-            &self,
-            target: krabka_log::IoTarget,
-            file: &std::fs::File,
-            buf: &[u8],
-        ) -> std::io::Result<usize> {
-            use std::io::Write as _;
-            if target == krabka_log::IoTarget::LeaderEpochCheckpoint {
-                return Err(std::io::ErrorKind::StorageFull.into());
-            }
-            (&*file).write(buf)
-        }
     }
 
     /// A promotion whose epoch cannot be recorded is not published, as a

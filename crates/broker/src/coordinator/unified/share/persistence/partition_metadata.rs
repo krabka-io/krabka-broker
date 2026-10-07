@@ -38,9 +38,9 @@ use bytes::{BufMut, Bytes, BytesMut};
 use crate::{
     coordinator::unified::persistence::{
         flex::{
-            get_compact_array_len, get_compact_string, get_i32_array, get_uuid,
-            put_compact_array_len, put_compact_string, put_empty_tagged_fields, put_i32_array,
-            put_uuid, skip_tagged_fields,
+            get_compact_array, get_compact_string, get_i32_array, get_uuid, put_compact_array,
+            put_compact_string, put_empty_tagged_fields, put_i32_array, put_uuid,
+            skip_tagged_fields,
         },
         get_i16,
     },
@@ -86,20 +86,18 @@ impl ShareGroupStatePartitionMetadataValue {
         let mut buf = BytesMut::new();
         buf.put_i16(0);
         for topics in [&self.initializing, &self.initialized] {
-            put_compact_array_len(&mut buf, topics.len());
-            for topic in topics {
-                put_uuid(&mut buf, *topic.topic_id.as_bytes());
-                put_compact_string(&mut buf, &topic.topic_name);
-                put_i32_array(&mut buf, &topic.partitions);
-                put_empty_tagged_fields(&mut buf);
-            }
+            put_compact_array(&mut buf, topics.iter(), |buf, topic| {
+                put_uuid(buf, *topic.topic_id.as_bytes());
+                put_compact_string(buf, &topic.topic_name);
+                put_i32_array(buf, &topic.partitions);
+                put_empty_tagged_fields(buf);
+            });
         }
-        put_compact_array_len(&mut buf, self.deleting.len());
-        for topic in &self.deleting {
-            put_uuid(&mut buf, *topic.topic_id.as_bytes());
-            put_compact_string(&mut buf, &topic.topic_name);
-            put_empty_tagged_fields(&mut buf);
-        }
+        put_compact_array(&mut buf, self.deleting.iter(), |buf, topic| {
+            put_uuid(buf, *topic.topic_id.as_bytes());
+            put_compact_string(buf, &topic.topic_name);
+            put_empty_tagged_fields(buf);
+        });
         put_empty_tagged_fields(&mut buf);
         buf.freeze()
     }
@@ -110,17 +108,15 @@ impl ShareGroupStatePartitionMetadataValue {
         let _v = get_i16(&mut buf)?;
         let initializing = get_topic_partitions_infos(&mut buf)?;
         let initialized = get_topic_partitions_infos(&mut buf)?;
-        let dn = get_compact_array_len(&mut buf)?;
-        let mut deleting = Vec::with_capacity(dn);
-        for _ in 0..dn {
-            let topic_id = uuid::Uuid::from_bytes(get_uuid(&mut buf)?);
-            let topic_name = get_compact_string(&mut buf)?;
-            skip_tagged_fields(&mut buf)?;
-            deleting.push(DeletingTopic {
+        let deleting = get_compact_array(&mut buf, |buf| {
+            let topic_id = uuid::Uuid::from_bytes(get_uuid(buf)?);
+            let topic_name = get_compact_string(buf)?;
+            skip_tagged_fields(buf)?;
+            Ok(DeletingTopic {
                 topic_id,
                 topic_name,
-            });
-        }
+            })
+        })?;
         skip_tagged_fields(&mut buf)?;
         Ok(Self {
             initializing,
@@ -132,20 +128,17 @@ impl ShareGroupStatePartitionMetadataValue {
 
 /// Decodes one `[]TopicPartitionsInfo` array.
 fn get_topic_partitions_infos(buf: &mut &[u8]) -> Result<Vec<TopicPartitionsInfo>, BrokerError> {
-    let n = get_compact_array_len(buf)?;
-    let mut topics = Vec::with_capacity(n);
-    for _ in 0..n {
+    get_compact_array(buf, |buf| {
         let topic_id = uuid::Uuid::from_bytes(get_uuid(buf)?);
         let topic_name = get_compact_string(buf)?;
         let partitions = get_i32_array(buf)?;
         skip_tagged_fields(buf)?;
-        topics.push(TopicPartitionsInfo {
+        Ok(TopicPartitionsInfo {
             topic_id,
             topic_name,
             partitions,
-        });
-    }
-    Ok(topics)
+        })
+    })
 }
 
 #[cfg(test)]

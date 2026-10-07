@@ -5,7 +5,6 @@
 //! of six near-identical call sites, which is what makes collecting a digest
 //! per object cheap enough to do on every archive write.
 
-use bytes::Bytes;
 use krabka_object_store::{ObjectOps, PutMode, PutOutcome, PutRequest};
 use krabka_units::prelude::ByteSizeExt as _;
 use object_store::path::Path as ObjectPath;
@@ -14,25 +13,12 @@ use super::S3RemoteStorage;
 use crate::{
     error::RemoteStorageError,
     metadata::{CustomMetadata, RemoteLogSegmentMetadata},
-    storage_manager::{IndexType, LogSegmentData},
+    storage_manager::{ArtifactBody, LogSegmentData},
     worm::{MANIFEST_SUFFIX, ObjectEntry, Sha256Digest, WormError},
 };
 
 #[cfg(test)]
 mod tests;
-
-/// Where one copied object's body comes from.
-///
-/// The two arms differ in more than the source: a file goes through the
-/// multipart threshold, an in-memory payload is always a single PUT. Naming
-/// them lets the copy walk one ordered list instead of six near-identical
-/// call sites, which is what makes collecting a digest per object cheap.
-enum ObjectBody<'a> {
-    /// A file on disk.
-    Path(&'a std::path::Path),
-    /// An in-memory payload.
-    Memory(Bytes),
-}
 
 /// Turns one completed upload into the manifest entry that records it.
 ///
@@ -97,57 +83,21 @@ impl S3RemoteStorage {
             PutRequest::default()
         };
 
-        let mut uploads = vec![
-            (
-                ".log",
-                self.log_key(metadata),
-                ObjectBody::Path(&data.log_segment),
-            ),
-            (
-                IndexType::Offset.suffix(),
-                self.index_key(metadata, IndexType::Offset),
-                ObjectBody::Path(&data.offset_index),
-            ),
-            (
-                IndexType::Timestamp.suffix(),
-                self.index_key(metadata, IndexType::Timestamp),
-                ObjectBody::Path(&data.time_index),
-            ),
-        ];
-        if let Some(snap) = &data.producer_snapshot_index {
-            uploads.push((
-                IndexType::ProducerSnapshot.suffix(),
-                self.index_key(metadata, IndexType::ProducerSnapshot),
-                ObjectBody::Path(snap),
-            ));
-        }
-        uploads.push((
-            IndexType::LeaderEpoch.suffix(),
-            self.index_key(metadata, IndexType::LeaderEpoch),
-            ObjectBody::Memory(data.leader_epoch_index.clone()),
-        ));
-        if let Some(txn) = &data.transaction_index {
-            uploads.push((
-                IndexType::Transaction.suffix(),
-                self.index_key(metadata, IndexType::Transaction),
-                ObjectBody::Path(txn),
-            ));
-        }
-
         // Only the WORM path reads this list. An empty `Vec` allocates
         // nothing, so the default path pays nothing to declare it.
         let mut objects = Vec::new();
-        for (suffix, key, body) in uploads {
+        for (suffix, body) in data.artifacts() {
+            let key = self.segment_key(metadata, suffix);
             let outcome = match body {
-                ObjectBody::Path(path) => Self::block_os(self.ops.put_from_path(
+                ArtifactBody::File(path) => Self::block_os(self.ops.put_from_path(
                     &key,
                     path,
                     threshold,
                     chunk_size,
                     put.clone(),
                 ))?,
-                ObjectBody::Memory(bytes) => {
-                    Self::block_os(self.ops.put(&key, bytes, put.clone()))?
+                ArtifactBody::Memory(bytes) => {
+                    Self::block_os(self.ops.put(&key, bytes.clone(), put.clone()))?
                 }
             };
             if worm.is_some() {

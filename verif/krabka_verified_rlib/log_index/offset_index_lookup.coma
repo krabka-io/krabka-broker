@@ -1,31 +1,31 @@
-(* #"/workspace/crates/verified/src/log_index.rs" 26 0 26 70 *)
+(* #"/workspace/crates/verified/src/log_index.rs" 21 8 21 66 *)
 
-let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
-let%span swell_founded = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/well_founded.rs" 62 16 62 28
-let%span sslice = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 331 18 331 22
-let%span slog_index = "/workspace/crates/verified/src/log_index.rs" 27 17 27 23
-let%span slog_index'0 = "/workspace/crates/verified/src/log_index.rs" 28 17 28 30
-let%span slog_index'1 = "/workspace/crates/verified/src/log_index.rs" 32 14 32 21
-let%span slog_index'2 = "/workspace/crates/verified/src/log_index.rs" 31 16 31 90
-let%span slog_index'3 = "/workspace/crates/verified/src/log_index.rs" 30 16 30 78
-let%span slog_index'4 = "/workspace/crates/verified/src/log_index.rs" 29 16 29 51
-let%span slog_index'5 = "/workspace/crates/verified/src/log_index.rs" 34 23 34 32
-let%span slog_index'6 = "/workspace/crates/verified/src/log_index.rs" 34 35 34 36
-let%span slog_index'7 = "/workspace/crates/verified/src/log_index.rs" 34 23 34 36
-let%span slog_index'8 = "/workspace/crates/verified/src/log_index.rs" 34 18 34 36
-let%span slog_index'9 = "/workspace/crates/verified/src/log_index.rs" 35 11 35 23
-let%span slog_index'10 = "/workspace/crates/verified/src/log_index.rs" 35 11 35 25
-let%span slog_index'11 = "/workspace/crates/verified/src/log_index.rs" 36 23 36 24
-let%span slog_index'12 = "/workspace/crates/verified/src/log_index.rs" 36 12 36 24
-let%span slog_index'13 = "/workspace/crates/verified/src/log_index.rs" 41 13 41 14
-let%span slog_index'14 = "/workspace/crates/verified/src/log_index.rs" 41 17 41 18
-let%span slog_index'15 = "/workspace/crates/verified/src/log_index.rs" 41 41 41 42
-let%span slog_index'16 = "/workspace/crates/verified/src/log_index.rs" 41 36 41 42
-let%span slog_index'17 = "/workspace/crates/verified/src/log_index.rs" 41 28 41 43
-let%span slog_index'18 = "/workspace/crates/verified/src/log_index.rs" 41 28 41 45
-let%span slog_index'19 = "/workspace/crates/verified/src/log_index.rs" 16 11 17 39
-let%span slog_index'20 = "/workspace/crates/verified/src/log_index.rs" 18 10 22 84
-let%span slog_index'21 = "/workspace/crates/verified/src/log_index.rs" 23 10 24 20
+let%span sord = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span swell_founded = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/well_founded.rs" 62 16 62 28
+let%span sslice = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 331 18 331 22
+let%span slog_index = "/workspace/crates/verified/src/log_index.rs" 22 25 22 31
+let%span slog_index'0 = "/workspace/crates/verified/src/log_index.rs" 23 25 23 38
+let%span slog_index'1 = "/workspace/crates/verified/src/log_index.rs" 27 22 27 29
+let%span slog_index'2 = "/workspace/crates/verified/src/log_index.rs" 26 24 26 98
+let%span slog_index'3 = "/workspace/crates/verified/src/log_index.rs" 25 24 25 86
+let%span slog_index'4 = "/workspace/crates/verified/src/log_index.rs" 24 24 24 59
+let%span slog_index'5 = "/workspace/crates/verified/src/log_index.rs" 29 31 29 40
+let%span slog_index'6 = "/workspace/crates/verified/src/log_index.rs" 29 43 29 44
+let%span slog_index'7 = "/workspace/crates/verified/src/log_index.rs" 29 31 29 44
+let%span slog_index'8 = "/workspace/crates/verified/src/log_index.rs" 29 26 29 44
+let%span slog_index'9 = "/workspace/crates/verified/src/log_index.rs" 30 19 30 31
+let%span slog_index'10 = "/workspace/crates/verified/src/log_index.rs" 30 19 30 33
+let%span slog_index'11 = "/workspace/crates/verified/src/log_index.rs" 30 57 30 58
+let%span slog_index'12 = "/workspace/crates/verified/src/log_index.rs" 30 46 30 58
+let%span slog_index'13 = "/workspace/crates/verified/src/log_index.rs" 32 21 32 22
+let%span slog_index'14 = "/workspace/crates/verified/src/log_index.rs" 32 25 32 26
+let%span slog_index'15 = "/workspace/crates/verified/src/log_index.rs" 32 49 32 50
+let%span slog_index'16 = "/workspace/crates/verified/src/log_index.rs" 32 44 32 50
+let%span slog_index'17 = "/workspace/crates/verified/src/log_index.rs" 32 36 32 51
+let%span slog_index'18 = "/workspace/crates/verified/src/log_index.rs" 32 36 32 53
+let%span slog_index'19 = "/workspace/crates/verified/src/log_index.rs" 13 19 14 52
+let%span slog_index'20 = "/workspace/crates/verified/src/log_index.rs" 15 18 18 92
+let%span slog_index'21 = "/workspace/crates/verified/src/log_index.rs" 19 18 19 109
 
 use creusot.int.UInt64
 use creusot.slice.Slice64
@@ -58,7 +58,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let offset_index_lookup [#"/workspace/crates/verified/src/log_index.rs" 26 0 26 70]
+let offset_index_lookup [#"/workspace/crates/verified/src/log_index.rs" 21 8 21 66]
   (entries: Slice64.slice tup2_u32_u32) (target: UInt32.t) (return (x: UInt32.t)) =
 {[@stop_split] [@expl:offset_index_lookup requires] [%#slog_index'19] forall i: int, j: int. 0 <= i
       /\ i < j /\ j < Seq.length (Slice64.view entries)

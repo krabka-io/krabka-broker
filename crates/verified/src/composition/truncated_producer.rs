@@ -1,5 +1,7 @@
 use creusot_std::prelude::*;
 
+#[cfg(creusot)]
+use super::control_truncation::physical_truncation_input_valid;
 use super::{
     ProducerDecision, ProducerSnapshotEntryFacts, rebuilt_data_window_bounds_retry,
     whole_batch_truncation_bounds_controls,
@@ -20,10 +22,7 @@ type TruncatedRetry = (
 /// rebuilt window. Every duplicate frontier fits the retained end, and clamping
 /// the HWM preserves readiness for that returned frontier. Complete data history,
 /// faithful rows and complete physical batch ends remain host obligations.
-#[requires(0 <= physical_start@ && physical_start@ <= cut@)]
-#[requires(forall<i: Int> 0 <= i && i < ends@.len() ==> physical_start@ < ends@[i]@)]
-#[requires(forall<i: Int, j: Int> 0 <= i && i < j && j < ends@.len() ==> ends@[i]@ < ends@[j]@)]
-#[requires(0 <= previous_hwm@ && previous_hwm@ <= if ends@.len() == 0 { physical_start@ } else { ends@[ends@.len() - 1]@ })]
+#[requires(physical_truncation_input_valid(ends@, physical_start@, cut@, previous_hwm@))]
 #[requires(rows@.len() > 0
     && (forall<i: Int> 0 <= i && i < rows@.len() ==>
         crate::producer_snapshot::snapshot_entry_valid_model(

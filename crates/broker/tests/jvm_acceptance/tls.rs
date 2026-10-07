@@ -8,13 +8,9 @@
 use std::process::Command;
 
 use assert2::assert;
-use krabka_broker::{Broker, BrokerConfig};
-use krabka_log::LogConfig;
+use krabka_broker::BrokerConfig;
 
-use super::{
-    docker::KAFKA_IMAGE,
-    ports::{broker0_advertised, broker0_listen, controller_addr_0},
-};
+use super::{docker::KAFKA_IMAGE, ports::broker0_advertised};
 
 /// Spawn the broker with a single `SSL` listener on an allocated port
 /// (advertised as an allocated port) with the dev cert/key from
@@ -22,92 +18,21 @@ use super::{
 /// [`start_host_broker`] otherwise, but flips the protocol to `Ssl` and
 /// supplies a [`TlsConfig`].
 pub(crate) async fn start_ssl_broker() -> (krabka_broker::BrokerHandle, tempfile::TempDir) {
-    use krabka_broker::config::ListenerSpec;
-    use krabka_security::{ListenerProtocol, TlsConfig};
-
-    let _ = tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("krabka_broker=debug,info")),
-        )
-        .with_test_writer()
-        .try_init();
-    let dir = tempfile::tempdir().expect("tempdir");
-    let listen_addr: std::net::SocketAddr = broker0_listen().parse().expect("static addr");
-    let controller_addr: std::net::SocketAddr =
-        controller_addr_0().parse().expect("allocated addr");
-
-    // Resolve the on-disk paths of the dev fixture certs, which live under this
-    // crate's own tests/fixtures/security since krabka-security moved to the
-    // krabka-protocol repository.
-    let manifest_dir = crate::support::manifest_dir();
-    let cert_path = manifest_dir
-        .join("tests")
-        .join("fixtures")
-        .join("security")
-        .join("dev_cert.pem");
-    let key_path = manifest_dir
-        .join("tests")
-        .join("fixtures")
-        .join("security")
-        .join("dev_key.pem");
-    assert!(
-        cert_path.exists(),
-        "dev_cert.pem missing at {}",
-        cert_path.display(),
-    );
-    assert!(
-        key_path.exists(),
-        "dev_key.pem missing at {}",
-        key_path.display(),
-    );
-
-    let config = BrokerConfig {
-        broker_id: 1,
-        listen_addr,
-        advertised_listener: broker0_advertised().into(),
-        log_dir: dir.path().to_path_buf(),
-        log_config: LogConfig::default(),
-        node_id: krabka_broker::NodeId(1),
-        controller_listen_addr: controller_addr,
-        controller_quorum_voters: vec![(krabka_broker::NodeId(1), controller_addr.to_string())],
-        heartbeat_interval: krabka_units::millis(3_000),
-        heartbeat_timeout: krabka_units::millis(9_000),
-        replica_lag_time_max: krabka_units::millis(30_000),
-        controller_election_timeout: krabka_units::secs(5),
-        controller_heartbeat_interval: krabka_units::millis(500),
-        bootstrap_mode: krabka_broker::BootstrapMode::Bootstrap,
-        listeners: vec![ListenerSpec {
-            name: "SSL".to_string(),
-            bind_addr: listen_addr,
-            advertised: broker0_advertised().to_string(),
-            protocol: ListenerProtocol::Ssl,
-            tls_config: None,
-            sasl_mechanisms: None,
-            principal_mapper: krabka_broker::SslPrincipalMapper::default(),
-        }],
-        inter_broker_listener_name: "SSL".to_string(),
-        tls_config: Some(TlsConfig {
-            cert_chain_path: cert_path,
-            private_key_path: key_path,
-            trust_roots_path: None,
-            client_ca_path: None,
-            client_auth: krabka_security::ClientAuthMode::Disabled,
-        }),
-        ..BrokerConfig::default().with_internal_topics_for(1)
-    };
-    let handle = Broker::start(config).await.expect("start ssl broker");
-    eprintln!(
-        "KRABKA[test] ssl broker started listen={listen} advertised={bootstrap}",
-        bootstrap = broker0_advertised(),
-        listen = broker0_listen()
-    );
-    tracing::info!(
-        listen = %broker0_listen(),
-        advertised = %broker0_advertised(),
-        "ssl broker started for jvm acceptance"
-    );
-    (handle, dir)
+    super::broker::start_host_broker_with(|config| {
+        configure_tls(config, krabka_security::ListenerProtocol::Ssl);
+        let tls = config.tls_config.as_ref().expect("TLS config");
+        assert!(
+            tls.cert_chain_path.exists(),
+            "dev cert missing at {}",
+            tls.cert_chain_path.display()
+        );
+        assert!(
+            tls.private_key_path.exists(),
+            "dev key missing at {}",
+            tls.private_key_path.display()
+        );
+    })
+    .await
 }
 
 /// Build a JKS truststore from the dev cert PEM. This function runs
@@ -196,91 +121,40 @@ pub(crate) fn start_sasl_ssl_broker(
     admin: &str,
     admin_pass: &str,
 ) -> impl std::future::Future<Output = (krabka_broker::BrokerHandle, tempfile::TempDir)> {
-    use krabka_broker::config::ListenerSpec;
-    use krabka_security::{ListenerProtocol, SaslMechanism, TlsConfig};
-
-    let _ = tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("krabka_broker=debug,info")),
-        )
-        .with_test_writer()
-        .try_init();
-    let dir = tempfile::tempdir().expect("tempdir");
-    let listen_addr: std::net::SocketAddr = broker0_listen().parse().expect("static addr");
-    let controller_addr: std::net::SocketAddr =
-        controller_addr_0().parse().expect("allocated addr");
-
-    let manifest_dir = crate::support::manifest_dir();
-    let cert_path = manifest_dir
-        .join("tests")
-        .join("fixtures")
-        .join("security")
-        .join("dev_cert.pem");
-    let key_path = manifest_dir
-        .join("tests")
-        .join("fixtures")
-        .join("security")
-        .join("dev_key.pem");
-
-    let mut config = BrokerConfig {
-        broker_id: 1,
-        listen_addr,
-        advertised_listener: broker0_advertised().into(),
-        log_dir: dir.path().to_path_buf(),
-        log_config: LogConfig::default(),
-        node_id: krabka_broker::NodeId(1),
-        controller_listen_addr: controller_addr,
-        controller_quorum_voters: vec![(krabka_broker::NodeId(1), controller_addr.to_string())],
-        heartbeat_interval: krabka_units::millis(3_000),
-        heartbeat_timeout: krabka_units::millis(9_000),
-        replica_lag_time_max: krabka_units::millis(30_000),
-        controller_election_timeout: krabka_units::secs(5),
-        controller_heartbeat_interval: krabka_units::millis(500),
-        bootstrap_mode: krabka_broker::BootstrapMode::Bootstrap,
-        listeners: vec![ListenerSpec {
-            name: "SASL_SSL".to_string(),
-            bind_addr: listen_addr,
-            advertised: broker0_advertised().to_string(),
-            protocol: ListenerProtocol::SaslSsl,
-            tls_config: None,
-            sasl_mechanisms: None,
-            principal_mapper: krabka_broker::SslPrincipalMapper::default(),
-        }],
-        inter_broker_listener_name: "SASL_SSL".to_string(),
-        tls_config: Some(TlsConfig {
-            cert_chain_path: cert_path,
-            private_key_path: key_path,
-            trust_roots_path: None,
-            client_ca_path: None,
-            client_auth: krabka_security::ClientAuthMode::Disabled,
-        }),
-        enabled_sasl_mechanisms: vec![SaslMechanism::Plain, SaslMechanism::ScramSha512],
-        super_users: maplit::hashset! {admin.to_string()},
-        ..BrokerConfig::default().with_internal_topics_for(1)
-    };
-    // The PLAINTEXT controller listener carries `ANONYMOUS`, and the node's own
-    // heartbeats reach it. Every data listener here authenticates, so this
-    // super user reaches only the controller listener.
-    config.super_users.insert("ANONYMOUS".to_string());
-    config.authorizer = std::sync::Arc::new(krabka_broker::authorizer::SimpleAclAuthorizer::new(
-        config.super_users.clone(),
-    ));
-    config
-        .plain_credentials
-        .insert(admin.to_string(), admin_pass.to_string());
-    Box::pin(async move {
-        let handle = Broker::start(config).await.expect("start sasl_ssl broker");
-        eprintln!(
-            "KRABKA[test] sasl_ssl broker started listen={listen} advertised={bootstrap}",
-            bootstrap = broker0_advertised(),
-            listen = broker0_listen()
-        );
-        tracing::info!(
-            listen = %broker0_listen(),
-            advertised = %broker0_advertised(),
-            "sasl_ssl broker started for jvm acceptance"
-        );
-        (handle, dir)
+    super::broker::start_host_broker_with(|config| {
+        super::sasl::configure_sasl(config, &[(admin, admin_pass)], Some(admin));
+        config
+            .enabled_sasl_mechanisms
+            .push(krabka_security::SaslMechanism::ScramSha512);
+        configure_tls(config, krabka_security::ListenerProtocol::SaslSsl);
     })
+}
+
+fn configure_tls(config: &mut BrokerConfig, protocol: krabka_security::ListenerProtocol) {
+    use krabka_broker::config::ListenerSpec;
+    use krabka_security::{ClientAuthMode, ListenerProtocol, TlsConfig};
+
+    let name = if protocol == ListenerProtocol::SaslSsl {
+        "SASL_SSL"
+    } else {
+        "SSL"
+    };
+    let security = crate::support::manifest_dir().join("tests/fixtures/security");
+    config.listeners = vec![ListenerSpec {
+        name: name.into(),
+        bind_addr: config.listen_addr,
+        advertised: broker0_advertised().into(),
+        protocol,
+        tls_config: None,
+        sasl_mechanisms: None,
+        principal_mapper: krabka_broker::SslPrincipalMapper::default(),
+    }];
+    config.inter_broker_listener_name = name.into();
+    config.tls_config = Some(TlsConfig {
+        cert_chain_path: security.join("dev_cert.pem"),
+        private_key_path: security.join("dev_key.pem"),
+        trust_roots_path: None,
+        client_ca_path: None,
+        client_auth: ClientAuthMode::Disabled,
+    });
 }

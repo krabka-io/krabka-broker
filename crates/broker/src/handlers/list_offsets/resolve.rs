@@ -558,6 +558,7 @@ pub(super) async fn resolve_partition(
 
 #[cfg(test)]
 mod tests {
+    use crate::handlers::list_offsets::test_support::test_context;
     mod timestamp_visibility;
 
     use assert2::assert;
@@ -573,7 +574,7 @@ mod tests {
             },
             test_support::{
                 client_for, create_topic, decode_response, encode_request, list_one,
-                list_one_at_epoch, test_context,
+                list_one_at_epoch,
             },
         },
         test_support::test_ctx,
@@ -715,38 +716,8 @@ mod tests {
 
         const TOPIC: &str = "list-offsets-tiered";
 
-        let remote_dir = tempfile::tempdir().expect("remote tempdir");
-        let remote_path = remote_dir.path().to_path_buf();
-        let (broker, _dir) = crate::test_support::start_broker_no_audit_with(move |config| {
-            config.remote_storage_backend =
-                Some(crate::config::RemoteStorageBackend::Local { dir: remote_path });
-        })
-        .await;
-        let client = client_for(&broker).await;
-        create_topic(
-            &client,
-            TOPIC,
-            vec![CreatableTopicConfig {
-                name: "remote.storage.enable".into(),
-                value: Some("true".into()),
-                ..Default::default()
-            }],
-        )
-        .await;
-        broker.wait_until_partition_present(TOPIC, 0).await;
-        tokio::time::timeout(Duration::from_secs(5), async {
-            loop {
-                if broker
-                    .partition_log_config_for_test(TOPIC, 0)
-                    .is_some_and(|config| config.remote_storage_enable)
-                {
-                    break;
-                }
-                tokio::task::yield_now().await;
-            }
-        })
-        .await
-        .expect("remote topic config propagated");
+        let (broker, client, _dirs) =
+            crate::handlers::list_offsets::test_support::remote_topic(TOPIC, vec![]).await;
         broker
             .produce_records_for_test(TOPIC, 0, 10)
             .await
@@ -860,38 +831,8 @@ mod tests {
     async fn earliest_pending_upload_falls_back_to_earliest_when_nothing_is_tiered() {
         const TOPIC: &str = "list-offsets-pending-upload-empty-tier";
 
-        let remote_dir = tempfile::tempdir().expect("remote tempdir");
-        let remote_path = remote_dir.path().to_path_buf();
-        let (broker, _dir) = crate::test_support::start_broker_no_audit_with(move |config| {
-            config.remote_storage_backend =
-                Some(crate::config::RemoteStorageBackend::Local { dir: remote_path });
-        })
-        .await;
-        let client = client_for(&broker).await;
-        create_topic(
-            &client,
-            TOPIC,
-            vec![CreatableTopicConfig {
-                name: "remote.storage.enable".into(),
-                value: Some("true".into()),
-                ..Default::default()
-            }],
-        )
-        .await;
-        broker.wait_until_partition_present(TOPIC, 0).await;
-        tokio::time::timeout(Duration::from_secs(5), async {
-            loop {
-                if broker
-                    .partition_log_config_for_test(TOPIC, 0)
-                    .is_some_and(|config| config.remote_storage_enable)
-                {
-                    break;
-                }
-                tokio::task::yield_now().await;
-            }
-        })
-        .await
-        .expect("remote topic config propagated");
+        let (broker, client, _dirs) =
+            crate::handlers::list_offsets::test_support::remote_topic(TOPIC, vec![]).await;
         broker
             .produce_records_for_test(TOPIC, 0, 4)
             .await
@@ -921,48 +862,15 @@ mod tests {
     async fn earliest_pending_upload_stays_unknown_when_local_segments_outrun_the_rlmm() {
         const TOPIC: &str = "list-offsets-pending-upload-unconfirmed";
 
-        let remote_dir = tempfile::tempdir().expect("remote tempdir");
-        let remote_path = remote_dir.path().to_path_buf();
-        let (broker, _dir) = crate::test_support::start_broker_no_audit_with(move |config| {
-            config.remote_storage_backend =
-                Some(crate::config::RemoteStorageBackend::Local { dir: remote_path });
-        })
-        .await;
-        let client = client_for(&broker).await;
-        create_topic(
-            &client,
+        let (broker, client, _dirs) = crate::handlers::list_offsets::test_support::remote_topic(
             TOPIC,
-            vec![
-                CreatableTopicConfig {
-                    name: "remote.storage.enable".into(),
-                    value: Some("true".into()),
-                    ..Default::default()
-                },
-                // A tiny segment size seals a fresh segment on almost every
-                // produced record, so a handful of records leave several
-                // sealed segments behind the active one to evict.
-                CreatableTopicConfig {
-                    name: "internal.segment.bytes".into(),
-                    value: Some("1".into()),
-                    ..Default::default()
-                },
-            ],
+            vec![CreatableTopicConfig {
+                name: "internal.segment.bytes".into(),
+                value: Some("1".into()),
+                ..Default::default()
+            }],
         )
         .await;
-        broker.wait_until_partition_present(TOPIC, 0).await;
-        tokio::time::timeout(Duration::from_secs(5), async {
-            loop {
-                if broker
-                    .partition_log_config_for_test(TOPIC, 0)
-                    .is_some_and(|config| config.remote_storage_enable)
-                {
-                    break;
-                }
-                tokio::task::yield_now().await;
-            }
-        })
-        .await
-        .expect("remote topic config propagated");
         broker
             .produce_records_for_test(TOPIC, 0, 6)
             .await

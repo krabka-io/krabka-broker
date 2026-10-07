@@ -2,37 +2,20 @@
 //! configured count creates, how an existing source log bootstraps them, and
 //! which prefix a reopen recovers or discards.
 
-use std::sync::{Arc, Mutex};
-
 use assert2::assert;
-use krabka_ids::{Offset, PartitionIndex};
+use krabka_ids::Offset;
 use krabka_kraft_core::NodeId;
-use krabka_log::{Log, LogConfig};
 use krabka_units::{ByteSize, convert::ByteSizeExt as _};
 
-use super::{
-    QuorumWalStore,
-    test_support::{append_source, batch},
-};
+use super::test_support::{append_source, batch, open_log, partition_store, source_log};
 use crate::wal::WalStore;
 
 #[test]
 fn partition_quorum_uses_configured_local_replica_count() {
     let dir = tempfile::tempdir().unwrap();
-    let source = Arc::new(Mutex::new(
-        Log::open(dir.path().join("source"), LogConfig::default()).unwrap(),
-    ));
+    let source = source_log(dir.path());
 
-    QuorumWalStore::for_partition(
-        "topic",
-        None,
-        PartitionIndex(0),
-        dir.path(),
-        source,
-        None,
-        2,
-    )
-    .unwrap();
+    partition_store(dir.path(), source, 2);
 
     let root = dir.path().join("__diskless_wal_quorum/topic-0");
     assert!(root.join("replica-1").is_dir());
@@ -42,22 +25,11 @@ fn partition_quorum_uses_configured_local_replica_count() {
 #[test]
 fn partition_quorum_bootstraps_existing_source_into_every_replica() {
     let dir = tempfile::tempdir().unwrap();
-    let source = Arc::new(Mutex::new(
-        Log::open(dir.path().join("source"), LogConfig::default()).unwrap(),
-    ));
+    let source = source_log(dir.path());
     source.lock().unwrap().append(&mut batch(3)).unwrap();
     source.lock().unwrap().sync().unwrap();
 
-    let store = QuorumWalStore::for_partition(
-        "topic",
-        None,
-        PartitionIndex(0),
-        dir.path(),
-        source,
-        None,
-        3,
-    )
-    .unwrap();
+    let store = partition_store(dir.path(), source, 3);
 
     assert!(store.engine.durable_watermark() == Offset(3));
     assert!(store.engine.replica_end_offsets() == vec![Offset(3), Offset(3), Offset(3)]);
@@ -72,19 +44,8 @@ fn partition_quorum_bootstraps_existing_source_into_every_replica() {
 async fn partition_quorum_recovers_watermark_and_repairs_one_lost_replica() {
     let dir = tempfile::tempdir().unwrap();
     let source_dir = dir.path().join("source");
-    let source = Arc::new(Mutex::new(
-        Log::open(&source_dir, LogConfig::default()).unwrap(),
-    ));
-    let store = QuorumWalStore::for_partition(
-        "topic",
-        None,
-        PartitionIndex(0),
-        dir.path(),
-        source.clone(),
-        None,
-        3,
-    )
-    .unwrap();
+    let source = open_log(&source_dir);
+    let store = partition_store(dir.path(), source.clone(), 3);
 
     let (_results, leo) = append_source(&store, 1).await;
     assert!(store.sync_durable(leo).await.unwrap() == Offset(1));
@@ -93,19 +54,8 @@ async fn partition_quorum_recovers_watermark_and_repairs_one_lost_replica() {
 
     let lost_replica = dir.path().join("__diskless_wal_quorum/topic-0/replica-2");
     std::fs::remove_dir_all(&lost_replica).unwrap();
-    let source = Arc::new(Mutex::new(
-        Log::open(&source_dir, LogConfig::default()).unwrap(),
-    ));
-    let reopened = QuorumWalStore::for_partition(
-        "topic",
-        None,
-        PartitionIndex(0),
-        dir.path(),
-        source,
-        None,
-        3,
-    )
-    .unwrap();
+    let source = open_log(&source_dir);
+    let reopened = partition_store(dir.path(), source, 3);
 
     assert!(reopened.engine.durable_watermark() == Offset(1));
     assert!(reopened.engine.replica_end_offsets() == vec![Offset(1), Offset(1), Offset(1)]);
@@ -121,19 +71,8 @@ async fn partition_quorum_recovers_watermark_and_repairs_one_lost_replica() {
 async fn partition_quorum_discards_uncommitted_suffix_on_reopen() {
     let dir = tempfile::tempdir().unwrap();
     let source_dir = dir.path().join("source");
-    let source = Arc::new(Mutex::new(
-        Log::open(&source_dir, LogConfig::default()).unwrap(),
-    ));
-    let store = QuorumWalStore::for_partition(
-        "topic",
-        None,
-        PartitionIndex(0),
-        dir.path(),
-        source.clone(),
-        None,
-        3,
-    )
-    .unwrap();
+    let source = open_log(&source_dir);
+    let store = partition_store(dir.path(), source.clone(), 3);
     let (_results, leo) = append_source(&store, 2).await;
     assert!(store.sync_durable(leo).await.unwrap() == Offset(2));
 
@@ -145,19 +84,8 @@ async fn partition_quorum_discards_uncommitted_suffix_on_reopen() {
     drop(store);
     drop(source);
 
-    let source = Arc::new(Mutex::new(
-        Log::open(&source_dir, LogConfig::default()).unwrap(),
-    ));
-    let reopened = QuorumWalStore::for_partition(
-        "topic",
-        None,
-        PartitionIndex(0),
-        dir.path(),
-        source,
-        None,
-        3,
-    )
-    .unwrap();
+    let source = open_log(&source_dir);
+    let reopened = partition_store(dir.path(), source, 3);
 
     assert!(reopened.engine.durable_watermark() == Offset(2));
     assert!(reopened.engine.replica_end_offsets() == vec![Offset(2), Offset(2), Offset(2)]);

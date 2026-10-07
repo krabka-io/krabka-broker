@@ -9,7 +9,6 @@
 //! separately and drives the typed request.
 
 use assert2::assert;
-use krabka_broker::Broker;
 use krabka_protocol::owned::init_producer_id_request::InitProducerIdRequest;
 
 use crate::{
@@ -18,19 +17,11 @@ use crate::{
     acl_admin::create_topic_as_admin,
     client_api::{drive_init_producer_id_as_plain, drive_join_group_as_plain, join_group_request},
     polling::{retry_join_group_until_allowed, retry_metadata_until_topic_visible},
-    sasl_cluster::sasl_plain_broker_config,
 };
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn metadata_silent_filter_on_fetch_all() {
-    let log_dir = tempfile::tempdir().unwrap();
-    let cfg = sasl_plain_broker_config(
-        log_dir.path(),
-        &[("admin", "admin-secret"), ("alice", "wonderland")],
-        Some("admin"),
-    );
-
-    let handle = Broker::start(cfg).await.expect("broker must start");
+    let (handle, _dir, _) = crate::sasl_cluster::start_admin_alice().await;
     let addr = handle.listen_addr();
 
     create_topic_as_admin(addr, "t1", 1).await;
@@ -41,16 +32,10 @@ async fn metadata_silent_filter_on_fetch_all() {
     // authorizer evaluates every request rather than short-circuiting to
     // Allow.
     handle
-        .submit_metadata_record_for_test(krabka_metadata::MetadataRecord::V1AccessControlEntry(
-            krabka_metadata::AclEntry {
-                resource_type: krabka_metadata::ResourceType::Topic,
-                resource_name: "t1".into(),
-                pattern_type: krabka_metadata::PatternType::Literal,
-                principal: "User:alice".into(),
-                host: "*".into(),
-                operation: krabka_metadata::AclOperation::Describe,
-                permission_type: krabka_metadata::PermissionType::Allow,
-            },
+        .submit_metadata_record_for_test(crate::support::acl::topic_acl_record(
+            "t1",
+            "User:alice",
+            krabka_metadata::AclOperation::Describe,
         ))
         .await
         .expect("seed Describe-on-t1 ACL for alice");
@@ -80,14 +65,7 @@ async fn metadata_silent_filter_on_fetch_all() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn metadata_explicit_deny_on_named_topic() {
-    let log_dir = tempfile::tempdir().unwrap();
-    let cfg = sasl_plain_broker_config(
-        log_dir.path(),
-        &[("admin", "admin-secret"), ("alice", "wonderland")],
-        Some("admin"),
-    );
-
-    let handle = Broker::start(cfg).await.expect("broker must start");
+    let (handle, _dir, _) = crate::sasl_cluster::start_admin_alice().await;
     let addr = handle.listen_addr();
 
     create_topic_as_admin(addr, "t1", 1).await;
@@ -97,16 +75,10 @@ async fn metadata_explicit_deny_on_named_topic() {
     // shim off and gives alice *something* she's authorized to see, so
     // the Deny on t2 isn't merely "no ACLs anywhere".
     handle
-        .submit_metadata_record_for_test(krabka_metadata::MetadataRecord::V1AccessControlEntry(
-            krabka_metadata::AclEntry {
-                resource_type: krabka_metadata::ResourceType::Topic,
-                resource_name: "t1".into(),
-                pattern_type: krabka_metadata::PatternType::Literal,
-                principal: "User:alice".into(),
-                host: "*".into(),
-                operation: krabka_metadata::AclOperation::Describe,
-                permission_type: krabka_metadata::PermissionType::Allow,
-            },
+        .submit_metadata_record_for_test(crate::support::acl::topic_acl_record(
+            "t1",
+            "User:alice",
+            krabka_metadata::AclOperation::Describe,
         ))
         .await
         .expect("seed Describe-on-t1 ACL for alice");
@@ -136,14 +108,7 @@ async fn metadata_explicit_deny_on_named_topic() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn join_group_denied_without_group_read_acl() {
-    let log_dir = tempfile::tempdir().unwrap();
-    let cfg = sasl_plain_broker_config(
-        log_dir.path(),
-        &[("admin", "admin-secret"), ("alice", "wonderland")],
-        Some("admin"),
-    );
-
-    let handle = Broker::start(cfg).await.expect("broker must start");
+    let (handle, _dir, _) = crate::sasl_cluster::start_admin_alice().await;
     handle.wait_until_group_coordinator_ready().await;
     let addr = handle.listen_addr();
 
@@ -151,16 +116,10 @@ async fn join_group_denied_without_group_read_acl() {
     // authorizer would short-circuit to Allow on every check and the
     // Deny assertion below would never fire.
     handle
-        .submit_metadata_record_for_test(krabka_metadata::MetadataRecord::V1AccessControlEntry(
-            krabka_metadata::AclEntry {
-                resource_type: krabka_metadata::ResourceType::Topic,
-                resource_name: "_nothing".into(),
-                pattern_type: krabka_metadata::PatternType::Literal,
-                principal: "User:admin".into(),
-                host: "*".into(),
-                operation: krabka_metadata::AclOperation::Read,
-                permission_type: krabka_metadata::PermissionType::Allow,
-            },
+        .submit_metadata_record_for_test(crate::support::acl::topic_acl_record(
+            "_nothing",
+            "User:admin",
+            krabka_metadata::AclOperation::Read,
         ))
         .await
         .expect("seed dummy ACL");
@@ -225,28 +184,15 @@ async fn join_group_denied_without_group_read_acl() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn init_producer_id_denied_without_txn_acl() {
-    let log_dir = tempfile::tempdir().unwrap();
-    let cfg = sasl_plain_broker_config(
-        log_dir.path(),
-        &[("admin", "admin-secret"), ("alice", "wonderland")],
-        Some("admin"),
-    );
-
-    let handle = Broker::start(cfg).await.expect("broker must start");
+    let (handle, _dir, _) = crate::sasl_cluster::start_admin_alice().await;
     let addr = handle.listen_addr();
 
     // Seed a dummy ACL to disable the compat shim.
     handle
-        .submit_metadata_record_for_test(krabka_metadata::MetadataRecord::V1AccessControlEntry(
-            krabka_metadata::AclEntry {
-                resource_type: krabka_metadata::ResourceType::Topic,
-                resource_name: "_nothing".into(),
-                pattern_type: krabka_metadata::PatternType::Literal,
-                principal: "User:admin".into(),
-                host: "*".into(),
-                operation: krabka_metadata::AclOperation::Read,
-                permission_type: krabka_metadata::PermissionType::Allow,
-            },
+        .submit_metadata_record_for_test(crate::support::acl::topic_acl_record(
+            "_nothing",
+            "User:admin",
+            krabka_metadata::AclOperation::Read,
         ))
         .await
         .expect("seed dummy ACL");

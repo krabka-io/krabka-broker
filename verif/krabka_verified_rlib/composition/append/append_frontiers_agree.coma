@@ -1,35 +1,35 @@
-(* #"/workspace/crates/verified/src/composition/append.rs" 34 0 34 86 *)
+(* #"/workspace/crates/verified/src/composition/append.rs" 35 0 35 86 *)
 
-let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
-let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
-let%span sconvert = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/convert.rs" 274 26 274 51
-let%span sops = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/ops.rs" 688 18 691 9
-let%span sops'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/ops.rs" 702 25 702 33
-let%span sops'1 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/ops.rs" 701 18 701 32
+let%span sord = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sord'0 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span sconvert = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/convert.rs" 274 26 274 51
+let%span sops = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/ops.rs" 688 18 691 9
+let%span sops'0 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/ops.rs" 702 25 702 33
+let%span sops'1 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/ops.rs" 701 18 701 32
 let%span stimestamp = "/workspace/crates/verified/src/timestamp.rs" 84 10 90 1
-let%span sappend = "/workspace/crates/verified/src/composition/append.rs" 35 17 35 60
-let%span sappend'0 = "/workspace/crates/verified/src/composition/append.rs" 35 17 35 61
-let%span sappend'1 = "/workspace/crates/verified/src/composition/append.rs" 36 26 36 66
-let%span sappend'2 = "/workspace/crates/verified/src/composition/append.rs" 36 26 36 67
-let%span sappend'3 = "/workspace/crates/verified/src/composition/append.rs" 37 44 37 60
-let%span sappend'4 = "/workspace/crates/verified/src/composition/append.rs" 37 63 37 64
-let%span sappend'5 = "/workspace/crates/verified/src/composition/append.rs" 37 44 37 64
-let%span sappend'6 = "/workspace/crates/verified/src/composition/append.rs" 37 22 37 65
-let%span sappend'7 = "/workspace/crates/verified/src/composition/append.rs" 37 22 37 66
-let%span sappend'8 = "/workspace/crates/verified/src/composition/append.rs" 38 45 38 46
-let%span sappend'9 = "/workspace/crates/verified/src/composition/append.rs" 38 48 38 49
-let%span sappend'10 = "/workspace/crates/verified/src/composition/append.rs" 38 70 38 71
-let%span sappend'11 = "/workspace/crates/verified/src/composition/append.rs" 38 19 38 72
-let%span sappend'12 = "/workspace/crates/verified/src/composition/append.rs" 38 19 38 73
-let%span sappend'13 = "/workspace/crates/verified/src/composition/append.rs" 39 15 39 53
-let%span sappend'14 = "/workspace/crates/verified/src/composition/append.rs" 39 15 39 54
-let%span sappend'15 = "/workspace/crates/verified/src/composition/append.rs" 20 10 21 69
-let%span sappend'16 = "/workspace/crates/verified/src/composition/append.rs" 22 10 33 1
-let%span sfuture_log_swap_admission = "/workspace/crates/verified/src/storage/future_log_swap_admission.rs" 8 10 21 1
+let%span sappend = "/workspace/crates/verified/src/composition/append.rs" 36 17 36 60
+let%span sappend'0 = "/workspace/crates/verified/src/composition/append.rs" 36 17 36 61
+let%span sappend'1 = "/workspace/crates/verified/src/composition/append.rs" 37 26 37 66
+let%span sappend'2 = "/workspace/crates/verified/src/composition/append.rs" 37 26 37 67
+let%span sappend'3 = "/workspace/crates/verified/src/composition/append.rs" 38 44 38 60
+let%span sappend'4 = "/workspace/crates/verified/src/composition/append.rs" 38 63 38 64
+let%span sappend'5 = "/workspace/crates/verified/src/composition/append.rs" 38 44 38 64
+let%span sappend'6 = "/workspace/crates/verified/src/composition/append.rs" 38 22 38 65
+let%span sappend'7 = "/workspace/crates/verified/src/composition/append.rs" 38 22 38 66
+let%span sappend'8 = "/workspace/crates/verified/src/composition/append.rs" 39 45 39 46
+let%span sappend'9 = "/workspace/crates/verified/src/composition/append.rs" 39 48 39 49
+let%span sappend'10 = "/workspace/crates/verified/src/composition/append.rs" 39 70 39 71
+let%span sappend'11 = "/workspace/crates/verified/src/composition/append.rs" 39 19 39 72
+let%span sappend'12 = "/workspace/crates/verified/src/composition/append.rs" 39 19 39 73
+let%span sappend'13 = "/workspace/crates/verified/src/composition/append.rs" 40 15 40 53
+let%span sappend'14 = "/workspace/crates/verified/src/composition/append.rs" 40 15 40 54
+let%span sappend'15 = "/workspace/crates/verified/src/composition/append.rs" 21 10 22 69
+let%span sappend'16 = "/workspace/crates/verified/src/composition/append.rs" 23 10 34 1
+let%span sfuture_log_swap_admission = "/workspace/crates/verified/src/storage/future_log_swap_admission.rs" 9 10 22 1
 let%span sproduce = "/workspace/crates/verified/src/produce.rs" 18 10 26 1
 let%span soffset_allocator = "/workspace/crates/verified/src/offset_allocator.rs" 94 10 94 87
 let%span soffset_allocator'0 = "/workspace/crates/verified/src/offset_allocator.rs" 95 10 96 55
-let%span sindex_frontier = "/workspace/crates/verified/src/local_recovery/index_frontier.rs" 101 10 119 1
+let%span sindex_frontier = "/workspace/crates/verified/src/local_recovery/index_frontier.rs" 102 10 120 1
 
 use creusot.int.Int64
 use creusot.int.Int32
@@ -285,8 +285,8 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let append_frontiers_agree [#"/workspace/crates/verified/src/composition/append.rs" 34 0 34 86]
-  (base: Int64.t) (delta: Int32.t) (return (x: t_Option_AppendFrontiers)) = (! bb0
+let append_frontiers_agree [#"/workspace/crates/verified/src/composition/append.rs" 35 0 35 86] (base: Int64.t)
+  (delta: Int32.t) (return (x: t_Option_AppendFrontiers)) = (! bb0
   [ bb0 = s0
     [ s0 = local_append_coordinates [%#sappend] {base} {base} {delta}
         (fun (_x: t_Option_tup2_i64_i64) -> [ &_11 <- _x ] s1)

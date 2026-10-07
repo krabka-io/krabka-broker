@@ -1,18 +1,18 @@
-(* #"/workspace/crates/verified/src/consensus/log_is_up_to_date.rs" 166 0 166 67 *)
+(* #"/workspace/crates/verified/src/consensus/log_is_up_to_date.rs" 167 0 167 67 *)
 
-let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
-let%span sconvert = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/convert.rs" 274 26 274 51
-let%span snum = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 338 26 338 48
-let%span slog_is_up_to_date = "/workspace/crates/verified/src/consensus/log_is_up_to_date.rs" 167 18 167 19
-let%span slog_is_up_to_date'0 = "/workspace/crates/verified/src/consensus/log_is_up_to_date.rs" 168 15 168 16
-let%span slog_is_up_to_date'1 = "/workspace/crates/verified/src/consensus/log_is_up_to_date.rs" 172 30 172 51
-let%span slog_is_up_to_date'2 = "/workspace/crates/verified/src/consensus/log_is_up_to_date.rs" 172 14 172 52
-let%span slog_is_up_to_date'3 = "/workspace/crates/verified/src/consensus/log_is_up_to_date.rs" 173 10 173 26
-let%span slog_is_up_to_date'4 = "/workspace/crates/verified/src/consensus/log_is_up_to_date.rs" 173 40 173 61
-let%span slog_is_up_to_date'5 = "/workspace/crates/verified/src/consensus/log_is_up_to_date.rs" 173 10 173 62
-let%span slog_is_up_to_date'6 = "/workspace/crates/verified/src/consensus/log_is_up_to_date.rs" 174 4 174 17
-let%span slog_is_up_to_date'7 = "/workspace/crates/verified/src/consensus/log_is_up_to_date.rs" 163 10 163 40
-let%span slog_is_up_to_date'8 = "/workspace/crates/verified/src/consensus/log_is_up_to_date.rs" 164 10 164 45
+let%span sord = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span snum = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 338 26 338 48
+let%span sconvert = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/convert.rs" 274 26 274 51
+let%span slog_is_up_to_date = "/workspace/crates/verified/src/consensus/log_is_up_to_date.rs" 168 18 168 19
+let%span slog_is_up_to_date'0 = "/workspace/crates/verified/src/consensus/log_is_up_to_date.rs" 169 15 169 16
+let%span slog_is_up_to_date'1 = "/workspace/crates/verified/src/consensus/log_is_up_to_date.rs" 173 30 173 51
+let%span slog_is_up_to_date'2 = "/workspace/crates/verified/src/consensus/log_is_up_to_date.rs" 173 14 173 52
+let%span slog_is_up_to_date'3 = "/workspace/crates/verified/src/consensus/log_is_up_to_date.rs" 174 10 174 26
+let%span slog_is_up_to_date'4 = "/workspace/crates/verified/src/consensus/log_is_up_to_date.rs" 174 40 174 61
+let%span slog_is_up_to_date'5 = "/workspace/crates/verified/src/consensus/log_is_up_to_date.rs" 174 10 174 62
+let%span slog_is_up_to_date'6 = "/workspace/crates/verified/src/consensus/log_is_up_to_date.rs" 175 4 175 17
+let%span slog_is_up_to_date'7 = "/workspace/crates/verified/src/consensus/log_is_up_to_date.rs" 164 10 164 40
+let%span slog_is_up_to_date'8 = "/workspace/crates/verified/src/consensus/log_is_up_to_date.rs" 165 10 165 45
 
 use creusot.int.UInt64
 use creusot.int.UInt32
@@ -36,8 +36,8 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let election_jitter_ms [#"/workspace/crates/verified/src/consensus/log_is_up_to_date.rs" 166 0 166 67]
-  (me: UInt64.t) (epoch: UInt32.t) (base_ms: UInt64.t) (return (x: UInt64.t)) = (! bb0
+let election_jitter_ms [#"/workspace/crates/verified/src/consensus/log_is_up_to_date.rs" 167 0 167 67] (me: UInt64.t)
+  (epoch: UInt32.t) (base_ms: UInt64.t) (return (x: UInt64.t)) = (! bb0
   [ bb0 = s0
     [ s0 = [ &_9 <- base_ms = ([%#slog_is_up_to_date] (0: UInt64.t)) ] s1
     | s1 = any [ br0 -> {_9 = false} (! bb2) | br1 -> {_9} (! bb1) ] ]

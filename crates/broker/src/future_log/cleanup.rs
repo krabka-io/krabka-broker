@@ -100,16 +100,26 @@ mod tests {
 
     use super::*;
 
+    struct DropCounter(Arc<AtomicU64>);
+
+    impl Drop for DropCounter {
+        fn drop(&mut self) {
+            self.0.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
+    fn pending_move(started: &Arc<AtomicU64>, dropped: &Arc<AtomicU64>) -> JoinHandle<()> {
+        let started = Arc::clone(started);
+        let dropped = Arc::clone(dropped);
+        tokio::spawn(async move {
+            let _drop_counter = DropCounter(dropped);
+            started.fetch_add(1, Ordering::SeqCst);
+            std::future::pending::<()>().await;
+        })
+    }
+
     #[tokio::test]
     async fn shutdown_moves_cancels_and_awaits_every_task() {
-        struct DropCounter(Arc<AtomicU64>);
-
-        impl Drop for DropCounter {
-            fn drop(&mut self) {
-                self.0.fetch_add(1, Ordering::SeqCst);
-            }
-        }
-
         let dir = tempdir().expect("tempdir");
         let future_log = Arc::new(Mutex::new(
             Log::open(dir.path(), LogConfig::default()).expect("open future log"),
@@ -121,13 +131,7 @@ mod tests {
 
         for partition in [PartitionIndex(0), PartitionIndex(1)] {
             let cancel = CancellationToken::new();
-            let task_started = Arc::clone(&started);
-            let task_dropped = Arc::clone(&dropped);
-            let task = tokio::spawn(async move {
-                let _drop_counter = DropCounter(task_dropped);
-                task_started.fetch_add(1, Ordering::SeqCst);
-                std::future::pending::<()>().await;
-            });
+            let task = pending_move(&started, &dropped);
             future_logs.insert(
                 ("t".to_string(), partition),
                 Arc::new(FutureLogState {
@@ -163,14 +167,6 @@ mod tests {
 
     #[tokio::test]
     async fn abort_moves_cancels_and_aborts_every_task() {
-        struct DropCounter(Arc<AtomicU64>);
-
-        impl Drop for DropCounter {
-            fn drop(&mut self) {
-                self.0.fetch_add(1, Ordering::SeqCst);
-            }
-        }
-
         let dir = tempdir().expect("tempdir");
         let future_log = Arc::new(Mutex::new(
             Log::open(dir.path(), LogConfig::default()).expect("open future log"),
@@ -179,13 +175,7 @@ mod tests {
         let started = Arc::new(AtomicU64::new(0));
         let dropped = Arc::new(AtomicU64::new(0));
         let cancel = CancellationToken::new();
-        let task_started = Arc::clone(&started);
-        let task_dropped = Arc::clone(&dropped);
-        let task = tokio::spawn(async move {
-            let _drop_counter = DropCounter(task_dropped);
-            task_started.fetch_add(1, Ordering::SeqCst);
-            std::future::pending::<()>().await;
-        });
+        let task = pending_move(&started, &dropped);
         future_logs.insert(
             ("t".to_string(), PartitionIndex(0)),
             Arc::new(FutureLogState {

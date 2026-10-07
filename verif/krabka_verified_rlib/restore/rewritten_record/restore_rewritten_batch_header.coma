@@ -1,41 +1,41 @@
-(* #"/workspace/crates/verified/src/restore/rewritten_record.rs" 82 0 85 16 *)
+(* #"/workspace/crates/verified/src/restore/rewritten_record.rs" 83 0 86 16 *)
 
-let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
-let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
-let%span sconvert = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/convert.rs" 274 26 274 51
-let%span snum = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 328 20 329 89
-let%span snum'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 332 26 332 87
-let%span sops = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/ops.rs" 688 18 691 9
-let%span sops'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/ops.rs" 702 25 702 33
-let%span sops'1 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/ops.rs" 701 18 701 32
-let%span srewritten_record = "/workspace/crates/verified/src/restore/rewritten_record.rs" 87 35 87 37
-let%span srewritten_record'0 = "/workspace/crates/verified/src/restore/rewritten_record.rs" 88 38 88 40
-let%span srewritten_record'1 = "/workspace/crates/verified/src/restore/rewritten_record.rs" 89 37 89 39
-let%span srewritten_record'2 = "/workspace/crates/verified/src/restore/rewritten_record.rs" 86 25 89 39
-let%span srewritten_record'3 = "/workspace/crates/verified/src/restore/rewritten_record.rs" 91 8 95 48
-let%span srewritten_record'4 = "/workspace/crates/verified/src/restore/rewritten_record.rs" 93 43 93 44
-let%span srewritten_record'5 = "/workspace/crates/verified/src/restore/rewritten_record.rs" 94 46 94 47
-let%span srewritten_record'6 = "/workspace/crates/verified/src/restore/rewritten_record.rs" 95 45 95 47
-let%span srewritten_record'7 = "/workspace/crates/verified/src/restore/rewritten_record.rs" 92 15 95 48
-let%span srewritten_record'8 = "/workspace/crates/verified/src/restore/rewritten_record.rs" 97 8 100 47
-let%span srewritten_record'9 = "/workspace/crates/verified/src/restore/rewritten_record.rs" 98 40 98 41
-let%span srewritten_record'10 = "/workspace/crates/verified/src/restore/rewritten_record.rs" 99 46 99 47
-let%span srewritten_record'11 = "/workspace/crates/verified/src/restore/rewritten_record.rs" 100 45 100 46
-let%span srewritten_record'12 = "/workspace/crates/verified/src/restore/rewritten_record.rs" 98 15 100 47
-let%span srewritten_record'13 = "/workspace/crates/verified/src/restore/rewritten_record.rs" 103 32 103 33
-let%span srewritten_record'14 = "/workspace/crates/verified/src/restore/rewritten_record.rs" 104 38 104 39
-let%span srewritten_record'15 = "/workspace/crates/verified/src/restore/rewritten_record.rs" 105 34 105 35
-let%span srewritten_record'16 = "/workspace/crates/verified/src/restore/rewritten_record.rs" 106 61 106 62
-let%span srewritten_record'17 = "/workspace/crates/verified/src/restore/rewritten_record.rs" 106 89 106 90
-let%span srewritten_record'18 = "/workspace/crates/verified/src/restore/rewritten_record.rs" 113 21 113 56
-let%span srewritten_record'19 = "/workspace/crates/verified/src/restore/rewritten_record.rs" 111 4 113 57
-let%span srewritten_record'20 = "/workspace/crates/verified/src/restore/rewritten_record.rs" 111 4 113 58
-let%span srewritten_record'21 = "/workspace/crates/verified/src/restore/rewritten_record.rs" 114 21 114 22
-let%span srewritten_record'22 = "/workspace/crates/verified/src/restore/rewritten_record.rs" 111 4 114 23
-let%span srewritten_record'23 = "/workspace/crates/verified/src/restore/rewritten_record.rs" 75 10 80 1
-let%span srewritten_record'24 = "/workspace/crates/verified/src/restore/rewritten_record.rs" 65 8 69 79
-let%span srewritten_record'25 = "/workspace/crates/verified/src/restore/rewritten_record.rs" 24 8 35 9
-let%span srewritten_record'26 = "/workspace/crates/verified/src/restore/rewritten_record.rs" 46 8 49 44
+let%span sord = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span sord'0 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span snum = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 328 20 329 89
+let%span snum'0 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 332 26 332 87
+let%span sconvert = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/convert.rs" 274 26 274 51
+let%span sops = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/ops.rs" 688 18 691 9
+let%span sops'0 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/ops.rs" 702 25 702 33
+let%span sops'1 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/ops.rs" 701 18 701 32
+let%span srewritten_record = "/workspace/crates/verified/src/restore/rewritten_record.rs" 88 35 88 37
+let%span srewritten_record'0 = "/workspace/crates/verified/src/restore/rewritten_record.rs" 89 38 89 40
+let%span srewritten_record'1 = "/workspace/crates/verified/src/restore/rewritten_record.rs" 90 37 90 39
+let%span srewritten_record'2 = "/workspace/crates/verified/src/restore/rewritten_record.rs" 87 25 90 39
+let%span srewritten_record'3 = "/workspace/crates/verified/src/restore/rewritten_record.rs" 92 8 96 48
+let%span srewritten_record'4 = "/workspace/crates/verified/src/restore/rewritten_record.rs" 94 43 94 44
+let%span srewritten_record'5 = "/workspace/crates/verified/src/restore/rewritten_record.rs" 95 46 95 47
+let%span srewritten_record'6 = "/workspace/crates/verified/src/restore/rewritten_record.rs" 96 45 96 47
+let%span srewritten_record'7 = "/workspace/crates/verified/src/restore/rewritten_record.rs" 93 15 96 48
+let%span srewritten_record'8 = "/workspace/crates/verified/src/restore/rewritten_record.rs" 98 8 101 47
+let%span srewritten_record'9 = "/workspace/crates/verified/src/restore/rewritten_record.rs" 99 40 99 41
+let%span srewritten_record'10 = "/workspace/crates/verified/src/restore/rewritten_record.rs" 100 46 100 47
+let%span srewritten_record'11 = "/workspace/crates/verified/src/restore/rewritten_record.rs" 101 45 101 46
+let%span srewritten_record'12 = "/workspace/crates/verified/src/restore/rewritten_record.rs" 99 15 101 47
+let%span srewritten_record'13 = "/workspace/crates/verified/src/restore/rewritten_record.rs" 104 32 104 33
+let%span srewritten_record'14 = "/workspace/crates/verified/src/restore/rewritten_record.rs" 105 38 105 39
+let%span srewritten_record'15 = "/workspace/crates/verified/src/restore/rewritten_record.rs" 106 34 106 35
+let%span srewritten_record'16 = "/workspace/crates/verified/src/restore/rewritten_record.rs" 107 61 107 62
+let%span srewritten_record'17 = "/workspace/crates/verified/src/restore/rewritten_record.rs" 107 89 107 90
+let%span srewritten_record'18 = "/workspace/crates/verified/src/restore/rewritten_record.rs" 114 21 114 56
+let%span srewritten_record'19 = "/workspace/crates/verified/src/restore/rewritten_record.rs" 112 4 114 57
+let%span srewritten_record'20 = "/workspace/crates/verified/src/restore/rewritten_record.rs" 112 4 114 58
+let%span srewritten_record'21 = "/workspace/crates/verified/src/restore/rewritten_record.rs" 115 21 115 22
+let%span srewritten_record'22 = "/workspace/crates/verified/src/restore/rewritten_record.rs" 112 4 115 23
+let%span srewritten_record'23 = "/workspace/crates/verified/src/restore/rewritten_record.rs" 76 10 81 1
+let%span srewritten_record'24 = "/workspace/crates/verified/src/restore/rewritten_record.rs" 66 8 70 79
+let%span srewritten_record'25 = "/workspace/crates/verified/src/restore/rewritten_record.rs" 25 8 36 9
+let%span srewritten_record'26 = "/workspace/crates/verified/src/restore/rewritten_record.rs" 47 8 50 44
 
 use creusot.int.Int64
 use creusot.int.Int16
@@ -136,19 +136,19 @@ predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord'0] oth
 
 meta "rewrite_def" predicate ge_log_Int
 
-predicate legal_header [#"/workspace/crates/verified/src/restore/rewritten_record.rs" 63 0 63 65] (layout: t_RestoreLayout) (control'0: bool) =
+predicate legal_header [#"/workspace/crates/verified/src/restore/rewritten_record.rs" 64 0 64 65] (layout: t_RestoreLayout) (control'0: bool) =
   [%#srewritten_record'24] ge_log_Int (Int64.to_int layout.base_offset) 0
   /\ ge_log_Int (Int32.to_int layout.last_offset_delta) 0
   /\ ge_log_Int (Int32.to_int layout.records_count) 0
   /\ (control'0 -> Int32.to_int layout.last_offset_delta = 0 /\ Int32.to_int layout.records_count <= 1)
   /\ Int64.to_int layout.base_offset + Int32.to_int layout.last_offset_delta + 1 <= Int64.to_int const_MAX
 
-predicate non_idempotent_producer [#"/workspace/crates/verified/src/restore/rewritten_record.rs" 44 0 44 65] (producer: t_RestoreProducer) =
+predicate non_idempotent_producer [#"/workspace/crates/verified/src/restore/rewritten_record.rs" 45 0 45 65] (producer: t_RestoreProducer) =
   [%#srewritten_record'26] not producer.transactional
   /\ Int64.to_int producer.producer_id = - 1
   /\ Int16.to_int producer.producer_epoch = - 1 /\ Int32.to_int producer.base_sequence = - 1
 
-predicate legal_producer [#"/workspace/crates/verified/src/restore/rewritten_record.rs" 22 0 22 56] (producer: t_RestoreProducer) =
+predicate legal_producer [#"/workspace/crates/verified/src/restore/rewritten_record.rs" 23 0 23 56] (producer: t_RestoreProducer) =
   [%#srewritten_record'25] if producer.control then
     non_idempotent_producer producer
     \/ producer.transactional
@@ -164,7 +164,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let restore_rewritten_batch_header [#"/workspace/crates/verified/src/restore/rewritten_record.rs" 82 0 85 16]
+let restore_rewritten_batch_header [#"/workspace/crates/verified/src/restore/rewritten_record.rs" 83 0 86 16]
   (layout: t_RestoreLayout) (producer: t_RestoreProducer) (return (x: t_Option_i64)) = (! bb0
   [ bb0 = any [ br0 -> {producer.transactional = false} (! bb1) | br1 -> {producer.transactional} (! bb6) ]
   | bb1 = s0

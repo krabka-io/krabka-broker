@@ -129,20 +129,14 @@ where
 mod tests {
     use assert2::assert;
     use bytes::BytesMut;
-    use krabka_protocol::owned::{
-        create_topics_request::CreatableTopicConfig,
-        list_offsets_response::ListOffsetsPartitionResponse,
-    };
+    use krabka_protocol::owned::list_offsets_response::ListOffsetsPartitionResponse;
     use krabka_remote_storage::{
         LogSegmentData, RemoteLogSegmentDetails, RemoteLogSegmentId, RemoteLogSegmentMetadata,
         RemoteLogSegmentMetadataUpdate, RemoteLogSegmentState, TopicIdPartition,
     };
 
     use super::*;
-    use crate::{
-        codes,
-        handlers::list_offsets::test_support::{client_for, create_topic, list_one},
-    };
+    use crate::{codes, handlers::list_offsets::test_support::list_one};
 
     /// The remote tier answers first, and what it answers decides the row: a
     /// hit competes with any earlier local match; a miss or a failure reads the local log,
@@ -277,38 +271,8 @@ mod tests {
 
         const TOPIC: &str = "list-offsets-remote-timestamp";
 
-        let remote_dir = tempfile::tempdir().expect("remote tempdir");
-        let remote_path = remote_dir.path().to_path_buf();
-        let (broker, _dir) = crate::test_support::start_broker_no_audit_with(move |config| {
-            config.remote_storage_backend =
-                Some(crate::config::RemoteStorageBackend::Local { dir: remote_path });
-        })
-        .await;
-        let client = client_for(&broker).await;
-        create_topic(
-            &client,
-            TOPIC,
-            vec![CreatableTopicConfig {
-                name: "remote.storage.enable".into(),
-                value: Some("true".into()),
-                ..Default::default()
-            }],
-        )
-        .await;
-        broker.wait_until_partition_present(TOPIC, 0).await;
-        tokio::time::timeout(Duration::from_secs(5), async {
-            loop {
-                if broker
-                    .partition_log_config_for_test(TOPIC, 0)
-                    .is_some_and(|config| config.remote_storage_enable)
-                {
-                    break;
-                }
-                tokio::task::yield_now().await;
-            }
-        })
-        .await
-        .expect("remote topic config propagated");
+        let (broker, client, _dirs) =
+            crate::handlers::list_offsets::test_support::remote_topic(TOPIC, vec![]).await;
 
         let broker_arc = broker.broker_arc_for_test();
         let partition = broker_arc

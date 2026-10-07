@@ -53,6 +53,36 @@ fn voter_set_with_controller(id: NodeId, host: &str, port: u16) -> VoterSet {
     VoterSet::from_voters([voter_with_controller(id, host, port)])
 }
 
+fn recorded_sender(
+    address: std::net::SocketAddr,
+) -> (
+    RealPeerSender,
+    Arc<std::sync::Mutex<Vec<ConnectionOptions>>>,
+) {
+    let options = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let sender = RealPeerSender::new(
+        voter_set_with_controller(NodeId(2), &address.ip().to_string(), address.port()),
+        &[],
+        "raft-client".into(),
+        Arc::new(TestRecordingDialer {
+            options: options.clone(),
+        }),
+        krabka_client_core::ConnectionDispatchQueueCapacity::new(7).unwrap(),
+        krabka_client_core::ClientFrameMax::try_from(krabka_units::kibibytes(32)).unwrap(),
+    );
+    (sender, options)
+}
+
+async fn answer_fetch_connection(listener: &tokio::net::TcpListener, answer: &[u8]) {
+    let (mut stream, _) = listener.accept().await.unwrap();
+    let api_versions = read_frame(&mut stream).await;
+    let (_, _, correlation, _, _) = parse_request_header(&api_versions);
+    write_response_frame(&mut stream, correlation, false, &api_versions_response_v0()).await;
+    let request = read_frame(&mut stream).await;
+    let (_, _, correlation, _, _) = parse_request_header(&request);
+    write_response_frame(&mut stream, correlation, true, answer).await;
+}
+
 fn api_versions_response_v0() -> Vec<u8> {
     let resp = ApiVersionsResponse {
         error_code: 0,
@@ -235,18 +265,7 @@ async fn probe_reports_kraft_support_only_within_the_advertised_range() {
             write_response_frame(&mut stream, corr, false, &body).await;
         });
 
-        let recorded_options = Arc::new(std::sync::Mutex::new(Vec::new()));
-        let voters = voter_set_with_controller(NodeId(2), &addr.ip().to_string(), addr.port());
-        let sender = RealPeerSender::new(
-            voters,
-            &[],
-            "raft-client".into(),
-            Arc::new(TestRecordingDialer {
-                options: Arc::clone(&recorded_options),
-            }),
-            krabka_client_core::ConnectionDispatchQueueCapacity::new(7).unwrap(),
-            krabka_client_core::ClientFrameMax::try_from(krabka_units::kibibytes(32)).unwrap(),
-        );
+        let (sender, recorded_options) = recorded_sender(addr);
         let got = PeerSender::probe_kraft_version(&sender, &addr.to_string(), finalized)
             .await
             .expect("probe");
@@ -290,18 +309,7 @@ async fn real_peer_sender_sends_expected_api_version_client_id_and_body() {
         write_response_frame(&mut stream, corr, true, b"raft-response").await;
     });
 
-    let recorded_options = Arc::new(std::sync::Mutex::new(Vec::new()));
-    let voters = voter_set_with_controller(NodeId(2), &addr.ip().to_string(), addr.port());
-    let sender = RealPeerSender::new(
-        voters,
-        &[],
-        "raft-client".into(),
-        Arc::new(TestRecordingDialer {
-            options: Arc::clone(&recorded_options),
-        }),
-        krabka_client_core::ConnectionDispatchQueueCapacity::new(7).unwrap(),
-        krabka_client_core::ClientFrameMax::try_from(krabka_units::kibibytes(32)).unwrap(),
-    );
+    let (sender, recorded_options) = recorded_sender(addr);
     assert2::assert!(sender.dispatch_queue_capacity.get() == 7);
     assert2::assert!(sender.frame_max.size() == krabka_units::kibibytes(32));
     let response = sender
@@ -355,13 +363,7 @@ async fn a_peer_stays_reachable_after_it_leaves_the_voter_set() {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         let server = tokio::spawn(async move {
-            let (mut stream, _) = listener.accept().await.unwrap();
-            let api_versions = read_frame(&mut stream).await;
-            let (_, _, corr, _, _) = parse_request_header(&api_versions);
-            write_response_frame(&mut stream, corr, false, &api_versions_response_v0()).await;
-            let request = read_frame(&mut stream).await;
-            let (_, _, corr, _, _) = parse_request_header(&request);
-            write_response_frame(&mut stream, corr, true, b"fetch-response").await;
+            answer_fetch_connection(&listener, b"fetch-response").await;
         });
 
         let host = addr.ip().to_string();
@@ -418,13 +420,7 @@ async fn a_peer_stays_reachable_after_it_leaves_the_voter_set() {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let server = tokio::spawn(async move {
-        let (mut stream, _) = listener.accept().await.unwrap();
-        let api_versions = read_frame(&mut stream).await;
-        let (_, _, corr, _, _) = parse_request_header(&api_versions);
-        write_response_frame(&mut stream, corr, false, &api_versions_response_v0()).await;
-        let request = read_frame(&mut stream).await;
-        let (_, _, corr, _, _) = parse_request_header(&request);
-        write_response_frame(&mut stream, corr, true, b"fetch-response").await;
+        answer_fetch_connection(&listener, b"fetch-response").await;
     });
     let host = addr.ip().to_string();
     let new_voter = voter_with_controller(NodeId(5), &host, addr.port());
@@ -454,13 +450,7 @@ async fn a_send_dials_again_when_the_cached_connection_has_closed() {
     let addr = listener.local_addr().unwrap();
     let server = tokio::spawn(async move {
         for answer in [&b"first"[..], &b"second"[..]] {
-            let (mut stream, _) = listener.accept().await.unwrap();
-            let api_versions = read_frame(&mut stream).await;
-            let (_, _, corr, _, _) = parse_request_header(&api_versions);
-            write_response_frame(&mut stream, corr, false, &api_versions_response_v0()).await;
-            let request = read_frame(&mut stream).await;
-            let (_, _, corr, _, _) = parse_request_header(&request);
-            write_response_frame(&mut stream, corr, true, answer).await;
+            answer_fetch_connection(&listener, answer).await;
             // The stream drops here: the peer closes the link.
         }
     });

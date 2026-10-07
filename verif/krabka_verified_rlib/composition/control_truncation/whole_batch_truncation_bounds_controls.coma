@@ -1,9 +1,9 @@
-(* #"/workspace/crates/verified/src/composition/control_truncation.rs" 38 0 45 22 *)
+(* #"/workspace/crates/verified/src/composition/control_truncation.rs" 53 0 60 22 *)
 
-let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
-let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
-let%span swell_founded = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/well_founded.rs" 43 8 43 33
-let%span sslice = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 331 18 331 22
+let%span sord = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sord'0 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span swell_founded = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/well_founded.rs" 43 8 43 33
+let%span sslice = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 331 18 331 22
 let%span sfuture_log_swap_admission = "/workspace/crates/verified/src/storage/future_log_swap_admission.rs" 101 10 101 40
 let%span sfuture_log_swap_admission'0 = "/workspace/crates/verified/src/storage/future_log_swap_admission.rs" 108 10 108 30
 let%span sfuture_log_swap_admission'1 = "/workspace/crates/verified/src/storage/future_log_swap_admission.rs" 109 10 109 29
@@ -13,34 +13,32 @@ let%span smetadata_record_offset_deltas'0 = "/workspace/crates/verified/src/raft
 let%span smetadata_record_offset_deltas'1 = "/workspace/crates/verified/src/raft/metadata_record_offset_deltas.rs" 141 28 142 54
 let%span smetadata_record_offset_deltas'2 = "/workspace/crates/verified/src/raft/metadata_record_offset_deltas.rs" 143 28 144 68
 let%span smetadata_record_offset_deltas'3 = "/workspace/crates/verified/src/raft/metadata_record_offset_deltas.rs" 131 28 131 60
-let%span scontrol_truncation = "/workspace/crates/verified/src/composition/control_truncation.rs" 46 19 46 25
-let%span scontrol_truncation'0 = "/workspace/crates/verified/src/composition/control_truncation.rs" 52 14 52 33
-let%span scontrol_truncation'1 = "/workspace/crates/verified/src/composition/control_truncation.rs" 53 17 53 27
-let%span scontrol_truncation'2 = "/workspace/crates/verified/src/composition/control_truncation.rs" 51 16 51 72
-let%span scontrol_truncation'3 = "/workspace/crates/verified/src/composition/control_truncation.rs" 50 16 50 55
-let%span scontrol_truncation'4 = "/workspace/crates/verified/src/composition/control_truncation.rs" 49 16 49 84
-let%span scontrol_truncation'5 = "/workspace/crates/verified/src/composition/control_truncation.rs" 48 16 48 36
-let%span scontrol_truncation'6 = "/workspace/crates/verified/src/composition/control_truncation.rs" 53 57 53 67
-let%span scontrol_truncation'7 = "/workspace/crates/verified/src/composition/control_truncation.rs" 53 70 53 71
-let%span scontrol_truncation'8 = "/workspace/crates/verified/src/composition/control_truncation.rs" 53 57 53 71
-let%span scontrol_truncation'9 = "/workspace/crates/verified/src/composition/control_truncation.rs" 53 31 53 77
-let%span scontrol_truncation'10 = "/workspace/crates/verified/src/composition/control_truncation.rs" 54 14 54 24
-let%span scontrol_truncation'11 = "/workspace/crates/verified/src/composition/control_truncation.rs" 55 16 55 17
-let%span scontrol_truncation'12 = "/workspace/crates/verified/src/composition/control_truncation.rs" 55 8 55 17
-let%span scontrol_truncation'13 = "/workspace/crates/verified/src/composition/control_truncation.rs" 57 18 57 83
-let%span scontrol_truncation'14 = "/workspace/crates/verified/src/composition/control_truncation.rs" 58 14 58 52
-let%span scontrol_truncation'15 = "/workspace/crates/verified/src/composition/control_truncation.rs" 59 19 59 57
-let%span scontrol_truncation'16 = "/workspace/crates/verified/src/composition/control_truncation.rs" 60 20 60 58
-let%span scontrol_truncation'17 = "/workspace/crates/verified/src/composition/control_truncation.rs" 61 18 61 41
-let%span scontrol_truncation'18 = "/workspace/crates/verified/src/composition/control_truncation.rs" 62 18 62 52
-let%span scontrol_truncation'19 = "/workspace/crates/verified/src/composition/control_truncation.rs" 63 16 63 50
-let%span scontrol_truncation'20 = "/workspace/crates/verified/src/composition/control_truncation.rs" 17 11 17 58
-let%span scontrol_truncation'21 = "/workspace/crates/verified/src/composition/control_truncation.rs" 18 11 18 83
-let%span scontrol_truncation'22 = "/workspace/crates/verified/src/composition/control_truncation.rs" 19 11 19 94
-let%span scontrol_truncation'23 = "/workspace/crates/verified/src/composition/control_truncation.rs" 20 11 20 122
-let%span scontrol_truncation'24 = "/workspace/crates/verified/src/composition/control_truncation.rs" 21 11 21 103
-let%span scontrol_truncation'25 = "/workspace/crates/verified/src/composition/control_truncation.rs" 22 11 22 28
-let%span scontrol_truncation'26 = "/workspace/crates/verified/src/composition/control_truncation.rs" 23 10 37 30
+let%span scontrol_truncation = "/workspace/crates/verified/src/composition/control_truncation.rs" 61 19 61 25
+let%span scontrol_truncation'0 = "/workspace/crates/verified/src/composition/control_truncation.rs" 67 14 67 33
+let%span scontrol_truncation'1 = "/workspace/crates/verified/src/composition/control_truncation.rs" 68 17 68 27
+let%span scontrol_truncation'2 = "/workspace/crates/verified/src/composition/control_truncation.rs" 66 16 66 72
+let%span scontrol_truncation'3 = "/workspace/crates/verified/src/composition/control_truncation.rs" 65 16 65 55
+let%span scontrol_truncation'4 = "/workspace/crates/verified/src/composition/control_truncation.rs" 64 16 64 84
+let%span scontrol_truncation'5 = "/workspace/crates/verified/src/composition/control_truncation.rs" 63 16 63 36
+let%span scontrol_truncation'6 = "/workspace/crates/verified/src/composition/control_truncation.rs" 68 57 68 67
+let%span scontrol_truncation'7 = "/workspace/crates/verified/src/composition/control_truncation.rs" 68 70 68 71
+let%span scontrol_truncation'8 = "/workspace/crates/verified/src/composition/control_truncation.rs" 68 57 68 71
+let%span scontrol_truncation'9 = "/workspace/crates/verified/src/composition/control_truncation.rs" 68 31 68 77
+let%span scontrol_truncation'10 = "/workspace/crates/verified/src/composition/control_truncation.rs" 69 14 69 24
+let%span scontrol_truncation'11 = "/workspace/crates/verified/src/composition/control_truncation.rs" 70 16 70 17
+let%span scontrol_truncation'12 = "/workspace/crates/verified/src/composition/control_truncation.rs" 70 8 70 17
+let%span scontrol_truncation'13 = "/workspace/crates/verified/src/composition/control_truncation.rs" 72 18 72 83
+let%span scontrol_truncation'14 = "/workspace/crates/verified/src/composition/control_truncation.rs" 73 14 73 52
+let%span scontrol_truncation'15 = "/workspace/crates/verified/src/composition/control_truncation.rs" 74 19 74 57
+let%span scontrol_truncation'16 = "/workspace/crates/verified/src/composition/control_truncation.rs" 75 20 75 58
+let%span scontrol_truncation'17 = "/workspace/crates/verified/src/composition/control_truncation.rs" 76 18 76 41
+let%span scontrol_truncation'18 = "/workspace/crates/verified/src/composition/control_truncation.rs" 77 18 77 52
+let%span scontrol_truncation'19 = "/workspace/crates/verified/src/composition/control_truncation.rs" 78 16 78 50
+let%span scontrol_truncation'20 = "/workspace/crates/verified/src/composition/control_truncation.rs" 35 11 35 87
+let%span scontrol_truncation'21 = "/workspace/crates/verified/src/composition/control_truncation.rs" 36 11 36 103
+let%span scontrol_truncation'22 = "/workspace/crates/verified/src/composition/control_truncation.rs" 37 11 37 28
+let%span scontrol_truncation'23 = "/workspace/crates/verified/src/composition/control_truncation.rs" 38 10 52 30
+let%span scontrol_truncation'24 = "/workspace/crates/verified/src/composition/control_truncation.rs" 19 8 22 89
 
 use creusot.int.UInt64
 use seq.Seq
@@ -117,37 +115,27 @@ type tup7_usize_i64_i64_usize_usize_bool_bool = {
   f5: bool;
   f6: bool }
 
+predicate physical_truncation_input_valid [#"/workspace/crates/verified/src/composition/control_truncation.rs" 12 0 17 9] (ends: Seq.seq Int64.t) (start: int) (cut: int) (hwm: int) =
+  [%#scontrol_truncation'24] 0 <= start
+  /\ start <= cut
+  /\ (forall i: int. 0 <= i /\ i < Seq.length ends -> start < Int64.to_int (Seq.get ends i))
+  /\ (forall i: int, j: int. 0 <= i /\ i < j /\ j < Seq.length ends
+      -> Int64.to_int (Seq.get ends i) < Int64.to_int (Seq.get ends j))
+  /\ 0 <= hwm /\ hwm <= (if Seq.length ends = 0 then start else Int64.to_int (Seq.get ends (Seq.length ends - 1)))
+
 meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let whole_batch_truncation_bounds_controls [#"/workspace/crates/verified/src/composition/control_truncation.rs" 38 0 45 22]
+let whole_batch_truncation_bounds_controls [#"/workspace/crates/verified/src/composition/control_truncation.rs" 53 0 60 22]
   (ends: Slice64.slice Int64.t) (physical_start: Int64.t) (cut: Int64.t) (previous_hwm: Int64.t)
   (history: Slice64.slice Int64.t) (pending_end: Int64.t) (return (x: tup7_usize_i64_i64_usize_usize_bool_bool)) =
-{[@stop_split] [@expl:whole_batch_truncation_bounds_controls requires] ([@stop_split] [@expl:whole_batch_truncation_bounds_controls requires #0] [%#scontrol_truncation'20] 0
-      <= Int64.to_int physical_start
-    /\ Int64.to_int physical_start <= Int64.to_int cut)
-  /\ ([@stop_split] [@expl:whole_batch_truncation_bounds_controls requires #1] [%#scontrol_truncation'21] forall i: int. 0
-          <= i
-        /\ i < Seq.length (Slice64.view ends)
-      -> Int64.to_int physical_start < Int64.to_int (Seq.get (Slice64.view ends) i))
-  /\ ([@stop_split] [@expl:whole_batch_truncation_bounds_controls requires #2] [%#scontrol_truncation'22] forall i: int, j: int. 0
-          <= i
-        /\ i < j /\ j < Seq.length (Slice64.view ends)
-      -> Int64.to_int (Seq.get (Slice64.view ends) i) < Int64.to_int (Seq.get (Slice64.view ends) j))
-  /\ ([@stop_split] [@expl:whole_batch_truncation_bounds_controls requires #3] [%#scontrol_truncation'23] 0
-      <= Int64.to_int previous_hwm
-    /\ Int64.to_int previous_hwm
-    <= (if Seq.length (Slice64.view ends) = 0 then
-      Int64.to_int physical_start
-    else
-      Int64.to_int (Seq.get (Slice64.view ends) (Seq.length (Slice64.view ends) - 1))
-    ))
-  /\ ([@stop_split] [@expl:whole_batch_truncation_bounds_controls requires #4] [%#scontrol_truncation'24] forall i: int, j: int. 0
+{[@stop_split] [@expl:whole_batch_truncation_bounds_controls requires] ([@stop_split] [@expl:whole_batch_truncation_bounds_controls requires #0] [%#scontrol_truncation'20] physical_truncation_input_valid (Slice64.view ends) (Int64.to_int physical_start) (Int64.to_int cut) (Int64.to_int previous_hwm))
+  /\ ([@stop_split] [@expl:whole_batch_truncation_bounds_controls requires #1] [%#scontrol_truncation'21] forall i: int, j: int. 0
           <= i
         /\ i < j /\ j < Seq.length (Slice64.view history)
       -> Int64.to_int (Seq.get (Slice64.view history) i) < Int64.to_int (Seq.get (Slice64.view history) j))
-  /\ ([@stop_split] [@expl:whole_batch_truncation_bounds_controls requires #5] [%#scontrol_truncation'25] 0
+  /\ ([@stop_split] [@expl:whole_batch_truncation_bounds_controls requires #2] [%#scontrol_truncation'22] 0
   <= Int64.to_int pending_end)}
   (! bb0
   [ bb0 = s0
@@ -170,26 +158,26 @@ let whole_batch_truncation_bounds_controls [#"/workspace/crates/verified/src/com
       {[@expl:loop invariant #3] [%#scontrol_truncation'2] forall i: int. 0 <= i /\ i < UInt64.t'int kept
         -> Int64.to_int (Seq.get (Slice64.view ends) i) <= Int64.to_int cut}
       (! [ &variant_old_bb1 <- [%#scontrol_truncation'0] Seq.length (Slice64.view ends) - UInt64.t'int kept ] s0)
-      [ s0 = len_i64 [%#scontrol_truncation'1] {ends} (fun (_x: UInt64.t) -> [ &_56 <- _x ] s1)
-      | s1 = [ &_54 <- UInt64.lt kept _56 ] s2
-      | s2 = any [ br0 -> {_54 = false} (! bb11) | br1 -> {_54} (! bb4) ] ]
+      [ s0 = len_i64 [%#scontrol_truncation'1] {ends} (fun (_x: UInt64.t) -> [ &_49 <- _x ] s1)
+      | s1 = [ &_47 <- UInt64.lt kept _49 ] s2
+      | s2 = any [ br0 -> {_47 = false} (! bb11) | br1 -> {_47} (! bb4) ] ]
       [ bb4 = s0
-        [ s0 = [ &_61 <- kept ] s1
-        | s1 = [ &_62 <- Slice64.length ends ] s2
-        | s2 = [ &_63 <- UInt64.lt _61 _62 ] s3
-        | s3 = {[@expl:index in bounds] [%#scontrol_truncation'6] _63} s4
-        | s4 = Slice64.get [%#scontrol_truncation'6] <Int64.t> {ends} {_61} (fun (r: Int64.t) -> [ &_60 <- r ] s5)
-        | s5 = Int64.sub [%#scontrol_truncation'8] {_60} {[%#scontrol_truncation'7] (1: Int64.t)}
-            (fun (_x: Int64.t) -> [ &_59 <- _x ] s6)
-        | s6 = truncation_batch_retained [%#scontrol_truncation'9] {_59} {cut} (fun (_x: bool) -> [ &_58 <- _x ] s7)
-        | s7 = any [ br0 -> {_58 = false} (! bb11) | br1 -> {_58} (! bb7) ] ]
+        [ s0 = [ &_54 <- kept ] s1
+        | s1 = [ &_55 <- Slice64.length ends ] s2
+        | s2 = [ &_56 <- UInt64.lt _54 _55 ] s3
+        | s3 = {[@expl:index in bounds] [%#scontrol_truncation'6] _56} s4
+        | s4 = Slice64.get [%#scontrol_truncation'6] <Int64.t> {ends} {_54} (fun (r: Int64.t) -> [ &_53 <- r ] s5)
+        | s5 = Int64.sub [%#scontrol_truncation'8] {_53} {[%#scontrol_truncation'7] (1: Int64.t)}
+            (fun (_x: Int64.t) -> [ &_52 <- _x ] s6)
+        | s6 = truncation_batch_retained [%#scontrol_truncation'9] {_52} {cut} (fun (_x: bool) -> [ &_51 <- _x ] s7)
+        | s7 = any [ br0 -> {_51 = false} (! bb11) | br1 -> {_51} (! bb7) ] ]
       | bb7 = s0
-        [ s0 = [ &_66 <- kept ] s1
-        | s1 = [ &_67 <- Slice64.length ends ] s2
-        | s2 = [ &_68 <- UInt64.lt _66 _67 ] s3
-        | s3 = {[@expl:index in bounds] [%#scontrol_truncation'10] _68} s4
-        | s4 = Slice64.get [%#scontrol_truncation'10] <Int64.t> {ends} {_66} (fun (r: Int64.t) -> [ &_65 <- r ] s5)
-        | s5 = [ &end' <- _65 ] s6
+        [ s0 = [ &_59 <- kept ] s1
+        | s1 = [ &_60 <- Slice64.length ends ] s2
+        | s2 = [ &_61 <- UInt64.lt _59 _60 ] s3
+        | s3 = {[@expl:index in bounds] [%#scontrol_truncation'10] _61} s4
+        | s4 = Slice64.get [%#scontrol_truncation'10] <Int64.t> {ends} {_59} (fun (r: Int64.t) -> [ &_58 <- r ] s5)
+        | s5 = [ &end' <- _58 ] s6
         | s6 = UInt64.add [%#scontrol_truncation'12] {kept} {[%#scontrol_truncation'11] (1: UInt64.t)}
             (fun (_x: UInt64.t) -> [ &kept <- _x ] s7)
         | s7 = bb1 ] ] ]
@@ -216,18 +204,18 @@ let whole_batch_truncation_bounds_controls [#"/workspace/crates/verified/src/com
   | & pending_end: Int64.t = pending_end
   | & kept: UInt64.t = Any.any_l ()
   | & end': Int64.t = Any.any_l ()
-  | & _54: bool = Any.any_l ()
-  | & _56: UInt64.t = Any.any_l ()
-  | & _58: bool = Any.any_l ()
-  | & _59: Int64.t = Any.any_l ()
-  | & _60: Int64.t = Any.any_l ()
-  | & _61: UInt64.t = Any.any_l ()
-  | & _62: UInt64.t = Any.any_l ()
-  | & _63: bool = Any.any_l ()
-  | & _65: Int64.t = Any.any_l ()
-  | & _66: UInt64.t = Any.any_l ()
-  | & _67: UInt64.t = Any.any_l ()
-  | & _68: bool = Any.any_l ()
+  | & _47: bool = Any.any_l ()
+  | & _49: UInt64.t = Any.any_l ()
+  | & _51: bool = Any.any_l ()
+  | & _52: Int64.t = Any.any_l ()
+  | & _53: Int64.t = Any.any_l ()
+  | & _54: UInt64.t = Any.any_l ()
+  | & _55: UInt64.t = Any.any_l ()
+  | & _56: bool = Any.any_l ()
+  | & _58: Int64.t = Any.any_l ()
+  | & _59: UInt64.t = Any.any_l ()
+  | & _60: UInt64.t = Any.any_l ()
+  | & _61: bool = Any.any_l ()
   | & hwm: Int64.t = Any.any_l ()
   | & retained: UInt64.t = Any.any_l ()
   | & committed: UInt64.t = Any.any_l ()
@@ -235,7 +223,7 @@ let whole_batch_truncation_bounds_controls [#"/workspace/crates/verified/src/com
   | & ready: bool = Any.any_l ()
   | & variant_old_bb1: int = Any.any_l () ])
   [ return (result: tup7_usize_i64_i64_usize_usize_bool_bool) ->
-  {[@stop_split] [@expl:whole_batch_truncation_bounds_controls ensures] [%#scontrol_truncation'26] UInt64.t'int result.f0
+  {[@stop_split] [@expl:whole_batch_truncation_bounds_controls ensures] [%#scontrol_truncation'23] UInt64.t'int result.f0
       <= Seq.length (Slice64.view ends)
     /\ (forall i: int. 0 <= i /\ i < Seq.length (Slice64.view ends)
         -> (i < UInt64.t'int result.f0) = (Int64.to_int (Seq.get (Slice64.view ends) i) <= Int64.to_int cut))

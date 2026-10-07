@@ -8,13 +8,9 @@
 
 use assert2::assert;
 use bytes::Bytes;
-use krabka_ids::LeaderEpoch;
 use krabka_log::{Log, LogConfig};
 use krabka_protocol::records::{Record, RecordBatch};
-use krabka_remote_storage::{
-    LocalTieredStorage, LogSegmentData, RemoteLogSegmentDetails, RemoteLogSegmentId,
-    RemoteLogSegmentMetadata, RemoteLogSegmentState, RemoteStorageManager, TopicIdPartition,
-};
+use krabka_remote_storage::{LocalTieredStorage, TopicIdPartition};
 use tempfile::TempDir;
 use uuid::Uuid;
 
@@ -85,43 +81,12 @@ pub(crate) fn build_archive(topic: &str, partition: i32, batches: &mut [RecordBa
     let archive_root = tempfile::tempdir().expect("archive root tempdir");
     let storage = LocalTieredStorage::new(archive_root.path());
     for export in sealed {
-        let leader_epoch_checkpoint =
-            Bytes::from(format!("0\n1\n0 {}\n", export.base_offset.0).into_bytes());
-        let metadata = RemoteLogSegmentMetadata::new(
-            RemoteLogSegmentId::new(
-                TopicIdPartition::new(topic_id, topic, partition),
-                Uuid::new_v4(),
-            ),
-            export.base_offset.0,
-            export.last_offset.0,
-            export.max_timestamp,
-            1,
-            0,
-            RemoteLogSegmentDetails::new(
-                i32::try_from(
-                    std::fs::metadata(&export.log_path)
-                        .expect("fixture segment metadata")
-                        .len(),
-                )
-                .expect("test segment fits i32"),
-                RemoteLogSegmentState::CopySegmentFinished,
-                maplit::btreemap! {LeaderEpoch(0) => export.base_offset.0},
-            ),
-        )
-        .expect("valid remote metadata");
-        storage
-            .copy_log_segment_data(
-                &metadata,
-                &LogSegmentData {
-                    log_segment: export.log_path.clone(),
-                    offset_index: export.offset_index_path.clone(),
-                    time_index: export.time_index_path.clone(),
-                    transaction_index: export.transaction_index_path.clone(),
-                    producer_snapshot_index: Some(export.producer_snapshot_path.clone()),
-                    leader_epoch_index: leader_epoch_checkpoint,
-                },
-            )
-            .expect("archive the segment");
+        crate::archive_fixture::archive_segment(
+            &storage,
+            TopicIdPartition::new(topic_id, topic, partition),
+            Uuid::new_v4(),
+            &export,
+        );
     }
     archive_root
 }

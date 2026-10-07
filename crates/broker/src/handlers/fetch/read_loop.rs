@@ -829,12 +829,7 @@ mod tests {
         const TOPIC_B: &str = "budget-progress-b";
         const PAYLOAD: &[u8; 512] = &[b'x'; 512];
 
-        let dir = tempfile::tempdir().expect("tempdir");
-        let broker_handle = Broker::start(crate::config::BrokerConfig::for_tests(
-            dir.path().to_path_buf(),
-        ))
-        .await
-        .expect("start broker");
+        let (broker_handle, dir) = crate::handlers::test_support::start_broker().await;
         let broker = broker_handle.broker_arc_for_test();
 
         let part_a = nonempty_local_partition(&broker, dir.path(), TOPIC_A, PAYLOAD).await;
@@ -992,12 +987,7 @@ mod tests {
             ("read_committed", true, Some(Vec::new())),
         ];
 
-        let dir = tempfile::tempdir().expect("tempdir");
-        let broker_handle = Broker::start(crate::config::BrokerConfig::for_tests(
-            dir.path().to_path_buf(),
-        ))
-        .await
-        .expect("start broker");
+        let (broker_handle, _dir) = crate::handlers::test_support::start_broker().await;
         let broker = broker_handle.broker_arc_for_test();
 
         for (name, read_committed, want_aborted) in cases {
@@ -1097,14 +1087,14 @@ mod tests {
         const TOPIC_A: &str = "budget-cold-a";
         const TOPIC_B: &str = "budget-cold-b";
 
-        let dir = tempfile::tempdir().expect("tempdir");
         let object_dir = tempfile::tempdir().expect("object tempdir");
-        let mut config = crate::config::BrokerConfig::for_tests(dir.path().to_path_buf());
-        config.remote_storage_backend = Some(crate::config::RemoteStorageBackend::Local {
-            dir: object_dir.path().to_path_buf(),
-        });
-        config.remote_log_metadata = crate::config::RlmmKind::InMemory;
-        let broker_handle = Broker::start(config).await.expect("start broker");
+        let (broker_handle, dir) = crate::handlers::test_support::start_broker_with(|config| {
+            config.remote_storage_backend = Some(crate::config::RemoteStorageBackend::Local {
+                dir: object_dir.path().to_path_buf(),
+            });
+            config.remote_log_metadata = crate::config::RlmmKind::InMemory;
+        })
+        .await;
         let broker = broker_handle.broker_arc_for_test();
 
         let topic_a = uuid::Uuid::from_u128(0xA0);
@@ -1258,14 +1248,14 @@ mod tests {
     /// rustdoc describes as decode, authorization and encode.
     #[tokio::test]
     async fn cold_tier_fallback_charges_the_object_store_read_to_the_remote_phase() {
-        let dir = tempfile::tempdir().expect("tempdir");
         let object_dir = tempfile::tempdir().expect("object tempdir");
-        let mut config = crate::config::BrokerConfig::for_tests(dir.path().to_path_buf());
-        config.remote_storage_backend = Some(crate::config::RemoteStorageBackend::Local {
-            dir: object_dir.path().to_path_buf(),
-        });
-        config.remote_log_metadata = crate::config::RlmmKind::InMemory;
-        let broker_handle = Broker::start(config).await.expect("start broker");
+        let (broker_handle, dir) = crate::handlers::test_support::start_broker_with(|config| {
+            config.remote_storage_backend = Some(crate::config::RemoteStorageBackend::Local {
+                dir: object_dir.path().to_path_buf(),
+            });
+            config.remote_log_metadata = crate::config::RlmmKind::InMemory;
+        })
+        .await;
         let broker = broker_handle.broker_arc_for_test();
 
         let topic_id = uuid::Uuid::from_u128(0xC01D);
@@ -1308,17 +1298,7 @@ mod tests {
                 }],
             });
 
-        let part_dir = dir.path().join("cold-0");
-        std::fs::create_dir_all(&part_dir).expect("partition dir");
-        let part = crate::broker::spawn_partition(
-            "cold".into(),
-            PartitionIndex(0),
-            dir.path().to_path_buf(),
-            Log::open(&part_dir, LogConfig::default()).expect("open partition log"),
-            broker.log_dir_status.clone(),
-            broker.producer_state.clone(),
-            true,
-        );
+        let part = crate::handlers::test_support::partition(&broker, dir.path(), "cold", true);
         let mut pending = super::PendingRead {
             topic_name: "cold".into(),
             topic_id: WireUuid(topic_id.into_bytes()),
@@ -1366,46 +1346,13 @@ mod tests {
     async fn long_poll_reread_rechecks_follower_epoch() {
         const TOPIC: &str = "long-poll-epoch";
 
-        let dir = tempfile::tempdir().expect("tempdir");
-        let broker_handle = Broker::start(crate::config::BrokerConfig::for_tests(
-            dir.path().to_path_buf(),
-        ))
-        .await
-        .expect("start broker");
+        let (broker_handle, dir) = crate::handlers::test_support::start_broker().await;
         let broker = broker_handle.broker_arc_for_test();
-        let part_dir = dir.path().join(format!("{TOPIC}-0"));
-        std::fs::create_dir_all(&part_dir).expect("partition dir");
-        let part = crate::broker::spawn_partition(
-            TOPIC.to_string(),
-            PartitionIndex(0),
-            dir.path().to_path_buf(),
-            Log::open(&part_dir, LogConfig::default()).expect("open partition log"),
-            broker.log_dir_status.clone(),
-            broker.producer_state.clone(),
-            false,
-        );
+        let part = crate::handlers::test_support::local_partition(&broker, dir.path(), TOPIC);
         // A follower fetch reads only from the leader.
         part.install_replication_target(None, broker.config.node_id.0, 0)
             .await;
-        let request = super::EffectivePartition {
-            partition: 0,
-            current_leader_epoch: 0,
-            last_fetched_epoch: -1,
-            fetch_offset: 0,
-            log_start_offset: -1,
-            partition_max_bytes: 1024,
-        };
-        let mut pending = [super::PendingRead::planned(
-            TOPIC,
-            WireUuid::ZERO,
-            &request,
-            (false, true),
-            Some(std::sync::Arc::clone(&part)),
-            super::PartitionData {
-                partition_index: 0,
-                ..Default::default()
-            },
-        )];
+        let mut pending = [follower_read(TOPIC, &part, crate::codes::NONE)];
 
         part.install_leader_change(1, 1).await;
         part.produce_batch(RecordBatch {
@@ -1444,46 +1391,16 @@ mod tests {
     async fn a_partition_error_completes_the_long_poll() {
         const TOPIC: &str = "long-poll-error";
 
-        let dir = tempfile::tempdir().expect("tempdir");
-        let broker_handle = Broker::start(crate::config::BrokerConfig::for_tests(
-            dir.path().to_path_buf(),
-        ))
-        .await
-        .expect("start broker");
+        let (broker_handle, dir) = crate::handlers::test_support::start_broker().await;
         let broker = broker_handle.broker_arc_for_test();
-        let part_dir = dir.path().join(format!("{TOPIC}-0"));
-        std::fs::create_dir_all(&part_dir).expect("partition dir");
-        let part = crate::broker::spawn_partition(
-            TOPIC.to_string(),
-            PartitionIndex(0),
-            dir.path().to_path_buf(),
-            Log::open(&part_dir, LogConfig::default()).expect("open partition log"),
-            broker.log_dir_status.clone(),
-            broker.producer_state.clone(),
-            false,
-        );
+        let part = crate::handlers::test_support::local_partition(&broker, dir.path(), TOPIC);
         // A follower fetch reads only from the leader.
         part.install_replication_target(None, broker.config.node_id.0, 0)
             .await;
-        let request = super::EffectivePartition {
-            partition: 0,
-            current_leader_epoch: 0,
-            last_fetched_epoch: -1,
-            fetch_offset: 0,
-            log_start_offset: -1,
-            partition_max_bytes: 1024,
-        };
-        let mut pending = [super::PendingRead::planned(
+        let mut pending = [follower_read(
             TOPIC,
-            WireUuid::ZERO,
-            &request,
-            (false, true),
-            Some(std::sync::Arc::clone(&part)),
-            super::PartitionData {
-                partition_index: 0,
-                error_code: crate::codes::OFFSET_OUT_OF_RANGE,
-                ..Default::default()
-            },
+            &part,
+            crate::codes::OFFSET_OUT_OF_RANGE,
         )];
 
         // Nothing will ever append, and the floor is unreachable: only the
@@ -1510,24 +1427,9 @@ mod tests {
     async fn a_leader_change_completes_a_parked_follower_fetch() {
         const TOPIC: &str = "long-poll-leader-change";
 
-        let dir = tempfile::tempdir().expect("tempdir");
-        let broker_handle = Broker::start(crate::config::BrokerConfig::for_tests(
-            dir.path().to_path_buf(),
-        ))
-        .await
-        .expect("start broker");
+        let (broker_handle, dir) = crate::handlers::test_support::start_broker().await;
         let broker = broker_handle.broker_arc_for_test();
-        let part_dir = dir.path().join(format!("{TOPIC}-0"));
-        std::fs::create_dir_all(&part_dir).expect("partition dir");
-        let part = crate::broker::spawn_partition(
-            TOPIC.to_string(),
-            PartitionIndex(0),
-            dir.path().to_path_buf(),
-            Log::open(&part_dir, LogConfig::default()).expect("open partition log"),
-            broker.log_dir_status.clone(),
-            broker.producer_state.clone(),
-            false,
-        );
+        let part = crate::handlers::test_support::local_partition(&broker, dir.path(), TOPIC);
         let node_id = broker.config.node_id.0;
         part.install_replication_target(None, node_id, 0).await;
         let request = super::EffectivePartition {
@@ -1590,12 +1492,7 @@ mod tests {
             ("read_committed", true, Some(Vec::new())),
         ];
 
-        let dir = tempfile::tempdir().expect("tempdir");
-        let broker_handle = Broker::start(crate::config::BrokerConfig::for_tests(
-            dir.path().to_path_buf(),
-        ))
-        .await
-        .expect("start broker");
+        let (broker_handle, _dir) = crate::handlers::test_support::start_broker().await;
         let broker = broker_handle.broker_arc_for_test();
 
         for (name, read_committed, want_aborted) in cases {
@@ -1631,24 +1528,9 @@ mod tests {
     async fn a_diverging_recheck_carries_null_aborted_transactions() {
         const TOPIC: &str = "recheck-diverge";
 
-        let dir = tempfile::tempdir().expect("tempdir");
-        let broker_handle = Broker::start(crate::config::BrokerConfig::for_tests(
-            dir.path().to_path_buf(),
-        ))
-        .await
-        .expect("start broker");
+        let (broker_handle, dir) = crate::handlers::test_support::start_broker().await;
         let broker = broker_handle.broker_arc_for_test();
-        let part_dir = dir.path().join(format!("{TOPIC}-0"));
-        std::fs::create_dir_all(&part_dir).expect("partition dir");
-        let part = crate::broker::spawn_partition(
-            TOPIC.to_string(),
-            PartitionIndex(0),
-            dir.path().to_path_buf(),
-            Log::open(&part_dir, LogConfig::default()).expect("open partition log"),
-            broker.log_dir_status.clone(),
-            broker.producer_state.clone(),
-            false,
-        );
+        let part = crate::handlers::test_support::local_partition(&broker, dir.path(), TOPIC);
         {
             let mut log = part.log.lock().expect("log mutex poisoned");
             for epoch in [0, 0, 1, 1] {
@@ -1742,24 +1624,9 @@ mod tests {
         const TOPIC: &str = "min-bytes-floor";
         const PAYLOAD: &[u8; 64] = &[b'x'; 64];
 
-        let dir = tempfile::tempdir().expect("tempdir");
-        let broker_handle = Broker::start(crate::config::BrokerConfig::for_tests(
-            dir.path().to_path_buf(),
-        ))
-        .await
-        .expect("start broker");
+        let (broker_handle, dir) = crate::handlers::test_support::start_broker().await;
         let broker = broker_handle.broker_arc_for_test();
-        let part_dir = dir.path().join(format!("{TOPIC}-0"));
-        std::fs::create_dir_all(&part_dir).expect("partition dir");
-        let part = crate::broker::spawn_partition(
-            TOPIC.to_string(),
-            PartitionIndex(0),
-            dir.path().to_path_buf(),
-            Log::open(&part_dir, LogConfig::default()).expect("open partition log"),
-            broker.log_dir_status.clone(),
-            broker.producer_state.clone(),
-            false,
-        );
+        let part = crate::handlers::test_support::local_partition(&broker, dir.path(), TOPIC);
         // A follower fetch reads only from the leader.
         part.install_replication_target(None, broker.config.node_id.0, 0)
             .await;
@@ -1832,47 +1699,14 @@ mod tests {
     async fn an_append_that_lands_before_the_park_is_not_missed() {
         const TOPIC: &str = "append-before-park";
 
-        let dir = tempfile::tempdir().expect("tempdir");
-        let broker_handle = Broker::start(crate::config::BrokerConfig::for_tests(
-            dir.path().to_path_buf(),
-        ))
-        .await
-        .expect("start broker");
+        let (broker_handle, dir) = crate::handlers::test_support::start_broker().await;
         let broker = broker_handle.broker_arc_for_test();
-        let part_dir = dir.path().join(format!("{TOPIC}-0"));
-        std::fs::create_dir_all(&part_dir).expect("partition dir");
-        let part = crate::broker::spawn_partition(
-            TOPIC.to_string(),
-            PartitionIndex(0),
-            dir.path().to_path_buf(),
-            Log::open(&part_dir, LogConfig::default()).expect("open partition log"),
-            broker.log_dir_status.clone(),
-            broker.producer_state.clone(),
-            false,
-        );
+        let part = crate::handlers::test_support::local_partition(&broker, dir.path(), TOPIC);
         // A follower fetch reads only from the leader.
         part.install_replication_target(None, broker.config.node_id.0, 0)
             .await;
 
-        let request = super::EffectivePartition {
-            partition: 0,
-            current_leader_epoch: 0,
-            last_fetched_epoch: -1,
-            fetch_offset: 0,
-            log_start_offset: -1,
-            partition_max_bytes: 1024,
-        };
-        let mut pending = [super::PendingRead::planned(
-            TOPIC,
-            WireUuid::ZERO,
-            &request,
-            (false, true),
-            Some(std::sync::Arc::clone(&part)),
-            super::PartitionData {
-                partition_index: 0,
-                ..Default::default()
-            },
-        )];
+        let mut pending = [follower_read(TOPIC, &part, crate::codes::NONE)];
 
         // What `execute_pending_reads` does in this order: arm the waiters,
         // read (the log is empty, so the read finds nothing), then park.
@@ -1895,5 +1729,30 @@ mod tests {
 
         assert!(served_base_offsets(&pending[0].out) == vec![0]);
         broker_handle.shutdown().await;
+    }
+    fn follower_read(
+        topic: &str,
+        part: &std::sync::Arc<crate::partition::Partition>,
+        error_code: i16,
+    ) -> super::PendingRead {
+        super::PendingRead::planned(
+            topic,
+            WireUuid::ZERO,
+            &super::EffectivePartition {
+                partition: 0,
+                current_leader_epoch: 0,
+                last_fetched_epoch: -1,
+                fetch_offset: 0,
+                log_start_offset: -1,
+                partition_max_bytes: 1024,
+            },
+            (false, true),
+            Some(std::sync::Arc::clone(part)),
+            super::PartitionData {
+                partition_index: 0,
+                error_code,
+                ..Default::default()
+            },
+        )
     }
 }

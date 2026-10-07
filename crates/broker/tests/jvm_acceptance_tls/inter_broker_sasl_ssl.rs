@@ -7,18 +7,13 @@
 //! longest case in the suite and the only one that asserts rf=2, so it stands
 //! apart from the `SASL_PLAINTEXT` variant it otherwise resembles.
 
-use std::{
-    io::Write,
-    process::{Command, Stdio},
-};
-
 use assert2::assert;
 use krabka_security::ListenerProtocol;
 
 use crate::jvm_acceptance::{
     KAFKA_IMAGE_TXN, broker0_advertised, docker_run_kafka_tool_with_image_and_mounts,
-    nc_check_connectivity, plain_jaas, prepare_jks_truststore, scram_jaas,
-    start_two_sasl_ssl_brokers_with_controller_protocol, write_client_props,
+    nc_check_connectivity, prepare_jks_truststore,
+    start_two_sasl_ssl_brokers_with_controller_protocol,
 };
 
 /// Two-broker `SASL_SSL` cluster with `controller_listener_protocol =
@@ -63,72 +58,21 @@ async fn jvm_inter_broker_sasl_ssl_raft_replication() {
 
     // Step A: provision alice's SCRAM-SHA-512 credential via admin/PLAIN
     // over the SASL_SSL data-plane listener. Use cp-kafka:7.5.0 (KIP-554).
-    let admin_props = write_client_props(&format!(
-        "security.protocol=SASL_SSL\n\
-         sasl.mechanism=PLAIN\n\
-         sasl.jaas.config={}\n\
-         ssl.truststore.location=/truststore.jks\n\
-         ssl.truststore.password=changeit\n\
-         ssl.endpoint.identification.algorithm=\n",
-        plain_jaas(ADMIN, ADMIN_PASS),
-    ));
-    docker_run_kafka_tool_with_image_and_mounts(
-        KAFKA_IMAGE_TXN,
-        &[&admin_props.mount_str(), &ts_mount],
-        &[
-            "kafka-configs",
-            "--alter",
-            "--entity-type",
-            "users",
-            "--entity-name",
-            ALICE,
-            "--add-config",
-            &format!("SCRAM-SHA-512=[password={ALICE_PASS}]"),
-            "--bootstrap-server",
-            broker0_advertised(),
-            "--command-config",
-            "/client.properties",
-        ],
+    let (admin_props, alice_props) = crate::jvm_acceptance::provision_ssl_scram_sha512(
+        ADMIN, ADMIN_PASS, ALICE, ALICE_PASS, &ts_mount,
     );
-
-    // Step B: drive create-topic + produce as alice over SASL_SSL+SCRAM.
-    // Disable idempotent producer mode so alice doesn't need
-    // `Cluster IdempotentWrite`.
-    let alice_props = write_client_props(&format!(
-        "security.protocol=SASL_SSL\n\
-         sasl.mechanism=SCRAM-SHA-512\n\
-         sasl.jaas.config={}\n\
-         ssl.truststore.location=/truststore.jks\n\
-         ssl.truststore.password=changeit\n\
-         ssl.endpoint.identification.algorithm=\n\
-         enable.idempotence=false\n\
-         acks=1\n",
-        scram_jaas(ALICE, ALICE_PASS),
-    ));
     let alice_props_mount = alice_props.mount_str();
 
     // Create topic rf=2 across both brokers. Run as `admin` (super-user)
     //  for the CreateTopics Cluster-Create authorize check, then
     //  grant alice Read/Write on the topic; the implications
     //  auto-grant Describe via Read and Write.
-    docker_run_kafka_tool_with_image_and_mounts(
+    crate::jvm_acceptance::create_console_topic(
         KAFKA_IMAGE_TXN,
         &[&admin_props.mount_str(), &ts_mount],
-        &[
-            "kafka-topics",
-            "--create",
-            "--if-not-exists",
-            "--topic",
-            TOPIC,
-            "--partitions",
-            "1",
-            "--replication-factor",
-            "2",
-            "--bootstrap-server",
-            broker0_advertised(),
-            "--command-config",
-            "/client.properties",
-        ],
+        TOPIC,
+        1,
+        2,
     );
     for op in ["Read", "Write"] {
         docker_run_kafka_tool_with_image_and_mounts(
@@ -156,42 +100,18 @@ async fn jvm_inter_broker_sasl_ssl_raft_replication() {
     broker1.wait_until_partition_present(TOPIC, 0).await;
 
     // Produce 50 records via `kafka-console-producer` as alice over SASL_SSL.
-    let mut child = Command::new("docker")
-        .args([
-            "run",
-            "--rm",
-            "-i",
-            "-v",
-            &alice_props_mount,
-            "-v",
-            &ts_mount,
-            "--add-host=host.docker.internal:host-gateway",
-            KAFKA_IMAGE_TXN,
-            "kafka-console-producer",
-            "--bootstrap-server",
-            broker0_advertised(),
-            "--topic",
-            TOPIC,
-            "--producer.config",
-            "/client.properties",
-        ])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("spawn producer");
+
     let payload: String = (0..50)
         .map(|i| format!("rec-{i}\n"))
         .collect::<Vec<_>>()
         .concat();
-    child
-        .stdin
-        .as_mut()
-        .expect("stdin")
-        .write_all(payload.as_bytes())
-        .expect("write stdin");
-    drop(child.stdin.take());
-    let producer_out = child.wait_with_output().expect("wait producer");
+    let producer_out = crate::jvm_acceptance::produce_console(
+        KAFKA_IMAGE_TXN,
+        &[&alice_props_mount, &ts_mount],
+        TOPIC,
+        false,
+        payload.as_bytes(),
+    );
     assert!(
         producer_out.status.success(),
         "producer failed: stdout={} stderr={}",

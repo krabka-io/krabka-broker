@@ -1,30 +1,30 @@
-(* #"/workspace/crates/verified/src/quota.rs" 49 0 55 15 *)
+(* #"/workspace/crates/verified/src/quota.rs" 52 0 58 15 *)
 
-let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
-let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
-let%span snum = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 347 20 348 51
-let%span snum'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 351 26 351 83
-let%span snum'1 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 352 26 352 83
-let%span snum'2 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 27 28 27 33
-let%span squota = "/workspace/crates/verified/src/quota.rs" 58 21 58 22
-let%span squota'0 = "/workspace/crates/verified/src/quota.rs" 56 33 61 5
-let%span squota'1 = "/workspace/crates/verified/src/quota.rs" 62 39 62 58
-let%span squota'2 = "/workspace/crates/verified/src/quota.rs" 62 19 62 59
-let%span squota'3 = "/workspace/crates/verified/src/quota.rs" 62 19 62 73
-let%span squota'4 = "/workspace/crates/verified/src/quota.rs" 41 10 43 12
-let%span squota'5 = "/workspace/crates/verified/src/quota.rs" 44 10 45 89
-let%span squota'6 = "/workspace/crates/verified/src/quota.rs" 46 10 46 55
-let%span squota'7 = "/workspace/crates/verified/src/quota.rs" 47 10 47 80
+let%span sord = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sord'0 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span snum = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 347 20 348 51
+let%span snum'0 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 351 26 351 83
+let%span snum'1 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 352 26 352 83
+let%span snum'2 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 27 28 27 33
+let%span scmp = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 76 26 76 66
+let%span scmp'0 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 77 26 77 63
+let%span scmp'1 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 78 36 78 40
+let%span scmp'2 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 79 26 79 79
+let%span scmp'3 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 80 26 80 77
+let%span squota = "/workspace/crates/verified/src/quota.rs" 61 21 61 22
+let%span squota'0 = "/workspace/crates/verified/src/quota.rs" 59 33 64 5
+let%span squota'1 = "/workspace/crates/verified/src/quota.rs" 65 39 65 58
+let%span squota'2 = "/workspace/crates/verified/src/quota.rs" 65 19 65 59
+let%span squota'3 = "/workspace/crates/verified/src/quota.rs" 65 19 65 73
+let%span squota'4 = "/workspace/crates/verified/src/quota.rs" 44 10 46 12
+let%span squota'5 = "/workspace/crates/verified/src/quota.rs" 47 10 48 89
+let%span squota'6 = "/workspace/crates/verified/src/quota.rs" 49 10 49 55
+let%span squota'7 = "/workspace/crates/verified/src/quota.rs" 50 10 50 80
 let%span sthrottle = "/workspace/crates/verified/src/throttle.rs" 87 10 87 37
 let%span sthrottle'0 = "/workspace/crates/verified/src/throttle.rs" 88 10 88 33
 let%span sthrottle'1 = "/workspace/crates/verified/src/throttle.rs" 89 10 89 80
 let%span sthrottle'2 = "/workspace/crates/verified/src/throttle.rs" 90 10 94 1
 let%span sthrottle'3 = "/workspace/crates/verified/src/throttle.rs" 79 4 83 5
-let%span scmp = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 76 26 76 66
-let%span scmp'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 77 26 77 63
-let%span scmp'1 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 78 36 78 40
-let%span scmp'2 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 79 26 79 79
-let%span scmp'3 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 80 26 80 77
 
 use creusot.int.UInt64
 use creusot.prelude.Any
@@ -110,8 +110,8 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let quota_charge [#"/workspace/crates/verified/src/quota.rs" 49 0 55 15] (available: UInt64.t)
-  (debt: UInt64.t) (requested: UInt64.t) (burst: UInt64.t) (debt_cap: UInt64.t) (return (x: tup2_u64_u64)) = (! bb0
+let quota_charge [#"/workspace/crates/verified/src/quota.rs" 52 0 58 15] (available: UInt64.t) (debt: UInt64.t)
+  (requested: UInt64.t) (burst: UInt64.t) (debt_cap: UInt64.t) (return (x: tup2_u64_u64)) = (! bb0
   [ bb0 = s0
     [ s0 = [ &_25 <- { f0 = available } ] s1
     | s1 = [ &_27 <- { f0'0 = ([%#squota] (0: UInt64.t)) } ] s2

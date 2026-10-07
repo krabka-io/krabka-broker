@@ -5,7 +5,7 @@
 //! transaction state -- together with the config swap and the hard reset
 //! that empties the log at a new base offset.
 
-use std::{fs, path::Path};
+use std::path::Path;
 
 use krabka_ids::{Offset, ProducerId};
 use krabka_units::prelude::{ByteSize, ByteSizeExt};
@@ -16,7 +16,7 @@ use crate::{
     config::LogConfig,
     error::LogError,
     leader_epoch_checkpoint::LeaderEpochCheckpoint,
-    log_start_offset_checkpoint, name,
+    log_start_offset_checkpoint,
     producer_snapshot::{self, ProducerSnapshotEntry},
     segment::Segment,
     txn_index::TxnIndex,
@@ -204,22 +204,14 @@ impl Log {
         while let Some(popped) = self.segments.pop() {
             let base = popped.base_offset();
             drop(popped);
-            let _ = fs::remove_file(name::log_path(&self.dir, base.0));
-            let _ = fs::remove_file(name::index_path(&self.dir, base.0));
-            let _ = fs::remove_file(name::timeindex_path(&self.dir, base.0));
-            let _ = fs::remove_file(name::txnindex_path(&self.dir, base.0));
-            let _ = fs::remove_file(name::stampindex_path(&self.dir, base.0));
+            self.remove_truncated_segment_files(base);
         }
 
         // Drop the active segment + its on-disk files.
         if let Some(active) = self.active.take() {
             let base = active.base_offset();
             drop(active);
-            let _ = fs::remove_file(name::log_path(&self.dir, base.0));
-            let _ = fs::remove_file(name::index_path(&self.dir, base.0));
-            let _ = fs::remove_file(name::timeindex_path(&self.dir, base.0));
-            let _ = fs::remove_file(name::txnindex_path(&self.dir, base.0));
-            let _ = fs::remove_file(name::stampindex_path(&self.dir, base.0));
+            self.remove_truncated_segment_files(base);
         }
 
         // A hard reset re-bases the local log after a divergence or a

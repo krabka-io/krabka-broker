@@ -11,10 +11,7 @@ use krabka_broker::{BootstrapMode, Broker};
 
 use crate::{
     ACCEPT, NONE, REJECT, RELEASE,
-    harness::{
-        bootstrap_share_state, broker_config, broker_test_permit, connect, create_topic, join,
-        produce_n, topic_id, wait_for_share_init,
-    },
+    harness::{bootstrap_share_state, broker_config, broker_test_permit, connect, join, produce_n},
     share_rpc::{acquired_count, fetch_until_acquired, share_ack, share_fetch},
 };
 
@@ -29,16 +26,10 @@ async fn consume_accept_restart() {
 
     let tid;
     {
-        let broker = Broker::start(broker_config(log_dir.clone())).await.unwrap();
-        let client = connect(&broker.listen_addr().to_string()).await;
-        create_topic(&broker, &client, "t", 1).await;
-        tid = topic_id(&broker, "t");
-        bootstrap_share_state(&broker, &client, "g1").await;
-        produce_n(&client, "t", tid, 0, 3).await;
-        let (member, member_epoch) = join(&client, "g1", "t").await;
-        // The group lifecycle initializes share state asynchronously; wait until
-        // it is durable so the SPSO advance from the Accept below also persists.
-        wait_for_share_init(&broker, &client, &member, member_epoch, tid).await;
+        let (broker, client, topic) =
+            crate::support::share::start_topic(broker_config(log_dir.clone()), "t", 1).await;
+        tid = topic;
+        let (member, _) = crate::harness::initialize_consumption(&broker, &client, tid, 3).await;
 
         // First fetch (epoch 0 opens the session): acquire offsets 0..2.
         let row = fetch_until_acquired(&client, "g1", &member, tid, 0, 0).await;
@@ -106,20 +97,10 @@ async fn consume_accept_restart() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn release_redelivers() {
     let _permit = broker_test_permit().await;
-    let dir = tempfile::TempDir::new().unwrap();
-    let broker = Broker::start(broker_config(dir.path().to_path_buf()))
-        .await
-        .unwrap();
-    let client = connect(&broker.listen_addr().to_string()).await;
-    create_topic(&broker, &client, "t", 1).await;
-    let tid = topic_id(&broker, "t");
-    bootstrap_share_state(&broker, &client, "g1").await;
-    produce_n(&client, "t", tid, 0, 2).await;
-    let (member, member_epoch) = join(&client, "g1", "t").await;
-    wait_for_share_init(&broker, &client, &member, member_epoch, tid).await;
+    let (broker, client, _dir, tid) = crate::support::share::topic_fixture("t", 1, |_| {}).await;
+    let (member, _) = crate::harness::initialize_consumption(&broker, &client, tid, 2).await;
 
-    let row = fetch_until_acquired(&client, "g1", &member, tid, 0, 0).await;
-    assert!(acquired_count(&row) == 2, "acquire both offsets");
+    let row = acquire_both(&client, &member, tid).await;
     assert!(row.acquired_records.iter().all(|r| r.delivery_count == 1));
 
     // Release offsets 0..1 (epoch 1).
@@ -146,20 +127,10 @@ async fn release_redelivers() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn reject_archives() {
     let _permit = broker_test_permit().await;
-    let dir = tempfile::TempDir::new().unwrap();
-    let broker = Broker::start(broker_config(dir.path().to_path_buf()))
-        .await
-        .unwrap();
-    let client = connect(&broker.listen_addr().to_string()).await;
-    create_topic(&broker, &client, "t", 1).await;
-    let tid = topic_id(&broker, "t");
-    bootstrap_share_state(&broker, &client, "g1").await;
-    produce_n(&client, "t", tid, 0, 2).await;
-    let (member, member_epoch) = join(&client, "g1", "t").await;
-    wait_for_share_init(&broker, &client, &member, member_epoch, tid).await;
+    let (broker, client, _dir, tid) = crate::support::share::topic_fixture("t", 1, |_| {}).await;
+    let (member, _) = crate::harness::initialize_consumption(&broker, &client, tid, 2).await;
 
-    let row = fetch_until_acquired(&client, "g1", &member, tid, 0, 0).await;
-    assert!(acquired_count(&row) == 2, "acquire both offsets");
+    let _row = acquire_both(&client, &member, tid).await;
 
     // Reject offsets 0..1 (epoch 1) → archived.
     let ack = share_ack(&client, &member, tid, 1, 0, 1, REJECT).await;
@@ -197,4 +168,14 @@ async fn reject_archives() {
         "acquired offset must be 2 (past the rejected 0..1), got {:?}",
         row3.acquired_records
     );
+}
+
+async fn acquire_both(
+    client: &krabka_client_core::Client,
+    member: &str,
+    tid: uuid::Uuid,
+) -> krabka_protocol::owned::share_fetch_response::PartitionData {
+    let row = fetch_until_acquired(client, "g1", member, tid, 0, 0).await;
+    assert!(acquired_count(&row) == 2, "acquire both offsets");
+    row
 }

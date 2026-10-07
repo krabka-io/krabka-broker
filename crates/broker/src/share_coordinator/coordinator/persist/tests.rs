@@ -153,70 +153,13 @@ async fn a_record_is_appended_only_as_the_leader_of_the_term() {
 /// the log of the next leader, so that is not a commit.
 #[tokio::test]
 async fn an_answer_waits_for_the_commit_under_its_term() {
-    struct Case {
-        what: &'static str,
-        /// The high watermark when the wait starts.
-        hw_now: i64,
-        /// The leader and epoch that the partition moves to during the wait.
-        moves_to: Option<(u64, i32)>,
-        /// The high watermark that followers bring during the wait, after
-        /// any move.
-        hw_later: Option<i64>,
-        timeout: Duration,
-        expected: Result<(), &'static str>,
-    }
-    let long = Duration::from_secs(30);
-    let cases = [
-        Case {
-            what: "already committed",
-            hw_now: 2,
-            moves_to: None,
-            hw_later: None,
-            timeout: long,
-            expected: Ok(()),
-        },
-        Case {
-            what: "committed when the followers catch up",
-            hw_now: 0,
-            moves_to: None,
-            hw_later: Some(2),
-            timeout: long,
-            expected: Ok(()),
-        },
-        Case {
-            what: "another broker takes the partition first",
-            hw_now: 0,
-            moves_to: Some((2, 1)),
-            hw_later: None,
-            timeout: long,
-            expected: Err("not leader"),
-        },
-        Case {
-            what: "this broker leads again, at a newer epoch",
-            hw_now: 0,
-            moves_to: Some((1, 1)),
-            hw_later: None,
-            timeout: long,
-            expected: Err("not leader"),
-        },
-        Case {
-            what: "the high watermark passes the records after the partition moved",
-            hw_now: 0,
-            moves_to: Some((2, 1)),
-            hw_later: Some(2),
-            timeout: long,
-            expected: Err("not leader"),
-        },
-        Case {
-            what: "the followers never catch up",
-            hw_now: 0,
-            moves_to: None,
-            hw_later: None,
-            timeout: Duration::from_millis(100),
-            expected: Err("timed out"),
-        },
-    ];
-    for case in cases {
+    use crate::coordinator::test_support::{CommitWaitOutcome, commit_wait_cases};
+    for case in commit_wait_cases() {
+        let expected = match case.expected {
+            CommitWaitOutcome::Committed => Ok(()),
+            CommitWaitOutcome::NotLeader => Err("not leader"),
+            CommitWaitOutcome::TimedOut => Err("timed out"),
+        };
         let dir = tempdir().unwrap();
         let (coord, part) = one_partition(dir.path(), case.timeout);
         part.install_leader_change(1, 0).await;
@@ -240,7 +183,7 @@ async fn an_answer_waits_for_the_commit_under_its_term() {
         let result = coord.await_committed(TERM, Offset(2)).await;
         changes.await.expect("the changes land");
 
-        assert!(outcome(result) == case.expected, "{}", case.what);
+        assert!(outcome(result) == expected, "{}", case.what);
     }
 }
 

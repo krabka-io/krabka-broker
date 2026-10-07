@@ -1,19 +1,19 @@
-(* #"/workspace/crates/verified/src/composition/append.rs" 64 0 68 28 *)
+(* #"/workspace/crates/verified/src/composition/append.rs" 65 0 69 28 *)
 
-let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
-let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
-let%span sops = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/ops.rs" 688 18 691 9
-let%span sops'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/ops.rs" 702 25 702 33
-let%span sops'1 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/ops.rs" 701 18 701 32
-let%span sappend = "/workspace/crates/verified/src/composition/append.rs" 69 25 69 59
-let%span sappend'0 = "/workspace/crates/verified/src/composition/append.rs" 69 25 69 60
-let%span sappend'1 = "/workspace/crates/verified/src/composition/append.rs" 70 19 70 69
-let%span sappend'2 = "/workspace/crates/verified/src/composition/append.rs" 70 19 70 70
-let%span sappend'3 = "/workspace/crates/verified/src/composition/append.rs" 71 26 71 65
-let%span sappend'4 = "/workspace/crates/verified/src/composition/append.rs" 71 26 71 66
-let%span sappend'5 = "/workspace/crates/verified/src/composition/append.rs" 72 18 72 55
-let%span sappend'6 = "/workspace/crates/verified/src/composition/append.rs" 52 10 54 61
-let%span sappend'7 = "/workspace/crates/verified/src/composition/append.rs" 55 10 63 1
+let%span sord = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sord'0 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span sops = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/ops.rs" 688 18 691 9
+let%span sops'0 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/ops.rs" 702 25 702 33
+let%span sops'1 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/ops.rs" 701 18 701 32
+let%span sappend = "/workspace/crates/verified/src/composition/append.rs" 70 25 70 59
+let%span sappend'0 = "/workspace/crates/verified/src/composition/append.rs" 70 25 70 60
+let%span sappend'1 = "/workspace/crates/verified/src/composition/append.rs" 71 19 71 69
+let%span sappend'2 = "/workspace/crates/verified/src/composition/append.rs" 71 19 71 70
+let%span sappend'3 = "/workspace/crates/verified/src/composition/append.rs" 72 26 72 65
+let%span sappend'4 = "/workspace/crates/verified/src/composition/append.rs" 72 26 72 66
+let%span sappend'5 = "/workspace/crates/verified/src/composition/append.rs" 73 18 73 55
+let%span sappend'6 = "/workspace/crates/verified/src/composition/append.rs" 53 10 55 61
+let%span sappend'7 = "/workspace/crates/verified/src/composition/append.rs" 56 10 64 1
 let%span soffset_allocator = "/workspace/crates/verified/src/offset_allocator.rs" 94 10 94 87
 let%span soffset_allocator'0 = "/workspace/crates/verified/src/offset_allocator.rs" 95 10 96 55
 let%span soffset_allocator'1 = "/workspace/crates/verified/src/offset_allocator.rs" 19 10 29 1
@@ -167,8 +167,8 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let reservations_do_not_overlap [#"/workspace/crates/verified/src/composition/append.rs" 64 0 68 28]
-  (base: Int64.t) (first_count: Int64.t) (second_count: Int64.t) (return (x: t_Option_tup3_i64_i64_i64)) = (! bb0
+let reservations_do_not_overlap [#"/workspace/crates/verified/src/composition/append.rs" 65 0 69 28] (base: Int64.t)
+  (first_count: Int64.t) (second_count: Int64.t) (return (x: t_Option_tup3_i64_i64_i64)) = (! bb0
   [ bb0 = s0
     [ s0 = reserve_offsets [%#sappend] {base} {first_count} (fun (_x: t_Option_tup2_i64_i64) -> [ &_16 <- _x ] s1)
     | s1 = branch_Option_tup2_i64_i64 [%#sappend'0] {_16}

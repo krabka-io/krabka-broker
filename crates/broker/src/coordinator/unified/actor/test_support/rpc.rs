@@ -18,13 +18,54 @@ use krabka_protocol::{
 };
 
 use super::subscription_blob;
-use crate::coordinator::unified::{
-    actor::{
-        ClassicView, CommitFence, CommitRequest, GroupActorHandle, GroupActorMessage, JoinResult,
-        SyncResult,
+use crate::{
+    coordinator::unified::{
+        actor::{
+            ClassicView, CommitFence, CommitRequest, DescribeView, GroupActorHandle,
+            GroupActorMessage, JoinResult, LeaveResult, SyncResult,
+        },
+        classic_state::OffsetEntry,
     },
-    classic_state::OffsetEntry,
+    task_util::ask,
 };
+
+pub async fn describe(handle: &GroupActorHandle) -> DescribeView {
+    ask(&handle.tx, |reply| GroupActorMessage::Describe { reply })
+        .await
+        .unwrap()
+}
+
+pub async fn classic_leave_request(
+    handle: &GroupActorHandle,
+    req: LeaveGroupRequest,
+    version: i16,
+) -> LeaveResult {
+    ask(&handle.tx, |reply| GroupActorMessage::ClassicLeave {
+        req,
+        version,
+        reply,
+    })
+    .await
+    .unwrap()
+}
+
+pub async fn classic_leave_member(handle: &GroupActorHandle, member_id: &str) -> LeaveResult {
+    classic_leave_request(
+        handle,
+        LeaveGroupRequest {
+            group_id: "g".into(),
+            members: vec![
+                krabka_protocol::owned::leave_group_request::MemberIdentity {
+                    member_id: member_id.into(),
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        },
+        3,
+    )
+    .await
+}
 
 pub async fn classic_join(handle: &GroupActorHandle, member_id: &str, topic: &str) -> JoinResult {
     let (tx, rx) = tokio::sync::oneshot::channel();
@@ -106,18 +147,29 @@ pub async fn consumer_heartbeat(
     member_epoch: i32,
     topic: Option<&str>,
 ) -> ConsumerGroupHeartbeatResponse {
+    consumer_request(
+        handle,
+        ConsumerGroupHeartbeatRequest {
+            group_id: "g".into(),
+            member_id: member_id.into(),
+            member_epoch,
+            subscribed_topic_names: topic.map(|t| vec![t.into()]),
+            rebalance_timeout_ms: 60_000,
+            ..Default::default()
+        },
+    )
+    .await
+}
+
+pub async fn consumer_request(
+    handle: &GroupActorHandle,
+    request: ConsumerGroupHeartbeatRequest,
+) -> ConsumerGroupHeartbeatResponse {
     let (tx, rx) = tokio::sync::oneshot::channel();
     handle
         .tx
         .send(GroupActorMessage::Heartbeat {
-            request: ConsumerGroupHeartbeatRequest {
-                group_id: "g".into(),
-                member_id: member_id.into(),
-                member_epoch,
-                subscribed_topic_names: topic.map(|t| vec![t.into()]),
-                rebalance_timeout_ms: 60_000,
-                ..Default::default()
-            },
+            request,
             client_id: "client-a".into(),
             client_host: String::new(),
             regex_resolver: crate::coordinator::unified::regex_resolver::no_topic_regex_resolver(),
@@ -136,36 +188,28 @@ pub async fn consumer_heartbeat_owning(
     member_epoch: i32,
     owned: &[(Uuid, &[i32])],
 ) -> ConsumerGroupHeartbeatResponse {
-    let (tx, rx) = tokio::sync::oneshot::channel();
-    handle
-        .tx
-        .send(GroupActorMessage::Heartbeat {
-            request: ConsumerGroupHeartbeatRequest {
-                group_id: "g".into(),
-                member_id: member_id.into(),
-                member_epoch,
-                subscribed_topic_names: Some(vec!["t".into()]),
-                rebalance_timeout_ms: 60_000,
-                topic_partitions: Some(
-                    owned
-                        .iter()
-                        .map(|(topic_id, partitions)| TopicPartitions {
-                            topic_id: *topic_id,
-                            partitions: partitions.to_vec(),
-                            ..Default::default()
-                        })
-                        .collect(),
-                ),
-                ..Default::default()
-            },
-            client_id: "client-a".into(),
-            client_host: String::new(),
-            regex_resolver: crate::coordinator::unified::regex_resolver::no_topic_regex_resolver(),
-            reply: tx,
-        })
-        .await
-        .unwrap();
-    rx.await.unwrap()
+    consumer_request(
+        handle,
+        ConsumerGroupHeartbeatRequest {
+            group_id: "g".into(),
+            member_id: member_id.into(),
+            member_epoch,
+            subscribed_topic_names: Some(vec!["t".into()]),
+            rebalance_timeout_ms: 60_000,
+            topic_partitions: Some(
+                owned
+                    .iter()
+                    .map(|(topic_id, partitions)| TopicPartitions {
+                        topic_id: *topic_id,
+                        partitions: partitions.to_vec(),
+                        ..Default::default()
+                    })
+                    .collect(),
+            ),
+            ..Default::default()
+        },
+    )
+    .await
 }
 
 /// Reads the live `ClassicInspect` view. Only a classic-kind group
@@ -182,26 +226,7 @@ pub async fn classic_inspect(handle: &GroupActorHandle) -> ClassicView {
 
 /// A classic member leaves the group (v3 single-member leave list).
 pub async fn classic_leave(handle: &GroupActorHandle, member_id: &str) -> Vec<MemberResponse> {
-    use krabka_protocol::owned::leave_group_request::MemberIdentity;
-    let (tx, rx) = tokio::sync::oneshot::channel();
-    handle
-        .tx
-        .send(GroupActorMessage::ClassicLeave {
-            req: LeaveGroupRequest {
-                group_id: "g".into(),
-                members: vec![MemberIdentity {
-                    member_id: member_id.into(),
-                    group_instance_id: None,
-                    ..Default::default()
-                }],
-                ..Default::default()
-            },
-            version: 3,
-            reply: tx,
-        })
-        .await
-        .unwrap();
-    rx.await.unwrap().members
+    classic_leave_member(handle, member_id).await.members
 }
 
 /// Validates an offset commit of `partitions` against the group's LIVE kind,

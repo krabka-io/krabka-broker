@@ -5,10 +5,7 @@
 //! from one grant -- an allowed topic and a denied one -- and so seeds two
 //! topics and runs two consumers, which no other ACL case does.
 
-use std::{
-    io::Write,
-    process::{Command, Stdio},
-};
+use std::process::Stdio;
 
 use assert2::assert;
 
@@ -51,35 +48,12 @@ async fn jvm_prefixed_topic_acl_works() {
     .await;
     nc_check_connectivity();
 
-    let admin_props = write_client_props(&format!(
-        "security.protocol=SASL_PLAINTEXT\n\
-         sasl.mechanism=PLAIN\n\
-         sasl.jaas.config={}\n",
-        plain_jaas(ADMIN, ADMIN_PASS),
-    ));
+    let admin_props = crate::jvm_acceptance::write_plain_props(ADMIN, ADMIN_PASS);
     let admin_mount = admin_props.mount_str();
 
     // Pre-create both topics.
     for topic in [TOPIC_OK, TOPIC_DENIED] {
-        docker_run_kafka_tool_with_image_and_mount(
-            KAFKA_IMAGE_TXN,
-            &admin_mount,
-            &[
-                "kafka-topics",
-                "--create",
-                "--if-not-exists",
-                "--topic",
-                topic,
-                "--partitions",
-                "1",
-                "--replication-factor",
-                "1",
-                "--bootstrap-server",
-                broker0_advertised(),
-                "--command-config",
-                "/client.properties",
-            ],
-        );
+        crate::jvm_acceptance::create_console_topic(KAFKA_IMAGE_TXN, &[&admin_mount], topic, 1, 1);
     }
 
     // Prefixed Read on `team-*` for alice. ACL implications grant Describe from
@@ -138,36 +112,13 @@ async fn jvm_prefixed_topic_acl_works() {
     let admin_producer_mount = admin_producer_props.mount_str();
 
     for topic in [TOPIC_OK, TOPIC_DENIED] {
-        let mut child = Command::new("docker")
-            .args([
-                "run",
-                "--rm",
-                "-i",
-                "-v",
-                &admin_producer_mount,
-                "--add-host=host.docker.internal:host-gateway",
-                KAFKA_IMAGE_TXN,
-                "kafka-console-producer",
-                "--bootstrap-server",
-                broker0_advertised(),
-                "--topic",
-                topic,
-                "--producer.config",
-                "/client.properties",
-            ])
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .expect("spawn admin seed producer");
-        child
-            .stdin
-            .as_mut()
-            .expect("stdin")
-            .write_all(format!("seed-{topic}\n").as_bytes())
-            .expect("write seed");
-        drop(child.stdin.take());
-        let seed_out = child.wait_with_output().expect("wait seed producer");
+        let seed_out = crate::jvm_acceptance::produce_console(
+            KAFKA_IMAGE_TXN,
+            &[&admin_producer_mount],
+            topic,
+            false,
+            format!("seed-{topic}\n").as_bytes(),
+        );
         assert!(
             seed_out.status.success(),
             "admin seed producer failed for {topic}: stderr={}",
@@ -176,12 +127,7 @@ async fn jvm_prefixed_topic_acl_works() {
     }
 
     // ---- Alice: consume team-foo (allowed by prefix).
-    let alice_props = write_client_props(&format!(
-        "security.protocol=SASL_PLAINTEXT\n\
-         sasl.mechanism=PLAIN\n\
-         sasl.jaas.config={}\n",
-        plain_jaas(ALICE, ALICE_PASS),
-    ));
+    let alice_props = crate::jvm_acceptance::write_plain_props(ALICE, ALICE_PASS);
     let alice_mount = alice_props.mount_str();
 
     let consumer_out = docker_run_kafka_tool_with_image_and_mount(
@@ -212,14 +158,10 @@ async fn jvm_prefixed_topic_acl_works() {
     );
 
     // ---- Alice: consume other-foo (denied — no matching prefix).
-    let denied_out = Command::new("docker")
-        .args([
-            "run",
-            "--rm",
-            "-v",
-            &alice_mount,
-            "--add-host=host.docker.internal:host-gateway",
-            KAFKA_IMAGE_TXN,
+    let denied_out = crate::support::jvm_docker_command(
+        KAFKA_IMAGE_TXN,
+        &[&alice_mount],
+        &[
             "kafka-console-consumer",
             "--bootstrap-server",
             broker0_advertised(),
@@ -234,11 +176,13 @@ async fn jvm_prefixed_topic_acl_works() {
             "15000",
             "--consumer.config",
             "/client.properties",
-        ])
-        .stderr(Stdio::piped())
-        .stdout(Stdio::piped())
-        .output()
-        .expect("spawn alice denied consumer");
+        ],
+        false,
+    )
+    .stderr(Stdio::piped())
+    .stdout(Stdio::piped())
+    .output()
+    .expect("spawn alice denied consumer");
     let denied_stderr = String::from_utf8_lossy(&denied_out.stderr);
     let denied_stdout = String::from_utf8_lossy(&denied_out.stdout);
     eprintln!(

@@ -38,7 +38,7 @@ mod persistence;
 mod pump;
 mod rlmm;
 #[cfg(test)]
-mod test_support;
+pub(crate) mod test_support;
 
 use self::pump::pump_loop;
 use crate::log::{AssignmentHandle, MetadataEventLog};

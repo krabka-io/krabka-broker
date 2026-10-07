@@ -4,9 +4,7 @@
 use assert2::{assert, check};
 use krabka_ids::{LeaderEpoch, PartitionIndex};
 use krabka_log::Log;
-use krabka_remote_storage::{
-    InmemoryRemoteLogMetadataManager, LocalTieredStorage, RemoteStorageManager,
-};
+use krabka_remote_storage::{InmemoryRemoteLogMetadataManager, RemoteStorageManager};
 use krabka_units::{bytes, millis};
 
 use super::*;
@@ -14,8 +12,8 @@ use crate::{
     remote_log_manager::{
         ArchiveMode, copy_eligible,
         test_support::{
-            FakeWormArchive, batch, leading_partition_over, rolled_tiered_partition_with_config,
-            synth_export, tier, tp,
+            FakeWormArchive, archived_backends, batch, leading_partition_over, local_backends,
+            partition_snapshot, rolled_tiered_partition_with_config, synth_export, tier, tp,
         },
     },
     time_util::now_ms,
@@ -31,6 +29,21 @@ fn sealed_ranges(log: &mut Log) -> Vec<(Offset, Offset)> {
         .iter()
         .map(|export| (export.base_offset, export.last_offset))
         .collect()
+}
+
+/// A rolled, tiered partition whose sealed segments expire after one millisecond.
+fn short_retention_partition(
+    log_dir: &std::path::Path,
+) -> std::sync::Arc<crate::partition::Partition> {
+    rolled_tiered_partition_with_config(
+        log_dir,
+        LogConfig {
+            segment_size: bytes(256),
+            remote_storage_enable: true,
+            local_retention: Some(millis(1)),
+            ..LogConfig::default()
+        },
+    )
 }
 
 // One `local_retention_decision` case over a log whose active segment
@@ -563,17 +576,7 @@ async fn local_retention_drive_deletes_copied_segments() {
     assert!(exports.len() >= 2, "test needs multiple sealed segments");
     let log_config = log.config_snapshot();
 
-    let rsm: Arc<dyn RemoteStorageManager> = Arc::new(LocalTieredStorage::new(remote_dir.path()));
-    let rlmm: Arc<dyn RemoteLogMetadataManager> = Arc::new(InmemoryRemoteLogMetadataManager::new());
-    let copied = copy_eligible(
-        &tier(ArchiveMode::Mutable, &rsm, &rlmm),
-        &tp(),
-        1,
-        LeaderEpoch(0),
-        exports.clone(),
-    )
-    .await;
-    assert!(copied == exports.len());
+    let (_rsm, rlmm) = archived_backends(remote_dir.path(), &exports).await;
 
     // Gather finished ranges the same way `local_retention_pass` would.
     let finished: Vec<(i64, i64)> = rlmm
@@ -610,32 +613,11 @@ async fn local_retention_drive_deletes_copied_segments() {
 async fn local_retention_pass_deletes_finished_segments_and_returns_count() {
     let log_dir = tempfile::tempdir().unwrap();
     let remote_dir = tempfile::tempdir().unwrap();
-    let partition = rolled_tiered_partition_with_config(
-        log_dir.path(),
-        LogConfig {
-            segment_size: bytes(256),
-            remote_storage_enable: true,
-            local_retention: Some(millis(1)),
-            ..LogConfig::default()
-        },
-    );
-    let (exports, log_config) = {
-        let log = partition.log.lock().expect("partition log mutex poisoned");
-        (log.tierable_segments(), log.config_snapshot())
-    };
+    let partition = short_retention_partition(log_dir.path());
+    let (exports, log_config) = partition_snapshot(&partition);
     assert!(exports.len() >= 2, "test needs multiple sealed segments");
 
-    let rsm: Arc<dyn RemoteStorageManager> = Arc::new(LocalTieredStorage::new(remote_dir.path()));
-    let rlmm: Arc<dyn RemoteLogMetadataManager> = Arc::new(InmemoryRemoteLogMetadataManager::new());
-    let copied = copy_eligible(
-        &tier(ArchiveMode::Mutable, &rsm, &rlmm),
-        &tp(),
-        1,
-        LeaderEpoch(0),
-        exports.clone(),
-    )
-    .await;
-    assert!(copied == exports.len());
+    let (_rsm, rlmm) = archived_backends(remote_dir.path(), &exports).await;
 
     let removed = local_retention_pass(
         &tp(),
@@ -663,19 +645,8 @@ async fn local_retention_pass_deletes_finished_segments_and_returns_count() {
 #[tokio::test]
 async fn local_retention_still_evicts_under_a_write_once_archive() {
     let log_dir = tempfile::tempdir().unwrap();
-    let partition = rolled_tiered_partition_with_config(
-        log_dir.path(),
-        LogConfig {
-            segment_size: bytes(256),
-            remote_storage_enable: true,
-            local_retention: Some(millis(1)),
-            ..LogConfig::default()
-        },
-    );
-    let (exports, log_config) = {
-        let log = partition.log.lock().expect("partition log mutex poisoned");
-        (log.tierable_segments(), log.config_snapshot())
-    };
+    let partition = short_retention_partition(log_dir.path());
+    let (exports, log_config) = partition_snapshot(&partition);
     assert!(exports.len() >= 2, "test needs multiple sealed segments");
 
     let rsm: Arc<dyn RemoteStorageManager> = Arc::new(FakeWormArchive::new());
@@ -772,25 +743,10 @@ async fn future_stamped_segments_leave_the_disk_only_under_trunks_rule() {
         }
         log.sync().unwrap();
         let partition = leading_partition_over(PartitionIndex(0), log_dir.path(), log);
-        let (exports, log_config) = {
-            let log = partition.log.lock().expect("partition log mutex poisoned");
-            (log.tierable_segments(), log.config_snapshot())
-        };
+        let (exports, log_config) = partition_snapshot(&partition);
         assert!(exports.len() >= 2, "test needs multiple sealed segments");
 
-        let rsm: Arc<dyn RemoteStorageManager> =
-            Arc::new(LocalTieredStorage::new(remote_dir.path()));
-        let rlmm: Arc<dyn RemoteLogMetadataManager> =
-            Arc::new(InmemoryRemoteLogMetadataManager::new());
-        let copied = copy_eligible(
-            &tier(ArchiveMode::Mutable, &rsm, &rlmm),
-            &tp(),
-            1,
-            LeaderEpoch(0),
-            exports.clone(),
-        )
-        .await;
-        assert!(copied == exports.len());
+        let (_rsm, rlmm) = archived_backends(remote_dir.path(), &exports).await;
 
         let removed = local_retention_pass(
             &tp(),
@@ -830,10 +786,7 @@ async fn pass_over(
     rlmm: &Arc<dyn RemoteLogMetadataManager>,
     now_ms: i64,
 ) -> PassOutcome {
-    let (exports, log_config) = {
-        let log = partition.log.lock().expect("partition log mutex poisoned");
-        (log.tierable_segments(), log.config_snapshot())
-    };
+    let (exports, log_config) = partition_snapshot(partition);
     let removed = local_retention_pass(
         &tp(),
         partition,
@@ -884,8 +837,7 @@ async fn a_breached_active_segment_rolls_then_tiers_then_leaves_the_disk() {
         log.append(&mut batch(2)).unwrap();
     }
     let partition = leading_partition_over(PartitionIndex(0), log_dir.path(), log);
-    let rsm: Arc<dyn RemoteStorageManager> = Arc::new(LocalTieredStorage::new(remote_dir.path()));
-    let rlmm: Arc<dyn RemoteLogMetadataManager> = Arc::new(InmemoryRemoteLogMetadataManager::new());
+    let (rsm, rlmm) = local_backends(remote_dir.path());
 
     check!(
         pass_over(&partition, &rlmm, now_ms()).await
@@ -959,23 +911,8 @@ async fn the_roll_waits_for_the_high_watermark_and_for_the_walk_to_reach_it() {
                 ..LogConfig::default()
             },
         );
-        let (exports, log_config) = {
-            let log = partition.log.lock().expect("partition log mutex poisoned");
-            (log.tierable_segments(), log.config_snapshot())
-        };
-        let rsm: Arc<dyn RemoteStorageManager> =
-            Arc::new(LocalTieredStorage::new(remote_dir.path()));
-        let rlmm: Arc<dyn RemoteLogMetadataManager> =
-            Arc::new(InmemoryRemoteLogMetadataManager::new());
-        let copied = copy_eligible(
-            &tier(ArchiveMode::Mutable, &rsm, &rlmm),
-            &tp(),
-            1,
-            LeaderEpoch(0),
-            exports.clone(),
-        )
-        .await;
-        assert!(copied == exports.len());
+        let (exports, log_config) = partition_snapshot(&partition);
+        let (_rsm, rlmm) = archived_backends(remote_dir.path(), &exports).await;
         let active_before = {
             let mut log = partition.log.lock().expect("partition log mutex poisoned");
             if rolled_since {

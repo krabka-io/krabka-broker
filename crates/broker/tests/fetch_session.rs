@@ -10,7 +10,6 @@ mod support;
 
 use krabka_protocol::{
     owned::{
-        create_topics_request::{CreatableTopic, CreateTopicsRequest},
         fetch_request::{FetchPartition, FetchRequest, FetchTopic, ForgottenTopic},
         produce_request::{PartitionProduceData, ProduceRequest, TopicProduceData},
     },
@@ -37,21 +36,7 @@ fn one_record_batch(n: i32) -> RecordBatch {
 }
 
 async fn create_topic(p: &support::InProcess, name: &str, num_partitions: i32) {
-    let resp = p
-        .client
-        .send(CreateTopicsRequest {
-            topics: vec![CreatableTopic {
-                name: name.into(),
-                num_partitions,
-                replication_factor: 1,
-                ..Default::default()
-            }],
-            timeout_ms: 5_000,
-            ..Default::default()
-        })
-        .await
-        .expect("CreateTopics");
-    assert!(resp.topics[0].error_code == 0, "CreateTopics for {name}");
+    crate::support::client::create_topic(&p.client, name, num_partitions).await;
 }
 
 async fn produce(p: &support::InProcess, topic: &str, partition: i32, records: i32) {
@@ -105,26 +90,7 @@ async fn new_session_then_incremental_filters_unchanged_partitions() {
     let tid = topic_id_for(&p.client, "t").await;
 
     // (1) New session — session_id=0, session_epoch=0.
-    let r1 = p
-        .client
-        .send(FetchRequest {
-            max_wait_ms: 100,
-            min_bytes: 0,
-            session_id: 0,
-            session_epoch: 0,
-            topics: vec![fetch_topic(
-                "t",
-                tid,
-                vec![
-                    fetch_partition(0, 0),
-                    fetch_partition(1, 0),
-                    fetch_partition(2, 0),
-                ],
-            )],
-            ..Default::default()
-        })
-        .await
-        .expect("Fetch new-session");
+    let r1 = open_session(&p.client, tid, 3, 100).await;
     check!(r1.error_code == 0, "no top-level error");
     check!(r1.session_id > 0, "broker allocated a session id");
     assert!(r1.responses.len() == 1, "new session emits full response");
@@ -193,26 +159,7 @@ async fn forgotten_topics_drop_partitions_from_subscription() {
     let tid = topic_id_for(&p.client, "t").await;
 
     // Open a session covering t-0..t-2.
-    let r1 = p
-        .client
-        .send(FetchRequest {
-            max_wait_ms: 100,
-            min_bytes: 0,
-            session_id: 0,
-            session_epoch: 0,
-            topics: vec![fetch_topic(
-                "t",
-                tid,
-                vec![
-                    fetch_partition(0, 0),
-                    fetch_partition(1, 0),
-                    fetch_partition(2, 0),
-                ],
-            )],
-            ..Default::default()
-        })
-        .await
-        .expect("new session");
+    let r1 = open_session(&p.client, tid, 3, 100).await;
     let sid = r1.session_id;
     assert!(sid > 0);
 
@@ -301,16 +248,7 @@ async fn stale_session_epoch_returns_invalid_epoch() {
     create_topic(&p, "t", 1).await;
     let tid = topic_id_for(&p.client, "t").await;
 
-    let r1 = p
-        .client
-        .send(FetchRequest {
-            session_id: 0,
-            session_epoch: 0,
-            topics: vec![fetch_topic("t", tid, vec![fetch_partition(0, 0)])],
-            ..Default::default()
-        })
-        .await
-        .expect("new session");
+    let r1 = open_session(&p.client, tid, 1, 0).await;
     let sid = r1.session_id;
     assert!(sid > 0);
 
@@ -339,16 +277,7 @@ async fn close_session_drops_cache_entry() {
     create_topic(&p, "t", 1).await;
     let tid = topic_id_for(&p.client, "t").await;
 
-    let r1 = p
-        .client
-        .send(FetchRequest {
-            session_id: 0,
-            session_epoch: 0,
-            topics: vec![fetch_topic("t", tid, vec![fetch_partition(0, 0)])],
-            ..Default::default()
-        })
-        .await
-        .expect("new session");
+    let r1 = open_session(&p.client, tid, 1, 0).await;
     let sid = r1.session_id;
     assert!(sid > 0);
 
@@ -435,4 +364,27 @@ async fn sessionless_full_fetch_round_trip() {
     let total: usize = batches.iter().map(|b| b.records.len()).sum();
     assert!(total == 2);
     p.broker.shutdown().await;
+}
+
+async fn open_session(
+    client: &krabka_client_core::Client,
+    tid: WireUuid,
+    partitions: i32,
+    max_wait_ms: i32,
+) -> krabka_protocol::owned::fetch_response::FetchResponse {
+    client
+        .send(FetchRequest {
+            max_wait_ms,
+            min_bytes: 0,
+            session_id: 0,
+            session_epoch: 0,
+            topics: vec![fetch_topic(
+                "t",
+                tid,
+                (0..partitions).map(|p| fetch_partition(p, 0)).collect(),
+            )],
+            ..Default::default()
+        })
+        .await
+        .expect("new session")
 }

@@ -1,29 +1,29 @@
-(* #"/workspace/crates/verified/src/producer_snapshot/replay_start.rs" 31 0 34 9 *)
+(* #"/workspace/crates/verified/src/producer_snapshot/replay_start.rs" 32 0 35 9 *)
 
-let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
-let%span sconvert = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/convert.rs" 274 26 274 51
-let%span sreplay_start = "/workspace/crates/verified/src/producer_snapshot/replay_start.rs" 36 30 36 32
-let%span sreplay_start'0 = "/workspace/crates/verified/src/producer_snapshot/replay_start.rs" 36 59 36 61
-let%span sreplay_start'1 = "/workspace/crates/verified/src/producer_snapshot/replay_start.rs" 36 87 36 88
-let%span sreplay_start'2 = "/workspace/crates/verified/src/producer_snapshot/replay_start.rs" 36 8 41 55
-let%span sreplay_start'3 = "/workspace/crates/verified/src/producer_snapshot/replay_start.rs" 37 37 37 38
-let%span sreplay_start'4 = "/workspace/crates/verified/src/producer_snapshot/replay_start.rs" 38 42 38 43
-let%span sreplay_start'5 = "/workspace/crates/verified/src/producer_snapshot/replay_start.rs" 39 41 39 42
-let%span sreplay_start'6 = "/workspace/crates/verified/src/producer_snapshot/replay_start.rs" 40 40 40 69
-let%span sreplay_start'7 = "/workspace/crates/verified/src/producer_snapshot/replay_start.rs" 37 15 41 55
-let%span sreplay_start'8 = "/workspace/crates/verified/src/producer_snapshot/replay_start.rs" 42 62 42 64
-let%span sreplay_start'9 = "/workspace/crates/verified/src/producer_snapshot/replay_start.rs" 42 28 45 67
-let%span sreplay_start'10 = "/workspace/crates/verified/src/producer_snapshot/replay_start.rs" 43 46 43 47
-let%span sreplay_start'11 = "/workspace/crates/verified/src/producer_snapshot/replay_start.rs" 43 11 45 67
-let%span sreplay_start'12 = "/workspace/crates/verified/src/producer_snapshot/replay_start.rs" 46 23 46 24
-let%span sreplay_start'13 = "/workspace/crates/verified/src/producer_snapshot/replay_start.rs" 47 32 47 33
-let%span sreplay_start'14 = "/workspace/crates/verified/src/producer_snapshot/replay_start.rs" 48 35 48 36
-let%span sreplay_start'15 = "/workspace/crates/verified/src/producer_snapshot/replay_start.rs" 49 38 49 40
-let%span sreplay_start'16 = "/workspace/crates/verified/src/producer_snapshot/replay_start.rs" 46 4 51 28
-let%span sreplay_start'17 = "/workspace/crates/verified/src/producer_snapshot/replay_start.rs" 29 10 29 71
-let%span sreplay_start'18 = "/workspace/crates/verified/src/producer_snapshot/replay_start.rs" 18 8 23 65
-let%span ssnapshot_transaction_valid = "/workspace/crates/verified/src/producer_snapshot/snapshot_transaction_valid.rs" 202 8 207 56
-let%span ssnapshot_transaction_valid'0 = "/workspace/crates/verified/src/producer_snapshot/snapshot_transaction_valid.rs" 219 8 222 73
+let%span sord = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sconvert = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/convert.rs" 274 26 274 51
+let%span sreplay_start = "/workspace/crates/verified/src/producer_snapshot/replay_start.rs" 37 30 37 32
+let%span sreplay_start'0 = "/workspace/crates/verified/src/producer_snapshot/replay_start.rs" 37 59 37 61
+let%span sreplay_start'1 = "/workspace/crates/verified/src/producer_snapshot/replay_start.rs" 37 87 37 88
+let%span sreplay_start'2 = "/workspace/crates/verified/src/producer_snapshot/replay_start.rs" 37 8 42 55
+let%span sreplay_start'3 = "/workspace/crates/verified/src/producer_snapshot/replay_start.rs" 38 37 38 38
+let%span sreplay_start'4 = "/workspace/crates/verified/src/producer_snapshot/replay_start.rs" 39 42 39 43
+let%span sreplay_start'5 = "/workspace/crates/verified/src/producer_snapshot/replay_start.rs" 40 41 40 42
+let%span sreplay_start'6 = "/workspace/crates/verified/src/producer_snapshot/replay_start.rs" 41 40 41 69
+let%span sreplay_start'7 = "/workspace/crates/verified/src/producer_snapshot/replay_start.rs" 38 15 42 55
+let%span sreplay_start'8 = "/workspace/crates/verified/src/producer_snapshot/replay_start.rs" 43 62 43 64
+let%span sreplay_start'9 = "/workspace/crates/verified/src/producer_snapshot/replay_start.rs" 43 28 46 67
+let%span sreplay_start'10 = "/workspace/crates/verified/src/producer_snapshot/replay_start.rs" 44 46 44 47
+let%span sreplay_start'11 = "/workspace/crates/verified/src/producer_snapshot/replay_start.rs" 44 11 46 67
+let%span sreplay_start'12 = "/workspace/crates/verified/src/producer_snapshot/replay_start.rs" 47 23 47 24
+let%span sreplay_start'13 = "/workspace/crates/verified/src/producer_snapshot/replay_start.rs" 48 32 48 33
+let%span sreplay_start'14 = "/workspace/crates/verified/src/producer_snapshot/replay_start.rs" 49 35 49 36
+let%span sreplay_start'15 = "/workspace/crates/verified/src/producer_snapshot/replay_start.rs" 50 38 50 40
+let%span sreplay_start'16 = "/workspace/crates/verified/src/producer_snapshot/replay_start.rs" 47 4 52 28
+let%span sreplay_start'17 = "/workspace/crates/verified/src/producer_snapshot/replay_start.rs" 30 10 30 71
+let%span sreplay_start'18 = "/workspace/crates/verified/src/producer_snapshot/replay_start.rs" 19 8 24 65
+let%span ssnapshot_transaction_valid = "/workspace/crates/verified/src/producer_snapshot/snapshot_transaction_valid.rs" 203 8 208 56
+let%span ssnapshot_transaction_valid'0 = "/workspace/crates/verified/src/producer_snapshot/snapshot_transaction_valid.rs" 220 8 223 73
 
 use creusot.int.Int64
 use creusot.int.Int16
@@ -49,7 +49,7 @@ predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other
 
 meta "rewrite_def" predicate ge_log_Int
 
-predicate snapshot_last_record_valid [#"/workspace/crates/verified/src/producer_snapshot/snapshot_transaction_valid.rs" 200 0 200 98] (snapshot_offset: int) (entry: t_ProducerSnapshotEntryFacts) =
+predicate snapshot_last_record_valid [#"/workspace/crates/verified/src/producer_snapshot/snapshot_transaction_valid.rs" 201 0 201 98] (snapshot_offset: int) (entry: t_ProducerSnapshotEntryFacts) =
   [%#ssnapshot_transaction_valid] Int64.to_int entry.last_offset = - 1
     /\ Int32.to_int entry.last_sequence = - 1 /\ Int32.to_int entry.offset_delta = 0
   \/ ge_log_Int (Int64.to_int entry.last_offset) 0
@@ -58,13 +58,13 @@ predicate snapshot_last_record_valid [#"/workspace/crates/verified/src/producer_
   /\ ge_log_Int (Int64.to_int entry.last_offset) (Int32.to_int entry.offset_delta)
   /\ Int64.to_int entry.last_offset < snapshot_offset
 
-predicate snapshot_transaction_valid [#"/workspace/crates/verified/src/producer_snapshot/snapshot_transaction_valid.rs" 217 0 217 98] (snapshot_offset: int) (entry: t_ProducerSnapshotEntryFacts) =
+predicate snapshot_transaction_valid [#"/workspace/crates/verified/src/producer_snapshot/snapshot_transaction_valid.rs" 218 0 218 98] (snapshot_offset: int) (entry: t_ProducerSnapshotEntryFacts) =
   [%#ssnapshot_transaction_valid'0] Int64.to_int entry.current_txn_first_offset = - 1
   \/ ge_log_Int (Int64.to_int entry.current_txn_first_offset) 0
   /\ Int64.to_int entry.current_txn_first_offset < snapshot_offset
   /\ Int64.to_int entry.current_txn_first_offset <= Int64.to_int entry.last_offset
 
-predicate snapshot_entry_valid_model [#"/workspace/crates/verified/src/producer_snapshot/replay_start.rs" 16 0 16 98] (snapshot_offset: int) (entry: t_ProducerSnapshotEntryFacts) =
+predicate snapshot_entry_valid_model [#"/workspace/crates/verified/src/producer_snapshot/replay_start.rs" 17 0 17 98] (snapshot_offset: int) (entry: t_ProducerSnapshotEntryFacts) =
   [%#sreplay_start'18] ge_log_Int snapshot_offset 0
   /\ ge_log_Int (Int64.to_int entry.producer_id) 0
   /\ ge_log_Int (Int16.to_int entry.producer_epoch) 0
@@ -75,7 +75,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let producer_snapshot_entry_valid [#"/workspace/crates/verified/src/producer_snapshot/replay_start.rs" 31 0 34 9]
+let producer_snapshot_entry_valid [#"/workspace/crates/verified/src/producer_snapshot/replay_start.rs" 32 0 35 9]
   (snapshot_offset: Int64.t) (entry: t_ProducerSnapshotEntryFacts) (return (x: bool)) = (! bb0
   [ bb0 = s0
     [ s0 = [ &_7 <- entry.last_offset = ([%#sreplay_start] (-1: Int64.t)) ] s1

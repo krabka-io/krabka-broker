@@ -1,23 +1,23 @@
-(* #"/workspace/crates/verified/src/delegation_token/token_is_active.rs" 160 0 165 24 *)
+(* #"/workspace/crates/verified/src/delegation_token/token_is_active.rs" 180 0 185 24 *)
 
-let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
-let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
-let%span snum = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 27 28 27 33
-let%span scmp = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 76 26 76 66
-let%span scmp'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 77 26 77 63
-let%span scmp'1 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 78 36 78 40
-let%span scmp'2 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 79 26 79 79
-let%span scmp'3 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 80 26 80 77
-let%span stoken_is_active = "/workspace/crates/verified/src/delegation_token/token_is_active.rs" 166 19 166 20
-let%span stoken_is_active'0 = "/workspace/crates/verified/src/delegation_token/token_is_active.rs" 173 32 173 65
-let%span stoken_is_active'1 = "/workspace/crates/verified/src/delegation_token/token_is_active.rs" 173 32 173 87
-let%span stoken_is_active'2 = "/workspace/crates/verified/src/delegation_token/token_is_active.rs" 150 10 150 69
-let%span stoken_is_active'3 = "/workspace/crates/verified/src/delegation_token/token_is_active.rs" 151 10 153 73
-let%span stoken_is_active'4 = "/workspace/crates/verified/src/delegation_token/token_is_active.rs" 154 10 158 1
-let%span stoken_is_active'5 = "/workspace/crates/verified/src/delegation_token/token_is_active.rs" 36 11 36 28
-let%span stoken_is_active'6 = "/workspace/crates/verified/src/delegation_token/token_is_active.rs" 37 10 37 57
-let%span stoken_is_active'7 = "/workspace/crates/verified/src/delegation_token/token_is_active.rs" 30 8 30 47
-let%span stoken_is_active'8 = "/workspace/crates/verified/src/delegation_token/token_is_active.rs" 10 8 10 89
+let%span sord = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sord'0 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span snum = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 27 28 27 33
+let%span scmp = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 76 26 76 66
+let%span scmp'0 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 77 26 77 63
+let%span scmp'1 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 78 36 78 40
+let%span scmp'2 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 79 26 79 79
+let%span scmp'3 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 80 26 80 77
+let%span stoken_is_active = "/workspace/crates/verified/src/delegation_token/token_is_active.rs" 186 19 186 20
+let%span stoken_is_active'0 = "/workspace/crates/verified/src/delegation_token/token_is_active.rs" 193 32 193 65
+let%span stoken_is_active'1 = "/workspace/crates/verified/src/delegation_token/token_is_active.rs" 193 32 193 87
+let%span stoken_is_active'2 = "/workspace/crates/verified/src/delegation_token/token_is_active.rs" 170 10 170 69
+let%span stoken_is_active'3 = "/workspace/crates/verified/src/delegation_token/token_is_active.rs" 171 10 173 73
+let%span stoken_is_active'4 = "/workspace/crates/verified/src/delegation_token/token_is_active.rs" 174 10 178 1
+let%span stoken_is_active'5 = "/workspace/crates/verified/src/delegation_token/token_is_active.rs" 37 11 37 28
+let%span stoken_is_active'6 = "/workspace/crates/verified/src/delegation_token/token_is_active.rs" 38 10 38 57
+let%span stoken_is_active'7 = "/workspace/crates/verified/src/delegation_token/token_is_active.rs" 31 8 31 47
+let%span stoken_is_active'8 = "/workspace/crates/verified/src/delegation_token/token_is_active.rs" 11 8 11 89
 
 use creusot.int.Int64
 use creusot.prelude.Any
@@ -35,7 +35,7 @@ meta "rewrite_def" predicate gt_log_Int
 
 constant const_MAX: Int64.t = (9223372036854775807: Int64.t)
 
-function deadline_model [#"/workspace/crates/verified/src/delegation_token/token_is_active.rs" 8 0 8 55] (now_ms: Int64.t) (duration_ms: int) : int
+function deadline_model [#"/workspace/crates/verified/src/delegation_token/token_is_active.rs" 9 0 9 55] (now_ms: Int64.t) (duration_ms: int) : int
  = [%#stoken_is_active'8] if gt_log_Int (Int64.to_int now_ms + duration_ms) (Int64.to_int const_MAX) then
     Int64.to_int const_MAX
   else
@@ -63,14 +63,14 @@ let min_i64 (self_: Int64.t) (o: Int64.t) (return (x: Int64.t)) = any
     /\ ([@stop_split] [@expl:min ensures #4] [%#scmp'3] deep_model_i64 o <= deep_model_i64 self_ -> result = o)}
     (! return {result}) ]
 
-function min_model [#"/workspace/crates/verified/src/delegation_token/token_is_active.rs" 28 0 28 42] (left: int) (right: int) : int
+function min_model [#"/workspace/crates/verified/src/delegation_token/token_is_active.rs" 29 0 29 42] (left: int) (right: int) : int
  = [%#stoken_is_active'7] if left < right then left else right
 
 meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let expire_token_deadline [#"/workspace/crates/verified/src/delegation_token/token_is_active.rs" 160 0 165 24]
+let expire_token_deadline [#"/workspace/crates/verified/src/delegation_token/token_is_active.rs" 180 0 185 24]
   (now_ms: Int64.t) (period_ms: Int64.t) (current_expiry_ms: Int64.t) (max_timestamp_ms: Int64.t)
   (return (x: t_TokenExpireDecision)) = (! bb0
   [ bb0 = s0

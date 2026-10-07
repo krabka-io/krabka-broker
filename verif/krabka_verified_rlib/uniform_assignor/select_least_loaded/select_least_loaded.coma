@@ -1,25 +1,25 @@
-(* #"/workspace/crates/verified/src/uniform_assignor/select_least_loaded.rs" 194 0 194 74 *)
+(* #"/workspace/crates/verified/src/uniform_assignor/select_least_loaded.rs" 195 0 195 74 *)
 
-let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
-let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
-let%span swell_founded = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/well_founded.rs" 43 8 43 33
-let%span sslice = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 331 18 331 22
-let%span sselect_least_loaded = "/workspace/crates/verified/src/uniform_assignor/select_least_loaded.rs" 195 16 195 32
-let%span sselect_least_loaded'0 = "/workspace/crates/verified/src/uniform_assignor/select_least_loaded.rs" 196 16 196 17
-let%span sselect_least_loaded'1 = "/workspace/crates/verified/src/uniform_assignor/select_least_loaded.rs" 199 19 199 25
-let%span sselect_least_loaded'2 = "/workspace/crates/verified/src/uniform_assignor/select_least_loaded.rs" 200 16 200 22
-let%span sselect_least_loaded'3 = "/workspace/crates/verified/src/uniform_assignor/select_least_loaded.rs" 207 14 207 36
-let%span sselect_least_loaded'4 = "/workspace/crates/verified/src/uniform_assignor/select_least_loaded.rs" 205 16 206 61
-let%span sselect_least_loaded'5 = "/workspace/crates/verified/src/uniform_assignor/select_least_loaded.rs" 203 16 204 62
-let%span sselect_least_loaded'6 = "/workspace/crates/verified/src/uniform_assignor/select_least_loaded.rs" 202 16 202 26
-let%span sselect_least_loaded'7 = "/workspace/crates/verified/src/uniform_assignor/select_least_loaded.rs" 201 16 201 50
-let%span sselect_least_loaded'8 = "/workspace/crates/verified/src/uniform_assignor/select_least_loaded.rs" 209 24 209 37
-let%span sselect_least_loaded'9 = "/workspace/crates/verified/src/uniform_assignor/select_least_loaded.rs" 210 22 210 38
-let%span sselect_least_loaded'10 = "/workspace/crates/verified/src/uniform_assignor/select_least_loaded.rs" 217 13 217 14
-let%span sselect_least_loaded'11 = "/workspace/crates/verified/src/uniform_assignor/select_least_loaded.rs" 217 8 217 14
-let%span sselect_least_loaded'12 = "/workspace/crates/verified/src/uniform_assignor/select_least_loaded.rs" 187 10 187 54
-let%span sselect_least_loaded'13 = "/workspace/crates/verified/src/uniform_assignor/select_least_loaded.rs" 188 10 192 64
-let%span sselect_least_loaded'14 = "/workspace/crates/verified/src/uniform_assignor/select_least_loaded.rs" 175 8 176 102
+let%span sord = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sord'0 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span swell_founded = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/well_founded.rs" 43 8 43 33
+let%span sslice = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 331 18 331 22
+let%span sselect_least_loaded = "/workspace/crates/verified/src/uniform_assignor/select_least_loaded.rs" 196 16 196 32
+let%span sselect_least_loaded'0 = "/workspace/crates/verified/src/uniform_assignor/select_least_loaded.rs" 197 16 197 17
+let%span sselect_least_loaded'1 = "/workspace/crates/verified/src/uniform_assignor/select_least_loaded.rs" 200 19 200 25
+let%span sselect_least_loaded'2 = "/workspace/crates/verified/src/uniform_assignor/select_least_loaded.rs" 201 16 201 22
+let%span sselect_least_loaded'3 = "/workspace/crates/verified/src/uniform_assignor/select_least_loaded.rs" 208 14 208 36
+let%span sselect_least_loaded'4 = "/workspace/crates/verified/src/uniform_assignor/select_least_loaded.rs" 206 16 207 61
+let%span sselect_least_loaded'5 = "/workspace/crates/verified/src/uniform_assignor/select_least_loaded.rs" 204 16 205 62
+let%span sselect_least_loaded'6 = "/workspace/crates/verified/src/uniform_assignor/select_least_loaded.rs" 203 16 203 26
+let%span sselect_least_loaded'7 = "/workspace/crates/verified/src/uniform_assignor/select_least_loaded.rs" 202 16 202 50
+let%span sselect_least_loaded'8 = "/workspace/crates/verified/src/uniform_assignor/select_least_loaded.rs" 210 24 210 37
+let%span sselect_least_loaded'9 = "/workspace/crates/verified/src/uniform_assignor/select_least_loaded.rs" 211 22 211 38
+let%span sselect_least_loaded'10 = "/workspace/crates/verified/src/uniform_assignor/select_least_loaded.rs" 218 13 218 14
+let%span sselect_least_loaded'11 = "/workspace/crates/verified/src/uniform_assignor/select_least_loaded.rs" 218 8 218 14
+let%span sselect_least_loaded'12 = "/workspace/crates/verified/src/uniform_assignor/select_least_loaded.rs" 188 10 188 54
+let%span sselect_least_loaded'13 = "/workspace/crates/verified/src/uniform_assignor/select_least_loaded.rs" 189 10 193 64
+let%span sselect_least_loaded'14 = "/workspace/crates/verified/src/uniform_assignor/select_least_loaded.rs" 176 8 177 102
 
 use creusot.slice.Slice64
 use creusot.int.UInt64
@@ -49,7 +49,7 @@ predicate well_founded_relation_Int [@inline:trivial] (self: int) (other: int) =
 
 meta "rewrite_def" predicate well_founded_relation_Int
 
-predicate load_precedes [#"/workspace/crates/verified/src/uniform_assignor/select_least_loaded.rs" 173 0 173 66] (a: t_SubscriberLoad) (b: t_SubscriberLoad) =
+predicate load_precedes [#"/workspace/crates/verified/src/uniform_assignor/select_least_loaded.rs" 174 0 174 66] (a: t_SubscriberLoad) (b: t_SubscriberLoad) =
   [%#sselect_least_loaded'14] UInt64.t'int a.assigned < UInt64.t'int b.assigned
   \/ UInt64.t'int a.assigned = UInt64.t'int b.assigned
   /\ UInt64.t'int a.assigned_at_topic_start < UInt64.t'int b.assigned_at_topic_start
@@ -58,7 +58,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let select_least_loaded [#"/workspace/crates/verified/src/uniform_assignor/select_least_loaded.rs" 194 0 194 74]
+let select_least_loaded [#"/workspace/crates/verified/src/uniform_assignor/select_least_loaded.rs" 195 0 195 74]
   (candidates: Slice64.slice t_SubscriberLoad) (return (x: t_Option_usize)) = (! bb0
   [ bb0 = s0
     [ s0 = len_SubscriberLoad [%#sselect_least_loaded] {candidates} (fun (_x: UInt64.t) -> [ &count <- _x ] s1)

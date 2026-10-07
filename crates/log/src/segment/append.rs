@@ -18,6 +18,23 @@ use super::{
 use crate::error::LogError;
 
 impl Segment {
+    fn append_coordinates(
+        &self,
+        base: i64,
+        delta: i32,
+        len: usize,
+    ) -> Result<(i64, u64), LogError> {
+        let (last, _) = krabka_verified::local_append_coordinates(base, base, delta)
+            .ok_or_else(|| LogError::InvalidArgument("invalid batch offset interval".into()))?;
+        let len = u64::try_from(len)
+            .map_err(|_| LogError::InvalidArgument("encoded batch length overflow".into()))?;
+        let size = self
+            .log_size
+            .checked_add(len)
+            .ok_or_else(|| LogError::InvalidArgument("segment byte length overflow".into()))?;
+        Ok((last, size))
+    }
+
     /// Append a record batch and return the byte position where the batch
     /// starts.
     ///
@@ -52,18 +69,9 @@ impl Segment {
         batch.encode(&mut buf)?;
         let bytes = buf.freeze();
 
-        let (last_offset, _) = krabka_verified::local_append_coordinates(
-            batch.base_offset,
-            batch.base_offset,
-            batch.last_offset_delta,
-        )
-        .ok_or_else(|| LogError::InvalidArgument("invalid batch offset interval".into()))?;
+        let (last_offset, new_log_size) =
+            self.append_coordinates(batch.base_offset, batch.last_offset_delta, bytes.len())?;
         let position = self.log_size;
-        let appended_len = u64::try_from(bytes.len())
-            .map_err(|_| LogError::InvalidArgument("encoded batch length overflow".into()))?;
-        let new_log_size = position
-            .checked_add(appended_len)
-            .ok_or_else(|| LogError::InvalidArgument("segment byte length overflow".into()))?;
         let previous = self.write_snapshot();
         let index_entry = self.index_entry_for(position, last_offset, index_interval)?;
         // The active file cursor is kept at log_size by open/recovery/truncate,
@@ -150,18 +158,9 @@ impl Segment {
         // The protocol patcher writes the raw KIP-320 wire `int32`; unwrap here.
         patch_base_offset_and_leader_epoch(&mut header, base_offset.0, leader_epoch.0);
 
-        let (last_offset, _) = krabka_verified::local_append_coordinates(
-            base_offset.0,
-            base_offset.0,
-            last_offset_delta,
-        )
-        .ok_or_else(|| LogError::InvalidArgument("invalid batch offset interval".into()))?;
+        let (last_offset, new_log_size) =
+            self.append_coordinates(base_offset.0, last_offset_delta, bytes.len())?;
         let position = self.log_size;
-        let appended_len = u64::try_from(bytes.len())
-            .map_err(|_| LogError::InvalidArgument("encoded batch length overflow".into()))?;
-        let new_log_size = position
-            .checked_add(appended_len)
-            .ok_or_else(|| LogError::InvalidArgument("segment byte length overflow".into()))?;
         let previous = self.write_snapshot();
         let index_entry = self.index_entry_for(position, last_offset, index_interval)?;
         let mut bufs = [IoSlice::new(&header), IoSlice::new(&bytes[HEADER_LEN..])];

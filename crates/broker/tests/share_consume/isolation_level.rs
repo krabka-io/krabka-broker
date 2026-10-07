@@ -11,15 +11,12 @@
 use std::{collections::BTreeSet, time::Duration};
 
 use assert2::assert;
-use krabka_broker::{Broker, BrokerHandle};
+use krabka_broker::BrokerHandle;
 use krabka_client_producer::{Producer, ProducerRecord};
 use krabka_metadata::{GroupConfigRecord, MetadataRecord};
 
 use crate::{
-    harness::{
-        bootstrap_share_state, broker_config, broker_test_permit, connect, create_topic, join,
-        produce_n, topic_id, wait_for_share_init,
-    },
+    harness::{bootstrap_share_state, broker_test_permit, join, produce_n, wait_for_share_init},
     share_rpc::{acquired_count, share_fetch},
 };
 
@@ -60,14 +57,8 @@ async fn set_isolation_level(broker: &BrokerHandle, group: &str, level: &str) {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn read_committed_skips_open_txn_then_sees_committed() {
     let _permit = broker_test_permit().await;
-    let dir = tempfile::TempDir::new().unwrap();
-    let broker = Broker::start(broker_config(dir.path().to_path_buf()))
-        .await
-        .unwrap();
+    let (broker, client, _dir, tid) = crate::support::share::topic_fixture("t", 1, |_| {}).await;
     let bootstrap = broker.listen_addr().to_string();
-    let client = connect(&bootstrap).await;
-    create_topic(&broker, &client, "t", 1).await;
-    let tid = topic_id(&broker, "t");
     bootstrap_share_state(&broker, &client, "g1").await;
     set_isolation_level(&broker, "g1", READ_COMMITTED).await;
     // The krabka producer does not retry a `FindCoordinator` that answers
@@ -84,18 +75,7 @@ async fn read_committed_skips_open_txn_then_sees_committed() {
         .unwrap();
     producer.init_transactions().await.unwrap();
     let txn = producer.begin_transaction().await.unwrap();
-    for v in ["a", "b", "c"] {
-        drop(
-            producer
-                .enqueue(ProducerRecord {
-                    topic: "t".into(),
-                    value: Some(bytes::Bytes::from(v.to_string())),
-                    ..Default::default()
-                })
-                .await
-                .expect("record is queued"),
-        );
-    }
+    enqueue_transaction_values(&producer).await;
     // Flush the records to the log (advances HWM) but keep the txn OPEN (LSO=0).
     producer.flush().await.unwrap();
 
@@ -214,7 +194,10 @@ async fn aborted_transaction_data_is_archived_under_read_committed() {
     let mut actual = Vec::new();
     let mut expected = Vec::new();
     for (name, isolation_level, commit, want) in cases {
-        actual.push((name, transaction_then_record(isolation_level, commit).await));
+        actual.push((
+            name,
+            Box::pin(transaction_then_record(isolation_level, commit)).await,
+        ));
         expected.push((name, want));
     }
     assert!(actual == expected);
@@ -224,14 +207,8 @@ async fn aborted_transaction_data_is_archived_under_read_committed() {
 /// group with no override.
 async fn transaction_then_record(isolation_level: Option<&str>, commit: bool) -> Seen {
     let _permit = broker_test_permit().await;
-    let dir = tempfile::TempDir::new().unwrap();
-    let broker = Broker::start(broker_config(dir.path().to_path_buf()))
-        .await
-        .unwrap();
+    let (broker, client, _dir, tid) = crate::support::share::topic_fixture("t", 1, |_| {}).await;
     let bootstrap = broker.listen_addr().to_string();
-    let client = connect(&bootstrap).await;
-    create_topic(&broker, &client, "t", 1).await;
-    let tid = topic_id(&broker, "t");
     bootstrap_share_state(&broker, &client, "g1").await;
     if let Some(level) = isolation_level {
         set_isolation_level(&broker, "g1", level).await;
@@ -246,18 +223,7 @@ async fn transaction_then_record(isolation_level: Option<&str>, commit: bool) ->
         .unwrap();
     producer.init_transactions().await.unwrap();
     let txn = producer.begin_transaction().await.unwrap();
-    for v in ["a", "b", "c"] {
-        drop(
-            producer
-                .enqueue(ProducerRecord {
-                    topic: "t".into(),
-                    value: Some(bytes::Bytes::from(v.to_string())),
-                    ..Default::default()
-                })
-                .await
-                .expect("record is queued"),
-        );
-    }
+    enqueue_transaction_values(&producer).await;
     producer.flush().await.unwrap();
     if commit {
         txn.commit().await.unwrap();
@@ -307,4 +273,19 @@ async fn transaction_then_record(isolation_level: Option<&str>, commit: bool) ->
     producer.close().await.unwrap();
     broker.shutdown().await;
     seen
+}
+
+async fn enqueue_transaction_values(producer: &Producer) {
+    for v in ["a", "b", "c"] {
+        drop(
+            producer
+                .enqueue(ProducerRecord {
+                    topic: "t".into(),
+                    value: Some(bytes::Bytes::from(v.to_string())),
+                    ..Default::default()
+                })
+                .await
+                .expect("record is queued"),
+        );
+    }
 }

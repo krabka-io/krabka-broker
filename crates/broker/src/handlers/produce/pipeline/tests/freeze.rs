@@ -9,7 +9,6 @@ use std::sync::Arc;
 
 use assert2::check;
 use bytes::Bytes;
-use krabka_compression::RecordDecompressionPolicy;
 use krabka_metadata::{
     MetadataImage, MetadataRecord, PartitionRecord, PatternType, TopicFreezeRecord, TopicRecord,
 };
@@ -19,10 +18,7 @@ use krabka_protocol::{
 };
 use uuid::Uuid;
 
-use super::super::{
-    BrokerProducePolicy, FramedPartition, PartitionInput, PartitionServices, TimestampPolicy,
-    process_partition,
-};
+use super::super::{PartitionInput, process_partition};
 use crate::{
     freeze::resolve::{FreezeVerdict, resolve_freeze_mutation, resolve_topic_freeze},
     handlers::produce::{
@@ -139,17 +135,7 @@ async fn a_frozen_topic_is_refused_and_its_log_end_offset_does_not_move() {
     frozen(&mut image, "frozen", PatternType::Literal, "DR cutover");
     let image = Arc::new(image);
 
-    let partitions = Arc::new(crate::partition_registry::PartitionRegistry::new());
-    let txn_coordinator = Arc::new(crate::txn::coordinator::TxnCoordinator::new(
-        krabka_audit::NodeId(1),
-        Arc::clone(&partitions),
-        Arc::new(crate::producer_id_manager::ProducerIdManager::new()),
-        50,
-        krabka_units::mebibytes(1),
-    ));
-    let producer_state = Arc::new(crate::producer_state::ProducerState::new());
-    let log_dir_status = crate::log_dir_status::LogDirRegistry::default();
-    let metrics = crate::metrics::BrokerMetrics::new();
+    let fixture = crate::handlers::produce::test_support::PipelineFixture::new(1);
 
     for topic in ["frozen", "control"] {
         let part_dir = crate::log_dir::partition_dir(dir.path(), topic, 0);
@@ -161,8 +147,8 @@ async fn a_frozen_topic_is_refused_and_its_log_end_offset_does_not_move() {
             krabka_ids::PartitionIndex(0),
             dir.path().to_path_buf(),
             log,
-            log_dir_status.clone(),
-            Arc::clone(&producer_state),
+            fixture.log_dir_status.clone(),
+            Arc::clone(&fixture.producer_state),
             false,
         );
         let topic_id = image.topic(topic).expect("topic").topic_id;
@@ -176,7 +162,9 @@ async fn a_frozen_topic_is_refused_and_its_log_end_offset_does_not_move() {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .append(&mut seed_batch())
             .expect("seed the partition");
-        partitions.insert(topic.into(), krabka_ids::PartitionIndex(0), part);
+        fixture
+            .partitions
+            .insert(topic.into(), krabka_ids::PartitionIndex(0), part);
     }
 
     // `base_offset` is spelled out because the refusal happens before any
@@ -230,41 +218,10 @@ async fn a_frozen_topic_is_refused_and_its_log_end_offset_does_not_move() {
         );
         let resp = process_partition(
             PartitionInput {
-                part_data: FramedPartition { index: 0, payload },
-                topic_compression: None,
-                timestamps: TimestampPolicy::default(),
-                compacted_topic: false,
-                max_message_bytes: krabka_log::DEFAULT_MAX_MESSAGE_SIZE,
-                delivery: None,
-                schema: None,
-                topic_name: topic.into(),
                 freeze,
-                internal_topic_denied: false,
-                transaction: crate::handlers::produce::producer_checks::TransactionRequest {
-                    transactional_id: None,
-                    version: 9,
-                    producer_id_expiration_ms: 86_400_000,
-                    verification_enabled: true,
-                },
-                acks: 1,
+                ..crate::handlers::produce::test_support::pipeline_input(topic, payload)
             },
-            PartitionServices {
-                partitions: &partitions,
-                txn_coordinator: &txn_coordinator,
-                producer_state: &producer_state,
-                log_dir_status: &log_dir_status,
-                image: &image,
-                broker_policy: BrokerProducePolicy {
-                    node_id: krabka_audit::NodeId(1),
-                    default_min_insync_replicas: 1,
-                    is_witness: false,
-                },
-                record_decompression_policy: RecordDecompressionPolicy::default(),
-                metrics: &metrics,
-                phases: &crate::metrics::RequestPhases::default(),
-                unstable_api_versions: crate::api_catalog::UnstableApiVersions::Disabled,
-                schema_validator: None,
-            },
+            fixture.services(&image),
         )
         .await
         .expect("process partition")
@@ -273,7 +230,8 @@ async fn a_frozen_topic_is_refused_and_its_log_end_offset_does_not_move() {
     }
 
     let log_end_offset = |topic: &str| {
-        partitions
+        fixture
+            .partitions
             .get(topic, krabka_ids::PartitionIndex(0))
             .expect("the partition is registered")
             .log_end_offset()
@@ -288,7 +246,8 @@ async fn a_frozen_topic_is_refused_and_its_log_end_offset_does_not_move() {
     );
 
     let rejections = |topic: &str| {
-        metrics
+        fixture
+            .metrics
             .topic_freeze_rejections
             .get_or_create(&crate::metrics::TopicLabel {
                 topic: topic.into(),

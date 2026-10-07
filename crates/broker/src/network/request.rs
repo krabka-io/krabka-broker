@@ -68,32 +68,7 @@ mod tests {
     use bytes::{BufMut, BytesMut};
 
     use super::*;
-
-    fn request_frame(
-        api_key: i16,
-        api_version: i16,
-        correlation_id: i32,
-        client_id: Option<&[u8]>,
-        tagged: Option<&[u8]>,
-        body: &[u8],
-    ) -> BytesMut {
-        let mut buf = BytesMut::new();
-        buf.put_i16(api_key);
-        buf.put_i16(api_version);
-        buf.put_i32(correlation_id);
-        match client_id {
-            Some(id) => {
-                buf.put_i16(i16::try_from(id.len()).expect("client id length"));
-                buf.put_slice(id);
-            }
-            None => buf.put_i16(-1),
-        }
-        if let Some(tagged) = tagged {
-            buf.put_slice(tagged);
-        }
-        buf.put_slice(body);
-        buf
-    }
+    use crate::network::test_support::request_frame;
 
     #[test]
     fn parse_request_non_flexible_header() {

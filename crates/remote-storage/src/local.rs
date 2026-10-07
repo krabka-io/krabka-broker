@@ -12,7 +12,9 @@ use tracing::instrument;
 use crate::{
     error::RemoteStorageError,
     metadata::{CustomMetadata, RemoteLogSegmentMetadata},
-    storage_manager::{IndexType, LogSegmentData, RemoteStorageManager},
+    storage_manager::{
+        ArtifactBody, IndexType, LogSegmentData, RemoteStorageManager, segment_suffixes,
+    },
 };
 
 /// A [`RemoteStorageManager`] that keeps offloaded segments on a local
@@ -86,27 +88,14 @@ impl RemoteStorageManager for LocalTieredStorage {
         let dir = self.partition_dir(metadata);
         fs::create_dir_all(&dir)?;
 
-        fs::copy(&data.log_segment, self.log_path(metadata))?;
-        fs::copy(
-            &data.offset_index,
-            self.index_path(metadata, IndexType::Offset),
-        )?;
-        fs::copy(
-            &data.time_index,
-            self.index_path(metadata, IndexType::Timestamp),
-        )?;
-        if let Some(snapshot) = &data.producer_snapshot_index {
-            fs::copy(
-                snapshot,
-                self.index_path(metadata, IndexType::ProducerSnapshot),
-            )?;
-        }
-        fs::write(
-            self.index_path(metadata, IndexType::LeaderEpoch),
-            &data.leader_epoch_index,
-        )?;
-        if let Some(txn) = &data.transaction_index {
-            fs::copy(txn, self.index_path(metadata, IndexType::Transaction))?;
+        for (suffix, body) in data.artifacts() {
+            let path = self.segment_path(metadata, suffix);
+            match body {
+                ArtifactBody::File(source) => {
+                    fs::copy(source, path)?;
+                }
+                ArtifactBody::Memory(bytes) => fs::write(path, bytes)?,
+            }
         }
         // A local store needs no opaque key echoed back.
         Ok(None)
@@ -198,14 +187,7 @@ impl RemoteStorageManager for LocalTieredStorage {
         &self,
         metadata: &RemoteLogSegmentMetadata,
     ) -> Result<(), RemoteStorageError> {
-        for path in [
-            self.log_path(metadata),
-            self.index_path(metadata, IndexType::Offset),
-            self.index_path(metadata, IndexType::Timestamp),
-            self.index_path(metadata, IndexType::ProducerSnapshot),
-            self.index_path(metadata, IndexType::LeaderEpoch),
-            self.index_path(metadata, IndexType::Transaction),
-        ] {
+        for path in segment_suffixes().map(|suffix| self.segment_path(metadata, suffix)) {
             match fs::remove_file(path) {
                 Ok(()) => {}
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
@@ -218,54 +200,10 @@ impl RemoteStorageManager for LocalTieredStorage {
 
 #[cfg(test)]
 mod tests {
-    use std::{io::Write, path::Path};
-
     use assert2::{assert, check};
-    use bytes::Bytes;
-    use krabka_ids::LeaderEpoch;
-    use uuid::Uuid;
 
     use super::*;
-    use crate::metadata::{RemoteLogSegmentId, RemoteLogSegmentState, TopicIdPartition};
-
-    fn metadata(id: u128) -> RemoteLogSegmentMetadata {
-        RemoteLogSegmentMetadata::new(
-            RemoteLogSegmentId::new(
-                TopicIdPartition::new(Uuid::from_u128(1), "orders", 0),
-                Uuid::from_u128(id),
-            ),
-            0,
-            99,
-            123,
-            1,
-            456,
-            crate::metadata::RemoteLogSegmentDetails::new(
-                8,
-                RemoteLogSegmentState::CopySegmentStarted,
-                maplit::btreemap! {LeaderEpoch(0) => 0},
-            ),
-        )
-        .unwrap()
-    }
-
-    /// Writes `contents` to a fresh temp file under `dir` and returns its path.
-    fn write_file(dir: &Path, name: &str, contents: &[u8]) -> PathBuf {
-        let p = dir.join(name);
-        let mut f = fs::File::create(&p).unwrap();
-        f.write_all(contents).unwrap();
-        p
-    }
-
-    fn sample_data(src: &Path, with_txn: bool) -> LogSegmentData {
-        LogSegmentData {
-            log_segment: write_file(src, "00.log", b"0123456789"),
-            offset_index: write_file(src, "00.index", b"OFFSET-IDX"),
-            time_index: write_file(src, "00.timeindex", b"TIME-IDX"),
-            transaction_index: with_txn.then(|| write_file(src, "00.txnindex", b"TXN-IDX")),
-            producer_snapshot_index: Some(write_file(src, "00.snapshot", b"SNAP")),
-            leader_epoch_index: Bytes::from_static(b"EPOCH-BYTES"),
-        }
-    }
+    use crate::test_support::{sample_data, sample_metadata as metadata};
 
     #[test]
     fn copy_then_fetch_full_segment() {

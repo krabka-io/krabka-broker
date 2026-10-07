@@ -21,22 +21,14 @@ fn request_frame(
     tagged: Option<u8>,
     body: &[u8],
 ) -> BytesMut {
-    let mut buf = BytesMut::new();
-    buf.put_i16(api_key);
-    buf.put_i16(api_version);
-    buf.put_i32(correlation_id);
-    match client_id {
-        Some(id) => {
-            buf.put_i16(i16::try_from(id.len()).expect("client id length"));
-            buf.put_slice(id);
-        }
-        None => buf.put_i16(-1),
-    }
-    if let Some(tagged) = tagged {
-        buf.put_u8(tagged);
-    }
-    buf.put_slice(body);
-    buf
+    crate::network::test_support::request_frame(
+        api_key,
+        api_version,
+        correlation_id,
+        client_id,
+        tagged.as_ref().map(std::slice::from_ref),
+        body,
+    )
 }
 
 #[test]
@@ -126,26 +118,7 @@ async fn raft_voter_registry_routes_to_real_handlers() {
     let handle = Broker::start(cfg).await.expect("start broker");
     let broker = handle.broker_arc_for_test();
 
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-        .await
-        .expect("bind loopback");
-    let addr = listener.local_addr().expect("listener addr");
-    let server = tokio::spawn(async move {
-        let (stream, peer) = listener.accept().await.expect("accept");
-        let spec = crate::config::ListenerSpec {
-            name: "PLAINTEXT".to_string(),
-            bind_addr: addr,
-            advertised: "127.0.0.1:9092".to_string(),
-            protocol: krabka_security::ListenerProtocol::Plaintext,
-            tls_config: None,
-            sasl_mechanisms: None,
-            principal_mapper: crate::SslPrincipalMapper::default(),
-        };
-        serve_connection_stream(broker, stream, spec, peer, None).await;
-    });
-
-    let client = TcpStream::connect(addr).await.expect("connect");
-    let mut framed = codec::frame(client, DEFAULT_MAX_FRAME_BYTES);
+    let (server, mut framed) = crate::network::dispatch::test_support::plaintext_loop(broker).await;
 
     let add_body = encode_default::<add_req::AddRaftVoterRequest>(add_req::MAX_VERSION);
     let raw = round_trip(&mut framed, 80, add_req::MAX_VERSION, &add_body).await;
@@ -198,26 +171,16 @@ async fn inter_broker_only_apis_close_the_connection_on_a_client_listener() {
         let handle = Broker::start(cfg).await.expect("start broker");
         let broker = handle.broker_arc_for_test();
 
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-            .await
-            .expect("bind loopback");
-        let addr = listener.local_addr().expect("listener addr");
-        let server = tokio::spawn(async move {
-            let (stream, peer) = listener.accept().await.expect("accept");
-            let spec = crate::config::ListenerSpec {
-                // Not `PLAINTEXT`, the `inter_broker_listener_name`
-                // `BrokerConfig::for_tests` defaults to, so this is a pure
-                // `ListenerKind::Client` listener.
-                name: "EXTERNAL".to_string(),
-                bind_addr: addr,
-                advertised: "127.0.0.1:9092".to_string(),
-                protocol: krabka_security::ListenerProtocol::Plaintext,
-                tls_config: None,
-                sasl_mechanisms: None,
-                principal_mapper: crate::SslPrincipalMapper::default(),
-            };
-            serve_connection_stream(broker, stream, spec, peer, None).await;
-        });
+        let (addr, serve) = crate::network::dispatch::test_support::serve_loop(
+            broker,
+            "EXTERNAL",
+            krabka_security::ListenerProtocol::Plaintext,
+            None,
+            None,
+            1,
+        )
+        .await;
+        let server = tokio::spawn(serve);
 
         let client = TcpStream::connect(addr).await.expect("connect");
         let mut framed = codec::frame(client, DEFAULT_MAX_FRAME_BYTES);
@@ -266,25 +229,16 @@ async fn drive_one_frame_per_connection(
     let registry = crate::handlers::registry::build_registry();
     let connections = requests.len();
 
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-        .await
-        .expect("bind loopback");
-    let addr = listener.local_addr().expect("listener addr");
-    let server = tokio::spawn(async move {
-        for _ in 0..connections {
-            let (stream, peer) = listener.accept().await.expect("accept");
-            let spec = crate::config::ListenerSpec {
-                name: "PLAINTEXT".to_string(),
-                bind_addr: addr,
-                advertised: "127.0.0.1:9092".to_string(),
-                protocol: krabka_security::ListenerProtocol::Plaintext,
-                tls_config: None,
-                sasl_mechanisms: None,
-                principal_mapper: crate::SslPrincipalMapper::default(),
-            };
-            serve_connection_stream(broker.clone(), stream, spec, peer, None).await;
-        }
-    });
+    let (addr, serve) = crate::network::dispatch::test_support::serve_loop(
+        broker,
+        "PLAINTEXT",
+        krabka_security::ListenerProtocol::Plaintext,
+        None,
+        None,
+        connections,
+    )
+    .await;
+    let server = tokio::spawn(serve);
 
     let mut outcomes = Vec::with_capacity(connections);
     for (correlation_id, &(api_key, version)) in requests.iter().enumerate() {
@@ -513,23 +467,11 @@ async fn serve_frames(
     let broker = handle.broker_arc_for_test();
     let metrics = broker.metrics.clone();
 
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-        .await
-        .expect("bind loopback");
-    let addr = listener.local_addr().expect("listener addr");
-    let server = tokio::spawn(async move {
-        let (stream, peer) = listener.accept().await.expect("accept");
-        let spec = crate::config::ListenerSpec {
-            name: "TESTS".to_string(),
-            bind_addr: addr,
-            advertised: "127.0.0.1:9092".to_string(),
-            protocol,
-            tls_config: None,
-            sasl_mechanisms: mechanisms,
-            principal_mapper: crate::SslPrincipalMapper::default(),
-        };
-        serve_connection_stream(broker, stream, spec, peer, None).await;
-    });
+    let (addr, serve) = crate::network::dispatch::test_support::serve_loop(
+        broker, "TESTS", protocol, mechanisms, None, 1,
+    )
+    .await;
+    let server = tokio::spawn(serve);
 
     let client = TcpStream::connect(addr).await.expect("connect");
     let mut framed = codec::frame(client, DEFAULT_MAX_FRAME_BYTES);
@@ -848,23 +790,16 @@ async fn a_sasl_frame_on_a_non_sasl_listener_keeps_the_principal() {
     for (case, protocol, mtls_principal, sasl_frame, expected_answer, expected_topic_error) in cases
     {
         let broker = handle.broker_arc_for_test();
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-            .await
-            .expect("bind loopback");
-        let addr = listener.local_addr().expect("listener addr");
-        let server = tokio::spawn(async move {
-            let (stream, peer) = listener.accept().await.expect("accept");
-            let spec = crate::config::ListenerSpec {
-                name: "TESTS".to_string(),
-                bind_addr: addr,
-                advertised: "127.0.0.1:9092".to_string(),
-                protocol,
-                tls_config: None,
-                sasl_mechanisms: None,
-                principal_mapper: crate::SslPrincipalMapper::default(),
-            };
-            serve_connection_stream(broker, stream, spec, peer, mtls_principal).await;
-        });
+        let (addr, serve) = crate::network::dispatch::test_support::serve_loop(
+            broker,
+            "TESTS",
+            protocol,
+            None,
+            mtls_principal,
+            1,
+        )
+        .await;
+        let server = tokio::spawn(serve);
         let client = TcpStream::connect(addr).await.expect("connect");
         let mut framed = codec::frame(client, DEFAULT_MAX_FRAME_BYTES);
 
@@ -941,8 +876,8 @@ mod request_budget {
     use assert2::{assert, check};
     use futures_util::{SinkExt as _, StreamExt as _};
 
-    use super::{DEFAULT_MAX_FRAME_BYTES, KafkaCodec, close_counts, request_frame};
-    use crate::{broker::Broker, network::codec};
+    use super::{KafkaCodec, close_counts, request_frame};
+    use crate::broker::Broker;
 
     /// One connection served by the loop, and the client end already framed.
     struct Served {
@@ -951,31 +886,10 @@ mod request_budget {
     }
 
     async fn serve(broker: &std::sync::Arc<Broker>) -> Served {
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-            .await
-            .expect("bind loopback");
-        let addr = listener.local_addr().expect("listener addr");
-        let spec = crate::config::ListenerSpec {
-            name: "PLAINTEXT".to_string(),
-            bind_addr: addr,
-            advertised: "127.0.0.1:9092".to_string(),
-            protocol: krabka_security::ListenerProtocol::Plaintext,
-            tls_config: None,
-            sasl_mechanisms: None,
-            principal_mapper: crate::SslPrincipalMapper::default(),
-        };
-        let broker = std::sync::Arc::clone(broker);
-        let loop_task = tokio::spawn(async move {
-            let (stream, peer) = listener.accept().await.expect("accept");
-            super::super::serve_connection_stream(broker, stream, spec, peer, None).await;
-        });
-        let client = tokio::net::TcpStream::connect(addr)
-            .await
-            .expect("connect to the serve loop");
-        Served {
-            client: codec::frame(client, DEFAULT_MAX_FRAME_BYTES),
-            loop_task,
-        }
+        let (loop_task, client) =
+            crate::network::dispatch::test_support::plaintext_loop(std::sync::Arc::clone(broker))
+                .await;
+        Served { client, loop_task }
     }
 
     /// A byte budget that leaves the broker's own traffic room to move.
@@ -1201,26 +1115,16 @@ mod log_levels {
 
         let capture = LogCapture::default();
         let _capturing = tracing::dispatcher::set_default(&capture.dispatch());
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-            .await
-            .expect("bind loopback");
-        let addr = listener.local_addr().expect("listener addr");
-        let spec = crate::config::ListenerSpec {
-            name: "PLAINTEXT".to_string(),
-            bind_addr: addr,
-            advertised: "127.0.0.1:9092".to_string(),
-            protocol: krabka_security::ListenerProtocol::Plaintext,
-            tls_config: None,
-            sasl_mechanisms: None,
-            principal_mapper: crate::SslPrincipalMapper::default(),
-        };
-        let loop_task = tokio::spawn(
-            async move {
-                let (stream, peer) = listener.accept().await.expect("accept");
-                super::super::serve_connection_stream(broker, stream, spec, peer, None).await;
-            }
-            .instrument(LogCapture::span()),
-        );
+        let (addr, serve) = crate::network::dispatch::test_support::serve_loop(
+            broker,
+            "PLAINTEXT",
+            krabka_security::ListenerProtocol::Plaintext,
+            None,
+            None,
+            1,
+        )
+        .await;
+        let loop_task = tokio::spawn(serve.instrument(LogCapture::span()));
         let client = tokio::net::TcpStream::connect(addr)
             .await
             .expect("connect to the serve loop");
@@ -1322,8 +1226,8 @@ mod request_limit {
         owned::describe_configs_request::{DescribeConfigsRequest, DescribeConfigsResource},
     };
 
-    use super::{DEFAULT_MAX_FRAME_BYTES, request_frame};
-    use crate::{broker::Broker, network::codec};
+    use super::request_frame;
+    use crate::broker::Broker;
 
     /// The limit of the broker under test: well over its own requests to
     /// itself, and well under the answer to a documentation-bearing
@@ -1359,28 +1263,9 @@ mod request_limit {
         let handle = Broker::start(cfg).await.expect("start broker");
         let broker = handle.broker_arc_for_test();
 
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-            .await
-            .expect("bind loopback");
-        let addr = listener.local_addr().expect("listener addr");
-        let spec = crate::config::ListenerSpec {
-            name: "PLAINTEXT".to_string(),
-            bind_addr: addr,
-            advertised: "127.0.0.1:9092".to_string(),
-            protocol: krabka_security::ListenerProtocol::Plaintext,
-            tls_config: None,
-            sasl_mechanisms: None,
-            principal_mapper: crate::SslPrincipalMapper::default(),
-        };
-        let loop_task = tokio::spawn(async move {
-            let (stream, peer) = listener.accept().await.expect("accept");
-            super::super::serve_connection_stream(broker, stream, spec, peer, None).await;
-        });
-        let client = tokio::net::TcpStream::connect(addr)
-            .await
-            .expect("connect to the serve loop");
         // The client's own codec is not the broker's limit.
-        let mut client = codec::frame(client, DEFAULT_MAX_FRAME_BYTES);
+        let (loop_task, mut client) =
+            crate::network::dispatch::test_support::plaintext_loop(broker).await;
         client
             .send(request.freeze())
             .await

@@ -1,8 +1,8 @@
-(* #"/workspace/crates/verified/src/restore/record_coordinates.rs" 96 0 99 29 *)
+(* #"/workspace/crates/verified/src/restore/record_coordinates.rs" 97 0 100 29 *)
 
-let%span srecord_coordinates = "/workspace/crates/verified/src/restore/record_coordinates.rs" 86 10 87 64
-let%span srecord_coordinates'0 = "/workspace/crates/verified/src/restore/record_coordinates.rs" 88 10 90 78
-let%span srecord_coordinates'1 = "/workspace/crates/verified/src/restore/record_coordinates.rs" 91 10 94 72
+let%span srecord_coordinates = "/workspace/crates/verified/src/restore/record_coordinates.rs" 87 10 88 64
+let%span srecord_coordinates'0 = "/workspace/crates/verified/src/restore/record_coordinates.rs" 89 10 91 78
+let%span srecord_coordinates'1 = "/workspace/crates/verified/src/restore/record_coordinates.rs" 92 10 95 72
 
 use creusot.prelude.Any
 
@@ -14,7 +14,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let restore_archive_reconcile [#"/workspace/crates/verified/src/restore/record_coordinates.rs" 96 0 99 29]
+let restore_archive_reconcile [#"/workspace/crates/verified/src/restore/record_coordinates.rs" 97 0 100 29]
   (scanned: bool) (snapshot_state: t_RestoreSnapshotState) (return (x: t_RestoreReconcileDecision)) = (! bb0
   [ bb0 = any
     [ br0 -> {snapshot_state = Missing} (! bb4)

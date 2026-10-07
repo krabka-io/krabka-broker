@@ -2,12 +2,14 @@ use creusot_std::prelude::*;
 
 use super::super::{constructed_voter_reconfiguration, reconfigured_majorities_overlap};
 #[cfg(creusot)]
+use super::spec::{control_inputs_coherent, control_request_admitted};
+#[cfg(creusot)]
 use super::{
-    super::spec::{expected_member, has_node, membership_coherent, valid_old},
+    super::spec::{expected_member, has_node},
     spec::{control_record_count, next_size, prefix_count, prefix_grants_agree},
 };
 #[cfg(creusot)]
-use crate::reconfiguration::{admitted_plan, voter_reconfiguration_rejection};
+use crate::reconfiguration::admitted_plan;
 use crate::{
     raft::metadata_record_offset_deltas,
     reconfiguration::{
@@ -29,13 +31,8 @@ type SupportedControl = Option<(
 /// count. Preflight writes nothing and needs no append support. Reported
 /// prefixes, common log identity, directory/epoch facts and actual control
 /// encoding remain host obligations. `KRaft` Fetch positions do not prove fsync.
-#[requires(state.1.voter_count@ == old@.len())]
-#[requires(reports@.len() == old@.len() + 1)]
-#[ensures((match result { None => false, Some(_) => true }) == (valid_old(old@)
-    && membership_coherent(old@, node, target.membership, request.kind)
-    && match voter_reconfiguration_rejection(state.0, state.1, request, target) {
-        Some(_) => false, None => true,
-    }
+#[requires(control_inputs_coherent(old@, state.1, reports@))]
+#[ensures((match result { None => false, Some(_) => true }) == (control_request_admitted(old@, state, request, node, target)
     && (control_record_count(state.1.kraft_version, request.kind) == 0
         || (base@ >= 0 && base@ + control_record_count(state.1.kraft_version, request.kind) <= i64::MAX@
             && prefix_count(old@, reports@, request.kind, node,

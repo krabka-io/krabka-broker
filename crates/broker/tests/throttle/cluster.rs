@@ -9,47 +9,12 @@
 
 use std::net::SocketAddr;
 
-use assert2::assert;
-use bytes::BytesMut;
-use krabka_broker::{Broker, BrokerHandle, config::ListenerSpec};
-use krabka_protocol::{Decode, Encode};
-use krabka_security::{ListenerProtocol, SaslMechanism};
+use krabka_broker::{Broker, BrokerHandle};
 use tempfile::TempDir;
 use tokio::net::TcpStream;
 
+pub use crate::support::sasl::start_single_broker_sasl_plaintext_with_users;
 use crate::{CLIENT_ID, kafka_wire};
-
-/// Start a single-broker SASL/PLAINTEXT cluster.
-/// Returns `(handle, _dir, addr)`.
-pub fn start_single_broker_sasl_plaintext_with_users(
-    super_user: &str,
-    users: &[(&str, &str)],
-) -> impl std::future::Future<Output = (BrokerHandle, TempDir, SocketAddr)> {
-    let log_dir = tempfile::tempdir().unwrap();
-    let mut cfg = krabka_broker::BrokerConfig::for_tests(log_dir.path().to_path_buf());
-    cfg.listeners = vec![ListenerSpec {
-        name: "SASL_PLAINTEXT".to_string(),
-        bind_addr: "127.0.0.1:0".parse().unwrap(),
-        advertised: "127.0.0.1:0".to_string(),
-        protocol: ListenerProtocol::SaslPlaintext,
-        tls_config: None,
-        sasl_mechanisms: None,
-        principal_mapper: krabka_broker::SslPrincipalMapper::default(),
-    }];
-    cfg.inter_broker_listener_name = "SASL_PLAINTEXT".to_string();
-    cfg.enabled_sasl_mechanisms = vec![SaslMechanism::Plain];
-    for (name, pass) in users {
-        cfg.plain_credentials
-            .insert((*name).to_string(), (*pass).to_string());
-    }
-    cfg.super_users = std::iter::once(super_user.to_string()).collect();
-
-    Box::pin(async move {
-        let handle = Broker::start(cfg).await.expect("broker must start");
-        let addr = handle.listen_addr();
-        (handle, log_dir, addr)
-    })
-}
 
 /// Start a single-broker PLAINTEXT cluster (no SASL).
 /// Returns `(handle, _dir, addr)`.
@@ -69,71 +34,25 @@ pub async fn create_topic_as_admin(
     partitions: i32,
     replication_factor: i16,
 ) {
-    use krabka_protocol::owned::{
-        create_topics_request::{CreatableTopic, CreateTopicsRequest},
-        create_topics_response::CreateTopicsResponse,
-    };
-
-    let req = CreateTopicsRequest {
-        topics: vec![CreatableTopic {
-            name: topic.to_string(),
-            num_partitions: partitions,
-            replication_factor,
-            ..Default::default()
-        }],
-        timeout_ms: 5_000,
-        ..Default::default()
-    };
-    let mut stream = kafka_wire::sasl_plain_authenticate(addr, CLIENT_ID, "admin", b"admin-secret")
-        .await
-        .expect("SASL authenticate for CreateTopics");
-    let mut body = BytesMut::new();
-    req.encode(&mut body, 7).expect("encode CreateTopics");
-    let resp_bytes = kafka_wire::round_trip(&mut stream, 19, 7, 1, CLIENT_ID, true, &body)
-        .await
-        .expect("CreateTopics round-trip");
-    let mut cur: &[u8] = &resp_bytes;
-    let resp = CreateTopicsResponse::decode(&mut cur, 7).expect("decode CreateTopicsResponse");
-    assert!(resp.topics.len() == 1);
-    assert!(
-        resp.topics[0].error_code == 0,
-        "CreateTopics({topic}) must succeed: {:?}",
-        resp.topics[0].error_message
-    );
+    kafka_wire::create_topic_sasl(
+        addr,
+        CLIENT_ID,
+        ("admin", b"admin-secret"),
+        kafka_wire::topic(topic, partitions, replication_factor),
+    )
+    .await;
 }
 
 /// Create a topic through PLAINTEXT. There is no SASL, and the compat shim
 /// allows everything.
 pub async fn create_topic_plaintext(addr: SocketAddr, topic: &str, partitions: i32, rf: i16) {
-    use krabka_protocol::owned::{
-        create_topics_request::{CreatableTopic, CreateTopicsRequest},
-        create_topics_response::CreateTopicsResponse,
-    };
-
-    let req = CreateTopicsRequest {
-        topics: vec![CreatableTopic {
-            name: topic.to_string(),
-            num_partitions: partitions,
-            replication_factor: rf,
-            ..Default::default()
-        }],
-        timeout_ms: 5_000,
-        ..Default::default()
-    };
     let mut stream = TcpStream::connect(addr).await.expect("connect");
-    let mut body = BytesMut::new();
-    req.encode(&mut body, 7).expect("encode CreateTopics");
-    let resp_bytes = kafka_wire::round_trip(&mut stream, 19, 7, 1, CLIENT_ID, true, &body)
-        .await
-        .expect("CreateTopics round-trip");
-    let mut cur: &[u8] = &resp_bytes;
-    let resp = CreateTopicsResponse::decode(&mut cur, 7).expect("decode CreateTopicsResponse");
-    assert!(resp.topics.len() == 1);
-    assert!(
-        resp.topics[0].error_code == 0,
-        "CreateTopics({topic}) must succeed: {:?}",
-        resp.topics[0].error_message
-    );
+    kafka_wire::create_topic_on(
+        &mut stream,
+        CLIENT_ID,
+        kafka_wire::topic(topic, partitions, rf),
+    )
+    .await;
 }
 
 /// Await until `handle` sees `(topic, partition)` present in its image.

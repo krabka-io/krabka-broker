@@ -60,3 +60,14 @@ pub(super) fn test_batch_at(off: i64) -> RecordBatch {
     });
     b
 }
+
+pub(super) fn indexed_segment() -> (tempfile::TempDir, Segment) {
+    let dir = tempdir().unwrap();
+    let mut segment = Segment::create(dir.path(), Offset(100)).unwrap();
+    for (base, count, timestamp) in [(100, 3, 100), (103, 2, 200), (105, 1, 300)] {
+        segment
+            .append(&sample_batch(base, count, timestamp), DENSE_INDEX)
+            .unwrap();
+    }
+    (dir, segment)
+}

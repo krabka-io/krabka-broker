@@ -165,87 +165,14 @@ pub(crate) fn admit_token_request<'a>(
 
 #[cfg(test)]
 mod tests {
-    use std::{sync::Arc, time::Duration};
-
     use assert2::assert;
-    use krabka_metadata::MetadataRecord;
     use krabka_raft::ControllerHandle;
-    use krabka_security::{AuthMethod, KafkaPrincipal, Principal, SaslMechanism};
     use tempfile::TempDir;
 
     use super::*;
-
-    const DAY_MS: i64 = 24 * 60 * 60 * 1_000;
-
-    /// Spin up a single-voter `Controller` for tests, wait for leader.
-    async fn test_controller(log_dir: std::path::PathBuf) -> Arc<ControllerHandle> {
-        let cfg = krabka_raft::ControllerConfig {
-            election_timeout: krabka_units::millis(200),
-            heartbeat_interval: Some(krabka_units::millis(50)),
-            client_id: "test".into(),
-            ..krabka_raft::ControllerConfig::for_tests(krabka_raft::NodeId(1), log_dir)
-        };
-        let handle = Arc::new(krabka_raft::Controller::start(cfg).await.unwrap());
-        let mut rx = handle.watch_leader();
-        let deadline = std::time::Instant::now() + Duration::from_secs(5);
-        while rx.borrow().is_none() {
-            assert!(std::time::Instant::now() < deadline, "no leader in 5s");
-            let _ = tokio::time::timeout(Duration::from_millis(100), rx.changed()).await;
-        }
-        handle
-    }
-
-    fn authed_with_token(name: &str, via_token: bool) -> ConnectionAuth {
-        ConnectionAuth::Authenticated {
-            principal: Principal {
-                name: name.into(),
-                auth_method: AuthMethod::SaslScramSha256,
-                groups: vec![],
-            },
-            mechanism: SaslMechanism::ScramSha256,
-            expires_at_ms: None,
-            authenticated_via_token: via_token,
-        }
-    }
-
-    fn authed(name: &str) -> ConnectionAuth {
-        authed_with_token(name, false)
-    }
-
-    fn kp(name: &str) -> KafkaPrincipal {
-        KafkaPrincipal {
-            principal_type: "User".into(),
-            name: name.into(),
-        }
-    }
-
-    /// The HMAC the tests' secret key `k` gives `token_id`, which a client
-    /// presents to name the token.
-    fn hmac_for(token_id: &str) -> Vec<u8> {
-        krabka_security::compute_token_hmac(b"k", token_id)
-    }
-
-    /// Seeds a token owned by `alice` with renewer `bob`.
-    async fn seed_token(
-        controller: &ControllerHandle,
-        token_id: &str,
-        expiry_ms: i64,
-        max_ms: i64,
-    ) {
-        let rec = DelegationTokenRecord {
-            token_id: token_id.into(),
-            owner: kp("alice"),
-            requester: kp("minter"),
-            issue_timestamp_ms: 0,
-            expiry_timestamp_ms: expiry_ms,
-            max_timestamp_ms: max_ms,
-            renewers: vec![kp("bob")],
-        };
-        controller
-            .submit_change(vec![MetadataRecord::V1DelegationToken(rec)])
-            .await
-            .expect("seed token");
-    }
+    use crate::handlers::delegation_token_test_support::{
+        DAY_MS, authed, authed_with_token, hmac_for, seed_token, test_controller,
+    };
 
     fn stored_expiry(controller: &ControllerHandle, token_id: &str) -> i64 {
         controller
@@ -262,15 +189,13 @@ mod tests {
     /// owner check.
     #[tokio::test]
     async fn refusals_follow_kafka_order() {
-        let dir = TempDir::new().unwrap();
-        let controller = test_controller(dir.path().into()).await;
-        let secret = SecretBytes::new(b"k".to_vec());
-        let now = now_ms();
-        let live = (hmac_for("live"), now + 60_000);
-        let expired = (hmac_for("expired"), now - 1);
-        for (token_id, (_, expiry)) in [("live", &live), ("expired", &expired)] {
-            seed_token(&controller, token_id, *expiry, now + DAY_MS).await;
-        }
+        let crate::handlers::delegation_token_test_support::RefusalFixture {
+            directory: _dir,
+            controller,
+            secret,
+            live,
+            expired,
+        } = crate::handlers::delegation_token_test_support::RefusalFixture::new().await;
 
         // (case, caller, secret configured, hmac, error code, expiry)
         let cases = [

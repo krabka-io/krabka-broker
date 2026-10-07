@@ -216,6 +216,26 @@ mod tests {
     use super::*;
     use crate::future_log::test_support::{append_records, fixture_partition, test_policy};
 
+    type MoveRegistries = (
+        Vec<PathBuf>,
+        Arc<PartitionRegistry>,
+        Arc<DashMap<(String, PartitionIndex), Arc<FutureLogState>>>,
+    );
+
+    fn registered_move(primary: &Path, target: &Path) -> MoveRegistries {
+        let partitions = Arc::new(PartitionRegistry::new());
+        partitions.insert(
+            "t".into(),
+            PartitionIndex(0),
+            fixture_partition(primary, "t", PartitionIndex(0)),
+        );
+        (
+            vec![primary.to_path_buf(), target.to_path_buf()],
+            partitions,
+            Arc::new(DashMap::new()),
+        )
+    }
+
     #[tokio::test]
     async fn move_error_log_dir_not_found_when_target_unknown() {
         // Empty broker — no partitions, no log dirs. `start_move`
@@ -371,11 +391,7 @@ mod tests {
         // lives in returns success without touching `future_logs`.
         let primary = tempdir().unwrap();
         let extra = tempdir().unwrap();
-        let log_dirs = vec![primary.path().to_path_buf(), extra.path().to_path_buf()];
-        let partitions = Arc::new(PartitionRegistry::new());
-        let future_logs = Arc::new(DashMap::new());
-        let part = fixture_partition(primary.path(), "t", PartitionIndex(0));
-        partitions.insert("t".into(), PartitionIndex(0), part);
+        let (log_dirs, partitions, future_logs) = registered_move(primary.path(), extra.path());
 
         start_move(
             &partitions,
@@ -424,20 +440,13 @@ mod tests {
         // and the registry still has one entry.
         let primary = tempdir().unwrap();
         let extra = tempdir().unwrap();
-        let log_dirs = vec![primary.path().to_path_buf(), extra.path().to_path_buf()];
-        let partitions = Arc::new(PartitionRegistry::new());
-        let future_logs = Arc::new(DashMap::new());
-        let part = fixture_partition(primary.path(), "t", PartitionIndex(0));
-        partitions.insert("t".into(), PartitionIndex(0), part);
+        let (log_dirs, partitions, future_logs) = registered_move(primary.path(), extra.path());
 
         // Plant a registry entry as if a prior ARLD already kicked off
         // a move — exercises the "already moving, same target" branch
         // without racing the replicator's swap-and-remove.
-        let future_path = log_dir::future_partition_dir(extra.path(), "t", 0);
-        std::fs::create_dir_all(&future_path).unwrap();
-        let future_log = Arc::new(Mutex::new(
-            Log::open(&future_path, LogConfig::default()).unwrap(),
-        ));
+        let (future_path, future_log) =
+            crate::future_log::test_support::open_future_log(extra.path());
         future_logs.insert(
             ("t".to_string(), PartitionIndex(0)),
             Arc::new(FutureLogState {
@@ -484,11 +493,8 @@ mod tests {
         partitions.insert("t".into(), PartitionIndex(0), part.clone());
 
         // Plant a registry entry pointing at `extra`.
-        let future_path = log_dir::future_partition_dir(extra.path(), "t", 0);
-        std::fs::create_dir_all(&future_path).unwrap();
-        let future_log = Arc::new(Mutex::new(
-            Log::open(&future_path, LogConfig::default()).unwrap(),
-        ));
+        let (future_path, future_log) =
+            crate::future_log::test_support::open_future_log(extra.path());
         let old_cancel = CancellationToken::new();
         future_logs.insert(
             ("t".to_string(), PartitionIndex(0)),

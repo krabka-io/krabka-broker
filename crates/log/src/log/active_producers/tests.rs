@@ -1,26 +1,15 @@
 use assert2::assert;
 use bytes::Bytes;
-use krabka_ids::LeaderEpoch;
 use krabka_protocol::records::{Attributes, Record, RecordBatch};
 
 use super::*;
 use crate::{
     TransactionalBatch,
     config::LogConfig,
-    log::test_support::{control_key, control_value, test_log, verbatim_from},
+    log::test_support::{
+        AppendPath as Path, append_path as append, control_key, control_value, test_log,
+    },
 };
-
-/// The path a batch takes into the log.
-#[derive(Debug, Clone, Copy)]
-enum Path {
-    /// `Log::append`, as a leader appends a client batch.
-    Leader,
-    /// `Log::append_at`, as a follower appends a decoded replicated batch.
-    Follower,
-    /// `Log::append_verbatim_at` for a data batch and `Log::append_at` for a
-    /// control batch, as a follower appends a passthrough fetch.
-    Verbatim,
-}
 
 /// A data batch of `producer` (`(id, epoch)`) with `records` records from
 /// `base_sequence`, whose max timestamp is `max_timestamp`.
@@ -72,21 +61,6 @@ fn marker(
             ..Record::default()
         }],
         ..RecordBatch::default()
-    }
-}
-
-fn append(log: &mut Log, path: Path, mut batch: RecordBatch) {
-    let log_end = log.log_end_offset();
-    match path {
-        Path::Leader => {
-            log.append(&mut batch).unwrap();
-        }
-        Path::Verbatim if !batch.attributes.is_control_batch() => {
-            batch.base_offset = log_end.0;
-            let (_wire, verbatim) = verbatim_from(&batch, LeaderEpoch(0));
-            log.append_verbatim_at(&verbatim, log_end).unwrap();
-        }
-        Path::Follower | Path::Verbatim => log.append_at(&mut batch, log_end).unwrap(),
     }
 }
 

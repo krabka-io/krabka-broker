@@ -25,7 +25,7 @@ use bytes::{BufMut, Bytes, BytesMut};
 
 use crate::{
     coordinator::unified::persistence::{
-        flex::{put_empty_tagged_fields, skip_tagged_fields},
+        flex::{epoch_value, put_empty_tagged_fields, skip_tagged_fields},
         get_i16, get_i32, get_i64,
     },
     error::BrokerError,
@@ -62,29 +62,7 @@ impl ShareGroupMetadataValue {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ShareGroupTargetAssignmentMetadataValue {
-    pub assignment_epoch: i32,
-}
-
-impl ShareGroupTargetAssignmentMetadataValue {
-    #[must_use]
-    pub fn encode(self) -> Bytes {
-        let mut buf = BytesMut::new();
-        buf.put_i16(0);
-        buf.put_i32(self.assignment_epoch);
-        put_empty_tagged_fields(&mut buf);
-        buf.freeze()
-    }
-    /// # Errors
-    /// Returns an error when log I/O fails, a record or index is corrupt, or the requested offset violates the segment state.
-    pub fn decode(mut buf: &[u8]) -> Result<Self, BrokerError> {
-        let _v = get_i16(&mut buf)?;
-        let assignment_epoch = get_i32(&mut buf)?;
-        skip_tagged_fields(&mut buf)?;
-        Ok(Self { assignment_epoch })
-    }
-}
+epoch_value!(ShareGroupTargetAssignmentMetadataValue { assignment_epoch });
 
 #[cfg(test)]
 mod tests {

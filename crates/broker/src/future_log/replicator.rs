@@ -213,6 +213,66 @@ mod tests {
         log_dir,
     };
 
+    async fn resume_and_wait(
+        part: &Arc<Partition>,
+        partitions: &Arc<PartitionRegistry>,
+        future_logs: &Arc<DashMap<(String, PartitionIndex), Arc<FutureLogState>>>,
+        target: &std::path::Path,
+        wait: Duration,
+        expectation: &str,
+    ) {
+        let future_path = log_dir::future_partition_dir(target, "t", 0);
+        std::fs::create_dir_all(&future_path).unwrap();
+        resume_move(
+            partitions,
+            future_logs,
+            target,
+            &LogConfig::default(),
+            "t",
+            PartitionIndex(0),
+            test_policy(),
+        )
+        .expect("resume should spawn a future-log move");
+        tokio::time::timeout(wait, async {
+            loop {
+                if canonicalize_or_self(&part.log_dir.load_full()) == canonicalize_or_self(target)
+                    && future_logs.is_empty()
+                {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect(expectation);
+    }
+
+    async fn finish_move(
+        part: &Arc<Partition>,
+        future_log: Arc<Mutex<Log>>,
+        future_path: PathBuf,
+        target: &std::path::Path,
+    ) {
+        tokio::time::timeout(
+            Duration::from_secs(10),
+            replicator_loop(ReplicatorTask {
+                part: Arc::clone(part),
+                future_log,
+                target_partition_path: log_dir::partition_dir(target, "t", 0),
+                future_path,
+                target_log_dir: target.to_path_buf(),
+                cancel: CancellationToken::new(),
+                _partitions: Arc::new(PartitionRegistry::new()),
+                future_logs: Arc::new(DashMap::new()),
+                topic: "t".into(),
+                partition: PartitionIndex(0),
+                policy: test_policy(),
+            }),
+        )
+        .await
+        .expect("the move should finish");
+    }
+
     #[tokio::test]
     async fn resume_move_catches_up_and_swaps_future_log() {
         let primary = tempdir().unwrap();
@@ -232,32 +292,15 @@ mod tests {
         append_records(&part, 3);
         partitions.insert("t".into(), PartitionIndex(0), part.clone());
 
-        let future_path = log_dir::future_partition_dir(target.path(), "t", 0);
-        std::fs::create_dir_all(&future_path).unwrap();
-
-        resume_move(
+        resume_and_wait(
+            &part,
             &partitions,
             &future_logs,
             target.path(),
-            &LogConfig::default(),
-            "t",
-            PartitionIndex(0),
-            test_policy(),
+            Duration::from_millis(500),
+            "future log should catch up and swap",
         )
-        .expect("resume should spawn a future-log move");
-
-        tokio::time::timeout(Duration::from_millis(500), async {
-            loop {
-                let moved = canonicalize_or_self(&part.log_dir.load_full())
-                    == canonicalize_or_self(target.path());
-                if moved && future_logs.is_empty() {
-                    break;
-                }
-                tokio::task::yield_now().await;
-            }
-        })
-        .await
-        .expect("future log should catch up and swap");
+        .await;
 
         assert!(part.log_end_offset() == 3);
         assert!(
@@ -280,32 +323,15 @@ mod tests {
         }
         partitions.insert("t".into(), PartitionIndex(0), part.clone());
 
-        let future_path = log_dir::future_partition_dir(target.path(), "t", 0);
-        std::fs::create_dir_all(&future_path).unwrap();
-
-        resume_move(
+        resume_and_wait(
+            &part,
             &partitions,
             &future_logs,
             target.path(),
-            &LogConfig::default(),
-            "t",
-            PartitionIndex(0),
-            test_policy(),
+            Duration::from_secs(2),
+            "future log should keep copying after a partial catch-up pass",
         )
-        .expect("resume should spawn a future-log move");
-
-        tokio::time::timeout(Duration::from_secs(2), async {
-            loop {
-                let moved = canonicalize_or_self(&part.log_dir.load_full())
-                    == canonicalize_or_self(target.path());
-                if moved && future_logs.is_empty() {
-                    break;
-                }
-                tokio::task::yield_now().await;
-            }
-        })
-        .await
-        .expect("future log should keep copying after a partial catch-up pass");
+        .await;
 
         assert!(part.log_end_offset() == 4);
     }
@@ -320,11 +346,7 @@ mod tests {
         for _ in 0..5 {
             append_value_batch(&part, 10);
         }
-        let future_path = log_dir::future_partition_dir(target, "t", 0);
-        std::fs::create_dir_all(&future_path).unwrap();
-        let future_log = Arc::new(Mutex::new(
-            Log::open(&future_path, LogConfig::default()).unwrap(),
-        ));
+        let (future_path, future_log) = crate::future_log::test_support::open_future_log(target);
         let policy = test_policy();
         while !catch_up(&part, &future_log, mebibytes(1), &policy.throttle)
             .unwrap()
@@ -364,24 +386,7 @@ mod tests {
         assert!(part.log_end_offset() == Offset(5));
         assert!(value_sizes(&part.log) == [10, 10, 10, 20, 20]);
 
-        tokio::time::timeout(
-            Duration::from_secs(10),
-            replicator_loop(ReplicatorTask {
-                part: Arc::clone(&part),
-                future_log,
-                target_partition_path: log_dir::partition_dir(target.path(), "t", 0),
-                future_path,
-                target_log_dir: target.path().to_path_buf(),
-                cancel: CancellationToken::new(),
-                _partitions: Arc::new(PartitionRegistry::new()),
-                future_logs: Arc::new(DashMap::new()),
-                topic: "t".into(),
-                partition: PartitionIndex(0),
-                policy: test_policy(),
-            }),
-        )
-        .await
-        .expect("the move should finish");
+        finish_move(&part, future_log, future_path, target.path()).await;
 
         assert!(
             canonicalize_or_self(&part.log_dir.load_full()) == canonicalize_or_self(target.path())
@@ -409,24 +414,7 @@ mod tests {
         }
         assert!(part.log_end_offset() == future_log.lock().unwrap().log_end_offset());
 
-        tokio::time::timeout(
-            Duration::from_secs(10),
-            replicator_loop(ReplicatorTask {
-                part: Arc::clone(&part),
-                future_log,
-                target_partition_path: log_dir::partition_dir(target.path(), "t", 0),
-                future_path,
-                target_log_dir: target.path().to_path_buf(),
-                cancel: CancellationToken::new(),
-                _partitions: Arc::new(PartitionRegistry::new()),
-                future_logs: Arc::new(DashMap::new()),
-                topic: "t".into(),
-                partition: PartitionIndex(0),
-                policy: test_policy(),
-            }),
-        )
-        .await
-        .expect("the move should finish");
+        finish_move(&part, future_log, future_path, target.path()).await;
 
         assert!(
             canonicalize_or_self(&part.log_dir.load_full()) == canonicalize_or_self(target.path())

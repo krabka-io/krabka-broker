@@ -1,8 +1,8 @@
-(* #"/workspace/crates/verified/src/freeze/replacement_decision.rs" 40 0 40 94 *)
+(* #"/workspace/crates/verified/src/freeze/replacement_decision.rs" 41 0 41 94 *)
 
-let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
-let%span sreplacement_decision = "/workspace/crates/verified/src/freeze/replacement_decision.rs" 38 10 38 51
-let%span sreplacement_decision'0 = "/workspace/crates/verified/src/freeze/replacement_decision.rs" 18 8 21 10
+let%span sord = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span sreplacement_decision = "/workspace/crates/verified/src/freeze/replacement_decision.rs" 39 10 39 51
+let%span sreplacement_decision'0 = "/workspace/crates/verified/src/freeze/replacement_decision.rs" 19 8 22 10
 
 use creusot.int.Int64
 use creusot.prelude.Any
@@ -30,7 +30,7 @@ predicate gt_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other
 
 meta "rewrite_def" predicate gt_log_Int
 
-function freeze_replacement_model [#"/workspace/crates/verified/src/freeze/replacement_decision.rs" 16 0 16 87] (facts: t_FreezeReplacementFacts) : t_FreezeReplacementDecision
+function freeze_replacement_model [#"/workspace/crates/verified/src/freeze/replacement_decision.rs" 17 0 17 87] (facts: t_FreezeReplacementFacts) : t_FreezeReplacementDecision
  = [%#sreplacement_decision'0] let admissible = match facts.stored with
     | Missing -> facts.incoming_frozen
     | Present set_at_ms -> gt_log_Int (Int64.to_int facts.incoming_set_at_ms) (Int64.to_int set_at_ms)
@@ -47,7 +47,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let freeze_replacement_decision [#"/workspace/crates/verified/src/freeze/replacement_decision.rs" 40 0 40 94]
+let freeze_replacement_decision [#"/workspace/crates/verified/src/freeze/replacement_decision.rs" 41 0 41 94]
   (facts: t_FreezeReplacementFacts) (return (x: t_FreezeReplacementDecision)) = (! bb0
   [ bb0 = any [ br0 -> {facts.stored = Missing} (! bb6) | br1 (x0: Int64.t) -> {facts.stored = Present x0} (! bb5) ]
   | bb5 = s0

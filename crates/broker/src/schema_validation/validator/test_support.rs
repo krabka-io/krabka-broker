@@ -31,19 +31,70 @@ pub(super) fn framed(id: u32, body: &[u8]) -> Vec<u8> {
 /// which is how the cache tests assert a hit.
 pub(super) async fn registry(versions_calls: u64) -> MockServer {
     let server = MockServer::start().await;
-    Mock::given(method("GET"))
-        .and(path(format!("/schemas/ids/{KNOWN_ID}/versions")))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+    schema_versions(&server, versions_calls).await;
+    json_endpoint(
+        &server,
+        &format!("/schemas/ids/{KNOWN_ID}"),
+        serde_json::json!({"schema": AVRO}),
+        None,
+    )
+    .await;
+    server
+}
+
+pub(super) async fn schema_versions(server: &MockServer, calls: u64) {
+    json_endpoint(
+        server,
+        &format!("/schemas/ids/{KNOWN_ID}/versions"),
+        serde_json::json!([
             {"subject": "orders-value", "version": 1}
-        ])))
-        .expect(versions_calls)
-        .mount(&server)
-        .await;
-    Mock::given(method("GET"))
-        .and(path(format!("/schemas/ids/{KNOWN_ID}")))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"schema": AVRO})))
-        .mount(&server)
-        .await;
+        ]),
+        Some(calls),
+    )
+    .await;
+}
+
+pub(super) async fn json_endpoint(
+    server: &MockServer,
+    route: &str,
+    body: serde_json::Value,
+    calls: Option<u64>,
+) {
+    let mock = Mock::given(method("GET"))
+        .and(path(route))
+        .respond_with(ResponseTemplate::new(200).set_body_json(body));
+    let mock = match calls {
+        Some(calls) => mock.expect(calls),
+        None => mock,
+    };
+    mock.mount(server).await;
+}
+
+pub(super) async fn referenced_avro(schema: &str) -> MockServer {
+    let server = MockServer::start().await;
+    schema_versions(&server, 1).await;
+    json_endpoint(
+        &server,
+        &format!("/schemas/ids/{KNOWN_ID}"),
+        serde_json::json!({
+            "schema": schema,
+            "references": [{"name":"Base","subject":"order-base","version":1}]
+        }),
+        Some(1),
+    )
+    .await;
+    json_endpoint(
+        &server,
+        "/subjects/order-base/versions/1",
+        serde_json::json!({
+            "subject": "order-base",
+            "version": 1,
+            "id": 7,
+            "schema": r#"{"type":"record","name":"Base","fields":[{"name":"id","type":"string"}]}"#
+        }),
+        Some(1),
+    )
+    .await;
     server
 }
 

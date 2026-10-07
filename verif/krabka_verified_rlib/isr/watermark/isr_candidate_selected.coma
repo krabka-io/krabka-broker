@@ -1,18 +1,18 @@
-(* #"/workspace/crates/verified/src/isr/watermark.rs" 93 0 93 63 *)
+(* #"/workspace/crates/verified/src/isr/watermark.rs" 94 0 94 63 *)
 
-let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
-let%span swatermark = "/workspace/crates/verified/src/isr/watermark.rs" 104 28 104 33
-let%span swatermark'0 = "/workspace/crates/verified/src/isr/watermark.rs" 101 26 105 17
-let%span swatermark'1 = "/workspace/crates/verified/src/isr/watermark.rs" 106 23 106 62
-let%span swatermark'2 = "/workspace/crates/verified/src/isr/watermark.rs" 106 12 106 62
-let%span swatermark'3 = "/workspace/crates/verified/src/isr/watermark.rs" 98 12 98 88
-let%span swatermark'4 = "/workspace/crates/verified/src/isr/watermark.rs" 96 33 96 37
-let%span swatermark'5 = "/workspace/crates/verified/src/isr/watermark.rs" 95 37 95 42
-let%span swatermark'6 = "/workspace/crates/verified/src/isr/watermark.rs" 84 10 91 1
-let%span swatermark'7 = "/workspace/crates/verified/src/isr/watermark.rs" 44 10 44 56
-let%span swatermark'8 = "/workspace/crates/verified/src/isr/watermark.rs" 39 16 39 74
-let%span swatermark'9 = "/workspace/crates/verified/src/isr/watermark.rs" 15 8 22 13
-let%span swatermark'10 = "/workspace/crates/verified/src/isr/watermark.rs" 67 8 71 13
+let%span sord = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span swatermark = "/workspace/crates/verified/src/isr/watermark.rs" 105 28 105 33
+let%span swatermark'0 = "/workspace/crates/verified/src/isr/watermark.rs" 102 26 106 17
+let%span swatermark'1 = "/workspace/crates/verified/src/isr/watermark.rs" 107 23 107 62
+let%span swatermark'2 = "/workspace/crates/verified/src/isr/watermark.rs" 107 12 107 62
+let%span swatermark'3 = "/workspace/crates/verified/src/isr/watermark.rs" 99 12 99 88
+let%span swatermark'4 = "/workspace/crates/verified/src/isr/watermark.rs" 97 33 97 37
+let%span swatermark'5 = "/workspace/crates/verified/src/isr/watermark.rs" 96 37 96 42
+let%span swatermark'6 = "/workspace/crates/verified/src/isr/watermark.rs" 85 10 92 1
+let%span swatermark'7 = "/workspace/crates/verified/src/isr/watermark.rs" 45 10 45 56
+let%span swatermark'8 = "/workspace/crates/verified/src/isr/watermark.rs" 40 16 40 74
+let%span swatermark'9 = "/workspace/crates/verified/src/isr/watermark.rs" 16 8 23 13
+let%span swatermark'10 = "/workspace/crates/verified/src/isr/watermark.rs" 68 8 72 13
 
 use creusot.int.Int64
 use creusot.prelude.Any
@@ -45,7 +45,7 @@ let elim_Some (_x: t_Option_i64) (return (f0: Int64.t)) = any
       end}
     any) ]
 
-predicate kafka_is_replica_isr_eligible [#"/workspace/crates/verified/src/isr/watermark.rs" 13 0 13 68] (facts: t_IsrEligibilityFacts) =
+predicate kafka_is_replica_isr_eligible [#"/workspace/crates/verified/src/isr/watermark.rs" 14 0 14 68] (facts: t_IsrEligibilityFacts) =
   [%#swatermark'9] not facts.fenced
   /\ not facts.shutting_down
   /\ match facts.fetch_broker_epoch with
@@ -61,14 +61,14 @@ let replica_isr_eligible (facts: t_IsrEligibilityFacts) (return (x: bool)) = any
     = kafka_is_replica_isr_eligible facts}
     (! return {result}) ]
 
-predicate kafka_replica_is_caught_up [#"/workspace/crates/verified/src/isr/watermark.rs" 34 0 38 9] (follower_log_end'0: int) (leader_log_end'0: int) (caught_up_within_lag'0: bool) =
+predicate kafka_replica_is_caught_up [#"/workspace/crates/verified/src/isr/watermark.rs" 35 0 39 9] (follower_log_end'0: int) (leader_log_end'0: int) (caught_up_within_lag'0: bool) =
   [%#swatermark'8] follower_log_end'0 = leader_log_end'0 \/ caught_up_within_lag'0
 
 predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other <= self
 
 meta "rewrite_def" predicate ge_log_Int
 
-predicate kafka_is_follower_in_sync [#"/workspace/crates/verified/src/isr/watermark.rs" 65 0 65 62] (facts: t_IsrCandidateFacts) =
+predicate kafka_is_follower_in_sync [#"/workspace/crates/verified/src/isr/watermark.rs" 66 0 66 62] (facts: t_IsrCandidateFacts) =
   [%#swatermark'10] ge_log_Int (Int64.to_int facts.follower_log_end) (Int64.to_int facts.leader_high_watermark)
   /\ match facts.leader_epoch_start with
     | Some start -> ge_log_Int (Int64.to_int facts.follower_log_end) (Int64.to_int start)
@@ -79,8 +79,8 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let isr_candidate_selected [#"/workspace/crates/verified/src/isr/watermark.rs" 93 0 93 63]
-  (facts: t_IsrCandidateFacts) (return (x: bool)) = (! bb0
+let isr_candidate_selected [#"/workspace/crates/verified/src/isr/watermark.rs" 94 0 94 63] (facts: t_IsrCandidateFacts)
+  (return (x: bool)) = (! bb0
   [ bb0 = any
     [ br0 -> {facts.role = Unassigned} (! bb8)
     | br1 -> {facts.role = Leader} (! bb7)

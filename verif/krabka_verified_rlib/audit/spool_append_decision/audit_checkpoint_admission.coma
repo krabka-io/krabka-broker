@@ -1,13 +1,13 @@
-(* #"/workspace/crates/verified/src/audit/spool_append_decision.rs" 15 0 20 29 *)
+(* #"/workspace/crates/verified/src/audit/spool_append_decision.rs" 16 0 21 29 *)
 
-let%span sspool_append_decision = "/workspace/crates/verified/src/audit/spool_append_decision.rs" 25 30 25 31
-let%span sspool_append_decision'0 = "/workspace/crates/verified/src/audit/spool_append_decision.rs" 25 73 25 74
-let%span sspool_append_decision'1 = "/workspace/crates/verified/src/audit/spool_append_decision.rs" 25 58 25 74
-let%span sspool_append_decision'2 = "/workspace/crates/verified/src/audit/spool_append_decision.rs" 5 10 7 53
-let%span sspool_append_decision'3 = "/workspace/crates/verified/src/audit/spool_append_decision.rs" 8 10 8 83
-let%span sspool_append_decision'4 = "/workspace/crates/verified/src/audit/spool_append_decision.rs" 9 10 10 41
-let%span sspool_append_decision'5 = "/workspace/crates/verified/src/audit/spool_append_decision.rs" 11 10 13 77
-let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span sspool_append_decision = "/workspace/crates/verified/src/audit/spool_append_decision.rs" 26 30 26 31
+let%span sspool_append_decision'0 = "/workspace/crates/verified/src/audit/spool_append_decision.rs" 26 73 26 74
+let%span sspool_append_decision'1 = "/workspace/crates/verified/src/audit/spool_append_decision.rs" 26 58 26 74
+let%span sspool_append_decision'2 = "/workspace/crates/verified/src/audit/spool_append_decision.rs" 6 10 8 53
+let%span sspool_append_decision'3 = "/workspace/crates/verified/src/audit/spool_append_decision.rs" 9 10 9 83
+let%span sspool_append_decision'4 = "/workspace/crates/verified/src/audit/spool_append_decision.rs" 10 10 11 41
+let%span sspool_append_decision'5 = "/workspace/crates/verified/src/audit/spool_append_decision.rs" 12 10 14 77
+let%span sord = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
 
 use creusot.int.UInt64
 use creusot.prelude.Any
@@ -23,7 +23,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let audit_checkpoint_admission [#"/workspace/crates/verified/src/audit/spool_append_decision.rs" 15 0 20 29]
+let audit_checkpoint_admission [#"/workspace/crates/verified/src/audit/spool_append_decision.rs" 16 0 21 29]
   (signature_valid: bool) (head_matches: bool) (expected_seq: UInt64.t) (checkpoint_seq_high: UInt64.t)
   (return (x: t_AuditCheckpointAdmission)) = (! bb0
   [ bb0 = any [ br0 -> {signature_valid = false} (! bb1) | br1 -> {signature_valid} (! bb2) ]

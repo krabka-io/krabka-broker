@@ -9,9 +9,7 @@
 use std::net::SocketAddr;
 
 use assert2::assert;
-use bytes::BytesMut;
 use krabka_protocol::{
-    Decode, Encode,
     owned::{
         fetch_request::{FetchPartition, FetchRequest, FetchTopic},
         fetch_response::FetchResponse,
@@ -62,13 +60,10 @@ pub(crate) async fn fetch_all(addr: SocketAddr, topic: &str, topic_id: Uuid) -> 
             ..Default::default()
         };
         let mut stream = TcpStream::connect(addr).await.expect("connect");
-        let mut body = BytesMut::new();
-        req.encode(&mut body, version).expect("encode Fetch");
-        let resp_bytes = kafka_wire::round_trip(&mut stream, 1, version, 1, CLIENT_ID, true, &body)
-            .await
-            .expect("Fetch round-trip");
-        let mut cur: &[u8] = &resp_bytes;
-        let resp = FetchResponse::decode(&mut cur, version).expect("decode FetchResponse");
+        let resp: FetchResponse =
+            kafka_wire::exchange(&mut stream, &req, 1, version, 1, CLIENT_ID, true)
+                .await
+                .expect("Fetch round-trip");
 
         let mut got_any = false;
         for topic_resp in &resp.responses {

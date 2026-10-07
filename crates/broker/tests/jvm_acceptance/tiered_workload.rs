@@ -5,11 +5,6 @@
 //! overrides, the producer forces a segment roll, and the consumer reads back
 //! offsets whose local segments are already evicted.
 
-use std::{
-    io::Write,
-    process::{Command, Stdio},
-};
-
 use assert2::assert;
 
 use super::{
@@ -126,13 +121,10 @@ pub(crate) fn produce_records(topic: &str, n: usize) {
         use std::fmt::Write as _;
         let _ = writeln!(payload, "record-{i:04}");
     }
-    let mut child = Command::new("docker")
-        .args([
-            "run",
-            "--rm",
-            "-i",
-            "--add-host=host.docker.internal:host-gateway",
-            KAFKA_IMAGE,
+    let mut child_command = crate::support::jvm_docker_command(
+        KAFKA_IMAGE,
+        &[],
+        &[
             "kafka-console-producer",
             "--bootstrap-server",
             broker0_advertised(),
@@ -144,20 +136,10 @@ pub(crate) fn produce_records(topic: &str, n: usize) {
             "linger.ms=0",
             "--producer-property",
             "max.in.flight.requests.per.connection=1",
-        ])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("spawn producer");
-    child
-        .stdin
-        .as_mut()
-        .expect("stdin")
-        .write_all(payload.as_bytes())
-        .expect("write stdin");
-    drop(child.stdin.take());
-    let producer_out = child.wait_with_output().expect("wait producer");
+        ],
+        true,
+    );
+    let producer_out = crate::support::jvm_stdin_output(&mut child_command, payload.as_bytes());
     assert!(
         producer_out.status.success(),
         "producer failed: {}",

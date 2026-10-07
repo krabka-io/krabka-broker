@@ -6,9 +6,6 @@
 //! `build_table`, so the handler receives the per-connection principal and the
 //! peer `SocketAddr` for the per-group `Describe` ACL gate.
 
-use std::collections::HashSet;
-
-use krabka_metadata::AclOperation;
 use krabka_protocol::owned::{
     share_group_describe_request::ShareGroupDescribeRequest,
     share_group_describe_response::{DescribedGroup, ShareGroupDescribeResponse},
@@ -19,14 +16,21 @@ use crate::{
     codes,
     coordinator::unified::{GroupType, share::actor::ShareGroupActorMessage},
     error::BrokerError,
-    handlers::authorized_operations::{DescribedGroupRow as _, fill_group_authorized_operations},
+    handlers::{
+        authorized_operations::{DescribedGroupRow as _, fill_group_authorized_operations},
+        consumer_group_describe::{DescribedTopics, hide_undescribable_topics},
+    },
     task_util::{AskError, ask},
 };
 
-/// The message of the row Kafka substitutes for a group whose assignment
-/// names a topic the caller cannot `Describe`.
-const UNAUTHORIZED_TOPICS_MESSAGE: &str =
-    "The group has described topic(s) that the client is not authorized to describe.";
+impl DescribedTopics for DescribedGroup {
+    fn topics(&self) -> impl Iterator<Item = &str> {
+        self.members
+            .iter()
+            .flat_map(|member| &member.assignment.topic_partitions)
+            .map(|topic| topic.topic_name.as_str())
+    }
+}
 
 pub(crate) async fn handle(
     broker: &Broker,
@@ -120,30 +124,7 @@ pub(crate) async fn handle(
     // Clients may not see topics they cannot `Describe`: a group whose
     // assignment names one is replaced by Kafka's TOPIC_AUTHORIZATION_FAILED
     // row with no members.
-    let assigned: HashSet<&str> = groups
-        .iter()
-        .flat_map(|g| &g.members)
-        .flat_map(|m| &m.assignment.topic_partitions)
-        .map(|tp| tp.topic_name.as_str())
-        .collect();
-    let denied =
-        crate::handlers::denied_topics(authorizer, &image, ctx, AclOperation::Describe, assigned);
-    if !denied.is_empty() {
-        for group in &mut groups {
-            let hides_topic = group
-                .members
-                .iter()
-                .flat_map(|m| &m.assignment.topic_partitions)
-                .any(|tp| denied.contains(&tp.topic_name));
-            if hides_topic {
-                *group = DescribedGroup::error_row(
-                    &group.group_id,
-                    codes::TOPIC_AUTHORIZATION_FAILED,
-                    Some(UNAUTHORIZED_TOPICS_MESSAGE.to_owned()),
-                );
-            }
-        }
-    }
+    hide_undescribable_topics(authorizer, &image, ctx, &mut groups);
 
     Ok(response(groups))
 }
@@ -161,8 +142,8 @@ mod tests {
     use std::sync::Arc;
 
     use assert2::assert;
-    use krabka_metadata::ResourceType;
-    use krabka_protocol::{UnknownTaggedFields, owned::share_group_describe_response};
+    use krabka_metadata::{AclOperation, ResourceType};
+    use krabka_protocol::owned::share_group_describe_response;
 
     use super::*;
     use crate::test_support::{DenyAll, peer, principal, test_ctx};
@@ -189,34 +170,14 @@ mod tests {
             .expect("handle");
 
         let expected = ShareGroupDescribeResponse {
-            throttle_time_ms: 0,
-            groups: vec![
-                DescribedGroup {
+            groups: ["g1", "g2"]
+                .map(|group_id| DescribedGroup {
+                    group_id: group_id.into(),
                     error_code: codes::GROUP_AUTHORIZATION_FAILED,
-                    error_message: None,
-                    group_id: "g1".into(),
-                    group_state: String::new(),
-                    group_epoch: 0,
-                    assignment_epoch: 0,
-                    assignor_name: String::new(),
-                    members: Vec::new(),
-                    authorized_operations: i32::MIN,
-                    unknown_tagged_fields: UnknownTaggedFields(Vec::new()),
-                },
-                DescribedGroup {
-                    error_code: codes::GROUP_AUTHORIZATION_FAILED,
-                    error_message: None,
-                    group_id: "g2".into(),
-                    group_state: String::new(),
-                    group_epoch: 0,
-                    assignment_epoch: 0,
-                    assignor_name: String::new(),
-                    members: Vec::new(),
-                    authorized_operations: i32::MIN,
-                    unknown_tagged_fields: UnknownTaggedFields(Vec::new()),
-                },
-            ],
-            unknown_tagged_fields: UnknownTaggedFields(Vec::new()),
+                    ..Default::default()
+                })
+                .into(),
+            ..Default::default()
         };
         assert!(resp == expected);
         broker_handle.shutdown().await;
@@ -238,56 +199,32 @@ mod tests {
             .expect("handle");
 
         let expected = ShareGroupDescribeResponse {
-            throttle_time_ms: 0,
             groups: vec![DescribedGroup {
                 error_code: codes::UNSUPPORTED_VERSION,
-                error_message: None,
                 group_id: "g1".into(),
-                group_state: String::new(),
-                group_epoch: 0,
-                assignment_epoch: 0,
-                assignor_name: String::new(),
-                members: Vec::new(),
-                authorized_operations: i32::MIN,
-                unknown_tagged_fields: UnknownTaggedFields(Vec::new()),
+                ..Default::default()
             }],
-            unknown_tagged_fields: UnknownTaggedFields(Vec::new()),
+            ..Default::default()
         };
         assert!(resp == expected);
         broker_handle.shutdown().await;
     }
 
     fn acl(resource_type: ResourceType, name: &str) -> krabka_metadata::MetadataRecord {
-        krabka_metadata::MetadataRecord::V1AccessControlEntry(crate::test_support::allow_acl(
+        crate::handlers::group_heartbeat_test_support::acl(
             resource_type,
             name,
-            "User:alice",
             AclOperation::Describe,
-        ))
+        )
     }
 
     fn topic(name: &str, topic_id: uuid::Uuid, node: u64) -> Vec<krabka_metadata::MetadataRecord> {
-        let replicas = vec![krabka_raft::NodeId(node)];
-        vec![
-            krabka_metadata::MetadataRecord::V1Topic(krabka_metadata::TopicRecord {
-                name: name.into(),
-                topic_id,
-                partitions: 2,
-                replication_factor: 1,
-            }),
-            krabka_metadata::MetadataRecord::V1Partition(krabka_metadata::PartitionRecord {
-                topic: name.into(),
-                partition: 0,
-                leader: krabka_raft::NodeId(node),
-                replicas: replicas.clone(),
-                isr: replicas,
-                leader_epoch: krabka_metadata::LeaderEpoch(0),
-                adding_replicas: vec![],
-                removing_replicas: vec![],
-                directories: vec![],
-                partition_epoch: 0,
-            }),
-        ]
+        crate::handlers::group_heartbeat_test_support::topic_with_partitions(
+            name,
+            topic_id,
+            1,
+            krabka_raft::NodeId(node),
+        )
     }
 
     /// Seeds share group `group_id` with member `m1` assigned partition 0 of
@@ -430,7 +367,7 @@ mod tests {
                 DescribedGroup::error_row(
                     "h",
                     codes::TOPIC_AUTHORIZATION_FAILED,
-                    Some(UNAUTHORIZED_TOPICS_MESSAGE.into()),
+                    Some("The group has described topic(s) that the client is not authorized to describe.".into()),
                 ),
                 DescribedGroup::error_row(
                     "missing",

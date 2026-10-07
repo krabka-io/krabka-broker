@@ -42,6 +42,7 @@ mod provisioning;
 mod sasl_cluster;
 #[path = "acl_handlers/super_users.rs"]
 mod super_users;
+mod support;
 
 // Wire `i8` discriminants for the Kafka ACL enums. Kept inline (rather
 // than imported from `krabka-broker::handlers::acl_wire`, which is

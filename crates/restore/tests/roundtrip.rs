@@ -27,6 +27,9 @@
 //! the offset bounds, the batches, the leader epoch, and all of it again
 //! after a restart -- is actually checked.
 
+#[path = "support/archive_fixture.rs"]
+mod archive_fixture;
+
 #[path = "roundtrip/args.rs"]
 mod args;
 #[path = "roundtrip/batches.rs"]

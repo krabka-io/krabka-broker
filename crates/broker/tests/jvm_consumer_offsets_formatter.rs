@@ -65,10 +65,7 @@
 
 mod support;
 
-use std::{
-    io::Write,
-    process::{Command, Stdio},
-};
+use std::process::Command;
 
 use assert2::assert;
 use krabka_broker::{Broker, BrokerConfig, BrokerHandle};
@@ -430,36 +427,23 @@ impl Cluster {
     /// Fill the topic with [`RECORDS`] records over the console producer's
     /// stdin.
     fn produce(&self) {
-        let mut child = Command::new("docker")
-            .args([
-                "run",
-                "--rm",
-                "-i",
-                "--add-host=host.docker.internal:host-gateway",
-                KAFKA_IMAGE,
+        let mut child_command = crate::support::jvm_docker_command(
+            KAFKA_IMAGE,
+            &[],
+            &[
                 CONSOLE_PRODUCER,
                 "--bootstrap-server",
                 &self.bootstrap,
                 "--topic",
                 TOPIC,
-            ])
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .expect("spawn console producer");
+            ],
+            true,
+        );
         // One record per line, and a final newline so the producer sends the
         // last one rather than holding a partial line.
         let lines: Vec<String> = (0..RECORDS).map(|i| format!("record-{i}")).collect();
         let body = format!("{}\n", lines.join("\n"));
-        child
-            .stdin
-            .as_mut()
-            .expect("producer stdin")
-            .write_all(body.as_bytes())
-            .expect("write the records");
-        drop(child.stdin.take());
-        let out = child.wait_with_output().expect("wait for the producer");
+        let out = crate::support::jvm_stdin_output(&mut child_command, body.as_bytes());
         assert!(
             out.status.success(),
             "console producer failed: {}",

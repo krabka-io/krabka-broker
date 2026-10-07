@@ -589,49 +589,17 @@ async fn release(
     topic_id: WireUuid,
     (first_offset, last_offset): (i64, i64),
 ) {
-    use krabka_protocol::owned::{
-        share_acknowledge_request::{
-            AcknowledgePartition, AcknowledgeTopic, AcknowledgementBatch as AcknowledgeBatch,
-            ShareAcknowledgeRequest,
-        },
-        share_acknowledge_response::ShareAcknowledgeResponse,
-    };
     let version = krabka_protocol::owned::share_acknowledge_request::MAX_VERSION;
-    let request = ShareAcknowledgeRequest {
-        group_id: Some(group.into()),
-        member_id: Some(member.into()),
-        share_session_epoch: epoch,
-        topics: vec![AcknowledgeTopic {
-            topic_id,
-            partitions: vec![AcknowledgePartition {
-                partition_index: 0,
-                acknowledgement_batches: vec![AcknowledgeBatch {
-                    first_offset,
-                    last_offset,
-                    acknowledge_types: vec![RELEASE],
-                    ..Default::default()
-                }],
-                ..Default::default()
-            }],
-            ..Default::default()
-        }],
-        ..Default::default()
-    };
-    let shared = broker.broker_arc_for_test();
-    let user = principal("share-consumer");
-    let address = peer();
-    let ctx = request_context(&user, &address, "share-client");
-    let request_bytes = encode_request(&request, version);
-    let response = crate::test_support::try_dispatch_context(
-        &shared,
-        krabka_protocol::owned::share_acknowledge_request::API_KEY,
-        version,
-        &request_bytes,
-        &ctx,
-    )
-    .await
-    .expect("handle share acknowledge");
-    let response: ShareAcknowledgeResponse = decode_response(&response, version);
+    let request = crate::handlers::test_support::acknowledge_request(
+        group,
+        member,
+        epoch,
+        topic_id,
+        (first_offset, last_offset),
+        RELEASE,
+    );
+    let response =
+        crate::handlers::test_support::share_acknowledge_wire(broker, version, &request).await;
     let row = &response.responses[0].partitions[0];
     assert!(
         (response.error_code, row.error_code) == (codes::NONE, codes::NONE),

@@ -4,8 +4,6 @@
 //! Every field is a sorted `Vec` rather than a map, because stateright hashes
 //! and compares each state, so the representation has to be canonical.
 
-use std::collections::{BTreeMap, BTreeSet};
-
 use crate::coordinator::unified::persistence_next_gen::MemberAssignmentState;
 
 /// Per-member coordinator-side projection, which maps a single topic to a
@@ -49,35 +47,6 @@ pub(super) enum ReconAction {
     ClientRevoke(String, i32),
 }
 
-pub(super) fn owned_map(s: &ReconState) -> BTreeMap<String, BTreeSet<i32>> {
-    s.client_owned
-        .iter()
-        .map(|(k, v)| (k.clone(), v.iter().copied().collect()))
-        .collect()
-}
-
-pub(super) fn advertised_map(s: &ReconState) -> BTreeMap<String, Vec<i32>> {
-    s.advertised
-        .iter()
-        .map(|(k, v)| (k.clone(), v.clone()))
-        .collect()
-}
-
-pub(super) fn owned_to_vec(owned: &BTreeMap<String, BTreeSet<i32>>) -> Vec<(String, Vec<i32>)> {
-    owned
-        .iter()
-        .map(|(k, v)| (k.clone(), v.iter().copied().collect()))
-        .collect()
-}
-
 pub(super) fn member<'a>(s: &'a ReconState, id: &str) -> Option<&'a MemberProj> {
     s.members.iter().find(|m| m.id == id)
-}
-
-pub(super) fn advertised_for(s: &ReconState, id: &str) -> Vec<i32> {
-    s.advertised
-        .iter()
-        .find(|(k, _)| k == id)
-        .map(|(_, v)| v.clone())
-        .unwrap_or_default()
 }

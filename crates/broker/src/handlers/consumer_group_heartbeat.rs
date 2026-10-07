@@ -232,8 +232,17 @@ mod tests {
     use std::sync::Arc;
 
     use assert2::assert;
-    use krabka_metadata::{FeatureLevelRecord, MetadataImage, MetadataRecord};
+    use krabka_metadata::{MetadataImage, MetadataRecord};
     use krabka_protocol::Decode;
+
+    use super::*;
+    use crate::{
+        handlers::group_heartbeat_test_support::{
+            acl_authorizer, alice, describe_acl, group_read_acl, image_with_group_version,
+            set_group_version, topic_with_partitions,
+        },
+        test_support::{peer, principal, test_ctx},
+    };
 
     const VERSION: i16 = krabka_protocol::owned::consumer_group_heartbeat_request::MAX_VERSION;
 
@@ -250,15 +259,6 @@ mod tests {
     }
 
     crate::test_support::context_helper!(client_id = "consumer-group-heartbeat-test");
-
-    fn image_with_group_version(level: i16) -> MetadataImage {
-        let mut image = MetadataImage::new(uuid::Uuid::nil());
-        image.apply(&MetadataRecord::V1FeatureLevel(FeatureLevelRecord {
-            name: krabka_metadata::group_version::GROUP_VERSION_FEATURE.into(),
-            level,
-        }));
-        image
-    }
 
     #[test]
     fn group_version_gate_distinguishes_disabled_and_enabled_images() {
@@ -449,17 +449,9 @@ mod tests {
         assert!(resp.error_code == codes::GROUP_AUTHORIZATION_FAILED);
     }
 
-    use super::*;
-    use crate::test_support::{peer, principal, test_ctx};
-
     #[test]
     fn group_read_denied_yields_group_authorization_failed() {
-        use krabka_protocol::owned::consumer_group_heartbeat_response::{
-            self, ConsumerGroupHeartbeatResponse,
-        };
-
-        let authorizer =
-            crate::authorizer::SimpleAclAuthorizer::new(std::collections::HashSet::new());
+        let authorizer = acl_authorizer();
         let image = krabka_metadata::MetadataImage::new(uuid::Uuid::nil());
         let principal = crate::test_support::principal("ANONYMOUS");
         let peer = peer();
@@ -470,15 +462,11 @@ mod tests {
 
         let bytes = crate::handlers::encode_response(
             &ConsumerGroupHeartbeatResponse::error(codes::GROUP_AUTHORIZATION_FAILED, None),
-            consumer_group_heartbeat_response::MAX_VERSION,
+            VERSION,
         )
         .expect("encode");
         let mut cur: &[u8] = &bytes;
-        let resp = ConsumerGroupHeartbeatResponse::decode(
-            &mut cur,
-            consumer_group_heartbeat_response::MAX_VERSION,
-        )
-        .unwrap();
+        let resp = ConsumerGroupHeartbeatResponse::decode(&mut cur, VERSION).unwrap();
         assert!(resp.error_code == codes::GROUP_AUTHORIZATION_FAILED);
     }
 
@@ -497,29 +485,13 @@ mod tests {
         ));
     }
 
-    /// Finalizes `group.version >= 1`, the [`group_version_disabled`] gate.
-    /// Every test below the protocol-gate reordering needs this first, or
-    /// the protocol gate — now checked *before* the group ACL — answers
-    /// `UNSUPPORTED_VERSION` before the behavior under test ever runs.
-    async fn finalize_group_version(broker: &crate::broker::Broker) {
-        broker
-            .controller
-            .submit_change(vec![MetadataRecord::V1FeatureLevel(FeatureLevelRecord {
-                name: krabka_metadata::group_version::GROUP_VERSION_FEATURE.into(),
-                level: 1,
-            })])
-            .await
-            .expect("finalize group.version");
-    }
-
     #[tokio::test]
     async fn handle_group_read_denied_preserves_error_response() {
-        let authorizer =
-            crate::authorizer::SimpleAclAuthorizer::new(std::collections::HashSet::new());
+        let authorizer = acl_authorizer();
         let (broker_handle, _dir) =
             crate::test_support::start_group_broker(Arc::new(authorizer)).await;
         let broker = broker_handle.broker_arc_for_test();
-        finalize_group_version(&broker).await;
+        set_group_version(&broker, 1).await;
         test_ctx!(ctx, "ANONYMOUS");
         let req = request("denied-group");
 
@@ -542,8 +514,7 @@ mod tests {
     /// when the protocol itself is unavailable.
     #[tokio::test]
     async fn handle_protocol_gate_precedes_group_acl() {
-        let authorizer =
-            crate::authorizer::SimpleAclAuthorizer::new(std::collections::HashSet::new());
+        let authorizer = acl_authorizer();
         let (broker_handle, _dir) =
             crate::test_support::start_group_broker(Arc::new(authorizer)).await;
         let broker = broker_handle.broker_arc_for_test();
@@ -551,14 +522,7 @@ mod tests {
         // default for a modern metadata.version, which finalizes
         // group.version >= 1 automatically. Explicitly downgrade it back to
         // 0 (unfinalized/disabled) so this test observes the protocol gate.
-        broker
-            .controller
-            .submit_change(vec![MetadataRecord::V1FeatureLevel(FeatureLevelRecord {
-                name: krabka_metadata::group_version::GROUP_VERSION_FEATURE.into(),
-                level: 0,
-            })])
-            .await
-            .expect("disable group.version");
+        set_group_version(&broker, 0).await;
         test_ctx!(ctx, "ANONYMOUS");
         let req = request("denied-group");
 
@@ -578,7 +542,7 @@ mod tests {
         ))
         .await;
         let broker = broker_handle.broker_arc_for_test();
-        finalize_group_version(&broker).await;
+        set_group_version(&broker, 1).await;
         let principal = principal("ANONYMOUS");
         let peer = peer();
         let ctx = test_context(&principal, &peer);
@@ -639,7 +603,7 @@ mod tests {
         ))
         .await;
         let broker = broker_handle.broker_arc_for_test();
-        finalize_group_version(&broker).await;
+        set_group_version(&broker, 1).await;
         let coordinator = &broker.group_coordinator;
         coordinator.mark_share("share");
         coordinator.mark_streams("streams");
@@ -725,76 +689,12 @@ mod tests {
         broker_handle.shutdown().await;
     }
 
-    // ── Explicit-name and regex `Describe` checks (issue #716) ─────────
-
-    use crate::handlers::group_heartbeat_test_support::{
-        alice, describe_acl, group_read_acl, topic_with_partitions,
-    };
-
-    /// Table-driven cases for
-    /// [`crate::handlers::subscribed_names_describe_denied`]: whether each ACL
-    /// configuration over `subscribed_topic_names` denies the whole heartbeat,
-    /// per Kafka's `filterByAuthorized(.., DESCRIBE, TOPIC, ..)`.
-    #[tokio::test]
-    async fn subscribed_names_describe_denied_table() {
-        for (label, granted, names, expected_denied) in [
-            ("no subscription", vec![], None, false),
-            ("empty subscription", vec![], Some(vec![]), false),
-            (
-                "single name, fully authorized",
-                vec!["orders"],
-                Some(vec!["orders"]),
-                false,
-            ),
-            (
-                "single name, not authorized",
-                vec![],
-                Some(vec!["orders"]),
-                true,
-            ),
-            (
-                "two names, one denied",
-                vec!["orders"],
-                Some(vec!["orders", "shipments"]),
-                true,
-            ),
-            (
-                "two names, both authorized",
-                vec!["orders", "shipments"],
-                Some(vec!["orders", "shipments"]),
-                false,
-            ),
-        ] {
-            let mut image = MetadataImage::new(uuid::Uuid::nil());
-            for name in &granted {
-                image.apply(&describe_acl(name));
-            }
-            let (broker_handle, _dir) = crate::test_support::start_group_broker(Arc::new(
-                crate::authorizer::SimpleAclAuthorizer::new(std::collections::HashSet::new()),
-            ))
-            .await;
-            let broker = broker_handle.broker_arc_for_test();
-            let principal = alice();
-            let peer = peer();
-            let ctx = crate::test_support::request_context(&principal, &peer, "c");
-            let req = ConsumerGroupHeartbeatRequest {
-                group_id: "g".into(),
-                subscribed_topic_names: names.map(|ns| ns.into_iter().map(String::from).collect()),
-                ..Default::default()
-            };
-
-            assert!(
-                crate::handlers::subscribed_names_describe_denied(
-                    broker.config.authorizer.as_ref(),
-                    &image,
-                    &ctx,
-                    req.subscribed_topic_names.as_deref(),
-                ) == expected_denied,
-                "{label}"
-            );
-            broker_handle.shutdown().await;
-        }
+    #[test]
+    fn subscribed_names_describe_denied_table() {
+        crate::handlers::group_heartbeat_test_support::subscribed_names_describe_denied_table();
     }
+
+    // ── Explicit-name and regex `Describe` checks (issue #716) ─────────
 
     /// A `SubscribedTopicNames` entry this principal cannot `Describe` fails
     /// the whole heartbeat with `TOPIC_AUTHORIZATION_FAILED` (29), and the
@@ -804,12 +704,10 @@ mod tests {
     #[tokio::test]
     async fn handle_subscribed_name_describe_denied_refuses_whole_heartbeat_no_member_created() {
         // Deliberately no Describe grant for "topic-a".
-        let (broker_handle, _dir) = crate::test_support::start_group_broker(Arc::new(
-            crate::authorizer::SimpleAclAuthorizer::new(std::collections::HashSet::new()),
-        ))
-        .await;
+        let (broker_handle, _dir) =
+            crate::test_support::start_group_broker(Arc::new(acl_authorizer())).await;
         let broker = broker_handle.broker_arc_for_test();
-        finalize_group_version(&broker).await;
+        set_group_version(&broker, 1).await;
         broker
             .controller
             .submit_change(vec![group_read_acl("g")])
@@ -853,12 +751,10 @@ mod tests {
     /// through the whole handler → actor → reconciler path.
     #[tokio::test]
     async fn handle_regex_subscription_assigns_only_describe_authorized_topics() {
-        let (broker_handle, _dir) = crate::test_support::start_group_broker(Arc::new(
-            crate::authorizer::SimpleAclAuthorizer::new(std::collections::HashSet::new()),
-        ))
-        .await;
+        let (broker_handle, _dir) =
+            crate::test_support::start_group_broker(Arc::new(acl_authorizer())).await;
         let broker = broker_handle.broker_arc_for_test();
-        finalize_group_version(&broker).await;
+        set_group_version(&broker, 1).await;
         let allowed_id = uuid::Uuid::from_u128(1);
         let denied_id = uuid::Uuid::from_u128(2);
         let node = krabka_raft::NodeId(broker_handle.node_id());
@@ -974,12 +870,10 @@ mod tests {
     async fn broker_with_described_topics(
         topics: &[(&str, uuid::Uuid)],
     ) -> (crate::broker::BrokerHandle, tempfile::TempDir) {
-        let (broker_handle, dir) = crate::test_support::start_group_broker(Arc::new(
-            crate::authorizer::SimpleAclAuthorizer::new(std::collections::HashSet::new()),
-        ))
-        .await;
+        let (broker_handle, dir) =
+            crate::test_support::start_group_broker(Arc::new(acl_authorizer())).await;
         let broker = broker_handle.broker_arc_for_test();
-        finalize_group_version(&broker).await;
+        set_group_version(&broker, 1).await;
         let node = krabka_raft::NodeId(broker_handle.node_id());
         let mut records = vec![group_read_acl("g")];
         for (name, id) in topics {

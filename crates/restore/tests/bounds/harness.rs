@@ -53,3 +53,16 @@ pub(crate) fn reopen(target_dir: &Path, topic: &str, partition: i32) -> Log {
     let dir = name::partition_dir(target_dir, topic, partition);
     Log::open(&dir, LogConfig::default()).expect("reopen restored partition")
 }
+
+pub(crate) fn check_batches(
+    target: &Path,
+    end: i64,
+    expected: &[krabka_protocol::records::RecordBatch],
+) {
+    let log = reopen(target, "orders", 0);
+    assert2::check!(log.log_end_offset() == krabka_ids::Offset(end));
+    let read = log
+        .read(krabka_ids::Offset(0), LogConfig::default().segment_size)
+        .expect("read back");
+    assert2::check!(read.batches == expected);
+}

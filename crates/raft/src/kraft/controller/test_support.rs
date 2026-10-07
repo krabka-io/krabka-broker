@@ -69,32 +69,9 @@ pub fn build_with_max_bytes_between_snapshots(
     ids: &[NodeId],
     max_bytes_between_snapshots: krabka_units::prelude::ByteSize,
 ) -> (KraftController, tempfile::TempDir) {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let log = KraftLog::open(dir.path(), &crate::MetadataLogConfig::default()).expect("open log");
-    let state = QuorumState::bootstrap(uuid::Uuid::nil(), voter_set(ids));
-    let ctrl = KraftController::spawn(
-        KraftConfig {
-            me,
-            cluster_id: uuid::Uuid::nil(),
-            directory_id: uuid::Uuid::nil(),
-            initial_state: state,
-            election_timeout: TEST_ELECTION_TIMEOUT,
-            heartbeat_interval: None,
-            controller_fetch_miss_limit: ControllerFetchMissLimit::default(),
-            metadata_raft_command_queue_capacity: MetadataRaftCommandQueueCapacity::default(),
-            metadata_raft_fetch_max: MetadataRaftFetchMax::default(),
-            peers: Arc::new(NullPeerSender),
-            snapshot_interval_records: 0,
-            max_bytes_between_snapshots,
-            max_snapshot_interval: krabka_units::prelude::millis(0),
-            metadata_snapshot_fetch_max: MetadataSnapshotFetchMax::default(),
-            metadata_log: test_metadata_log(),
-            activation: crate::kraft::Activation::default(),
-        },
-        log,
-        dir.path().to_path_buf(),
-    );
-    (ctrl, dir)
+    spawn_test_controller(me, ids, |config| {
+        config.max_bytes_between_snapshots = max_bytes_between_snapshots;
+    })
 }
 
 pub fn build_full(
@@ -126,31 +103,44 @@ pub fn build_full_with_policy(
     metadata_raft_command_queue_capacity: MetadataRaftCommandQueueCapacity,
     metadata_raft_fetch_max: MetadataRaftFetchMax,
 ) -> (KraftController, tempfile::TempDir) {
+    spawn_test_controller(me, ids, |config| {
+        config.election_timeout = election_timeout;
+        config.snapshot_interval_records = snapshot_interval_records;
+        config.heartbeat_interval = heartbeat_interval;
+        config.controller_fetch_miss_limit = controller_fetch_miss_limit;
+        config.metadata_raft_command_queue_capacity = metadata_raft_command_queue_capacity;
+        config.metadata_raft_fetch_max = metadata_raft_fetch_max;
+    })
+}
+
+fn spawn_test_controller(
+    me: NodeId,
+    ids: &[NodeId],
+    customize: impl FnOnce(&mut KraftConfig),
+) -> (KraftController, tempfile::TempDir) {
     let dir = tempfile::tempdir().expect("tempdir");
     let log = KraftLog::open(dir.path(), &crate::MetadataLogConfig::default()).expect("open log");
     let state = QuorumState::bootstrap(uuid::Uuid::nil(), voter_set(ids));
-    let ctrl = KraftController::spawn(
-        KraftConfig {
-            me,
-            cluster_id: uuid::Uuid::nil(),
-            directory_id: uuid::Uuid::nil(),
-            initial_state: state,
-            election_timeout,
-            heartbeat_interval,
-            controller_fetch_miss_limit,
-            metadata_raft_command_queue_capacity,
-            metadata_raft_fetch_max,
-            peers: Arc::new(NullPeerSender),
-            snapshot_interval_records,
-            max_bytes_between_snapshots: krabka_units::prelude::bytes(0),
-            max_snapshot_interval: krabka_units::prelude::millis(0),
-            metadata_snapshot_fetch_max: MetadataSnapshotFetchMax::default(),
-            metadata_log: test_metadata_log(),
-            activation: crate::kraft::Activation::default(),
-        },
-        log,
-        dir.path().to_path_buf(),
-    );
+    let mut config = KraftConfig {
+        me,
+        cluster_id: uuid::Uuid::nil(),
+        directory_id: uuid::Uuid::nil(),
+        initial_state: state,
+        election_timeout: TEST_ELECTION_TIMEOUT,
+        heartbeat_interval: None,
+        controller_fetch_miss_limit: ControllerFetchMissLimit::default(),
+        metadata_raft_command_queue_capacity: MetadataRaftCommandQueueCapacity::default(),
+        metadata_raft_fetch_max: MetadataRaftFetchMax::default(),
+        peers: Arc::new(NullPeerSender),
+        snapshot_interval_records: 0,
+        max_bytes_between_snapshots: krabka_units::prelude::bytes(0),
+        max_snapshot_interval: krabka_units::prelude::millis(0),
+        metadata_snapshot_fetch_max: MetadataSnapshotFetchMax::default(),
+        metadata_log: test_metadata_log(),
+        activation: crate::kraft::Activation::default(),
+    };
+    customize(&mut config);
+    let ctrl = KraftController::spawn(config, log, dir.path().to_path_buf());
     (ctrl, dir)
 }
 

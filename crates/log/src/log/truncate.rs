@@ -16,6 +16,32 @@ use crate::{
 };
 
 impl Log {
+    /// Remove sealed segments, their cached indexes, and their producer snapshots.
+    /// The snapshot at the first surviving base stays for local and remote reads.
+    pub(super) fn remove_sealed_segments(&mut self, bases: &[Offset]) -> Result<(), LogError> {
+        let drop_set: HashSet<Offset> = bases.iter().copied().collect();
+        self.segments
+            .retain(|segment| !drop_set.contains(&segment.base_offset()));
+        self.sealed_txn_indexes
+            .retain(|base, _| !drop_set.contains(base));
+        self.stamp_indexes
+            .retain(|base, _| !drop_set.contains(base));
+        for base in bases {
+            let _ = retention::delete_segment_files(&*self.io, &self.dir, *base);
+            producer_snapshot::remove_at(&self.dir, *base)?;
+        }
+        Ok(())
+    }
+
+    /// Drop the files of a discarded tail after closing its segment handle.
+    pub(super) fn remove_truncated_segment_files(&self, base: Offset) {
+        let _ = fs::remove_file(name::log_path(&self.dir, base.0));
+        let _ = fs::remove_file(name::index_path(&self.dir, base.0));
+        let _ = fs::remove_file(name::timeindex_path(&self.dir, base.0));
+        let _ = fs::remove_file(name::txnindex_path(&self.dir, base.0));
+        let _ = fs::remove_file(name::stampindex_path(&self.dir, base.0));
+    }
+
     /// Truncate the log so that no record at offset `>= offset` remains.
     /// Replication and leader election use this method.
     ///
@@ -80,11 +106,7 @@ impl Log {
             let popped = self.segments.pop().expect("length exceeds retained prefix");
             let base = popped.base_offset();
             drop(popped);
-            let _ = fs::remove_file(name::log_path(&self.dir, base.0));
-            let _ = fs::remove_file(name::index_path(&self.dir, base.0));
-            let _ = fs::remove_file(name::timeindex_path(&self.dir, base.0));
-            let _ = fs::remove_file(name::txnindex_path(&self.dir, base.0));
-            let _ = fs::remove_file(name::stampindex_path(&self.dir, base.0));
+            self.remove_truncated_segment_files(base);
             self.sealed_txn_indexes.remove(&base);
             self.stamp_indexes.remove(&base);
         }
@@ -95,11 +117,7 @@ impl Log {
         {
             let base = active.base_offset();
             self.active = None;
-            let _ = fs::remove_file(name::log_path(&self.dir, base.0));
-            let _ = fs::remove_file(name::index_path(&self.dir, base.0));
-            let _ = fs::remove_file(name::timeindex_path(&self.dir, base.0));
-            let _ = fs::remove_file(name::txnindex_path(&self.dir, base.0));
-            let _ = fs::remove_file(name::stampindex_path(&self.dir, base.0));
+            self.remove_truncated_segment_files(base);
             self.stamp_indexes.remove(&base);
         }
 
@@ -215,45 +233,12 @@ impl Log {
             return Ok(log_start);
         }
 
-        // Drop sealed segments whose last record is < target. A sealed
-        // segment covers [base_offset, next_segment_base_offset). The
-        // "last offset" of a sealed segment equals `next_base - 1`
-        // where `next_base` is the next segment's `base_offset`
-        // (or, for the most-recent sealed segment, the active segment's
-        // `base_offset`).
-        let active_base = self.active.as_ref().map_or(leo, Segment::base_offset);
-        let next_bases: Vec<Offset> = self
-            .segments
-            .iter()
-            .map(Segment::base_offset)
-            .skip(1)
-            .chain(std::iter::once(active_base))
+        let to_drop: Vec<Offset> = self
+            .sealed_segments_with_next_base()
+            .take_while(|(_, next_base)| *next_base <= target)
+            .map(|(segment, _)| segment.base_offset())
             .collect();
-
-        let mut to_drop: Vec<Offset> = Vec::new();
-        for (seg, next_base) in self.segments.iter().zip(next_bases.iter()) {
-            if *next_base <= target {
-                to_drop.push(seg.base_offset());
-            } else {
-                break;
-            }
-        }
-
-        let drop_set: HashSet<Offset> = to_drop.iter().copied().collect();
-        self.segments
-            .retain(|s| !drop_set.contains(&s.base_offset()));
-        self.sealed_txn_indexes
-            .retain(|base, _| !drop_set.contains(base));
-        self.stamp_indexes
-            .retain(|base, _| !drop_set.contains(base));
-        for base in &to_drop {
-            let _ = retention::delete_segment_files(&*self.io, &self.dir, *base);
-            // Kafka's `deleteProducerSnapshots` removes the snapshot at every
-            // deleted segment's base. The snapshot at the next surviving base
-            // stays, and in-memory producer state is untouched, as in
-            // `ProducerStateManager.onLogStartOffsetIncremented`.
-            producer_snapshot::remove_at(&self.dir, *base)?;
-        }
+        self.remove_sealed_segments(&to_drop)?;
 
         // Every dropped segment ended below `target`, so the first offset
         // still in the log is `target` itself: either it falls inside the

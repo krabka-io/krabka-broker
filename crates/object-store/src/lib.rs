@@ -54,3 +54,6 @@ pub use read::read_capped;
 pub use unavailable::{verify_gcs_worm_bucket, verify_s3_worm_bucket};
 #[cfg(not(target_family = "wasm"))]
 pub use worm::{verify_gcs_worm_bucket, verify_s3_worm_bucket};
+
+#[cfg(all(test, not(target_family = "wasm")))]
+mod test_support;

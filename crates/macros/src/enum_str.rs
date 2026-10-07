@@ -41,7 +41,7 @@ impl moxy::ast::FromMeta for Aliases {
 }
 
 /// The arguments of the `#[enum_str(...)]` enum attribute.
-#[derive(moxy::FromMeta)]
+#[derive(Default, moxy::FromMeta)]
 struct EnumArgs {
     /// How a variant name becomes its text when the variant names none.
     #[meta(default)]
@@ -99,15 +99,7 @@ fn apply_case(ident: &str, case: Option<&str>) -> Result<String, String> {
 /// Expands `#[derive(EnumStr)]` on `item`.
 pub(crate) fn expand(item: ItemEnum) -> Result<TokenStream, ParseError> {
     let span = item.ident.span();
-    let args = item
-        .parse_meta::<EnumArgs>("enum_str")?
-        .unwrap_or(EnumArgs {
-            case: None,
-            as_str: None,
-            parse: None,
-            all: false,
-            label_value: false,
-        });
+    let args = item.parse_meta::<EnumArgs>("enum_str")?.unwrap_or_default();
     let as_str = args
         .as_str
         .and_then(|name| name.0)

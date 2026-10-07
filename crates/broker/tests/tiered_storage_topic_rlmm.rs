@@ -32,6 +32,8 @@
 //! [`an_idle_tiered_partition_leaves_local_disk_through_its_last_record`]: rlmm_idle_partition::an_idle_tiered_partition_leaves_local_disk_through_its_last_record
 
 mod support;
+#[path = "tiered_storage_multi_broker/topic_fixture.rs"]
+mod topic_fixture;
 
 // Cargo compiles this file as its own test binary, so the crate root's module
 // directory is `tests/`. `#[path]` re-bases each declaration onto the sibling

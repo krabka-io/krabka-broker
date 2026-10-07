@@ -1,5 +1,7 @@
 use creusot_std::prelude::*;
 
+#[cfg(creusot)]
+use super::timestamp::sparse_maxima_bound_prefix;
 use super::{first_unstable_offset, indexed_timestamp_scan_finds_first};
 use crate::list_offsets::{
     ListOffsetsBoundDecision, ListOffsetsBoundFacts, ListOffsetsSelectionDecision,
@@ -21,11 +23,7 @@ use crate::list_offsets::{
     ==> offsets@[i]@ < offsets@[j]@)]
 #[requires(forall<i: Int> 0 <= i && i < starts@.len()
     ==> 0 <= starts@[i]@ && starts@[i]@ <= frontiers.1@)]
-#[requires(forall<i: Int, j: Int> 0 <= i && i < j && j < entries@.len()
-    ==> entries@[i].0@ <= entries@[j].0@)]
-#[requires(forall<i: Int, j: Int> 0 <= i && i < entries@.len()
-    && 0 <= j && j < offsets@.len() && offsets@[j]@ < entries@[i].1@
-    ==> timestamps@[j]@ <= entries@[i].0@)]
+#[requires(sparse_maxima_bound_prefix(entries@, offsets@, timestamps@))]
 #[ensures(match result {
     ListOffsetsSelectionDecision::RejectMalformed => false,
     ListOffsetsSelectionDecision::Resolved { offset, timestamp, leader_epoch } =>

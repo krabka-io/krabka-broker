@@ -18,15 +18,9 @@ use krabka_protocol::{
     records::{Record, RecordBatch, RecordsPayload},
 };
 
-use super::handle;
 use crate::{
-    authorizer::AllowAllAuthorizer,
-    broker::BrokerHandle,
-    codes,
-    test_support::{
-        decode_response, encode_request, peer, principal, request_context,
-        start_broker_with_authorizer_no_audit,
-    },
+    authorizer::AllowAllAuthorizer, broker::BrokerHandle, codes,
+    test_support::start_broker_with_authorizer_no_audit,
 };
 
 /// Produce v12 names the topic and carries `record_errors` and
@@ -95,21 +89,7 @@ async fn produce(broker: &BrokerHandle, topic: &str, records: RecordsPayload) ->
         }],
         ..Default::default()
     };
-    let shared = broker.broker_arc_for_test();
-    let user = principal("producer");
-    let address = peer();
-    let ctx = request_context(&user, &address, "producer-client");
-    let request_bytes = encode_request(&request, VERSION);
-    let response_bytes = handle(
-        &shared,
-        VERSION,
-        &request_bytes,
-        request_bytes.clone(),
-        &ctx,
-    )
-    .await
-    .expect("handle produce");
-    decode_response(&response_bytes, VERSION)
+    crate::handlers::test_support::produce_wire(broker, VERSION, &request).await
 }
 
 fn response(topic: &str, partition: PartitionProduceResponse) -> ProduceResponse {

@@ -13,10 +13,8 @@ use krabka_protocol::{
         add_offsets_to_txn_response::AddOffsetsToTxnResponse,
         fetch_request::{FetchPartition, FetchRequest, FetchTopic},
         fetch_response::FetchResponse,
-        produce_request::{PartitionProduceData, ProduceRequest, TopicProduceData},
         produce_response::ProduceResponse,
     },
-    records::{Record, RecordBatch},
 };
 use tokio::net::TcpStream;
 
@@ -83,36 +81,7 @@ pub async fn drive_produce_sasl(
 ) -> ProduceResponse {
     let version: i16 = 11; // flexible, supports throttle_time_ms
 
-    let value = vec![0u8; record_bytes];
-    let records: Vec<Record> = (0..count)
-        .map(|i| Record {
-            offset_delta: i32::try_from(i).unwrap(),
-            value: Some(bytes::Bytes::copy_from_slice(&value)),
-            ..Default::default()
-        })
-        .collect();
-
-    let req = ProduceRequest {
-        acks: 1,
-        timeout_ms: 30_000,
-        topic_data: vec![TopicProduceData {
-            name: topic.to_string(),
-            partition_data: vec![PartitionProduceData {
-                index: 0,
-                records: Some(
-                    RecordBatch {
-                        last_offset_delta: i32::try_from(count - 1).unwrap(),
-                        records,
-                        ..Default::default()
-                    }
-                    .into(),
-                ),
-                ..Default::default()
-            }],
-            ..Default::default()
-        }],
-        ..Default::default()
-    };
+    let req = kafka_wire::produce_records(topic, record_bytes, count);
 
     let mut stream = kafka_wire::sasl_plain_authenticate(addr, CLIENT_ID, user, pass)
         .await

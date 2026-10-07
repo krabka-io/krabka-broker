@@ -320,26 +320,7 @@ async fn a_broker_only_node_recovers_after_the_controller_prunes_past_its_fetch_
         .build()
         .await
         .unwrap();
-    for topic in &topics {
-        let resp = client
-            .send(CreateTopicsRequest {
-                topics: vec![CreatableTopic {
-                    name: topic.clone(),
-                    num_partitions: 1,
-                    replication_factor: 1,
-                    ..Default::default()
-                }],
-                timeout_ms: 5_000,
-                ..Default::default()
-            })
-            .await
-            .unwrap();
-        assert!(
-            resp.topics[0].error_code == 0,
-            "create {topic}: {:?}",
-            resp.topics[0]
-        );
-    }
+    create_topics(&client, &topics).await;
     for topic in &topics {
         cluster.brokers[0]
             .wait_until_partition_present(topic, 0)
@@ -866,26 +847,7 @@ async fn a_separate_metadata_log_directory_rolls_cleans_and_restores_a_wiped_nod
         .build()
         .await
         .unwrap();
-    for topic in &topics {
-        let resp = client
-            .send(CreateTopicsRequest {
-                topics: vec![CreatableTopic {
-                    name: topic.clone(),
-                    num_partitions: 1,
-                    replication_factor: 1,
-                    ..Default::default()
-                }],
-                timeout_ms: 5_000,
-                ..Default::default()
-            })
-            .await
-            .unwrap();
-        assert!(
-            resp.topics[0].error_code == 0,
-            "create {topic}: {:?}",
-            resp.topics[0]
-        );
-    }
+    create_topics(&client, &topics).await;
     for topic in &topics {
         cluster.brokers[0]
             .wait_until_local_log_end_offset(topic, 0, 0)
@@ -967,4 +929,10 @@ async fn a_separate_metadata_log_directory_rolls_cleans_and_restores_a_wiped_nod
 
     restarted.shutdown().await;
     controller.shutdown().await;
+}
+
+async fn create_topics(client: &Client, topics: &[String]) {
+    for topic in topics {
+        crate::support::client::create_topic(client, topic, 1).await;
+    }
 }

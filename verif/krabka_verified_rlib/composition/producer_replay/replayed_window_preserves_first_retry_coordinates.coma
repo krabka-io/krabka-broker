@@ -1,57 +1,57 @@
-(* #"/workspace/crates/verified/src/composition/producer_replay.rs" 128 0 132 50 *)
+(* #"/workspace/crates/verified/src/composition/producer_replay.rs" 129 0 133 50 *)
 
-let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
-let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
-let%span swell_founded = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/well_founded.rs" 43 8 43 33
-let%span sslice = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 331 18 331 22
-let%span soption = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/option.rs" 137 19 137 23
-let%span soption'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/option.rs" 138 34 138 38
-let%span sproducer_replay = "/workspace/crates/verified/src/composition/producer_replay.rs" 133 59 133 68
-let%span sproducer_replay'0 = "/workspace/crates/verified/src/composition/producer_replay.rs" 134 58 134 67
-let%span sproducer_replay'1 = "/workspace/crates/verified/src/composition/producer_replay.rs" 135 16 135 22
-let%span sproducer_replay'2 = "/workspace/crates/verified/src/composition/producer_replay.rs" 158 14 158 30
-let%span sproducer_replay'3 = "/workspace/crates/verified/src/composition/producer_replay.rs" 159 14 159 24
-let%span sproducer_replay'4 = "/workspace/crates/verified/src/composition/producer_replay.rs" 144 16 157 5
-let%span sproducer_replay'5 = "/workspace/crates/verified/src/composition/producer_replay.rs" 137 16 143 9
-let%span sproducer_replay'6 = "/workspace/crates/verified/src/composition/producer_replay.rs" 136 16 136 33
-let%span sproducer_replay'7 = "/workspace/crates/verified/src/composition/producer_replay.rs" 160 18 160 25
-let%span sproducer_replay'8 = "/workspace/crates/verified/src/composition/producer_replay.rs" 162 12 162 86
-let%span sproducer_replay'9 = "/workspace/crates/verified/src/composition/producer_replay.rs" 162 12 162 95
-let%span sproducer_replay'10 = "/workspace/crates/verified/src/composition/producer_replay.rs" 163 26 163 27
-let%span sproducer_replay'11 = "/workspace/crates/verified/src/composition/producer_replay.rs" 163 22 163 27
-let%span sproducer_replay'12 = "/workspace/crates/verified/src/composition/producer_replay.rs" 163 31 163 41
-let%span sproducer_replay'13 = "/workspace/crates/verified/src/composition/producer_replay.rs" 163 44 163 45
-let%span sproducer_replay'14 = "/workspace/crates/verified/src/composition/producer_replay.rs" 164 8 164 22
-let%span sproducer_replay'15 = "/workspace/crates/verified/src/composition/producer_replay.rs" 164 8 167 10
-let%span sproducer_replay'16 = "/workspace/crates/verified/src/composition/producer_replay.rs" 168 8 168 25
-let%span sproducer_replay'17 = "/workspace/crates/verified/src/composition/producer_replay.rs" 168 8 168 53
-let%span sproducer_replay'18 = "/workspace/crates/verified/src/composition/producer_replay.rs" 169 13 169 14
-let%span sproducer_replay'19 = "/workspace/crates/verified/src/composition/producer_replay.rs" 169 8 169 14
-let%span sproducer_replay'20 = "/workspace/crates/verified/src/composition/producer_replay.rs" 171 20 171 30
-let%span sproducer_replay'21 = "/workspace/crates/verified/src/composition/producer_replay.rs" 171 33 171 34
-let%span sproducer_replay'22 = "/workspace/crates/verified/src/composition/producer_replay.rs" 171 20 171 34
-let%span sproducer_replay'23 = "/workspace/crates/verified/src/composition/producer_replay.rs" 171 15 171 35
-let%span sproducer_replay'24 = "/workspace/crates/verified/src/composition/producer_replay.rs" 181 8 181 13
-let%span sproducer_replay'25 = "/workspace/crates/verified/src/composition/producer_replay.rs" 182 8 182 12
-let%span sproducer_replay'26 = "/workspace/crates/verified/src/composition/producer_replay.rs" 172 19 183 5
-let%span sproducer_replay'27 = "/workspace/crates/verified/src/composition/producer_replay.rs" 185 58 185 75
-let%span sproducer_replay'28 = "/workspace/crates/verified/src/composition/producer_replay.rs" 91 11 91 46
-let%span sproducer_replay'29 = "/workspace/crates/verified/src/composition/producer_replay.rs" 92 11 96 61
-let%span sproducer_replay'30 = "/workspace/crates/verified/src/composition/producer_replay.rs" 97 10 101 101
-let%span sproducer_replay'31 = "/workspace/crates/verified/src/composition/producer_replay.rs" 102 10 118 1
-let%span sproducer_replay'32 = "/workspace/crates/verified/src/composition/producer_replay.rs" 119 10 127 1
-let%span sproducer_replay'33 = "/workspace/crates/verified/src/composition/producer_replay.rs" 14 10 21 65
-let%span sproducer_replay'34 = "/workspace/crates/verified/src/composition/producer_replay.rs" 22 10 34 1
-let%span sreplay_start = "/workspace/crates/verified/src/producer_snapshot/replay_start.rs" 18 8 23 65
-let%span ssequence_decision = "/workspace/crates/verified/src/producer/sequence_decision.rs" 10 16 10 47
-let%span ssequence_decision'0 = "/workspace/crates/verified/src/producer/sequence_decision.rs" 107 8 114 9
-let%span ssequence_decision'1 = "/workspace/crates/verified/src/producer/sequence_decision.rs" 85 8 90 9
-let%span ssequence_decision'2 = "/workspace/crates/verified/src/producer/sequence_decision.rs" 130 8 145 9
-let%span ssequence_decision'3 = "/workspace/crates/verified/src/producer/sequence_decision.rs" 64 8 69 9
-let%span sdecision = "/workspace/crates/verified/src/producer/decision.rs" 37 10 44 1
-let%span ssnapshot_transaction_valid = "/workspace/crates/verified/src/producer_snapshot/snapshot_transaction_valid.rs" 202 8 207 56
-let%span ssnapshot_transaction_valid'0 = "/workspace/crates/verified/src/producer_snapshot/snapshot_transaction_valid.rs" 219 8 222 73
-let%span sarray = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/array.rs" 9 20 9 51
+let%span sord = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sord'0 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span soption = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/option.rs" 137 19 137 23
+let%span soption'0 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/option.rs" 138 34 138 38
+let%span swell_founded = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/well_founded.rs" 43 8 43 33
+let%span sslice = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 331 18 331 22
+let%span sproducer_replay = "/workspace/crates/verified/src/composition/producer_replay.rs" 134 59 134 68
+let%span sproducer_replay'0 = "/workspace/crates/verified/src/composition/producer_replay.rs" 135 58 135 67
+let%span sproducer_replay'1 = "/workspace/crates/verified/src/composition/producer_replay.rs" 136 16 136 22
+let%span sproducer_replay'2 = "/workspace/crates/verified/src/composition/producer_replay.rs" 159 14 159 30
+let%span sproducer_replay'3 = "/workspace/crates/verified/src/composition/producer_replay.rs" 160 14 160 24
+let%span sproducer_replay'4 = "/workspace/crates/verified/src/composition/producer_replay.rs" 145 16 158 5
+let%span sproducer_replay'5 = "/workspace/crates/verified/src/composition/producer_replay.rs" 138 16 144 9
+let%span sproducer_replay'6 = "/workspace/crates/verified/src/composition/producer_replay.rs" 137 16 137 33
+let%span sproducer_replay'7 = "/workspace/crates/verified/src/composition/producer_replay.rs" 161 18 161 25
+let%span sproducer_replay'8 = "/workspace/crates/verified/src/composition/producer_replay.rs" 163 12 163 86
+let%span sproducer_replay'9 = "/workspace/crates/verified/src/composition/producer_replay.rs" 163 12 163 95
+let%span sproducer_replay'10 = "/workspace/crates/verified/src/composition/producer_replay.rs" 164 26 164 27
+let%span sproducer_replay'11 = "/workspace/crates/verified/src/composition/producer_replay.rs" 164 22 164 27
+let%span sproducer_replay'12 = "/workspace/crates/verified/src/composition/producer_replay.rs" 164 31 164 41
+let%span sproducer_replay'13 = "/workspace/crates/verified/src/composition/producer_replay.rs" 164 44 164 45
+let%span sproducer_replay'14 = "/workspace/crates/verified/src/composition/producer_replay.rs" 165 8 165 22
+let%span sproducer_replay'15 = "/workspace/crates/verified/src/composition/producer_replay.rs" 165 8 168 10
+let%span sproducer_replay'16 = "/workspace/crates/verified/src/composition/producer_replay.rs" 169 8 169 25
+let%span sproducer_replay'17 = "/workspace/crates/verified/src/composition/producer_replay.rs" 169 8 169 53
+let%span sproducer_replay'18 = "/workspace/crates/verified/src/composition/producer_replay.rs" 170 13 170 14
+let%span sproducer_replay'19 = "/workspace/crates/verified/src/composition/producer_replay.rs" 170 8 170 14
+let%span sproducer_replay'20 = "/workspace/crates/verified/src/composition/producer_replay.rs" 172 20 172 30
+let%span sproducer_replay'21 = "/workspace/crates/verified/src/composition/producer_replay.rs" 172 33 172 34
+let%span sproducer_replay'22 = "/workspace/crates/verified/src/composition/producer_replay.rs" 172 20 172 34
+let%span sproducer_replay'23 = "/workspace/crates/verified/src/composition/producer_replay.rs" 172 15 172 35
+let%span sproducer_replay'24 = "/workspace/crates/verified/src/composition/producer_replay.rs" 182 8 182 13
+let%span sproducer_replay'25 = "/workspace/crates/verified/src/composition/producer_replay.rs" 183 8 183 12
+let%span sproducer_replay'26 = "/workspace/crates/verified/src/composition/producer_replay.rs" 173 19 184 5
+let%span sproducer_replay'27 = "/workspace/crates/verified/src/composition/producer_replay.rs" 186 58 186 75
+let%span sproducer_replay'28 = "/workspace/crates/verified/src/composition/producer_replay.rs" 92 11 92 46
+let%span sproducer_replay'29 = "/workspace/crates/verified/src/composition/producer_replay.rs" 93 11 97 61
+let%span sproducer_replay'30 = "/workspace/crates/verified/src/composition/producer_replay.rs" 98 10 102 101
+let%span sproducer_replay'31 = "/workspace/crates/verified/src/composition/producer_replay.rs" 103 10 119 1
+let%span sproducer_replay'32 = "/workspace/crates/verified/src/composition/producer_replay.rs" 120 10 128 1
+let%span sproducer_replay'33 = "/workspace/crates/verified/src/composition/producer_replay.rs" 15 10 22 65
+let%span sproducer_replay'34 = "/workspace/crates/verified/src/composition/producer_replay.rs" 23 10 35 1
+let%span sreplay_start = "/workspace/crates/verified/src/producer_snapshot/replay_start.rs" 19 8 24 65
+let%span ssequence_decision = "/workspace/crates/verified/src/producer/sequence_decision.rs" 11 16 11 47
+let%span ssequence_decision'0 = "/workspace/crates/verified/src/producer/sequence_decision.rs" 108 8 115 9
+let%span ssequence_decision'1 = "/workspace/crates/verified/src/producer/sequence_decision.rs" 86 8 91 9
+let%span ssequence_decision'2 = "/workspace/crates/verified/src/producer/sequence_decision.rs" 131 8 146 9
+let%span ssequence_decision'3 = "/workspace/crates/verified/src/producer/sequence_decision.rs" 65 8 70 9
+let%span sdecision = "/workspace/crates/verified/src/producer/decision.rs" 38 10 45 1
+let%span ssnapshot_transaction_valid = "/workspace/crates/verified/src/producer_snapshot/snapshot_transaction_valid.rs" 203 8 208 56
+let%span ssnapshot_transaction_valid'0 = "/workspace/crates/verified/src/producer_snapshot/snapshot_transaction_valid.rs" 220 8 223 73
+let%span sarray = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/array.rs" 9 20 9 51
 
 use creusot.int.Int32
 use creusot.int.UInt64
@@ -98,7 +98,7 @@ let len_ProducerSnapshotEntryFacts (self_: Slice64.slice t_ProducerSnapshotEntry
     = UInt64.t'int result}
     (! return {result}) ]
 
-function sequence_modulo_2_31 [#"/workspace/crates/verified/src/producer/sequence_decision.rs" 9 0 9 49] (sequence: int) : int
+function sequence_modulo_2_31 [#"/workspace/crates/verified/src/producer/sequence_decision.rs" 10 0 10 49] (sequence: int) : int
  = [%#ssequence_decision] EuclideanDivision.mod sequence 2147483648
 
 predicate inv_Seq_Option_RetainedSequenceRange [@inline:trivial] (_1: Seq.seq t_Option_RetainedSequenceRange) = true
@@ -195,7 +195,7 @@ type t_Option_ProducerEntryFacts = None'2 | Some'2 t_ProducerEntryFacts
 
 type tup3_i16_i32_i32 = { f0'1: Int16.t; f1'1: Int32.t; f2'1: Int32.t }
 
-predicate retained_matches [#"/workspace/crates/verified/src/producer/sequence_decision.rs" 58 0 62 9] (slot: t_Option_RetainedSequenceRange) (base_sequence'0: Int32.t) (last_offset_delta: Int32.t) =
+predicate retained_matches [#"/workspace/crates/verified/src/producer/sequence_decision.rs" 59 0 63 9] (slot: t_Option_RetainedSequenceRange) (base_sequence'0: Int32.t) (last_offset_delta: Int32.t) =
   [%#ssequence_decision'3] match slot with
     | Some range -> Int32.to_int range.base_sequence = Int32.to_int base_sequence'0
     /\ Int32.to_int range.last_sequence
@@ -203,7 +203,7 @@ predicate retained_matches [#"/workspace/crates/verified/src/producer/sequence_d
     | None -> false
     end
 
-predicate first_retained_duplicate [#"/workspace/crates/verified/src/producer/sequence_decision.rs" 98 0 105 9] (entry: t_Option_ProducerEntryFacts) (retained: Seq.seq t_Option_RetainedSequenceRange) (producer_epoch: Int16.t) (base_sequence'0: Int32.t) (last_offset_delta: Int32.t) (index: int) =
+predicate first_retained_duplicate [#"/workspace/crates/verified/src/producer/sequence_decision.rs" 99 0 106 9] (entry: t_Option_ProducerEntryFacts) (retained: Seq.seq t_Option_RetainedSequenceRange) (producer_epoch: Int16.t) (base_sequence'0: Int32.t) (last_offset_delta: Int32.t) (index: int) =
   [%#ssequence_decision'0] match entry with
     | Some'2 tracked -> Int16.to_int tracked.epoch'1 = Int16.to_int producer_epoch
     /\ 0 <= index
@@ -214,7 +214,7 @@ predicate first_retained_duplicate [#"/workspace/crates/verified/src/producer/se
     | None'2 -> false
     end
 
-predicate retained_duplicate_exists [#"/workspace/crates/verified/src/producer/sequence_decision.rs" 77 0 83 9] (entry: t_Option_ProducerEntryFacts) (retained: Seq.seq t_Option_RetainedSequenceRange) (producer_epoch: Int16.t) (base_sequence'0: Int32.t) (last_offset_delta: Int32.t) =
+predicate retained_duplicate_exists [#"/workspace/crates/verified/src/producer/sequence_decision.rs" 78 0 84 9] (entry: t_Option_ProducerEntryFacts) (retained: Seq.seq t_Option_RetainedSequenceRange) (producer_epoch: Int16.t) (base_sequence'0: Int32.t) (last_offset_delta: Int32.t) =
   [%#ssequence_decision'1] match entry with
     | Some'2 tracked -> Int16.to_int tracked.epoch'1 = Int16.to_int producer_epoch
     /\ (exists i: int. 0 <= i
@@ -222,7 +222,7 @@ predicate retained_duplicate_exists [#"/workspace/crates/verified/src/producer/s
     | None'2 -> false
     end
 
-function sequence_decision [#"/workspace/crates/verified/src/producer/sequence_decision.rs" 122 0 128 21] (entry: t_Option_ProducerEntryFacts) (producer_epoch: Int16.t) (base_sequence'0: Int32.t) (log_empty: bool) (trunk_rules: bool) : t_ProducerDecision
+function sequence_decision [#"/workspace/crates/verified/src/producer/sequence_decision.rs" 123 0 129 21] (entry: t_Option_ProducerEntryFacts) (producer_epoch: Int16.t) (base_sequence'0: Int32.t) (log_empty: bool) (trunk_rules: bool) : t_ProducerDecision
  = [%#ssequence_decision'2] match entry with
     | None'2 -> if trunk_rules /\ log_empty /\ Int32.to_int base_sequence'0 <> 0 then OutOfOrder else Append
     | Some'2 tracked -> if Int16.to_int producer_epoch < Int16.to_int tracked.epoch'1 then
@@ -261,7 +261,7 @@ let elim_Duplicate (_x: t_ProducerDecision) (return (retained: UInt64.t)) = any
 
 type tup2_ProducerDecision_Option_tup3_usize_i64_i64 = { f0'2: t_ProducerDecision; f1'2: t_Option_tup3_usize_i64_i64 }
 
-predicate snapshot_last_record_valid [#"/workspace/crates/verified/src/producer_snapshot/snapshot_transaction_valid.rs" 200 0 200 98] (snapshot_offset: int) (entry: t_ProducerSnapshotEntryFacts) =
+predicate snapshot_last_record_valid [#"/workspace/crates/verified/src/producer_snapshot/snapshot_transaction_valid.rs" 201 0 201 98] (snapshot_offset: int) (entry: t_ProducerSnapshotEntryFacts) =
   [%#ssnapshot_transaction_valid] Int64.to_int entry.last_offset'0 = - 1
     /\ Int32.to_int entry.last_sequence'0 = - 1 /\ Int32.to_int entry.offset_delta'0 = 0
   \/ ge_log_Int (Int64.to_int entry.last_offset'0) 0
@@ -270,13 +270,13 @@ predicate snapshot_last_record_valid [#"/workspace/crates/verified/src/producer_
   /\ ge_log_Int (Int64.to_int entry.last_offset'0) (Int32.to_int entry.offset_delta'0)
   /\ Int64.to_int entry.last_offset'0 < snapshot_offset
 
-predicate snapshot_transaction_valid [#"/workspace/crates/verified/src/producer_snapshot/snapshot_transaction_valid.rs" 217 0 217 98] (snapshot_offset: int) (entry: t_ProducerSnapshotEntryFacts) =
+predicate snapshot_transaction_valid [#"/workspace/crates/verified/src/producer_snapshot/snapshot_transaction_valid.rs" 218 0 218 98] (snapshot_offset: int) (entry: t_ProducerSnapshotEntryFacts) =
   [%#ssnapshot_transaction_valid'0] Int64.to_int entry.current_txn_first_offset'0 = - 1
   \/ ge_log_Int (Int64.to_int entry.current_txn_first_offset'0) 0
   /\ Int64.to_int entry.current_txn_first_offset'0 < snapshot_offset
   /\ Int64.to_int entry.current_txn_first_offset'0 <= Int64.to_int entry.last_offset'0
 
-predicate snapshot_entry_valid_model [#"/workspace/crates/verified/src/producer_snapshot/replay_start.rs" 16 0 16 98] (snapshot_offset: int) (entry: t_ProducerSnapshotEntryFacts) =
+predicate snapshot_entry_valid_model [#"/workspace/crates/verified/src/producer_snapshot/replay_start.rs" 17 0 17 98] (snapshot_offset: int) (entry: t_ProducerSnapshotEntryFacts) =
   [%#sreplay_start] ge_log_Int snapshot_offset 0
   /\ ge_log_Int (Int64.to_int entry.producer_id'0) 0
   /\ ge_log_Int (Int16.to_int entry.producer_epoch'0) 0
@@ -287,7 +287,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let replayed_window_preserves_first_retry_coordinates [#"/workspace/crates/verified/src/composition/producer_replay.rs" 128 0 132 50]
+let replayed_window_preserves_first_retry_coordinates [#"/workspace/crates/verified/src/composition/producer_replay.rs" 129 0 133 50]
   (end': Int64.t) (rows: Slice64.slice t_ProducerSnapshotEntryFacts) (request: tup3_i16_i32_i32)
   (return (x: tup2_ProducerDecision_Option_tup3_usize_i64_i64)) =
 {[@stop_split] [@expl:replayed_window_preserves_first_retry_coordinates requires] ([@stop_split] [@expl:replayed_window_preserves_first_retry_coordinates requires #0] [%#sproducer_replay'28] 0

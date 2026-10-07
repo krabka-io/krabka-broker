@@ -5,11 +5,6 @@
 //! of the shared `start_host_broker` harness, so it carries the `BrokerConfig`
 //! that no other file in this suite needs.
 
-use std::{
-    io::Write,
-    process::{Command, Stdio},
-};
-
 use assert2::assert;
 use krabka_broker::{Broker, BrokerConfig};
 
@@ -53,40 +48,28 @@ async fn jvm_kafka_console_consumer_sees_compacted_topic_end_to_end() {
     /// parsed broker config; the harness sets the struct field directly.
     const SEGMENT_SIZE: krabka_units::ByteSize = krabka_units::bytes(256);
 
-    let _ = tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("krabka_broker=debug,info")),
-        )
-        .with_test_writer()
-        .try_init();
+    crate::support::init_jvm_tracing("krabka_broker=debug,info");
     let dir = tempfile::tempdir().expect("tempdir");
     let listen_addr: std::net::SocketAddr = broker0_listen().parse().expect("static addr");
     let controller_addr: std::net::SocketAddr =
         controller_addr_0().parse().expect("allocated addr");
     let config = BrokerConfig {
-        broker_id: 1,
-        listen_addr,
-        advertised_listener: broker0_advertised().into(),
-        log_dir: dir.path().to_path_buf(),
         // The topic below overrides no segment size, so it inherits this one.
         // See `SEGMENT_SIZE`.
         log_config: krabka_log::LogConfig {
             segment_size: SEGMENT_SIZE,
             ..krabka_log::LogConfig::default()
         },
-        node_id: krabka_broker::NodeId(1),
-        controller_listen_addr: controller_addr,
-        controller_quorum_voters: vec![(krabka_broker::NodeId(1), controller_addr.to_string())],
-        heartbeat_interval: krabka_units::millis(3_000),
-        heartbeat_timeout: krabka_units::millis(9_000),
-        replica_lag_time_max: krabka_units::millis(30_000),
-        controller_election_timeout: krabka_units::secs(5),
-        controller_heartbeat_interval: krabka_units::millis(500),
-        bootstrap_mode: krabka_broker::BootstrapMode::Bootstrap,
         // 3s cleaner tick so we don't have to wait the full 30s default.
         cleaner_interval_override: Some(krabka_units::secs(3)),
-        ..BrokerConfig::default().with_internal_topics_for(1)
+        ..crate::support::jvm_broker_config(
+            1,
+            listen_addr,
+            controller_addr,
+            broker0_advertised(),
+            dir.path().to_path_buf(),
+            &[(1, controller_addr)],
+        )
     };
     let broker = Broker::start(config).await.expect("start broker");
     eprintln!(
@@ -155,13 +138,10 @@ async fn jvm_kafka_console_consumer_sees_compacted_topic_end_to_end() {
 
     // 2. Produce 5 records under 3 keys — k1 has three values (v1, v2, v4);
     //    only v4 should survive compaction.
-    let mut child = Command::new("docker")
-        .args([
-            "run",
-            "--rm",
-            "-i",
-            "--add-host=host.docker.internal:host-gateway",
-            KAFKA_IMAGE,
+    let mut child_command = crate::support::jvm_docker_command(
+        KAFKA_IMAGE,
+        &[],
+        &[
             "kafka-console-producer",
             "--bootstrap-server",
             broker0_advertised(),
@@ -183,29 +163,20 @@ async fn jvm_kafka_console_consumer_sees_compacted_topic_end_to_end() {
             "linger.ms=0",
             "--producer-property",
             "max.in.flight.requests.per.connection=1",
-        ])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("spawn producer");
+        ],
+        true,
+    );
     // First 5 records: the actual workload. After that, a burst of "pad"
     // records under a sentinel key forces the active segment past
     // `SEGMENT_SIZE` so v5 ends up sealed (otherwise the compactor
     // can't see it; it never touches the active segment) and the test's
     // "no stale v1" assertion can actually hold for k1.
-    child
-        .stdin
-        .as_mut()
-        .expect("stdin")
-        .write_all(
-            b"k1:v1\nk1:v2\nk2:v3\nk1:v4\nk3:v5\n\
+    let producer_out = crate::support::jvm_stdin_output(
+        &mut child_command,
+        b"k1:v1\nk1:v2\nk2:v3\nk1:v4\nk3:v5\n\
               __pad__:p0\n__pad__:p1\n__pad__:p2\n__pad__:p3\n\
               __pad__:p4\n__pad__:p5\n__pad__:p6\n__pad__:p7\n",
-        )
-        .expect("write stdin");
-    drop(child.stdin.take());
-    let producer_out = child.wait_with_output().expect("wait producer");
+    );
     assert!(
         producer_out.status.success(),
         "producer failed: {}",

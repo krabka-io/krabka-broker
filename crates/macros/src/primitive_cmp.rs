@@ -5,7 +5,7 @@ use moxy::{
     token::TokenStream,
 };
 
-use crate::refined_newtype::inner_type;
+use crate::meta::inner_type;
 
 /// Expands `#[derive(PrimitiveCmp)]` on `item`.
 pub(crate) fn expand(item: ItemStruct) -> Result<TokenStream, ParseError> {

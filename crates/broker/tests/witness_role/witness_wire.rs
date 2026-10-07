@@ -9,59 +9,22 @@
 
 use std::collections::BTreeSet;
 
-use assert2::assert;
-use krabka_broker::codes;
 use krabka_client_core::Client;
 use krabka_protocol::{
     owned::{
-        create_topics_request::{CreatableTopic, CreateTopicsRequest},
         fetch_request::{FetchPartition, FetchRequest, FetchTopic},
         metadata_request::{MetadataRequest, MetadataRequestTopic},
         produce_request::{PartitionProduceData, ProduceRequest, TopicProduceData},
         produce_response::ProduceResponse,
     },
     primitives::uuid::Uuid as WireUuid,
-    records::{Record, RecordBatch},
 };
 
 use crate::TOPIC;
 
 /// Create `TOPIC` with one partition and rf=3, and return its id.
 pub(crate) async fn create_topic(client: &Client) -> WireUuid {
-    let resp = client
-        .send(CreateTopicsRequest {
-            topics: vec![CreatableTopic {
-                name: TOPIC.into(),
-                num_partitions: 1,
-                replication_factor: 3,
-                ..Default::default()
-            }],
-            timeout_ms: 10_000,
-            ..Default::default()
-        })
-        .await
-        .expect("CreateTopics");
-    assert!(
-        resp.topics[0].error_code == codes::NONE,
-        "CreateTopics {TOPIC}: error_code={}",
-        resp.topics[0].error_code
-    );
-    resp.topics[0].topic_id
-}
-
-fn record_batch(n: i32) -> RecordBatch {
-    RecordBatch {
-        base_offset: 0,
-        last_offset_delta: (n - 1).max(0),
-        records: (0..n)
-            .map(|i| Record {
-                offset_delta: i,
-                value: Some(bytes::Bytes::from(format!("v{i}"))),
-                ..Default::default()
-            })
-            .collect(),
-        ..Default::default()
-    }
+    crate::support::client::create_topic_with(client, TOPIC, 1, 3, 10_000).await
 }
 
 fn produce_request(topic_id: WireUuid, n: i32) -> ProduceRequest {
@@ -73,7 +36,7 @@ fn produce_request(topic_id: WireUuid, n: i32) -> ProduceRequest {
             topic_id,
             partition_data: vec![PartitionProduceData {
                 index: 0,
-                records: Some(record_batch(n).into()),
+                records: Some(crate::support::client::value_batch(n).into()),
                 ..Default::default()
             }],
             ..Default::default()

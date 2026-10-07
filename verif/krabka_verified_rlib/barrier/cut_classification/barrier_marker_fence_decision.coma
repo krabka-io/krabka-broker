@@ -1,10 +1,10 @@
-(* #"/workspace/crates/verified/src/barrier/cut_classification.rs" 70 0 70 98 *)
+(* #"/workspace/crates/verified/src/barrier/cut_classification.rs" 71 0 71 98 *)
 
-let%span scut_classification = "/workspace/crates/verified/src/barrier/cut_classification.rs" 72 34 72 35
-let%span scut_classification'0 = "/workspace/crates/verified/src/barrier/cut_classification.rs" 73 31 73 32
-let%span scut_classification'1 = "/workspace/crates/verified/src/barrier/cut_classification.rs" 74 33 74 34
-let%span scut_classification'2 = "/workspace/crates/verified/src/barrier/cut_classification.rs" 68 10 68 53
-let%span scut_classification'3 = "/workspace/crates/verified/src/barrier/cut_classification.rs" 44 8 60 9
+let%span scut_classification = "/workspace/crates/verified/src/barrier/cut_classification.rs" 73 34 73 35
+let%span scut_classification'0 = "/workspace/crates/verified/src/barrier/cut_classification.rs" 74 31 74 32
+let%span scut_classification'1 = "/workspace/crates/verified/src/barrier/cut_classification.rs" 75 33 75 34
+let%span scut_classification'2 = "/workspace/crates/verified/src/barrier/cut_classification.rs" 69 10 69 53
+let%span scut_classification'3 = "/workspace/crates/verified/src/barrier/cut_classification.rs" 45 8 61 9
 
 use creusot.int.UInt64
 use creusot.int.Int32
@@ -22,7 +22,7 @@ type t_BarrierMarkerFenceFacts = {
 
 type t_BarrierMarkerFenceDecision = Malformed | NotLeader | FencedEpoch | Append
 
-function barrier_marker_fence_model [#"/workspace/crates/verified/src/barrier/cut_classification.rs" 42 0 42 91] (facts: t_BarrierMarkerFenceFacts) : t_BarrierMarkerFenceDecision
+function barrier_marker_fence_model [#"/workspace/crates/verified/src/barrier/cut_classification.rs" 43 0 43 91] (facts: t_BarrierMarkerFenceFacts) : t_BarrierMarkerFenceDecision
  = [%#scut_classification'3] if not facts.image_present
   \/ Int32.to_int facts.expected_epoch < 0
   \/ Int32.to_int facts.image_epoch < 0 \/ Int32.to_int facts.current_epoch < 0 then
@@ -43,7 +43,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let barrier_marker_fence_decision [#"/workspace/crates/verified/src/barrier/cut_classification.rs" 70 0 70 98]
+let barrier_marker_fence_decision [#"/workspace/crates/verified/src/barrier/cut_classification.rs" 71 0 71 98]
   (facts: t_BarrierMarkerFenceFacts) (return (x: t_BarrierMarkerFenceDecision)) = (! bb0
   [ bb0 = any [ br0 -> {facts.image_present = false} (! bb7) | br1 -> {facts.image_present} (! bb1) ]
   | bb1 = s0

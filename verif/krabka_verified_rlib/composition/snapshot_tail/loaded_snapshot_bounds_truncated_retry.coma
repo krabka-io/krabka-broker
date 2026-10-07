@@ -1,20 +1,20 @@
 (* #"/workspace/crates/verified/src/composition/snapshot_tail.rs" 115 0 123 31 *)
 
-let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
-let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
-let%span swell_founded = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/well_founded.rs" 43 8 43 33
-let%span sslice = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 331 18 331 22
-let%span sslice'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 151 20 151 37
-let%span sslice'1 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 156 20 156 37
-let%span soption = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/option.rs" 193 19 193 79
-let%span soption'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/option.rs" 194 18 197 9
-let%span soption'1 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/option.rs" 40 18 40 43
-let%span svec = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 104 18 104 36
-let%span svec'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 118 18 118 48
-let%span svec'1 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 18 14 18 41
-let%span svec'2 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 202 18 202 34
-let%span svec'3 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 195 19 195 38
-let%span svec'4 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 196 18 196 46
+let%span sord = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sord'0 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span soption = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/option.rs" 193 19 193 79
+let%span soption'0 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/option.rs" 194 18 197 9
+let%span soption'1 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/option.rs" 40 18 40 43
+let%span swell_founded = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/well_founded.rs" 43 8 43 33
+let%span sslice = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 331 18 331 22
+let%span sslice'0 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 151 20 151 37
+let%span sslice'1 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 156 20 156 37
+let%span svec = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 104 18 104 36
+let%span svec'0 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 118 18 118 48
+let%span svec'1 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 18 14 18 41
+let%span svec'2 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 202 18 202 34
+let%span svec'3 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 195 19 195 38
+let%span svec'4 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 196 18 196 46
 let%span sreplay_start = "/workspace/crates/verified/src/producer_snapshot/replay_start.rs" 66 10 73 6
 let%span sreplay_start'0 = "/workspace/crates/verified/src/producer_snapshot/replay_start.rs" 74 10 74 100
 let%span sreplay_start'1 = "/workspace/crates/verified/src/producer_snapshot/replay_start.rs" 30 10 30 71
@@ -24,13 +24,11 @@ let%span ssnapshot_transaction_valid = "/workspace/crates/verified/src/producer_
 let%span ssnapshot_transaction_valid'0 = "/workspace/crates/verified/src/producer_snapshot/snapshot_transaction_valid.rs" 59 8 66 9
 let%span ssnapshot_transaction_valid'1 = "/workspace/crates/verified/src/producer_snapshot/snapshot_transaction_valid.rs" 203 8 208 56
 let%span ssnapshot_transaction_valid'2 = "/workspace/crates/verified/src/producer_snapshot/snapshot_transaction_valid.rs" 220 8 223 73
-let%span scontrol_truncation = "/workspace/crates/verified/src/composition/control_truncation.rs" 17 11 17 58
-let%span scontrol_truncation'0 = "/workspace/crates/verified/src/composition/control_truncation.rs" 18 11 18 83
-let%span scontrol_truncation'1 = "/workspace/crates/verified/src/composition/control_truncation.rs" 19 11 19 94
-let%span scontrol_truncation'2 = "/workspace/crates/verified/src/composition/control_truncation.rs" 20 11 20 122
-let%span scontrol_truncation'3 = "/workspace/crates/verified/src/composition/control_truncation.rs" 21 11 21 103
-let%span scontrol_truncation'4 = "/workspace/crates/verified/src/composition/control_truncation.rs" 22 11 22 28
-let%span scontrol_truncation'5 = "/workspace/crates/verified/src/composition/control_truncation.rs" 23 10 37 30
+let%span scontrol_truncation = "/workspace/crates/verified/src/composition/control_truncation.rs" 35 11 35 87
+let%span scontrol_truncation'0 = "/workspace/crates/verified/src/composition/control_truncation.rs" 36 11 36 103
+let%span scontrol_truncation'1 = "/workspace/crates/verified/src/composition/control_truncation.rs" 37 11 37 28
+let%span scontrol_truncation'2 = "/workspace/crates/verified/src/composition/control_truncation.rs" 38 10 52 30
+let%span scontrol_truncation'3 = "/workspace/crates/verified/src/composition/control_truncation.rs" 19 8 22 89
 let%span ssnapshot_tail = "/workspace/crates/verified/src/composition/snapshot_tail.rs" 126 93 126 94
 let%span ssnapshot_tail'0 = "/workspace/crates/verified/src/composition/snapshot_tail.rs" 126 8 126 95
 let%span ssnapshot_tail'1 = "/workspace/crates/verified/src/composition/snapshot_tail.rs" 131 19 131 51
@@ -109,37 +107,27 @@ type tup7_usize_i64_i64_usize_usize_bool_bool = {
   f5'0: bool;
   f6'0: bool }
 
+predicate physical_truncation_input_valid [#"/workspace/crates/verified/src/composition/control_truncation.rs" 12 0 17 9] (ends: Seq.seq Int64.t) (start: int) (cut: int) (hwm: int) =
+  [%#scontrol_truncation'3] 0 <= start
+  /\ start <= cut
+  /\ (forall i: int. 0 <= i /\ i < Seq.length ends -> start < Int64.to_int (Seq.get ends i))
+  /\ (forall i: int, j: int. 0 <= i /\ i < j /\ j < Seq.length ends
+      -> Int64.to_int (Seq.get ends i) < Int64.to_int (Seq.get ends j))
+  /\ 0 <= hwm /\ hwm <= (if Seq.length ends = 0 then start else Int64.to_int (Seq.get ends (Seq.length ends - 1)))
+
 let whole_batch_truncation_bounds_controls (ends: Slice64.slice Int64.t) (physical_start: Int64.t) (cut: Int64.t)
   (previous_hwm: Int64.t) (history: Slice64.slice Int64.t) (pending_end: Int64.t)
   (return (x: tup7_usize_i64_i64_usize_usize_bool_bool)) =
-{[@stop_split] [@expl:whole_batch_truncation_bounds_controls requires] ([@stop_split] [@expl:whole_batch_truncation_bounds_controls requires #0] [%#scontrol_truncation] 0
-      <= Int64.to_int physical_start
-    /\ Int64.to_int physical_start <= Int64.to_int cut)
-  /\ ([@stop_split] [@expl:whole_batch_truncation_bounds_controls requires #1] [%#scontrol_truncation'0] forall i: int. 0
-          <= i
-        /\ i < Seq.length (Slice64.view ends)
-      -> Int64.to_int physical_start < Int64.to_int (Seq.get (Slice64.view ends) i))
-  /\ ([@stop_split] [@expl:whole_batch_truncation_bounds_controls requires #2] [%#scontrol_truncation'1] forall i: int, j: int. 0
-          <= i
-        /\ i < j /\ j < Seq.length (Slice64.view ends)
-      -> Int64.to_int (Seq.get (Slice64.view ends) i) < Int64.to_int (Seq.get (Slice64.view ends) j))
-  /\ ([@stop_split] [@expl:whole_batch_truncation_bounds_controls requires #3] [%#scontrol_truncation'2] 0
-      <= Int64.to_int previous_hwm
-    /\ Int64.to_int previous_hwm
-    <= (if Seq.length (Slice64.view ends) = 0 then
-      Int64.to_int physical_start
-    else
-      Int64.to_int (Seq.get (Slice64.view ends) (Seq.length (Slice64.view ends) - 1))
-    ))
-  /\ ([@stop_split] [@expl:whole_batch_truncation_bounds_controls requires #4] [%#scontrol_truncation'3] forall i: int, j: int. 0
+{[@stop_split] [@expl:whole_batch_truncation_bounds_controls requires] ([@stop_split] [@expl:whole_batch_truncation_bounds_controls requires #0] [%#scontrol_truncation] physical_truncation_input_valid (Slice64.view ends) (Int64.to_int physical_start) (Int64.to_int cut) (Int64.to_int previous_hwm))
+  /\ ([@stop_split] [@expl:whole_batch_truncation_bounds_controls requires #1] [%#scontrol_truncation'0] forall i: int, j: int. 0
           <= i
         /\ i < j /\ j < Seq.length (Slice64.view history)
       -> Int64.to_int (Seq.get (Slice64.view history) i) < Int64.to_int (Seq.get (Slice64.view history) j))
-  /\ ([@stop_split] [@expl:whole_batch_truncation_bounds_controls requires #5] [%#scontrol_truncation'4] 0
+  /\ ([@stop_split] [@expl:whole_batch_truncation_bounds_controls requires #2] [%#scontrol_truncation'1] 0
   <= Int64.to_int pending_end)}
   any
   [ return (result: tup7_usize_i64_i64_usize_usize_bool_bool) ->
-  {[@stop_split] [@expl:whole_batch_truncation_bounds_controls ensures] [%#scontrol_truncation'5] UInt64.t'int result.f0'0
+  {[@stop_split] [@expl:whole_batch_truncation_bounds_controls ensures] [%#scontrol_truncation'2] UInt64.t'int result.f0'0
       <= Seq.length (Slice64.view ends)
     /\ (forall i: int. 0 <= i /\ i < Seq.length (Slice64.view ends)
         -> (i < UInt64.t'int result.f0'0) = (Int64.to_int (Seq.get (Slice64.view ends) i) <= Int64.to_int cut))

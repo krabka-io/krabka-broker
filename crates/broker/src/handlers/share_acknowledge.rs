@@ -37,7 +37,7 @@ use crate::{
         ErrorResponse as _, group_read_denied,
         share_fetch::{
             AckApplication, Renewal, acknowledgement_batches_are_valid, apply_acknowledgements,
-            current_leader, leader_endpoints, member_id_is_valid, names_the_leader,
+            current_leader, member_id_is_valid, names_the_leader,
         },
     },
     share_partition::group_settings::GroupShareSettings,
@@ -149,21 +149,12 @@ fn hint_current_leaders(
             }
         }
     }
-    leader_endpoints(
+    crate::handlers::leader_endpoints(
         &broker.controller.current_image(),
         ctx.connection_listener_name,
         &broker.config.inter_broker_listener_name,
         leader_ids,
     )
-    .into_iter()
-    .map(|endpoint| NodeEndpoint {
-        node_id: endpoint.node_id,
-        host: endpoint.host,
-        port: endpoint.port,
-        rack: endpoint.rack,
-        ..Default::default()
-    })
-    .collect()
 }
 
 /// The request-wide inputs of [`process_topics`].
@@ -327,7 +318,6 @@ mod tests {
     use krabka_protocol::{
         UnknownTaggedFields,
         owned::{
-            create_topics_request::{CreatableTopic, CreateTopicsRequest},
             share_acknowledge_request::{AcknowledgePartition, AcknowledgeTopic},
             share_acknowledge_response,
         },
@@ -423,30 +413,13 @@ mod tests {
     }
 
     async fn create_topic(broker: &crate::broker::BrokerHandle, name: &str) -> ProtoUuid {
-        let client = krabka_client_core::Client::builder()
-            .bootstrap(broker.listen_addr().to_string())
-            .client_id("share-acknowledge-resolution-test")
-            .build()
-            .await
-            .expect("client build");
-        let response = client
-            .send(CreateTopicsRequest {
-                topics: vec![CreatableTopic {
-                    name: name.to_string(),
-                    num_partitions: 1,
-                    replication_factor: 1,
-                    ..Default::default()
-                }],
-                timeout_ms: 5_000,
-                ..Default::default()
-            })
-            .await
-            .expect("CreateTopics");
-        assert!(response.topics[0].error_code == codes::NONE, "{response:?}");
-        broker.wait_until_partition_present(name, 0).await;
-        let image = broker.controller_image_for_test();
-        let topic = image.topic(name).expect("created topic in the image");
-        ProtoUuid(topic.topic_id.into_bytes())
+        crate::handlers::test_support::create_topic(
+            broker,
+            "share-acknowledge-resolution-test",
+            name,
+            1,
+        )
+        .await
     }
 
     /// Open a share session for `member` on partition 0 of `topic_id`,

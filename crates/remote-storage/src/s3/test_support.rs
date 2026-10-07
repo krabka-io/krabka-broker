@@ -2,10 +2,8 @@
 //! [`S3RemoteStorage`], the segment metadata and on-disk segment files a copy
 //! needs, and the throwaway signing key and chain stamp a WORM archive needs.
 
-use std::{io::Write, path::PathBuf, sync::Arc};
+use std::sync::Arc;
 
-use bytes::Bytes;
-use krabka_ids::LeaderEpoch;
 use krabka_object_store::fault::{FaultInjectingStore, FaultPolicy};
 use object_store::{ObjectStore, memory::InMemory};
 use ring::{rand::SystemRandom, signature::Ed25519KeyPair};
@@ -13,11 +11,10 @@ use tempfile::TempDir;
 use uuid::Uuid;
 
 use super::S3RemoteStorage;
+pub(super) use crate::test_support::{sample_data, sample_metadata, write_file};
 use crate::{
-    metadata::{
-        RemoteLogSegmentId, RemoteLogSegmentMetadata, RemoteLogSegmentState, TopicIdPartition,
-    },
-    storage_manager::{LogSegmentData, RemoteStorageManager},
+    metadata::RemoteLogSegmentMetadata,
+    storage_manager::RemoteStorageManager,
     worm::{ChainHead, ChainStamp, EpochId, ManifestSeq, WormChainRecord, WormConfig},
 };
 
@@ -36,46 +33,6 @@ pub(super) fn counting_rsm() -> (S3RemoteStorage, Arc<FaultInjectingStore>) {
         FaultPolicy::none(),
     ));
     (S3RemoteStorage::with_store(counter.clone(), None), counter)
-}
-
-pub(super) fn sample_metadata(id: u128) -> RemoteLogSegmentMetadata {
-    RemoteLogSegmentMetadata::new(
-        RemoteLogSegmentId::new(
-            TopicIdPartition::new(Uuid::from_u128(1), "orders", 0),
-            Uuid::from_u128(id),
-        ),
-        0,
-        99,
-        123,
-        1,
-        456,
-        crate::metadata::RemoteLogSegmentDetails::new(
-            8,
-            RemoteLogSegmentState::CopySegmentStarted,
-            maplit::btreemap! {LeaderEpoch(0) => 0},
-        ),
-    )
-    .unwrap()
-}
-
-pub(super) fn write_file(dir: &std::path::Path, name: &str, contents: &[u8]) -> PathBuf {
-    let p = dir.join(name);
-    std::fs::File::create(&p)
-        .unwrap()
-        .write_all(contents)
-        .unwrap();
-    p
-}
-
-pub(super) fn sample_data(src: &std::path::Path, with_txn: bool) -> LogSegmentData {
-    LogSegmentData {
-        log_segment: write_file(src, "00.log", b"0123456789"),
-        offset_index: write_file(src, "00.index", b"OFFSET-IDX"),
-        time_index: write_file(src, "00.timeindex", b"TIME-IDX"),
-        transaction_index: with_txn.then(|| write_file(src, "00.txnindex", b"TXN-IDX")),
-        producer_snapshot_index: Some(write_file(src, "00.snapshot", b"SNAP")),
-        leader_epoch_index: Bytes::from_static(b"EPOCH-BYTES"),
-    }
 }
 
 /// Copy one [`sample_data`] segment into `store` as `md` on the blocking

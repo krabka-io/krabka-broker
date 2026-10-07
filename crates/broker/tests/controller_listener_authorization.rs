@@ -11,11 +11,12 @@
 //! socket, with a `SimpleAclAuthorizer` whose only super user is the node's
 //! own inter-broker principal.
 
+mod support;
+
 use assert2::{assert, check};
 use bytes::{BufMut as _, Bytes, BytesMut};
 use krabka_broker::{
-    Broker, BrokerConfig, BrokerHandle, NodeId, authorizer::SimpleAclAuthorizer,
-    config::InterBrokerCredentials,
+    BrokerConfig, BrokerHandle, authorizer::SimpleAclAuthorizer, config::InterBrokerCredentials,
 };
 use krabka_metadata::{
     AclEntry, AclOperation, MetadataRecord, PatternType, PermissionType, ResourceType, TopicRecord,
@@ -49,9 +50,8 @@ use tokio::{
     net::TcpStream,
 };
 use tokio_rustls::rustls::{
-    ClientConfig, DigitallySignedStruct, SignatureScheme,
-    client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier},
-    pki_types::{CertificateDer, PrivateKeyDer, ServerName, UnixTime, pem::PemObject},
+    ClientConfig,
+    pki_types::{CertificateDer, PrivateKeyDer, ServerName, pem::PemObject as _},
 };
 
 const CLUSTER_AUTHORIZATION_FAILED: i16 = 31;
@@ -72,39 +72,24 @@ async fn start_with(
     users: &[(&str, &str)],
     adjust: impl FnOnce(&mut BrokerConfig),
 ) -> (BrokerHandle, tempfile::TempDir) {
-    let dir = tempfile::TempDir::new().expect("tempdir");
-    let data_listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-        .await
-        .expect("bind data listener");
-    let controller_listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-        .await
-        .expect("bind controller listener");
-    let data_addr = data_listener.local_addr().expect("data addr");
-    let controller_addr = controller_listener.local_addr().expect("controller addr");
-    let mut config = BrokerConfig::for_tests(dir.path().to_path_buf());
-    config.listen_addr = data_addr;
-    config.advertised_listener = data_addr.to_string();
-    config.controller_listen_addr = controller_addr;
-    config.controller_quorum_voters = vec![(NodeId(1), controller_addr.to_string())];
-    config.controller_listener_protocol = protocol;
-    config.enabled_sasl_mechanisms = vec![SaslMechanism::Plain];
-    for (user, password) in std::iter::once(&NODE).chain(users) {
-        config
-            .plain_credentials
-            .insert((*user).to_owned(), (*password).to_owned());
-    }
-    config.inter_broker_credentials = Some(InterBrokerCredentials::Plain {
-        username: NODE.0.to_owned(),
-        password: NODE.1.to_owned(),
-    });
-    config.super_users = std::iter::once(NODE.0.to_owned()).collect();
-    config.authorizer = std::sync::Arc::new(SimpleAclAuthorizer::new(config.super_users.clone()));
-    adjust(&mut config);
-    let broker =
-        Broker::start_with_listeners(config, Some(controller_listener), Some(data_listener))
-            .await
-            .expect("broker start");
-    (broker, dir)
+    crate::support::start_with_bound_listeners(|config| {
+        config.controller_listener_protocol = protocol;
+        config.enabled_sasl_mechanisms = vec![SaslMechanism::Plain];
+        for (user, password) in std::iter::once(&NODE).chain(users) {
+            config
+                .plain_credentials
+                .insert((*user).to_owned(), (*password).to_owned());
+        }
+        config.inter_broker_credentials = Some(InterBrokerCredentials::Plain {
+            username: NODE.0.to_owned(),
+            password: NODE.1.to_owned(),
+        });
+        config.super_users = std::iter::once(NODE.0.to_owned()).collect();
+        config.authorizer =
+            std::sync::Arc::new(SimpleAclAuthorizer::new(config.super_users.clone()));
+        adjust(config);
+    })
+    .await
 }
 
 async fn allow(broker: &BrokerHandle, principal: &str, operation: AclOperation) {
@@ -493,62 +478,6 @@ const DEV_CLIENT_KEY: &str = include_str!("fixtures/security/dev_client_key.pem"
 /// mapping rule keeps as the principal name.
 const CLIENT_PRINCIPAL: &str = r"CN=test-client\,OU\=integration\,O\=krabka";
 
-/// Accepts exactly the broker's fixture certificate. The fixture is a
-/// self-issued CA certificate, which rustls refuses as an end entity.
-#[derive(Debug)]
-struct PinnedServer(CertificateDer<'static>);
-
-impl ServerCertVerifier for PinnedServer {
-    fn verify_server_cert(
-        &self,
-        end_entity: &CertificateDer<'_>,
-        _intermediates: &[CertificateDer<'_>],
-        _server_name: &ServerName<'_>,
-        _ocsp_response: &[u8],
-        _now: UnixTime,
-    ) -> Result<ServerCertVerified, tokio_rustls::rustls::Error> {
-        if end_entity.as_ref() == self.0.as_ref() {
-            Ok(ServerCertVerified::assertion())
-        } else {
-            Err(tokio_rustls::rustls::Error::General(
-                "not the pinned fixture certificate".into(),
-            ))
-        }
-    }
-
-    fn verify_tls12_signature(
-        &self,
-        _message: &[u8],
-        _cert: &CertificateDer<'_>,
-        _dss: &DigitallySignedStruct,
-    ) -> Result<HandshakeSignatureValid, tokio_rustls::rustls::Error> {
-        Ok(HandshakeSignatureValid::assertion())
-    }
-
-    fn verify_tls13_signature(
-        &self,
-        _message: &[u8],
-        _cert: &CertificateDer<'_>,
-        _dss: &DigitallySignedStruct,
-    ) -> Result<HandshakeSignatureValid, tokio_rustls::rustls::Error> {
-        Ok(HandshakeSignatureValid::assertion())
-    }
-
-    fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
-        vec![
-            SignatureScheme::ED25519,
-            SignatureScheme::ECDSA_NISTP256_SHA256,
-            SignatureScheme::ECDSA_NISTP384_SHA384,
-            SignatureScheme::RSA_PSS_SHA256,
-            SignatureScheme::RSA_PSS_SHA384,
-            SignatureScheme::RSA_PSS_SHA512,
-            SignatureScheme::RSA_PKCS1_SHA256,
-            SignatureScheme::RSA_PKCS1_SHA384,
-            SignatureScheme::RSA_PKCS1_SHA512,
-        ]
-    }
-}
-
 /// An `SSL` controller listener authorizes each request for the principal of
 /// the client certificate.
 ///
@@ -589,7 +518,13 @@ async fn an_ssl_controller_listener_authorizes_each_request_for_the_certificate_
         PrivateKeyDer::from_pem_slice(DEV_CLIENT_KEY.as_bytes()).expect("parse client key");
     let client = ClientConfig::builder()
         .dangerous()
-        .with_custom_certificate_verifier(std::sync::Arc::new(PinnedServer(server_certificate)))
+        .with_custom_certificate_verifier(std::sync::Arc::new(
+            crate::support::tls::PinnedCertVerifier {
+                pinned: server_certificate,
+                schemes: crate::support::tls::fixture_signature_schemes(),
+                mismatch: "not the pinned fixture certificate",
+            },
+        ))
         .with_client_auth_cert(client_certificates, client_key)
         .expect("client certificate");
     let tcp = TcpStream::connect(broker.controller_addr())

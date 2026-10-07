@@ -1,99 +1,10 @@
-//! Local materialization of a newly created topic. Once the metadata quorum
-//! commits the records, this module creates the log directories and the
-//! partition objects of every replica that this broker hosts, and installs
-//! the initial leader and ISR state of each of them.
-
-use super::INITIAL_LEADER_EPOCH;
-use crate::replicator_supervisor::materialize_partition;
-
-fn should_materialize_locally(
-    replicas: &[krabka_raft::NodeId],
-    node_id: krabka_raft::NodeId,
-) -> bool {
-    replicas.contains(&node_id)
-}
+//! Installs the initial leader and ISR of a newly committed partition.
+//!
+//! Both creation handlers open their local replicas through
+//! [`crate::handlers::partition_materialization`] before installing this role.
 
 fn is_local_leader(leader: krabka_raft::NodeId, node_id: krabka_raft::NodeId) -> bool {
     leader == node_id
-}
-
-#[derive(Clone, Copy)]
-pub(super) struct TopicMaterialization<'a> {
-    pub(super) partitions: &'a std::sync::Arc<crate::partition_registry::PartitionRegistry>,
-    pub(super) log_dirs: &'a [std::path::PathBuf],
-    pub(super) log_config: &'a krabka_log::LogConfig,
-    pub(super) log_dir_status: &'a crate::log_dir_status::LogDirRegistry,
-    pub(super) producer_state: &'a std::sync::Arc<crate::producer_state::ProducerState>,
-    pub(super) max_produce_group: usize,
-    pub(super) partition_writer_queue_depth: usize,
-    pub(super) diskless_wal_local_replica_count: usize,
-    pub(super) node_id: krabka_raft::NodeId,
-    pub(super) diskless: bool,
-    pub(super) topic_id: uuid::Uuid,
-    pub(super) hot_tail: &'a std::sync::Arc<crate::diskless::hot_tail::HotTailCache>,
-    pub(super) wal_shards: &'a std::sync::Arc<crate::wal::quorum::registry::WalShardRegistry>,
-    pub(super) controller: &'a std::sync::Arc<dyn crate::metadata_source::MetadataSource>,
-}
-
-pub(super) async fn materialize_topic(
-    context: TopicMaterialization<'_>,
-    topic: &str,
-    assignments: &[Vec<krabka_raft::NodeId>],
-    leaderships: &[super::InitialLeadership],
-) {
-    for (index, (replicas, leadership)) in assignments.iter().zip(leaderships).enumerate() {
-        if !should_materialize_locally(replicas, context.node_id) {
-            continue;
-        }
-        let index = i32::try_from(index).unwrap_or(0);
-        if let Err(error) =
-            materialize_partition(crate::replicator_supervisor::MaterializePartitionConfig {
-                partitions: context.partitions,
-                topic,
-                topic_id: Some(context.topic_id),
-                partition: index,
-                log_dirs: context.log_dirs,
-                log_config: context.log_config,
-                log_dir_status: context.log_dir_status,
-                producer_state: context.producer_state,
-                max_produce_group: context.max_produce_group,
-                partition_writer_queue_depth: context.partition_writer_queue_depth,
-                diskless_wal_local_replica_count: context.diskless_wal_local_replica_count,
-                diskless: context.diskless,
-                hot_tail: Some(context.hot_tail.clone()),
-                wal_shards: Some(context.wal_shards.clone()),
-                sequencer: context.diskless.then(|| {
-                    std::sync::Arc::new(crate::wal::ControllerSequencer::new(
-                        context.controller.clone(),
-                    )) as std::sync::Arc<dyn crate::wal::OffsetSequencer>
-                }),
-            })
-        {
-            tracing::error!(topic, partition = index, error = %error,
-                "CreateTopics: materialize after quorum commit failed");
-            continue;
-        }
-        let Some(partition) = context
-            .partitions
-            .get(topic, krabka_ids::PartitionIndex(index))
-        else {
-            continue;
-        };
-        if let Err(error) = leadership
-            .install(
-                &partition,
-                context.producer_state,
-                context.topic_id,
-                context.node_id,
-                replicas,
-                INITIAL_LEADER_EPOCH,
-            )
-            .await
-        {
-            tracing::error!(topic, partition = index, error = %error,
-                "CreateTopics: failed to record the initial leader epoch");
-        }
-    }
 }
 
 impl super::InitialLeadership {
@@ -156,8 +67,13 @@ mod tests {
     use assert2::assert;
     use krabka_raft::NodeId;
 
-    use super::{is_local_leader, should_materialize_locally};
-    use crate::{handlers::create_topics::InitialLeadership, partition::Partition};
+    use super::is_local_leader;
+    use crate::{
+        handlers::{
+            create_topics::InitialLeadership, partition_materialization::should_materialize_locally,
+        },
+        partition::Partition,
+    };
 
     /// What an installed leadership left on a partition.
     #[derive(Debug, PartialEq, Eq)]
@@ -197,24 +113,7 @@ mod tests {
         }
     }
 
-    /// A leader-epoch checkpoint on a full disk.
-    #[derive(Debug)]
-    struct EpochCheckpointFull;
-
-    impl krabka_log::LogIo for EpochCheckpointFull {
-        fn write_at(
-            &self,
-            target: krabka_log::IoTarget,
-            file: &std::fs::File,
-            buf: &[u8],
-        ) -> std::io::Result<usize> {
-            use std::io::Write as _;
-            if target == krabka_log::IoTarget::LeaderEpochCheckpoint {
-                return Err(std::io::ErrorKind::StorageFull.into());
-            }
-            (&*file).write(buf)
-        }
-    }
+    use crate::partition::test_support::EpochCheckpointFull;
 
     /// Kafka's `Partition.makeLeader` records the first leader epoch at the
     /// log end the moment a disk-backed partition's leader is created, so a

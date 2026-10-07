@@ -26,6 +26,8 @@
 //! `delete` hold the tests of one RPC each, and `state_restore` holds the
 //! restart-durability test of the share-state summary.
 
+mod support;
+
 #[path = "share_admin_offsets/harness.rs"]
 mod harness;
 

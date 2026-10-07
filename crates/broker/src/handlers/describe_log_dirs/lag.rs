@@ -69,11 +69,8 @@ pub(super) fn future_offset_lag(
 #[cfg(test)]
 mod tests {
     use assert2::assert;
-    use bytes::Bytes;
-    use krabka_protocol::records::{Attributes, Record, RecordBatch};
 
     use super::*;
-    use crate::log_dir;
 
     /// Builds a `Partition` rooted at `<log_dir>/<topic>-<partition>`.
     ///
@@ -86,18 +83,7 @@ mod tests {
         partition: krabka_ids::PartitionIndex,
         count: i32,
     ) -> std::sync::Arc<crate::partition::Partition> {
-        let part_dir = log_dir::partition_dir(log_dir, topic, partition.get());
-        std::fs::create_dir_all(&part_dir).unwrap();
-        let log = krabka_log::Log::open(&part_dir, krabka_log::LogConfig::default()).unwrap();
-        let part = crate::broker::spawn_partition(
-            topic.to_string(),
-            partition,
-            log_dir.to_path_buf(),
-            log,
-            crate::log_dir_status::LogDirRegistry::default(),
-            std::sync::Arc::new(crate::producer_state::ProducerState::new()),
-            false,
-        );
+        let part = crate::test_support::open_partition(log_dir, topic, partition.get());
         if count > 0 {
             append_n(&part.log, count);
         }
@@ -108,27 +94,7 @@ mod tests {
     ///
     /// The LEO of the log advances by `count`.
     fn append_n(log: &std::sync::Mutex<krabka_log::Log>, count: i32) {
-        let mut batch = RecordBatch {
-            base_offset: 0,
-            partition_leader_epoch: -1,
-            attributes: Attributes::default(),
-            last_offset_delta: count - 1,
-            base_timestamp: 1_700_000_000,
-            max_timestamp: 1_700_000_000,
-            producer_id: -1,
-            producer_epoch: -1,
-            base_sequence: -1,
-            records: (0..count)
-                .map(|i| Record {
-                    attributes: 0,
-                    offset_delta: i,
-                    timestamp_delta: 0,
-                    key: None,
-                    value: Some(Bytes::from_static(b"v")),
-                    headers: vec![],
-                })
-                .collect(),
-        };
+        let mut batch = crate::test_support::repeated_records_batch(count, 1_700_000_000);
         log.lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .append(&mut batch)

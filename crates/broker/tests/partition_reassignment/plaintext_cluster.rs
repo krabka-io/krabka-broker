@@ -42,13 +42,7 @@ pub async fn start_three_broker_plaintext_cluster() -> (
     SocketAddr,
 ) {
     let cluster = support::start_n_node_with_retry(3).await;
-    support::wait_for_all_brokers_registered(&cluster, 3).await;
-    let mut it = cluster.into_iter();
-    let (h1, _cfg1, d1) = it.next().unwrap();
-    let (h2, _cfg2, d2) = it.next().unwrap();
-    let (h3, _cfg3, d3) = it.next().unwrap();
-    let addr1 = h1.listen_addr();
-    (h1, h2, h3, d1, d2, d3, addr1)
+    three_broker_handles(cluster).await
 }
 
 pub async fn start_three_broker_plaintext_cluster_with_log_dirs(
@@ -67,13 +61,7 @@ pub async fn start_three_broker_plaintext_cluster_with_log_dirs(
     })
     .await
     .expect("start three-broker JBOD cluster");
-    support::wait_for_all_brokers_registered(&cluster, 3).await;
-    let mut it = cluster.into_iter();
-    let (h1, _cfg1, d1) = it.next().unwrap();
-    let (h2, _cfg2, d2) = it.next().unwrap();
-    let (h3, _cfg3, d3) = it.next().unwrap();
-    let addr1 = h1.listen_addr();
-    (h1, h2, h3, d1, d2, d3, addr1)
+    three_broker_handles(cluster).await
 }
 
 /// Polls until the raft controller leader is stable, then returns its listen
@@ -93,4 +81,24 @@ pub async fn controller_leader_addr(handles: &[&BrokerHandle]) -> SocketAddr {
         handles.len()
     );
     handles[idx].listen_addr()
+}
+
+async fn three_broker_handles(
+    cluster: Vec<(BrokerHandle, krabka_broker::BrokerConfig, TempDir)>,
+) -> (
+    BrokerHandle,
+    BrokerHandle,
+    BrokerHandle,
+    TempDir,
+    TempDir,
+    TempDir,
+    SocketAddr,
+) {
+    support::wait_for_all_brokers_registered(&cluster, 3).await;
+    let mut it = cluster.into_iter();
+    let (h1, _cfg1, d1) = it.next().unwrap();
+    let (h2, _cfg2, d2) = it.next().unwrap();
+    let (h3, _cfg3, d3) = it.next().unwrap();
+    let addr1 = h1.listen_addr();
+    (h1, h2, h3, d1, d2, d3, addr1)
 }

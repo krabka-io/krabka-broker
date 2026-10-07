@@ -19,20 +19,15 @@
 use std::sync::Arc;
 
 use assert2::assert;
-use bytes::Bytes;
 use krabka_protocol::{
     owned::{
-        create_topics_request::{CreatableTopic, CreateTopicsRequest},
         delete_records_request::{
             DeleteRecordsPartition, DeleteRecordsRequest, DeleteRecordsTopic,
         },
-        produce_request::{PartitionProduceData, ProduceRequest, TopicProduceData},
-        produce_response::ProduceResponse,
         share_fetch_request::{FetchPartition, FetchTopic, ShareFetchRequest},
-        share_fetch_response::{PartitionData, ShareFetchResponse},
+        share_fetch_response::PartitionData,
     },
     primitives::uuid::Uuid as WireUuid,
-    records::{Record, RecordBatch, RecordsPayload},
 };
 
 use crate::{
@@ -40,17 +35,13 @@ use crate::{
     broker::BrokerHandle,
     codes,
     test_support::{
-        decode_response, encode_request, initialize_share_state, peer, principal, request_context,
-        start_broker_no_audit_with,
+        initialize_share_state, peer, principal, request_context, start_broker_no_audit_with,
     },
 };
 
 /// One partition row of a multi-partition `ShareFetch`: its
 /// `(partition_index, error_code, acquired ranges)`.
 type PartitionOutcome = (i32, i16, Vec<(i64, i64)>);
-
-/// Produce v12 names the topic.
-const PRODUCE_VERSION: i16 = 12;
 
 /// `DeleteRecords` v2, matching the other handler tests.
 const DELETE_RECORDS_VERSION: i16 = 2;
@@ -60,79 +51,18 @@ async fn start() -> (BrokerHandle, tempfile::TempDir) {
 }
 
 async fn create_topic(broker: &BrokerHandle, name: &str, num_partitions: i32) -> WireUuid {
-    let client = krabka_client_core::Client::builder()
-        .bootstrap(broker.listen_addr().to_string())
-        .client_id("share-log-start-lockout-test")
-        .build()
-        .await
-        .expect("client build");
-    let response = client
-        .send(CreateTopicsRequest {
-            topics: vec![CreatableTopic {
-                name: name.to_string(),
-                num_partitions,
-                replication_factor: 1,
-                ..Default::default()
-            }],
-            timeout_ms: 5_000,
-            ..Default::default()
-        })
-        .await
-        .expect("CreateTopics");
-    assert!(response.topics[0].error_code == codes::NONE, "{response:?}");
-    for partition in 0..num_partitions {
-        broker.wait_until_partition_present(name, partition).await;
-    }
-    let image = broker.controller_image_for_test();
-    let topic = image.topic(name).expect("created topic in the image");
-    WireUuid(topic.topic_id.into_bytes())
+    crate::handlers::test_support::create_topic(
+        broker,
+        "share-log-start-lockout-test",
+        name,
+        num_partitions,
+    )
+    .await
 }
 
 /// Appends `count` one-record batches to `partition_index` of `topic`.
 async fn produce_records(broker: &BrokerHandle, topic: &str, partition_index: i32, count: i32) {
-    let request = ProduceRequest {
-        acks: -1,
-        timeout_ms: 5_000,
-        topic_data: vec![TopicProduceData {
-            name: topic.to_string(),
-            partition_data: vec![PartitionProduceData {
-                index: partition_index,
-                records: Some(RecordsPayload::V2(vec![RecordBatch {
-                    last_offset_delta: count - 1,
-                    records: (0..count)
-                        .map(|offset_delta| Record {
-                            offset_delta,
-                            value: Some(Bytes::from_static(b"v")),
-                            ..Default::default()
-                        })
-                        .collect(),
-                    ..Default::default()
-                }])),
-                ..Default::default()
-            }],
-            ..Default::default()
-        }],
-        ..Default::default()
-    };
-    let shared = broker.broker_arc_for_test();
-    let user = principal("producer");
-    let address = peer();
-    let ctx = request_context(&user, &address, "producer-client");
-    let request_bytes = encode_request(&request, PRODUCE_VERSION);
-    let response_bytes = crate::handlers::produce::handle(
-        &shared,
-        PRODUCE_VERSION,
-        &request_bytes,
-        request_bytes.clone(),
-        &ctx,
-    )
-    .await
-    .expect("handle produce");
-    let response: ProduceResponse = decode_response(&response_bytes, PRODUCE_VERSION);
-    assert!(
-        response.responses[0].partition_responses[0].error_code == codes::NONE,
-        "{response:?}"
-    );
+    crate::handlers::test_support::produce_records(broker, topic, partition_index, count).await;
 }
 
 /// Trims `partition_index` of `topic` to `new_log_start` with a real
@@ -202,21 +132,7 @@ async fn share_fetch_rows_with_max_records(
         }],
         ..Default::default()
     };
-    let shared = broker.broker_arc_for_test();
-    let user = principal("share-consumer");
-    let address = peer();
-    let ctx = request_context(&user, &address, "share-client");
-    let request_bytes = encode_request(&request, version);
-    let response = crate::test_support::try_dispatch_context(
-        &shared,
-        krabka_protocol::owned::share_fetch_request::API_KEY,
-        version,
-        &request_bytes,
-        &ctx,
-    )
-    .await
-    .expect("handle share fetch");
-    let response: ShareFetchResponse = decode_response(&response, version);
+    let response = crate::handlers::test_support::share_fetch_wire(broker, version, &request).await;
     // An incremental response leaves out a partition with nothing new.
     response
         .responses
@@ -425,16 +341,7 @@ async fn an_unreadable_partition_fails_alone() {
     let (broker, dir) = start().await;
     let topic = "unreadable-and-healthy";
     let group = "g-unreadable-and-healthy";
-    let topic_id = create_topic(&broker, topic, 2).await;
-    initialize_share_state(&broker, group, topic_uuid(topic_id), 0).await;
-    initialize_share_state(&broker, group, topic_uuid(topic_id), 1).await;
-    let opened = share_fetch_rows(&broker, group, 0, topic_id, &[0, 1]).await;
-    assert!(
-        opened.iter().all(|row| row.error_code == codes::NONE),
-        "{opened:?}"
-    );
-    produce_records(&broker, topic, 0, 5).await;
-    produce_records(&broker, topic, 1, 5).await;
+    let topic_id = primed_pair(&broker, topic, group).await;
 
     // Give the only batch of partition 0 a length of zero, which is shorter
     // than a batch header: bytes 8 to 11 of a record batch are its
@@ -473,21 +380,7 @@ async fn a_healthy_partition_in_the_same_request_is_unaffected() {
     let (broker, _dir) = start().await;
     let topic = "lockout-and-healthy";
     let group = "g-lockout-and-healthy";
-    let topic_id = create_topic(&broker, topic, 2).await;
-    initialize_share_state(&broker, group, topic_uuid(topic_id), 0).await;
-    initialize_share_state(&broker, group, topic_uuid(topic_id), 1).await;
-
-    // Prime both leader cells at SPSO 0 before any record exists. Both
-    // partitions ride the same share session, so this is one request rather
-    // than two: a second `share_session_epoch: 0` would reopen the session
-    // and drop the first partition's subscription.
-    let opened = share_fetch_rows(&broker, group, 0, topic_id, &[0, 1]).await;
-    assert!(
-        opened.iter().all(|row| row.error_code == codes::NONE),
-        "{opened:?}"
-    );
-    produce_records(&broker, topic, 0, 5).await;
-    produce_records(&broker, topic, 1, 5).await;
+    let topic_id = primed_pair(&broker, topic, group).await;
 
     // Only partition 0's log start moves past its SPSO.
     let delete_error = delete_records(&broker, topic, 0, 3).await;
@@ -559,4 +452,19 @@ async fn a_member_that_does_not_acknowledge_gets_no_more_than_the_record_lock_li
             )
     );
     broker.shutdown().await;
+}
+
+/// Prime both partitions in one session while empty, then append five records each.
+async fn primed_pair(broker: &BrokerHandle, topic: &str, group: &str) -> WireUuid {
+    let topic_id = create_topic(broker, topic, 2).await;
+    initialize_share_state(broker, group, topic_uuid(topic_id), 0).await;
+    initialize_share_state(broker, group, topic_uuid(topic_id), 1).await;
+    let opened = share_fetch_rows(broker, group, 0, topic_id, &[0, 1]).await;
+    assert!(
+        opened.iter().all(|row| row.error_code == codes::NONE),
+        "{opened:?}"
+    );
+    produce_records(broker, topic, 0, 5).await;
+    produce_records(broker, topic, 1, 5).await;
+    topic_id
 }

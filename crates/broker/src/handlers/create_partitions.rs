@@ -32,19 +32,20 @@ mod test_support;
 mod tests;
 
 use self::{
-    admission::duplicate_names,
-    apply::{MaterializeContext, materialize_new_partitions, partition_records},
-    assignment::resolve_new_partition_assignments,
-    response::finish_response,
+    admission::duplicate_names, apply::partition_records,
+    assignment::resolve_new_partition_assignments, response::finish_response,
 };
 use crate::{
     broker::Broker,
     codes,
     config_keys::resolve_preferred_leader_site,
     error::BrokerError,
-    handlers::create_topics::{
-        automatic_leaderships, automatic_placement_exclusions, diskless_wal_placement_error,
-        inactive_brokers, manual_leaderships, site_broker_views,
+    handlers::{
+        create_topics::{
+            automatic_leaderships, automatic_placement_exclusions, diskless_wal_placement_error,
+            inactive_brokers, manual_leaderships, site_broker_views,
+        },
+        partition_materialization::PartitionMaterialization,
     },
     site_placement::PlacementRng,
 };
@@ -56,13 +57,7 @@ pub(crate) async fn handle(
     ctx: &crate::handlers::RequestContext<'_>,
 ) -> Result<CreatePartitionsResponse, BrokerError> {
     let node_id = broker.config.node_id;
-    let partitions_map = broker.partitions.clone();
-    let producer_state = broker.producer_state.clone();
     let log_dirs = broker.config.all_log_dirs();
-    let log_config = broker.config.log_config.clone();
-    let log_dir_status = broker.log_dir_status.clone();
-    let hot_tail = broker.hot_tail.clone();
-    let wal_shards = broker.wal_shards.clone();
 
     let image = broker.controller.current_image();
 
@@ -238,27 +233,16 @@ pub(crate) async fn handle(
 
         match broker.controller.submit_change(records).await {
             Ok(_) => {
-                materialize_new_partitions(
-                    MaterializeContext {
-                        partitions: &partitions_map,
-                        log_dirs: &log_dirs,
-                        log_config: &log_config,
-                        log_dir_status: &log_dir_status,
-                        producer_state: &producer_state,
-                        max_produce_group: broker.config.max_produce_group,
-                        partition_writer_queue_depth: broker.config.partition_writer_queue_depth,
-                        diskless_wal_local_replica_count: broker
-                            .config
-                            .diskless_wal_local_replica_count,
-                        node_id,
-                        diskless,
-                        topic_id: topic_rec.topic_id,
-                        hot_tail: &hot_tail,
-                        wal_shards: &wal_shards,
-                        controller: &broker.controller,
-                    },
+                PartitionMaterialization {
+                    broker,
+                    log_dirs: &log_dirs,
+                    diskless,
+                    topic_id: topic_rec.topic_id,
+                }
+                .materialize(
+                    "CreatePartitions",
                     &t.name,
-                    &new_partition_indices,
+                    new_partition_indices.iter().copied(),
                     &new_assignments,
                     &leaderships,
                 )

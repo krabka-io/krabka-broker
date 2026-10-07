@@ -1,8 +1,8 @@
-(* #"/workspace/crates/verified/src/authz/acl_decision.rs" 25 0 25 83 *)
+(* #"/workspace/crates/verified/src/authz/acl_decision.rs" 26 0 26 83 *)
 
-let%span sacl_decision = "/workspace/crates/verified/src/authz/acl_decision.rs" 27 48 27 53
-let%span sacl_decision'0 = "/workspace/crates/verified/src/authz/acl_decision.rs" 29 12 29 51
-let%span sacl_decision'1 = "/workspace/crates/verified/src/authz/acl_decision.rs" 20 10 23 2
+let%span sacl_decision = "/workspace/crates/verified/src/authz/acl_decision.rs" 28 48 28 53
+let%span sacl_decision'0 = "/workspace/crates/verified/src/authz/acl_decision.rs" 30 12 30 51
+let%span sacl_decision'1 = "/workspace/crates/verified/src/authz/acl_decision.rs" 21 10 24 2
 
 use creusot.prelude.Any
 
@@ -22,8 +22,8 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let acl_resource_match [#"/workspace/crates/verified/src/authz/acl_decision.rs" 25 0 25 83]
-  (pattern: t_AclPatternKind) (facts: t_AclResourceFacts) (return (x: bool)) = (! bb0
+let acl_resource_match [#"/workspace/crates/verified/src/authz/acl_decision.rs" 26 0 26 83] (pattern: t_AclPatternKind)
+  (facts: t_AclResourceFacts) (return (x: bool)) = (! bb0
   [ bb0 = s0
     [ s0 = [ &_9 <- { f0 = facts.resource_type; f1 = pattern } ] s1
     | s1 = any [ br0 -> {_9.f0 = Same} (! bb3) | br1 -> {_9.f0 = Different} (! bb7) ] ]

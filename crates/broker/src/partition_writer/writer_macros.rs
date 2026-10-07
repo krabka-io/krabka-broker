@@ -8,6 +8,19 @@
 macro_rules! run_writer {
     ($topic:expr, $partition:expr, $log:expr, $log_dir:expr, $rx:expr,
      $append:expr, $replica:expr, $hw:expr, $delivery:expr,
+     $status:expr, $producer:expr, $wal:expr; $cap:expr, $sequencer:expr $(,)?) => {
+        run_with_sequencer(
+            ($topic, $partition),
+            ($log, $log_dir),
+            $rx,
+            ($append, $replica, $hw, $delivery),
+            ($status, $producer, $wal),
+            $cap,
+            $sequencer,
+        )
+    };
+    ($topic:expr, $partition:expr, $log:expr, $log_dir:expr, $rx:expr,
+     $append:expr, $replica:expr, $hw:expr, $delivery:expr,
      $status:expr, $producer:expr, $wal:expr $(,)?) => {
         run(
             ($topic, $partition),
@@ -35,3 +48,5 @@ macro_rules! run_writer {
         )
     };
 }
+
+pub(super) use run_writer;

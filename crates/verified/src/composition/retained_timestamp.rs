@@ -1,5 +1,7 @@
 use creusot_std::prelude::*;
 
+#[cfg(creusot)]
+use super::time_index::sparse_timestamp_window_valid;
 use super::{
     SparseTimestampWindow, constructed_time_index_preserves_first,
     indexed_timestamp_scan_finds_first,
@@ -9,14 +11,9 @@ use super::{
 /// Preserve original record indices and exclude every earlier retained match,
 /// even when a pruned record matches first or timestamps regress later.
 /// Complete faithful decoding and coherent retained floors remain external.
-#[requires(window.0@.len() == window.1@.len())]
+#[requires(sparse_timestamp_window_valid(window.0@, window.1@, window.2@))]
 #[requires(base@ >= 0 && minimum@ >= 0)]
 #[requires(forall<i: Int> 0 <= i && i < window.0@.len() ==> base@ + window.0@[i]@ <= i64::MAX@)]
-#[requires(forall<i: Int, j: Int> 0 <= i && i < j && j < window.0@.len() ==> window.0@[i]@ < window.0@[j]@)]
-#[requires(forall<i: Int> 0 <= i && i < window.2@.len()
-    ==> window.2@[i].0@ <= window.2@[i].1@ && window.2@[i].1@ < window.1@.len())]
-#[requires(forall<i: Int, j: Int> 0 <= i && i < j && j < window.2@.len()
-    ==> window.2@[i].0@ < window.2@[j].0@ && window.2@[i].1@ <= window.2@[j].1@)]
 #[ensures(match result {
     None => forall<i: Int> 0 <= i && i < window.0@.len()
         ==> base@ + window.0@[i]@ < minimum@ || window.1@[i]@ < target@,
@@ -43,10 +40,19 @@ pub(super) fn constructed_index_retained_candidate(
     }
     proof_assert!(forall<i: Int> start@ <= i && i < offsets@.len()
         ==> minimum@ <= base@ + offsets@[i]@);
+    let retained_offsets = &offsets[start..];
+    let retained_timestamps = &timestamps[start..];
+    // Expose the suffix's original indexes before proving its sparse prefix bound.
+    proof_assert!(forall<i: Int> 0 <= i && i < retained_offsets@.len()
+        ==> retained_offsets@[i] == offsets@[start@ + i]
+            && retained_timestamps@[i] == timestamps@[start@ + i]);
+    proof_assert!(forall<i: Int, j: Int> 0 <= i && i < entries@.len()
+        && 0 <= j && j < retained_offsets@.len() && retained_offsets@[j]@ < entries@[i].1@
+        ==> retained_timestamps@[j]@ <= entries@[i].0@);
     let selected = indexed_timestamp_scan_finds_first(
         &entries,
-        &offsets[start..],
-        &timestamps[start..],
+        retained_offsets,
+        retained_timestamps,
         target,
     )?;
     Some(start + selected)

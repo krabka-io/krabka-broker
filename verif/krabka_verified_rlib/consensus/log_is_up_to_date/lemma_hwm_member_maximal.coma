@@ -1,18 +1,18 @@
-(* #"/workspace/crates/verified/src/consensus/log_is_up_to_date.rs" 144 0 150 1 *)
+(* #"/workspace/crates/verified/src/consensus/log_is_up_to_date.rs" 145 0 151 1 *)
 
-let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
-let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
-let%span slog_is_up_to_date = "/workspace/crates/verified/src/consensus/log_is_up_to_date.rs" 151 4 151 71
-let%span slog_is_up_to_date'0 = "/workspace/crates/verified/src/consensus/log_is_up_to_date.rs" 139 11 139 54
-let%span slog_is_up_to_date'1 = "/workspace/crates/verified/src/consensus/log_is_up_to_date.rs" 140 11 142 47
-let%span slog_is_up_to_date'2 = "/workspace/crates/verified/src/consensus/log_is_up_to_date.rs" 143 10 143 93
-let%span slog_is_up_to_date'3 = "/workspace/crates/verified/src/consensus/log_is_up_to_date.rs" 118 11 118 54
-let%span slog_is_up_to_date'4 = "/workspace/crates/verified/src/consensus/log_is_up_to_date.rs" 119 10 122 93
-let%span sfailover = "/workspace/crates/verified/src/consensus/failover.rs" 202 10 202 17
-let%span sfailover'0 = "/workspace/crates/verified/src/consensus/failover.rs" 204 16 204 74
-let%span sfailover'1 = "/workspace/crates/verified/src/consensus/failover.rs" 177 8 177 48
-let%span sfailover'2 = "/workspace/crates/verified/src/consensus/failover.rs" 185 10 185 15
-let%span sfailover'3 = "/workspace/crates/verified/src/consensus/failover.rs" 188 8 194 9
+let%span sord = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sord'0 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span sfailover = "/workspace/crates/verified/src/consensus/failover.rs" 203 10 203 17
+let%span sfailover'0 = "/workspace/crates/verified/src/consensus/failover.rs" 205 16 205 74
+let%span sfailover'1 = "/workspace/crates/verified/src/consensus/failover.rs" 178 8 178 48
+let%span sfailover'2 = "/workspace/crates/verified/src/consensus/failover.rs" 186 10 186 15
+let%span sfailover'3 = "/workspace/crates/verified/src/consensus/failover.rs" 189 8 195 9
+let%span slog_is_up_to_date = "/workspace/crates/verified/src/consensus/log_is_up_to_date.rs" 152 4 152 71
+let%span slog_is_up_to_date'0 = "/workspace/crates/verified/src/consensus/log_is_up_to_date.rs" 140 11 140 54
+let%span slog_is_up_to_date'1 = "/workspace/crates/verified/src/consensus/log_is_up_to_date.rs" 141 11 143 47
+let%span slog_is_up_to_date'2 = "/workspace/crates/verified/src/consensus/log_is_up_to_date.rs" 144 10 144 93
+let%span slog_is_up_to_date'3 = "/workspace/crates/verified/src/consensus/log_is_up_to_date.rs" 119 11 119 54
+let%span slog_is_up_to_date'4 = "/workspace/crates/verified/src/consensus/log_is_up_to_date.rs" 120 10 123 93
 
 use creusot.int.Int64
 use creusot.slice.Slice64
@@ -29,10 +29,10 @@ predicate gt_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord'0] oth
 
 meta "rewrite_def" predicate gt_log_Int
 
-function hwm_member_at [#"/workspace/crates/verified/src/consensus/failover.rs" 175 0 175 62] (log_end: int) (s: Seq.seq Int64.t) (k: int) : int
+function hwm_member_at [#"/workspace/crates/verified/src/consensus/failover.rs" 176 0 176 62] (log_end: int) (s: Seq.seq Int64.t) (k: int) : int
  = [%#sfailover'1] if k = 0 then log_end else Int64.to_int (Seq.get s (k - 1))
 
-function count_ge_prefix [#"/workspace/crates/verified/src/consensus/failover.rs" 186 0 186 97] (log_end: int) (s: Seq.seq Int64.t) (v: int) (limit: int) (leader_counts: bool) : int
+function count_ge_prefix [#"/workspace/crates/verified/src/consensus/failover.rs" 187 0 187 97] (log_end: int) (s: Seq.seq Int64.t) (v: int) (limit: int) (leader_counts: bool) : int
 
 axiom count_ge_prefix_def:
   forall log_end: int, s: Seq.seq Int64.t, v: int, limit: int, leader_counts: bool [count_ge_prefix log_end s v limit leader_counts]. count_ge_prefix log_end s v limit leader_counts
@@ -43,7 +43,7 @@ axiom count_ge_prefix_def:
       + (if (leader_counts \/ gt_log_Int limit 1) /\ ge_log_Int (hwm_member_at log_end s (limit - 1)) v then 1 else 0)
     )
 
-function count_ge [#"/workspace/crates/verified/src/consensus/failover.rs" 203 0 203 78] (log_end: int) (s: Seq.seq Int64.t) (v: int) (leader_counts: bool) : int
+function count_ge [#"/workspace/crates/verified/src/consensus/failover.rs" 204 0 204 78] (log_end: int) (s: Seq.seq Int64.t) (v: int) (leader_counts: bool) : int
 
 axiom count_ge_def:
   forall log_end: int, s: Seq.seq Int64.t, v: int, leader_counts: bool [count_ge log_end s v leader_counts]. count_ge log_end s v leader_counts
@@ -66,7 +66,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let lemma_hwm_member_maximal [#"/workspace/crates/verified/src/consensus/log_is_up_to_date.rs" 144 0 150 1]
+let lemma_hwm_member_maximal [#"/workspace/crates/verified/src/consensus/log_is_up_to_date.rs" 145 0 151 1]
   (log_end: Int64.t) (s: Slice64.slice Int64.t) (majority: UInt64.t) (best: Int64.t) (leader_counts: bool)
   (return (x: ())) =
 {[@stop_split] [@expl:lemma_hwm_member_maximal requires] ([@stop_split] [@expl:lemma_hwm_member_maximal requires #0] [%#slog_is_up_to_date'0] 1

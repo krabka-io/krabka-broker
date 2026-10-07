@@ -1,40 +1,40 @@
-(* #"/workspace/crates/verified/src/wal/select_wal_voters.rs" 176 0 180 20 *)
+(* #"/workspace/crates/verified/src/wal/select_wal_voters.rs" 177 0 181 20 *)
 
-let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
-let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
-let%span swell_founded = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/well_founded.rs" 43 8 43 33
-let%span sselect_wal_voters = "/workspace/crates/verified/src/wal/select_wal_voters.rs" 181 40 181 50
-let%span sselect_wal_voters'0 = "/workspace/crates/verified/src/wal/select_wal_voters.rs" 182 30 182 40
-let%span sselect_wal_voters'1 = "/workspace/crates/verified/src/wal/select_wal_voters.rs" 183 30 183 40
-let%span sselect_wal_voters'2 = "/workspace/crates/verified/src/wal/select_wal_voters.rs" 193 14 193 42
-let%span sselect_wal_voters'3 = "/workspace/crates/verified/src/wal/select_wal_voters.rs" 194 10 194 24
-let%span sselect_wal_voters'4 = "/workspace/crates/verified/src/wal/select_wal_voters.rs" 191 16 192 80
-let%span sselect_wal_voters'5 = "/workspace/crates/verified/src/wal/select_wal_voters.rs" 189 16 190 92
-let%span sselect_wal_voters'6 = "/workspace/crates/verified/src/wal/select_wal_voters.rs" 187 16 188 70
-let%span sselect_wal_voters'7 = "/workspace/crates/verified/src/wal/select_wal_voters.rs" 186 16 186 68
-let%span sselect_wal_voters'8 = "/workspace/crates/verified/src/wal/select_wal_voters.rs" 185 16 185 82
-let%span sselect_wal_voters'9 = "/workspace/crates/verified/src/wal/select_wal_voters.rs" 184 16 184 45
-let%span sselect_wal_voters'10 = "/workspace/crates/verified/src/wal/select_wal_voters.rs" 197 12 197 18
-let%span sselect_wal_voters'11 = "/workspace/crates/verified/src/wal/select_wal_voters.rs" 198 12 198 18
-let%span sselect_wal_voters'12 = "/workspace/crates/verified/src/wal/select_wal_voters.rs" 200 21 200 35
-let%span sselect_wal_voters'13 = "/workspace/crates/verified/src/wal/select_wal_voters.rs" 195 26 201 9
-let%span sselect_wal_voters'14 = "/workspace/crates/verified/src/wal/select_wal_voters.rs" 204 24 204 41
-let%span sselect_wal_voters'15 = "/workspace/crates/verified/src/wal/select_wal_voters.rs" 205 8 205 32
-let%span sselect_wal_voters'16 = "/workspace/crates/verified/src/wal/select_wal_voters.rs" 206 8 206 31
-let%span sselect_wal_voters'17 = "/workspace/crates/verified/src/wal/select_wal_voters.rs" 207 8 207 31
-let%span sselect_wal_voters'18 = "/workspace/crates/verified/src/wal/select_wal_voters.rs" 163 10 163 37
-let%span sselect_wal_voters'19 = "/workspace/crates/verified/src/wal/select_wal_voters.rs" 164 10 165 89
-let%span sselect_wal_voters'20 = "/workspace/crates/verified/src/wal/select_wal_voters.rs" 166 10 166 58
-let%span sselect_wal_voters'21 = "/workspace/crates/verified/src/wal/select_wal_voters.rs" 167 10 168 86
-let%span sselect_wal_voters'22 = "/workspace/crates/verified/src/wal/select_wal_voters.rs" 169 10 170 68
-let%span sselect_wal_voters'23 = "/workspace/crates/verified/src/wal/select_wal_voters.rs" 171 10 174 85
-let%span sselect_wal_voters'24 = "/workspace/crates/verified/src/wal/select_wal_voters.rs" 63 10 70 1
-let%span sselect_wal_voters'25 = "/workspace/crates/verified/src/wal/select_wal_voters.rs" 54 8 56 59
-let%span svec = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 104 18 104 36
-let%span svec'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 18 14 18 41
-let%span svec'1 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 114 18 114 40
-let%span svec'2 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 202 18 202 34
-let%span svec'3 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 118 18 118 48
+let%span sord = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span sord'0 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span swell_founded = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/well_founded.rs" 43 8 43 33
+let%span svec = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 104 18 104 36
+let%span svec'0 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 18 14 18 41
+let%span svec'1 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 114 18 114 40
+let%span svec'2 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 202 18 202 34
+let%span svec'3 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 118 18 118 48
+let%span sselect_wal_voters = "/workspace/crates/verified/src/wal/select_wal_voters.rs" 182 40 182 50
+let%span sselect_wal_voters'0 = "/workspace/crates/verified/src/wal/select_wal_voters.rs" 183 30 183 40
+let%span sselect_wal_voters'1 = "/workspace/crates/verified/src/wal/select_wal_voters.rs" 184 30 184 40
+let%span sselect_wal_voters'2 = "/workspace/crates/verified/src/wal/select_wal_voters.rs" 194 14 194 42
+let%span sselect_wal_voters'3 = "/workspace/crates/verified/src/wal/select_wal_voters.rs" 195 10 195 24
+let%span sselect_wal_voters'4 = "/workspace/crates/verified/src/wal/select_wal_voters.rs" 192 16 193 80
+let%span sselect_wal_voters'5 = "/workspace/crates/verified/src/wal/select_wal_voters.rs" 190 16 191 92
+let%span sselect_wal_voters'6 = "/workspace/crates/verified/src/wal/select_wal_voters.rs" 188 16 189 70
+let%span sselect_wal_voters'7 = "/workspace/crates/verified/src/wal/select_wal_voters.rs" 187 16 187 68
+let%span sselect_wal_voters'8 = "/workspace/crates/verified/src/wal/select_wal_voters.rs" 186 16 186 82
+let%span sselect_wal_voters'9 = "/workspace/crates/verified/src/wal/select_wal_voters.rs" 185 16 185 45
+let%span sselect_wal_voters'10 = "/workspace/crates/verified/src/wal/select_wal_voters.rs" 198 12 198 18
+let%span sselect_wal_voters'11 = "/workspace/crates/verified/src/wal/select_wal_voters.rs" 199 12 199 18
+let%span sselect_wal_voters'12 = "/workspace/crates/verified/src/wal/select_wal_voters.rs" 201 21 201 35
+let%span sselect_wal_voters'13 = "/workspace/crates/verified/src/wal/select_wal_voters.rs" 196 26 202 9
+let%span sselect_wal_voters'14 = "/workspace/crates/verified/src/wal/select_wal_voters.rs" 205 24 205 41
+let%span sselect_wal_voters'15 = "/workspace/crates/verified/src/wal/select_wal_voters.rs" 206 8 206 32
+let%span sselect_wal_voters'16 = "/workspace/crates/verified/src/wal/select_wal_voters.rs" 207 8 207 31
+let%span sselect_wal_voters'17 = "/workspace/crates/verified/src/wal/select_wal_voters.rs" 208 8 208 31
+let%span sselect_wal_voters'18 = "/workspace/crates/verified/src/wal/select_wal_voters.rs" 164 10 164 37
+let%span sselect_wal_voters'19 = "/workspace/crates/verified/src/wal/select_wal_voters.rs" 165 10 166 89
+let%span sselect_wal_voters'20 = "/workspace/crates/verified/src/wal/select_wal_voters.rs" 167 10 167 58
+let%span sselect_wal_voters'21 = "/workspace/crates/verified/src/wal/select_wal_voters.rs" 168 10 169 86
+let%span sselect_wal_voters'22 = "/workspace/crates/verified/src/wal/select_wal_voters.rs" 170 10 171 68
+let%span sselect_wal_voters'23 = "/workspace/crates/verified/src/wal/select_wal_voters.rs" 172 10 175 85
+let%span sselect_wal_voters'24 = "/workspace/crates/verified/src/wal/select_wal_voters.rs" 64 10 71 1
+let%span sselect_wal_voters'25 = "/workspace/crates/verified/src/wal/select_wal_voters.rs" 55 8 57 59
 
 use seq.Seq
 use creusot.int.UInt64
@@ -98,7 +98,7 @@ let deref_Vec_u64_Global (self_: t_Vec_u64_Global) (return (x: Slice64.slice UIn
 
 type t_Option_usize = None | Some UInt64.t
 
-predicate voter_blocked [#"/workspace/crates/verified/src/wal/select_wal_voters.rs" 46 0 52 9] (candidate: tup2_u64_u64) (used_nodes: Seq.seq UInt64.t) (used_racks: Seq.seq UInt64.t) (local_node: UInt64.t) (require_local: bool) =
+predicate voter_blocked [#"/workspace/crates/verified/src/wal/select_wal_voters.rs" 47 0 53 9] (candidate: tup2_u64_u64) (used_nodes: Seq.seq UInt64.t) (used_racks: Seq.seq UInt64.t) (local_node: UInt64.t) (require_local: bool) =
   [%#sselect_wal_voters'25] (exists j: int. 0 <= j /\ j < Seq.length used_nodes /\ Seq.get used_nodes j = candidate.f0)
   \/ (exists j: int. 0 <= j /\ j < Seq.length used_racks /\ Seq.get used_racks j = candidate.f1)
   \/ require_local /\ candidate.f0 <> local_node
@@ -138,7 +138,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let select_wal_voters [#"/workspace/crates/verified/src/wal/select_wal_voters.rs" 176 0 180 20]
+let select_wal_voters [#"/workspace/crates/verified/src/wal/select_wal_voters.rs" 177 0 181 20]
   (candidates: Slice64.slice tup2_u64_u64) (local_node: UInt64.t) (requested: UInt64.t)
   (return (x: t_Vec_tup2_u64_u64_Global)) = (! bb0
   [ bb0 = s0

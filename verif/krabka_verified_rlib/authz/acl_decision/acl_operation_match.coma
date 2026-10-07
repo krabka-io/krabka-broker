@@ -1,17 +1,17 @@
-(* #"/workspace/crates/verified/src/authz/acl_decision.rs" 51 0 55 9 *)
+(* #"/workspace/crates/verified/src/authz/acl_decision.rs" 52 0 56 9 *)
 
-let%span sacl_decision = "/workspace/crates/verified/src/authz/acl_decision.rs" 75 12 76 87
-let%span sacl_decision'0 = "/workspace/crates/verified/src/authz/acl_decision.rs" 76 19 76 87
-let%span sacl_decision'1 = "/workspace/crates/verified/src/authz/acl_decision.rs" 71 12 72 80
-let%span sacl_decision'2 = "/workspace/crates/verified/src/authz/acl_decision.rs" 72 19 72 80
-let%span sacl_decision'3 = "/workspace/crates/verified/src/authz/acl_decision.rs" 67 12 68 80
-let%span sacl_decision'4 = "/workspace/crates/verified/src/authz/acl_decision.rs" 68 19 68 80
-let%span sacl_decision'5 = "/workspace/crates/verified/src/authz/acl_decision.rs" 63 12 64 80
-let%span sacl_decision'6 = "/workspace/crates/verified/src/authz/acl_decision.rs" 64 19 64 80
-let%span sacl_decision'7 = "/workspace/crates/verified/src/authz/acl_decision.rs" 59 12 60 80
-let%span sacl_decision'8 = "/workspace/crates/verified/src/authz/acl_decision.rs" 60 19 60 80
-let%span sacl_decision'9 = "/workspace/crates/verified/src/authz/acl_decision.rs" 57 33 57 37
-let%span sacl_decision'10 = "/workspace/crates/verified/src/authz/acl_decision.rs" 41 10 49 59
+let%span sacl_decision = "/workspace/crates/verified/src/authz/acl_decision.rs" 76 12 77 87
+let%span sacl_decision'0 = "/workspace/crates/verified/src/authz/acl_decision.rs" 77 19 77 87
+let%span sacl_decision'1 = "/workspace/crates/verified/src/authz/acl_decision.rs" 72 12 73 80
+let%span sacl_decision'2 = "/workspace/crates/verified/src/authz/acl_decision.rs" 73 19 73 80
+let%span sacl_decision'3 = "/workspace/crates/verified/src/authz/acl_decision.rs" 68 12 69 80
+let%span sacl_decision'4 = "/workspace/crates/verified/src/authz/acl_decision.rs" 69 19 69 80
+let%span sacl_decision'5 = "/workspace/crates/verified/src/authz/acl_decision.rs" 64 12 65 80
+let%span sacl_decision'6 = "/workspace/crates/verified/src/authz/acl_decision.rs" 65 19 65 80
+let%span sacl_decision'7 = "/workspace/crates/verified/src/authz/acl_decision.rs" 60 12 61 80
+let%span sacl_decision'8 = "/workspace/crates/verified/src/authz/acl_decision.rs" 61 19 61 80
+let%span sacl_decision'9 = "/workspace/crates/verified/src/authz/acl_decision.rs" 58 33 58 37
+let%span sacl_decision'10 = "/workspace/crates/verified/src/authz/acl_decision.rs" 42 10 50 59
 
 use creusot.prelude.Any
 
@@ -35,8 +35,8 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let acl_operation_match [#"/workspace/crates/verified/src/authz/acl_decision.rs" 51 0 55 9]
-  (stored: t_AclOperationKind) (requested: t_AclOperationKind) (is_allow: bool) (return (x: bool)) = (! bb0
+let acl_operation_match [#"/workspace/crates/verified/src/authz/acl_decision.rs" 52 0 56 9] (stored: t_AclOperationKind)
+  (requested: t_AclOperationKind) (is_allow: bool) (return (x: bool)) = (! bb0
   [ bb0 = any
     [ br0 -> {stored = All} (! bb28)
     | br1 -> {stored = Read} (! bb27)

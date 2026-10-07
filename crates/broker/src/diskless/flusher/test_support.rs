@@ -9,7 +9,7 @@ use std::{
 
 use krabka_log::{Log, LogConfig};
 use krabka_metadata::NodeId;
-use krabka_protocol::records::{Attributes, Record, RecordBatch};
+use krabka_protocol::records::RecordBatch;
 
 use crate::partition::Partition;
 
@@ -18,27 +18,9 @@ use crate::partition::Partition;
 /// batch's `max_timestamp` off the index the flusher builds from this, and a
 /// batch left at the epoch would be older than any retention window.
 fn batch(count: i32) -> RecordBatch {
-    let now_ms = crate::time_util::now_ms();
     RecordBatch {
-        base_offset: 0,
         partition_leader_epoch: 0,
-        attributes: Attributes::default(),
-        last_offset_delta: count - 1,
-        base_timestamp: now_ms,
-        max_timestamp: now_ms,
-        producer_id: -1,
-        producer_epoch: -1,
-        base_sequence: -1,
-        records: (0..count)
-            .map(|i| Record {
-                attributes: 0,
-                offset_delta: i,
-                timestamp_delta: 0,
-                key: None,
-                value: Some(bytes::Bytes::from_static(b"v")),
-                headers: vec![],
-            })
-            .collect(),
+        ..crate::test_support::repeated_records_batch(count, crate::time_util::now_ms())
     }
 }
 

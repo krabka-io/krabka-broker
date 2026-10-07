@@ -9,7 +9,13 @@ use std::sync::{
 use krabka_ids::PartitionIndex;
 use krabka_log::{Log, LogConfig, Offset};
 use krabka_protocol::records::{Record, RecordBatch};
-use tokio::sync::oneshot;
+use tokio::sync::{Notify, mpsc, oneshot};
+
+use super::{run_with_sequencer, writer_macros::run_writer};
+use crate::{
+    delivery::DeliveryHandles, log_dir_status::LogDirRegistry, partition::WriterMessage,
+    producer_state::ProducerState, replica_state::ReplicaState,
+};
 
 #[derive(Debug)]
 pub(super) struct FixedStamp(pub(super) u64);
@@ -146,4 +152,127 @@ pub(super) fn open_log_with_records(path: &std::path::Path, records: i32) -> Log
         log.append(&mut sample_batch(records)).expect("append");
     }
     log
+}
+
+/// Writer services and signals, with each test overriding only what it observes.
+/// The fixture owns no log or sender: callers choose explicitly whether the
+/// spawned writer receives their log by move or by clone.
+pub(super) struct WriterOptions {
+    pub(super) topic: String,
+    pub(super) partition: PartitionIndex,
+    pub(super) append_notify: Arc<Notify>,
+    pub(super) replica_state: Arc<tokio::sync::Mutex<ReplicaState>>,
+    pub(super) hw_advance_notify: Arc<Notify>,
+    pub(super) delivery: DeliveryHandles,
+    pub(super) log_dir_status: LogDirRegistry,
+    pub(super) producer_state: Arc<ProducerState>,
+    pub(super) wal: Option<crate::wal::SharedWal>,
+    pub(super) max_produce_group: usize,
+    pub(super) sequencer: Option<Arc<dyn crate::wal::OffsetSequencer>>,
+}
+
+impl Default for WriterOptions {
+    fn default() -> Self {
+        Self {
+            topic: "t".into(),
+            partition: PartitionIndex(0),
+            append_notify: Arc::new(Notify::new()),
+            replica_state: Arc::new(tokio::sync::Mutex::new(ReplicaState::new())),
+            hw_advance_notify: Arc::new(Notify::new()),
+            delivery: DeliveryHandles::new(),
+            log_dir_status: LogDirRegistry::default(),
+            producer_state: Arc::new(ProducerState::new()),
+            wal: None,
+            max_produce_group: crate::config::BrokerConfig::default().max_produce_group,
+            sequencer: None,
+        }
+    }
+}
+
+pub(super) fn spawn_writer(
+    dir: &std::path::Path,
+    log: Arc<Mutex<Log>>,
+    receiver: mpsc::Receiver<WriterMessage>,
+    options: WriterOptions,
+) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(run_writer!(
+        options.topic, options.partition, log,
+        Arc::new(arc_swap::ArcSwap::from_pointee(dir.to_path_buf())), receiver,
+        options.append_notify, options.replica_state, options.hw_advance_notify,
+        options.delivery, options.log_dir_status, options.producer_state, options.wal;
+        options.max_produce_group, options.sequencer,
+    ))
+}
+
+pub(super) fn open_default_log(dir: &std::path::Path) -> Arc<Mutex<Log>> {
+    Arc::new(Mutex::new(
+        Log::open(dir, LogConfig::default()).expect("open log"),
+    ))
+}
+
+/// The default fixture for tests that retain their log after spawning.
+/// Destructuring it preserves the original caller-owned log and notify handles.
+pub(super) struct DefaultWriter {
+    pub(super) dir: tempfile::TempDir,
+    pub(super) log: Arc<Mutex<Log>>,
+    pub(super) sender: mpsc::Sender<WriterMessage>,
+    pub(super) writer: tokio::task::JoinHandle<()>,
+    pub(super) notify: Arc<Notify>,
+}
+
+pub(super) fn default_writer() -> DefaultWriter {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let log = open_default_log(dir.path());
+    let (sender, receiver) = mpsc::channel(1);
+    let notify = Arc::new(Notify::new());
+    let writer = spawn_writer(
+        dir.path(),
+        log.clone(),
+        receiver,
+        WriterOptions {
+            append_notify: notify.clone(),
+            ..Default::default()
+        },
+    );
+    DefaultWriter {
+        dir,
+        log,
+        sender,
+        writer,
+        notify,
+    }
+}
+
+pub(super) type ProduceAck =
+    oneshot::Receiver<Result<crate::partition::AppendedBatch, crate::error::BrokerError>>;
+
+/// Queue an owned batch without waiting for its append. Callers decide when to
+/// receive or drop the ack, so notification and group-draining tests retain
+/// their original ordering.
+pub(super) async fn queue_batch(
+    sender: &mpsc::Sender<WriterMessage>,
+    batch: RecordBatch,
+) -> ProduceAck {
+    let (ack, receiver) = oneshot::channel();
+    sender
+        .send(WriterMessage::Produce(crate::partition::ProduceJob {
+            data: crate::partition::ProduceData::Owned(batch),
+            ack,
+            producer_check: None,
+        }))
+        .await
+        .expect("send produce");
+    receiver
+}
+
+pub(super) async fn replica_with_isr(nodes: &[u64]) -> Arc<tokio::sync::Mutex<ReplicaState>> {
+    let replica = Arc::new(tokio::sync::Mutex::new(ReplicaState::new()));
+    let nodes: Vec<_> = nodes.iter().copied().map(krabka_audit::NodeId).collect();
+    replica.lock().await.install_isr(
+        &nodes,
+        &nodes,
+        krabka_audit::NodeId(1),
+        std::time::Instant::now(),
+    );
+    replica
 }

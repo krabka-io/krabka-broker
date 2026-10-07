@@ -1,18 +1,18 @@
-(* #"/workspace/crates/verified/src/transaction/reaper.rs" 122 0 130 34 *)
+(* #"/workspace/crates/verified/src/transaction/reaper.rs" 123 0 131 34 *)
 
-let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
-let%span sreaper = "/workspace/crates/verified/src/transaction/reaper.rs" 133 28 133 29
-let%span sreaper'0 = "/workspace/crates/verified/src/transaction/reaper.rs" 133 50 133 51
-let%span sreaper'1 = "/workspace/crates/verified/src/transaction/reaper.rs" 135 37 135 39
-let%span sreaper'2 = "/workspace/crates/verified/src/transaction/reaper.rs" 135 66 135 68
-let%span sreaper'3 = "/workspace/crates/verified/src/transaction/reaper.rs" 136 32 136 33
-let%span sreaper'4 = "/workspace/crates/verified/src/transaction/reaper.rs" 136 60 136 61
-let%span sreaper'5 = "/workspace/crates/verified/src/transaction/reaper.rs" 139 61 139 62
-let%span sreaper'6 = "/workspace/crates/verified/src/transaction/reaper.rs" 95 10 96 25
-let%span sreaper'7 = "/workspace/crates/verified/src/transaction/reaper.rs" 97 10 98 71
-let%span sreaper'8 = "/workspace/crates/verified/src/transaction/reaper.rs" 99 10 104 70
-let%span sreaper'9 = "/workspace/crates/verified/src/transaction/reaper.rs" 105 10 112 64
-let%span sreaper'10 = "/workspace/crates/verified/src/transaction/reaper.rs" 113 10 120 57
+let%span sord = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sreaper = "/workspace/crates/verified/src/transaction/reaper.rs" 134 28 134 29
+let%span sreaper'0 = "/workspace/crates/verified/src/transaction/reaper.rs" 134 50 134 51
+let%span sreaper'1 = "/workspace/crates/verified/src/transaction/reaper.rs" 136 37 136 39
+let%span sreaper'2 = "/workspace/crates/verified/src/transaction/reaper.rs" 136 66 136 68
+let%span sreaper'3 = "/workspace/crates/verified/src/transaction/reaper.rs" 137 32 137 33
+let%span sreaper'4 = "/workspace/crates/verified/src/transaction/reaper.rs" 137 60 137 61
+let%span sreaper'5 = "/workspace/crates/verified/src/transaction/reaper.rs" 140 61 140 62
+let%span sreaper'6 = "/workspace/crates/verified/src/transaction/reaper.rs" 96 10 97 25
+let%span sreaper'7 = "/workspace/crates/verified/src/transaction/reaper.rs" 98 10 99 71
+let%span sreaper'8 = "/workspace/crates/verified/src/transaction/reaper.rs" 100 10 105 70
+let%span sreaper'9 = "/workspace/crates/verified/src/transaction/reaper.rs" 106 10 113 64
+let%span sreaper'10 = "/workspace/crates/verified/src/transaction/reaper.rs" 114 10 121 57
 
 use creusot.int.Int64
 use creusot.int.Int16
@@ -34,7 +34,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let transaction_pid_install_decision [#"/workspace/crates/verified/src/transaction/reaper.rs" 122 0 130 34]
+let transaction_pid_install_decision [#"/workspace/crates/verified/src/transaction/reaper.rs" 123 0 131 34]
   (partition_matches: bool) (producer_id: Int64.t) (producer_epoch: Int16.t) (next_producer_id: Int64.t)
   (next_producer_epoch: Int16.t) (current_owner_matches: bool) (next_owner_matches: bool)
   (return (x: t_TransactionPidInstallDecision)) = (! bb0

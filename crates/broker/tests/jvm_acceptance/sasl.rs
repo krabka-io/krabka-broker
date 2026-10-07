@@ -3,10 +3,9 @@
 //! The JVM tools authenticate with a JAAS login-module entry, so the builders
 //! for those entries live beside the brokers that accept them.
 
-use krabka_broker::{Broker, BrokerConfig};
-use krabka_log::LogConfig;
+use krabka_broker::BrokerConfig;
 
-use super::ports::{broker0_advertised, broker0_listen, controller_addr_0};
+use super::ports::broker0_advertised;
 
 /// Build a JAAS config string for the `PlainLoginModule`. The trailing `;`
 /// is mandatory. Kafka's JAAS parser rejects the entry without it.
@@ -33,67 +32,7 @@ pub(crate) fn scram_jaas(user: &str, pass: &str) -> String {
 pub(crate) fn start_sasl_plaintext_broker(
     users: &[(&str, &str)],
 ) -> impl std::future::Future<Output = (krabka_broker::BrokerHandle, tempfile::TempDir)> {
-    use krabka_broker::config::ListenerSpec;
-    use krabka_security::{ListenerProtocol, SaslMechanism};
-
-    let _ = tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("krabka_broker=debug,info")),
-        )
-        .with_test_writer()
-        .try_init();
-    let dir = tempfile::tempdir().expect("tempdir");
-    let listen_addr: std::net::SocketAddr = broker0_listen().parse().expect("static addr");
-    let controller_addr: std::net::SocketAddr =
-        controller_addr_0().parse().expect("allocated addr");
-    let mut config = BrokerConfig {
-        broker_id: 1,
-        listen_addr,
-        advertised_listener: broker0_advertised().into(),
-        log_dir: dir.path().to_path_buf(),
-        log_config: LogConfig::default(),
-        node_id: krabka_broker::NodeId(1),
-        controller_listen_addr: controller_addr,
-        controller_quorum_voters: vec![(krabka_broker::NodeId(1), controller_addr.to_string())],
-        heartbeat_interval: krabka_units::millis(3_000),
-        heartbeat_timeout: krabka_units::millis(9_000),
-        replica_lag_time_max: krabka_units::millis(30_000),
-        controller_election_timeout: krabka_units::secs(5),
-        controller_heartbeat_interval: krabka_units::millis(500),
-        bootstrap_mode: krabka_broker::BootstrapMode::Bootstrap,
-        listeners: vec![ListenerSpec {
-            name: "SASL_PLAINTEXT".to_string(),
-            bind_addr: listen_addr,
-            advertised: broker0_advertised().to_string(),
-            protocol: ListenerProtocol::SaslPlaintext,
-            tls_config: None,
-            sasl_mechanisms: None,
-            principal_mapper: krabka_broker::SslPrincipalMapper::default(),
-        }],
-        inter_broker_listener_name: "SASL_PLAINTEXT".to_string(),
-        enabled_sasl_mechanisms: vec![SaslMechanism::Plain],
-        ..BrokerConfig::default().with_internal_topics_for(1)
-    };
-    for (u, p) in users {
-        config
-            .plain_credentials
-            .insert((*u).to_string(), (*p).to_string());
-    }
-    Box::pin(async move {
-        let handle = Broker::start(config).await.expect("start sasl broker");
-        eprintln!(
-            "KRABKA[test] sasl broker started listen={listen} advertised={bootstrap}",
-            bootstrap = broker0_advertised(),
-            listen = broker0_listen()
-        );
-        tracing::info!(
-            listen = %broker0_listen(),
-            advertised = %broker0_advertised(),
-            "sasl broker started for jvm acceptance"
-        );
-        (handle, dir)
-    })
+    super::broker::start_host_broker_with(|config| configure_sasl(config, users, None))
 }
 
 /// Spawn the broker with a single `SASL_PLAINTEXT` listener that enables
@@ -121,77 +60,13 @@ pub(crate) fn start_dual_mech_broker_with_reauth(
     admin_pass: &str,
     max_reauth: Option<krabka_units::Time>,
 ) -> impl std::future::Future<Output = (krabka_broker::BrokerHandle, tempfile::TempDir)> {
-    use krabka_broker::config::ListenerSpec;
-    use krabka_security::{ListenerProtocol, SaslMechanism};
-
-    let _ = tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("krabka_broker=debug,info")),
-        )
-        .with_test_writer()
-        .try_init();
-    let dir = tempfile::tempdir().expect("tempdir");
-    let listen_addr: std::net::SocketAddr = broker0_listen().parse().expect("static addr");
-    let controller_addr: std::net::SocketAddr =
-        controller_addr_0().parse().expect("allocated addr");
-    let mut config = BrokerConfig {
-        broker_id: 1,
-        listen_addr,
-        advertised_listener: broker0_advertised().into(),
-        log_dir: dir.path().to_path_buf(),
-        log_config: LogConfig::default(),
-        node_id: krabka_broker::NodeId(1),
-        controller_listen_addr: controller_addr,
-        controller_quorum_voters: vec![(krabka_broker::NodeId(1), controller_addr.to_string())],
-        heartbeat_interval: krabka_units::millis(3_000),
-        heartbeat_timeout: krabka_units::millis(9_000),
-        replica_lag_time_max: krabka_units::millis(30_000),
-        controller_election_timeout: krabka_units::secs(5),
-        controller_heartbeat_interval: krabka_units::millis(500),
-        bootstrap_mode: krabka_broker::BootstrapMode::Bootstrap,
-        listeners: vec![ListenerSpec {
-            name: "SASL_PLAINTEXT".to_string(),
-            bind_addr: listen_addr,
-            advertised: broker0_advertised().to_string(),
-            protocol: ListenerProtocol::SaslPlaintext,
-            tls_config: None,
-            sasl_mechanisms: None,
-            principal_mapper: krabka_broker::SslPrincipalMapper::default(),
-        }],
-        inter_broker_listener_name: "SASL_PLAINTEXT".to_string(),
-        enabled_sasl_mechanisms: vec![
-            SaslMechanism::Plain,
-            SaslMechanism::ScramSha256,
-            SaslMechanism::ScramSha512,
-        ],
-        super_users: maplit::hashset! {admin.to_string()},
-        connections_max_reauth: max_reauth,
-        ..BrokerConfig::default().with_internal_topics_for(1)
-    };
-    // The PLAINTEXT controller listener carries `ANONYMOUS`, and the node's own
-    // heartbeats reach it. Every data listener here authenticates, so this
-    // super user reaches only the controller listener.
-    config.super_users.insert("ANONYMOUS".to_string());
-    config.authorizer = std::sync::Arc::new(krabka_broker::authorizer::SimpleAclAuthorizer::new(
-        config.super_users.clone(),
-    ));
-    config
-        .plain_credentials
-        .insert(admin.to_string(), admin_pass.to_string());
-    Box::pin(async move {
-        let handle = Broker::start(config).await.expect("start dual-mech broker");
-        eprintln!(
-            "KRABKA[test] dual-mech broker started listen={listen} advertised={bootstrap}",
-            bootstrap = broker0_advertised(),
-            listen = broker0_listen()
-        );
-        tracing::info!(
-            listen = %broker0_listen(),
-            advertised = %broker0_advertised(),
-            "dual-mech broker started for jvm acceptance"
-        );
-        (handle, dir)
+    super::broker::start_host_broker_with(move |config| {
+        configure_sasl(config, &[(admin, admin_pass)], Some(admin));
+        config.enabled_sasl_mechanisms.extend([
+            krabka_security::SaslMechanism::ScramSha256,
+            krabka_security::SaslMechanism::ScramSha512,
+        ]);
+        config.connections_max_reauth = max_reauth;
     })
 }
 
@@ -212,57 +87,11 @@ pub(crate) fn oauthbearer_jaas(sub: &str) -> String {
 /// The broker validates the JVM client's unsecured JWS with the default
 /// validator (principal claim `sub`). Mirrors [`start_sasl_plaintext_broker`].
 pub(crate) async fn start_oauthbearer_broker() -> (krabka_broker::BrokerHandle, tempfile::TempDir) {
-    use krabka_broker::config::ListenerSpec;
-    use krabka_security::{ListenerProtocol, SaslMechanism};
-
-    let _ = tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("krabka_broker=debug,info")),
-        )
-        .with_test_writer()
-        .try_init();
-    let dir = tempfile::tempdir().expect("tempdir");
-    let listen_addr: std::net::SocketAddr = broker0_listen().parse().expect("static addr");
-    let controller_addr: std::net::SocketAddr =
-        controller_addr_0().parse().expect("allocated addr");
-    let config = BrokerConfig {
-        broker_id: 1,
-        listen_addr,
-        advertised_listener: broker0_advertised().into(),
-        log_dir: dir.path().to_path_buf(),
-        log_config: LogConfig::default(),
-        node_id: krabka_broker::NodeId(1),
-        controller_listen_addr: controller_addr,
-        controller_quorum_voters: vec![(krabka_broker::NodeId(1), controller_addr.to_string())],
-        heartbeat_interval: krabka_units::millis(3_000),
-        heartbeat_timeout: krabka_units::millis(9_000),
-        replica_lag_time_max: krabka_units::millis(30_000),
-        controller_election_timeout: krabka_units::secs(5),
-        controller_heartbeat_interval: krabka_units::millis(500),
-        bootstrap_mode: krabka_broker::BootstrapMode::Bootstrap,
-        listeners: vec![ListenerSpec {
-            name: "SASL_PLAINTEXT".to_string(),
-            bind_addr: listen_addr,
-            advertised: broker0_advertised().to_string(),
-            protocol: ListenerProtocol::SaslPlaintext,
-            tls_config: None,
-            sasl_mechanisms: None,
-            principal_mapper: krabka_broker::SslPrincipalMapper::default(),
-        }],
-        inter_broker_listener_name: "SASL_PLAINTEXT".to_string(),
-        enabled_sasl_mechanisms: vec![SaslMechanism::OAuthBearer],
-        ..BrokerConfig::default().with_internal_topics_for(1)
-    };
-    let handle = Broker::start(config)
-        .await
-        .expect("start oauthbearer broker");
-    eprintln!(
-        "KRABKA[test] oauthbearer broker started listen={listen} advertised={bootstrap}",
-        bootstrap = broker0_advertised(),
-        listen = broker0_listen()
-    );
-    (handle, dir)
+    super::broker::start_host_broker_with(|config| {
+        configure_sasl(config, &[], None);
+        config.enabled_sasl_mechanisms = vec![krabka_security::SaslMechanism::OAuthBearer];
+    })
+    .await
 }
 
 /// Spawn the broker with a single `SASL_PLAINTEXT` listener that enables
@@ -277,71 +106,65 @@ pub(crate) fn start_sasl_plaintext_broker_with_super_user(
     super_user: &str,
     users: &[(&str, &str)],
 ) -> impl std::future::Future<Output = (krabka_broker::BrokerHandle, tempfile::TempDir)> {
+    super::broker::start_host_broker_with(|config| configure_sasl(config, users, Some(super_user)))
+}
+
+pub(crate) fn configure_sasl(
+    config: &mut BrokerConfig,
+    users: &[(&str, &str)],
+    super_user: Option<&str>,
+) {
     use krabka_broker::config::ListenerSpec;
     use krabka_security::{ListenerProtocol, SaslMechanism};
 
-    let _ = tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("krabka_broker=debug,info")),
-        )
-        .with_test_writer()
-        .try_init();
-    let dir = tempfile::tempdir().expect("tempdir");
-    let super_user = super_user.to_string();
-    let listen_addr: std::net::SocketAddr = broker0_listen().parse().expect("static addr");
-    let controller_addr: std::net::SocketAddr =
-        controller_addr_0().parse().expect("allocated addr");
-    let mut config = BrokerConfig {
-        broker_id: 1,
-        listen_addr,
-        advertised_listener: broker0_advertised().into(),
-        log_dir: dir.path().to_path_buf(),
-        log_config: LogConfig::default(),
-        node_id: krabka_broker::NodeId(1),
-        controller_listen_addr: controller_addr,
-        controller_quorum_voters: vec![(krabka_broker::NodeId(1), controller_addr.to_string())],
-        heartbeat_interval: krabka_units::millis(3_000),
-        heartbeat_timeout: krabka_units::millis(9_000),
-        replica_lag_time_max: krabka_units::millis(30_000),
-        controller_election_timeout: krabka_units::secs(5),
-        controller_heartbeat_interval: krabka_units::millis(500),
-        bootstrap_mode: krabka_broker::BootstrapMode::Bootstrap,
-        listeners: vec![ListenerSpec {
-            name: "SASL_PLAINTEXT".to_string(),
-            bind_addr: listen_addr,
-            advertised: broker0_advertised().to_string(),
-            protocol: ListenerProtocol::SaslPlaintext,
-            tls_config: None,
-            sasl_mechanisms: None,
-            principal_mapper: krabka_broker::SslPrincipalMapper::default(),
-        }],
-        inter_broker_listener_name: "SASL_PLAINTEXT".to_string(),
-        enabled_sasl_mechanisms: vec![SaslMechanism::Plain],
-        super_users: maplit::hashset! {super_user.clone()},
-        ..BrokerConfig::default().with_internal_topics_for(1)
-    };
-    // The PLAINTEXT controller listener carries `ANONYMOUS`, and the node's own
-    // heartbeats reach it. Every data listener here authenticates, so this
-    // super user reaches only the controller listener.
-    config.super_users.insert("ANONYMOUS".to_string());
-    config.authorizer = std::sync::Arc::new(krabka_broker::authorizer::SimpleAclAuthorizer::new(
-        config.super_users.clone(),
-    ));
-    for (u, p) in users {
+    config.listeners = vec![ListenerSpec {
+        name: "SASL_PLAINTEXT".into(),
+        bind_addr: config.listen_addr,
+        advertised: broker0_advertised().into(),
+        protocol: ListenerProtocol::SaslPlaintext,
+        tls_config: None,
+        sasl_mechanisms: None,
+        principal_mapper: krabka_broker::SslPrincipalMapper::default(),
+    }];
+    config.inter_broker_listener_name = "SASL_PLAINTEXT".into();
+    config.enabled_sasl_mechanisms = vec![SaslMechanism::Plain];
+    for (user, password) in users {
         config
             .plain_credentials
-            .insert((*u).to_string(), (*p).to_string());
+            .insert((*user).into(), (*password).into());
     }
-    Box::pin(async move {
-        let handle = Broker::start(config)
-            .await
-            .expect("start sasl broker with super-user");
-        eprintln!(
-            "KRABKA[test] sasl super-user broker started listen={listen} advertised={bootstrap} super_user={super_user}",
-            bootstrap = broker0_advertised(),
-            listen = broker0_listen()
+    if let Some(user) = super_user {
+        // The node's own heartbeat reaches the PLAINTEXT controller as ANONYMOUS.
+        config.super_users.extend([user.into(), "ANONYMOUS".into()]);
+        config.authorizer = std::sync::Arc::new(
+            krabka_broker::authorizer::SimpleAclAuthorizer::new(config.super_users.clone()),
         );
-        (handle, dir)
-    })
+    }
+}
+
+/// ACL fixture with an admin-owned topic and a provisioned PLAIN user.
+pub(crate) async fn start_plain_acl_topic(
+    topic: &str,
+    user: &str,
+    password: &str,
+) -> (
+    krabka_broker::BrokerHandle,
+    tempfile::TempDir,
+    super::docker::ClientPropsFile,
+) {
+    let (broker, dir) = start_sasl_plaintext_broker_with_super_user(
+        "admin",
+        &[("admin", "admin-secret"), (user, password)],
+    )
+    .await;
+    super::docker::nc_check_connectivity();
+    let props = super::docker::write_plain_props("admin", "admin-secret");
+    super::docker::create_console_topic(
+        super::docker::KAFKA_IMAGE_TXN,
+        &[&props.mount_str()],
+        topic,
+        1,
+        1,
+    );
+    (broker, dir, props)
 }

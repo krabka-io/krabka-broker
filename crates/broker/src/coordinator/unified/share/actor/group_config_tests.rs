@@ -15,6 +15,9 @@ use super::{
     ShareGroupActorHandle,
     test_support::{heartbeat, metadata_with_topic, seed_initialized},
 };
+// A metadata image that holds each group config in `overrides`: a group id
+// and its `share.*` entries.
+use crate::coordinator::unified::test_support::group_config_image as group_image;
 use crate::{
     codes,
     coordinator::unified::{
@@ -23,24 +26,6 @@ use crate::{
         test_support::fixed_source,
     },
 };
-
-/// A metadata image that holds each group config in `overrides`: a group id
-/// and its `share.*` entries.
-fn group_image(overrides: &[(&str, &[(&str, &str)])]) -> krabka_metadata::MetadataImage {
-    let mut image = krabka_metadata::MetadataImage::new(uuid::Uuid::nil());
-    for (group_id, entries) in overrides {
-        image.apply(&krabka_metadata::MetadataRecord::V1GroupConfig(
-            krabka_metadata::GroupConfigRecord {
-                group_id: (*group_id).to_owned(),
-                configs: entries
-                    .iter()
-                    .map(|(key, value)| ((*key).to_owned(), (*value).to_owned()))
-                    .collect(),
-            },
-        ));
-    }
-    image
-}
 
 /// A coordinator over topic `t` with four partitions, whose metadata image
 /// holds each group config in `overrides`: a group id and its `share.*`

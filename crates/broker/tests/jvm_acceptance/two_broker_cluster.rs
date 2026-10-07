@@ -4,14 +4,6 @@
 //! advertised `host.docker.internal` name, which is the same address the JVM
 //! containers use, so one metadata response serves both.
 
-use krabka_broker::{Broker, BrokerConfig};
-use krabka_log::LogConfig;
-
-use super::ports::{
-    broker0_advertised, broker0_listen, broker1_advertised, broker1_listen, controller_addr_0,
-    controller_addr_1,
-};
-
 /// Host port assignments for the two-broker JVM inter-broker test. The
 /// `SASL_PLAINTEXT` listener of broker 0 binds an allocated port (advertised as
 /// an allocated port) and broker 1 binds an allocated port
@@ -34,124 +26,15 @@ pub(crate) async fn start_two_sasl_brokers(
     tempfile::TempDir,
     tempfile::TempDir,
 ) {
-    use krabka_broker::config::{InterBrokerCredentials, ListenerSpec};
-    use krabka_security::{ListenerProtocol, SaslMechanism};
-
-    let _ = tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("krabka_broker=info")),
-        )
-        .with_test_writer()
-        .try_init();
-    let _ = rustls::crypto::ring::default_provider().install_default();
-
-    let dir0 = tempfile::tempdir().expect("tempdir b0");
-    let dir1 = tempfile::tempdir().expect("tempdir b1");
-    let listen0: std::net::SocketAddr = broker0_listen().parse().expect("static addr");
-    let listen1: std::net::SocketAddr = broker1_listen().parse().expect("static addr");
-    let ctrl0: std::net::SocketAddr = controller_addr_0().parse().expect("allocated addr");
-    let ctrl1: std::net::SocketAddr = controller_addr_1().parse().expect("allocated addr");
-    let voters = [(1_u64, ctrl0), (2_u64, ctrl1)];
-
-    let mk_cfg = |idx: u64,
-                  listen: std::net::SocketAddr,
-                  ctrl: std::net::SocketAddr,
-                  advertised: &str,
-                  log_dir: std::path::PathBuf,
-                  mode: krabka_broker::BootstrapMode|
-     -> BrokerConfig {
-        let mut cfg = BrokerConfig {
-            broker_id: i32::try_from(idx).unwrap(),
-            listen_addr: listen,
-            advertised_listener: advertised.to_string(),
-            log_dir,
-            log_config: LogConfig::default(),
-            node_id: krabka_broker::NodeId(idx),
-            controller_listen_addr: ctrl,
-            controller_quorum_voters: voters
-                .iter()
-                .map(|(id, a)| (krabka_broker::NodeId(*id), a.to_string()))
-                .collect(),
-            heartbeat_interval: krabka_units::millis(3_000),
-            heartbeat_timeout: krabka_units::millis(9_000),
-            replica_lag_time_max: krabka_units::millis(30_000),
-            controller_election_timeout: krabka_units::secs(5),
-            controller_heartbeat_interval: krabka_units::millis(500),
-            bootstrap_mode: mode,
-            listeners: vec![ListenerSpec {
-                name: "SASL_PLAINTEXT".to_string(),
-                bind_addr: listen,
-                advertised: advertised.to_string(),
-                protocol: ListenerProtocol::SaslPlaintext,
-                tls_config: None,
-                sasl_mechanisms: None,
-                principal_mapper: krabka_broker::SslPrincipalMapper::default(),
-            }],
-            inter_broker_listener_name: "SASL_PLAINTEXT".to_string(),
-            // The controllers authorize each raft request for the peer
-            // principal. Over SASL that principal is the `admin` super user;
-            // over PLAINTEXT it would be `ANONYMOUS`, which holds nothing.
-            controller_listener_protocol: ListenerProtocol::SaslPlaintext,
-            enabled_sasl_mechanisms: vec![SaslMechanism::Plain],
-            super_users: maplit::hashset! {admin.to_string()},
-            inter_broker_credentials: Some(InterBrokerCredentials::Plain {
-                username: admin.to_string(),
-                password: admin_pass.to_string(),
-            }),
-            ..BrokerConfig::default().with_internal_topics_for(2)
-        };
-        cfg.authorizer = std::sync::Arc::new(krabka_broker::authorizer::SimpleAclAuthorizer::new(
-            cfg.super_users.clone(),
-        ));
-        cfg.plain_credentials
-            .insert(admin.to_string(), admin_pass.to_string());
-        cfg
-    };
-
-    let cfg0 = mk_cfg(
-        1,
-        listen0,
-        ctrl0,
-        broker0_advertised(),
-        dir0.path().to_path_buf(),
-        krabka_broker::BootstrapMode::Bootstrap,
-    );
-    // Static cold-boot (KIP-595): every voter is seeded with the full static
-    // `controller_quorum_voters` set in Bootstrap mode, so the quorum forms by
-    // electing among the concurrently-booting voters. `Broker::start` blocks
-    // until its controller sees a committed leader, and a leader needs a
-    // majority of the static set up and dialable — so awaiting broker 0 alone
-    // would deadlock. Spawn all starts concurrently and join them. (The old
-    // openraft bootstrap-then-join via add_learner/change_membership is gone
-    // with the static voter set.)
-    let cfg1 = mk_cfg(
-        2,
-        listen1,
-        ctrl1,
-        broker1_advertised(),
-        dir1.path().to_path_buf(),
-        krabka_broker::BootstrapMode::Bootstrap,
-    );
-    let h0 = tokio::spawn(async move { Broker::start(cfg0).await });
-    let h1 = tokio::spawn(async move { Broker::start(cfg1).await });
-    let broker0 = h0
-        .await
-        .expect("broker 0 spawn join")
-        .expect("start broker 0");
-    let broker1 = h1
-        .await
-        .expect("broker 1 spawn join")
-        .expect("broker 1 start");
-
-    eprintln!(
-        "KRABKA[test] two-broker sasl: b0={listen} adv={bootstrap} b1={listen_b1} adv={bootstrap_b1}",
-        bootstrap = broker0_advertised(),
-        bootstrap_b1 = broker1_advertised(),
-        listen = broker0_listen(),
-        listen_b1 = broker1_listen()
-    );
-    (broker0, broker1, dir0, dir1)
+    let ([h0, h1], _, [d0, d1]) = super::three_broker_cluster::start_sasl_cluster(
+        super::ports::cluster_listeners(),
+        admin,
+        admin_pass,
+        &[],
+        |_| {},
+    )
+    .await;
+    (h0, h1, d0, d1)
 }
 
 /// Spawn two in-process brokers that share an inter-broker SASL
@@ -172,147 +55,35 @@ pub(crate) async fn start_two_sasl_ssl_brokers_with_controller_protocol(
     tempfile::TempDir,
     tempfile::TempDir,
 ) {
-    use krabka_broker::config::{InterBrokerCredentials, ListenerSpec};
-    use krabka_security::{ListenerProtocol, SaslMechanism, TlsConfig};
+    use krabka_security::{ClientAuthMode, SaslMechanism, TlsConfig};
 
-    let _ = tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("krabka_broker=info")),
-        )
-        .with_test_writer()
-        .try_init();
-    let _ = rustls::crypto::ring::default_provider().install_default();
-
-    let dir0 = tempfile::tempdir().expect("tempdir b0");
-    let dir1 = tempfile::tempdir().expect("tempdir b1");
-    let listen0: std::net::SocketAddr = broker0_listen().parse().expect("static addr");
-    let listen1: std::net::SocketAddr = broker1_listen().parse().expect("static addr");
-    let ctrl0: std::net::SocketAddr = controller_addr_0().parse().expect("allocated addr");
-    let ctrl1: std::net::SocketAddr = controller_addr_1().parse().expect("allocated addr");
-    let voters = [(1_u64, ctrl0), (2_u64, ctrl1)];
-
-    let manifest_dir = crate::support::manifest_dir();
-    let cert_path = manifest_dir
-        .join("tests")
-        .join("fixtures")
-        .join("security")
-        .join("dev_cert.pem");
-    let key_path = manifest_dir
-        .join("tests")
-        .join("fixtures")
-        .join("security")
-        .join("dev_key.pem");
-
-    let mk_cfg = |idx: u64,
-                  listen: std::net::SocketAddr,
-                  ctrl: std::net::SocketAddr,
-                  advertised: &str,
-                  log_dir: std::path::PathBuf,
-                  mode: krabka_broker::BootstrapMode|
-     -> BrokerConfig {
-        let mut cfg = BrokerConfig {
-            broker_id: i32::try_from(idx).unwrap(),
-            listen_addr: listen,
-            advertised_listener: advertised.to_string(),
-            log_dir,
-            log_config: LogConfig::default(),
-            node_id: krabka_broker::NodeId(idx),
-            controller_listen_addr: ctrl,
-            controller_quorum_voters: voters
-                .iter()
-                .map(|(id, a)| (krabka_broker::NodeId(*id), a.to_string()))
-                .collect(),
-            heartbeat_interval: krabka_units::millis(3_000),
-            heartbeat_timeout: krabka_units::millis(9_000),
-            replica_lag_time_max: krabka_units::millis(30_000),
-            // Slightly more generous than the SASL_PLAINTEXT helper because
-            // both data-plane and controller-plane handshakes now include
-            // a TLS handshake on top of SASL; on a busy WSL/CI runner the
-            // extra round trips can push past 5s.
-            controller_election_timeout: krabka_units::secs(8),
-            controller_heartbeat_interval: krabka_units::millis(500),
-            bootstrap_mode: mode,
-            listeners: vec![ListenerSpec {
-                name: "SASL_SSL".to_string(),
-                bind_addr: listen,
-                advertised: advertised.to_string(),
-                protocol: ListenerProtocol::SaslSsl,
-                tls_config: None,
-                sasl_mechanisms: None,
-                principal_mapper: krabka_broker::SslPrincipalMapper::default(),
-            }],
-            inter_broker_listener_name: "SASL_SSL".to_string(),
-            controller_listener_protocol: ctrl_protocol,
-            tls_config: Some(TlsConfig {
+    let security = crate::support::manifest_dir().join("tests/fixtures/security");
+    let cert_path = security.join("dev_cert.pem");
+    let ([h0, h1], _, [d0, d1]) = super::three_broker_cluster::start_sasl_cluster(
+        super::ports::cluster_listeners(),
+        admin,
+        admin_pass,
+        &[],
+        |config| {
+            let listener = &mut config.listeners[0];
+            listener.name = "SASL_SSL".into();
+            listener.protocol = krabka_security::ListenerProtocol::SaslSsl;
+            config.inter_broker_listener_name = "SASL_SSL".into();
+            config.controller_listener_protocol = ctrl_protocol;
+            // TLS adds handshake round trips to both controller and data traffic.
+            config.controller_election_timeout = krabka_units::secs(8);
+            config.tls_config = Some(TlsConfig {
                 cert_chain_path: cert_path.clone(),
-                private_key_path: key_path.clone(),
-                // Each broker must trust the dev cert that its peer
-                // presents on inter-broker raft + replication dials.
-                // Without this, the InterBrokerClient TlsConnector has
-                // an empty trust-root store and rejects the peer's
-                // self-signed cert as `UnknownIssuer`.
+                private_key_path: security.join("dev_key.pem"),
                 trust_roots_path: Some(cert_path.clone()),
                 client_ca_path: None,
-                client_auth: krabka_security::ClientAuthMode::Disabled,
-            }),
-            enabled_sasl_mechanisms: vec![SaslMechanism::Plain, SaslMechanism::ScramSha512],
-            super_users: maplit::hashset! {admin.to_string()},
-            inter_broker_credentials: Some(InterBrokerCredentials::Plain {
-                username: admin.to_string(),
-                password: admin_pass.to_string(),
-            }),
-            ..BrokerConfig::default().with_internal_topics_for(2)
-        };
-        cfg.authorizer = std::sync::Arc::new(krabka_broker::authorizer::SimpleAclAuthorizer::new(
-            cfg.super_users.clone(),
-        ));
-        cfg.plain_credentials
-            .insert(admin.to_string(), admin_pass.to_string());
-        cfg
-    };
-
-    let cfg0 = mk_cfg(
-        1,
-        listen0,
-        ctrl0,
-        broker0_advertised(),
-        dir0.path().to_path_buf(),
-        krabka_broker::BootstrapMode::Bootstrap,
-    );
-    // Static cold-boot (KIP-595): every voter is seeded with the full static
-    // `controller_quorum_voters` set in Bootstrap mode, so the quorum forms by
-    // electing among the concurrently-booting voters. `Broker::start` blocks
-    // until its controller sees a committed leader, and a leader needs a
-    // majority of the static set up and dialable — so awaiting broker 0 alone
-    // would deadlock. Spawn all starts concurrently and join them. (The old
-    // openraft bootstrap-then-join via add_learner/change_membership is gone
-    // with the static voter set.)
-    let cfg1 = mk_cfg(
-        2,
-        listen1,
-        ctrl1,
-        broker1_advertised(),
-        dir1.path().to_path_buf(),
-        krabka_broker::BootstrapMode::Bootstrap,
-    );
-    let h0 = tokio::spawn(async move { Broker::start(cfg0).await });
-    let h1 = tokio::spawn(async move { Broker::start(cfg1).await });
-    let broker0 = h0
-        .await
-        .expect("broker 0 spawn join")
-        .expect("start broker 0");
-    let broker1 = h1
-        .await
-        .expect("broker 1 spawn join")
-        .expect("broker 1 start");
-
-    eprintln!(
-        "KRABKA[test] two-broker sasl_ssl: b0={listen} adv={bootstrap} b1={listen_b1} adv={bootstrap_b1} ctrl_protocol={ctrl_protocol:?}",
-        bootstrap = broker0_advertised(),
-        bootstrap_b1 = broker1_advertised(),
-        listen = broker0_listen(),
-        listen_b1 = broker1_listen()
-    );
-    (broker0, broker1, dir0, dir1)
+                client_auth: ClientAuthMode::Disabled,
+            });
+            config
+                .enabled_sasl_mechanisms
+                .push(SaslMechanism::ScramSha512);
+        },
+    )
+    .await;
+    (h0, h1, d0, d1)
 }

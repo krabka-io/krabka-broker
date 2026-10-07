@@ -9,11 +9,11 @@
 use std::time::{Duration, Instant};
 
 use assert2::assert;
-use krabka_broker::{Broker, authorizer::SimpleAclAuthorizer, config::ListenerSpec};
+use krabka_broker::{Broker, authorizer::SimpleAclAuthorizer};
 use krabka_metadata::{
     AclEntry, AclOperation, MetadataRecord, PatternType, PermissionType, ResourceType,
 };
-use krabka_security::{ListenerProtocol, SaslMechanism};
+use krabka_security::SaslMechanism;
 
 use crate::{
     sasl::{create_topic_sasl_plain, drive_elect_leaders_sasl_plain},
@@ -34,17 +34,7 @@ async fn non_super_user_without_acl_denied() {
     // Build a single-broker SASL_PLAINTEXT config.
     // admin is the super-user so the compat shim stays off once an ACL
     // exists; alice has credentials but no ACLs.
-    let mut cfg = krabka_broker::BrokerConfig::for_tests(log_dir.path().to_path_buf());
-    cfg.listeners = vec![ListenerSpec {
-        name: "SASL_PLAINTEXT".to_string(),
-        bind_addr: "127.0.0.1:0".parse().unwrap(),
-        advertised: "127.0.0.1:0".to_string(),
-        protocol: ListenerProtocol::SaslPlaintext,
-        tls_config: None,
-        sasl_mechanisms: None,
-        principal_mapper: krabka_broker::SslPrincipalMapper::default(),
-    }];
-    cfg.inter_broker_listener_name = "SASL_PLAINTEXT".to_string();
+    let mut cfg = crate::support::sasl_plaintext_config(log_dir.path().to_path_buf());
     cfg.enabled_sasl_mechanisms = vec![SaslMechanism::Plain];
     cfg.plain_credentials
         .insert("admin".to_string(), "admin-secret".to_string());

@@ -1,13 +1,13 @@
-(* #"/workspace/crates/verified/src/barrier/cut_classification.rs" 19 0 22 31 *)
+(* #"/workspace/crates/verified/src/barrier/cut_classification.rs" 20 0 23 31 *)
 
-let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
-let%span scut_classification = "/workspace/crates/verified/src/barrier/cut_classification.rs" 23 26 23 27
-let%span scut_classification'0 = "/workspace/crates/verified/src/barrier/cut_classification.rs" 26 16 26 42
-let%span scut_classification'1 = "/workspace/crates/verified/src/barrier/cut_classification.rs" 27 10 27 34
-let%span scut_classification'2 = "/workspace/crates/verified/src/barrier/cut_classification.rs" 10 10 17 1
-let%span sconvert = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/convert.rs" 274 26 274 51
-let%span snum = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 328 20 329 89
-let%span snum'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 332 26 332 87
+let%span sord = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span snum = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 328 20 329 89
+let%span snum'0 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 332 26 332 87
+let%span scut_classification = "/workspace/crates/verified/src/barrier/cut_classification.rs" 24 26 24 27
+let%span scut_classification'0 = "/workspace/crates/verified/src/barrier/cut_classification.rs" 27 16 27 42
+let%span scut_classification'1 = "/workspace/crates/verified/src/barrier/cut_classification.rs" 28 10 28 34
+let%span scut_classification'2 = "/workspace/crates/verified/src/barrier/cut_classification.rs" 11 10 18 1
+let%span sconvert = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/convert.rs" 274 26 274 51
 
 use creusot.int.Int32
 use creusot.int.Int64
@@ -52,7 +52,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let barrier_target_count_decision [#"/workspace/crates/verified/src/barrier/cut_classification.rs" 19 0 22 31]
+let barrier_target_count_decision [#"/workspace/crates/verified/src/barrier/cut_classification.rs" 20 0 23 31]
   (total: Int64.t) (partition_count: Int32.t) (return (x: t_BarrierTargetCountDecision)) = (! bb0
   [ bb0 = s0
     [ s0 = [ &_7 <- Int32.le partition_count ([%#scut_classification] (0: Int32.t)) ] s1

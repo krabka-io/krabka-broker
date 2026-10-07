@@ -17,7 +17,6 @@
 
 use std::ops::ControlFlow;
 
-use bytes::Bytes;
 use krabka_protocol::owned::{
     remove_raft_voter_request::RemoveRaftVoterRequest,
     remove_raft_voter_response::RemoveRaftVoterResponse,
@@ -25,21 +24,14 @@ use krabka_protocol::owned::{
 use krabka_raft::{reconfig::RemoveVoter, voter_requests};
 
 use crate::{
-    broker::Broker,
     codes,
-    error::BrokerError,
     handlers::{
         ErrorResponse as _, cluster_alter_denied,
         raft_voter::{Admitted, Refusals, prelude, respond},
     },
 };
 
-pub(crate) async fn handle(
-    broker: &Broker,
-    version: i16,
-    req_bytes: &[u8],
-    ctx: &crate::handlers::RequestContext<'_>,
-) -> Result<Bytes, BrokerError> {
+crate::handlers::raft_voter::handler!(broker, version, req_bytes, ctx, {
     let Admitted { req, image, quorum } = match prelude::<RemoveRaftVoterRequest, _>(
         broker,
         version,
@@ -97,14 +89,16 @@ pub(crate) async fn handle(
     }
 
     respond::<RemoveRaftVoterResponse>(version, error_code, error_message)
-}
+});
 
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
 
     use assert2::assert;
-    use krabka_protocol::{Decode as _, primitives::uuid::Uuid as ProtoUuid};
+    use krabka_protocol::{
+        Decode as _, owned::remove_raft_voter_response, primitives::uuid::Uuid as ProtoUuid,
+    };
 
     use crate::test_support::DenyAll;
 
@@ -117,10 +111,10 @@ mod tests {
         }
     }
 
-    crate::test_support::wire_helpers!(
+    crate::handlers::raft_voter::test_dispatch!(
+        81,
         RemoveRaftVoterRequest,
-        RemoveRaftVoterResponse,
-        client_id = "admin-client"
+        RemoveRaftVoterResponse
     );
 
     use super::*;
@@ -129,7 +123,7 @@ mod tests {
     /// Decode and encode round trip at the minimum and maximum versions.
     #[test]
     fn response_round_trips_at_min_and_max_versions() {
-        use krabka_protocol::owned::remove_raft_voter_response::{self, RemoveRaftVoterResponse};
+        use krabka_protocol::owned::remove_raft_voter_response::RemoveRaftVoterResponse;
         for version in [
             remove_raft_voter_response::MIN_VERSION,
             remove_raft_voter_response::MAX_VERSION,
@@ -163,12 +157,7 @@ mod tests {
         let (broker_handle, _dir) = start_broker(Arc::new(DenyAll)).await;
         let broker = broker_handle.broker_arc_for_test();
         test_ctx!(ctx, "alice");
-        let req_bytes = encode_request(&request(2), version);
-
-        let resp = super::handle(&broker, version, &req_bytes, &ctx)
-            .await
-            .expect("handle");
-        let resp = decode_response(&resp, version);
+        let resp = answer(&broker, version, &request(2), &ctx).await;
 
         assert!(resp.error_code == codes::CLUSTER_AUTHORIZATION_FAILED);
         assert!(resp.error_message.as_deref() == Some("remove-raft-voter denied"));
@@ -184,12 +173,7 @@ mod tests {
         test_ctx!(ctx, "admin");
         let mut request = request(-7);
         request.cluster_id = Some(broker.controller.current_image().cluster_id().to_string());
-        let req_bytes = encode_request(&request, version);
-
-        let resp = super::handle(&broker, version, &req_bytes, &ctx)
-            .await
-            .expect("handle");
-        let resp = decode_response(&resp, version);
+        let resp = answer(&broker, version, &request, &ctx).await;
 
         assert!(
             resp == RemoveRaftVoterResponse {

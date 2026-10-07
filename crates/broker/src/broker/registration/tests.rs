@@ -550,9 +550,6 @@ mod unclean_restart {
     use krabka_metadata::{
         LeaderEpoch, MetadataRecord, NodeId, PartitionRecord, TopicConfigRecord, TopicRecord,
     };
-    use krabka_protocol::owned::alter_partition_request::{
-        AlterPartitionRequest, PartitionData as ReqPartitionData, TopicData as ReqTopicData,
-    };
 
     use crate::{
         broker::{Broker, registration::register_broker},
@@ -560,7 +557,7 @@ mod unclean_restart {
         config::BrokerConfig,
         config_keys::MIN_INSYNC_REPLICAS,
         elr::{TopicElr, state::PartitionElr},
-        test_support::{peer, request_context, start_broker_with_authorizer},
+        test_support::start_broker_with_authorizer,
     };
 
     const TOPIC: &str = "orders";
@@ -618,39 +615,17 @@ mod unclean_restart {
     /// Shrink the ISR to `new_isr` through the real `AlterPartition` handler,
     /// which is how a real partition's ELR comes to exist at all.
     async fn alter_isr(broker: &Arc<Broker>, new_isr: &[i32]) {
-        let principal = crate::test_support::principal("replica");
-        let peer = peer();
-        let ctx = request_context(&principal, &peer, "broker-client");
-        // The controller checks the sender's broker epoch and the row's
-        // partition epoch, as Kafka's `ReplicationControlManager` does.
-        let image = broker.controller.current_image();
-        let request = AlterPartitionRequest {
-            broker_id: 1,
-            broker_epoch: image.broker_epoch(krabka_metadata::NodeId(1)).unwrap_or(-1),
-            topics: vec![ReqTopicData {
-                topic_id: krabka_protocol::primitives::uuid::Uuid(TOPIC_ID_BYTES),
-                partitions: vec![ReqPartitionData {
-                    partition_index: 0,
-                    leader_epoch: LEADER_EPOCH,
-                    // The controller refuses a stale partition epoch with
-                    // INVALID_UPDATE_VERSION, as Kafka does.
-                    partition_epoch: broker
-                        .controller
-                        .current_image()
-                        .partition(TOPIC, 0)
-                        .expect("partition")
-                        .partition_epoch,
-                    new_isr: new_isr.to_vec(),
-                    ..Default::default()
-                }],
-                ..Default::default()
-            }],
-            ..Default::default()
-        };
-        let response =
-            crate::handlers::alter_partition::handle(broker, request, ALTER_VERSION, &ctx)
-                .await
-                .expect("AlterPartition");
+        let response = crate::test_support::propose_isr(
+            broker,
+            TOPIC,
+            (
+                krabka_protocol::primitives::uuid::Uuid(TOPIC_ID_BYTES),
+                LEADER_EPOCH,
+                ALTER_VERSION,
+            ),
+            new_isr,
+        )
+        .await;
         assert!(
             response.topics[0].partitions[0].error_code == codes::NONE,
             "AlterPartition refused the proposal: {response:?}"

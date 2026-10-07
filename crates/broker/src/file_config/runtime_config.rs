@@ -12,37 +12,11 @@ use serde::{Deserialize, Serialize};
 use super::FileConfigError;
 
 /// Validated operational policy loaded from `[runtime]`.
+#[krabka_macros::runtime_policy_fields(toml)]
 #[krabka_macros::human_units]
 #[derive(Debug, Clone, Default, Deserialize, Serialize, JsonSchema, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct RuntimeFileConfig {
-    /// Maximum time the broker waits for a controller leader during startup.
-    pub startup_leader_wait_timeout: Option<Time>,
-    /// Initial delay between broker self-registration attempts.
-    pub self_registration_backoff_min: Option<Time>,
-    /// Maximum delay between broker self-registration attempts.
-    pub self_registration_backoff_max: Option<Time>,
-    /// Cadence of the KIP-853 observer promotion poll.
-    pub observer_poll_interval: Option<Time>,
-    /// Cadence at which the audit spool replays records it could not append.
-    pub audit_spool_replay_interval: Option<Time>,
-    /// Cadence of the audit statistics poll.
-    pub audit_stats_poll_interval: Option<Time>,
-    /// Maximum wait for the audit partition to become available.
-    pub audit_partition_wait_timeout: Option<Time>,
-    /// Cadence of broker liveness maintenance.
-    pub liveness_tick_interval: Option<Time>,
-    /// Cadence at which broker gauges are refreshed.
-    pub gauge_poll_interval: Option<Time>,
-    /// Cadence of in-sync-replica maintenance.
-    pub isr_scan_interval: Option<Time>,
-    /// Cadence of log cleaner maintenance.
-    pub cleaner_interval: Option<Time>,
-    /// Cadence of local-retention maintenance: how often `retention.ms`,
-    /// `retention.bytes` and `segment.ms` are applied to every hosted log.
-    pub log_retention_check_interval: Option<Time>,
-    /// Retry delay after a KIP-113 future-log move fails.
-    pub future_log_move_retry_backoff: Option<Time>,
     /// Whether the broker advertises the KIP-714 client-metrics RPCs,
     /// `GetTelemetrySubscriptions` (71) and `PushTelemetry` (72). Kafka
     /// advertises them only when `metric.reporters` holds a `ClientTelemetry`
@@ -92,52 +66,6 @@ pub struct RuntimeFileConfig {
     /// connection and sends one batched `Fetch` per round.
     #[schemars(range(min = 1))]
     pub replica_fetchers: Option<usize>,
-    /// Maximum bytes a follower requests from a leader in one replication
-    /// fetch. It reaches the leader as the fetch request's `max_bytes`.
-    pub replication_fetch_max: Option<ByteSize>,
-    /// Maximum time a leader holds a replication fetch that is not yet
-    /// satisfied. It reaches the leader as the fetch request's `max_wait_ms`.
-    pub replication_fetch_max_wait: Option<Time>,
-    /// Minimum bytes that satisfy a replication fetch. It reaches the leader
-    /// as the fetch request's `min_bytes`, which the leader honours as a
-    /// floor.
-    pub replication_fetch_min: Option<ByteSize>,
-    /// Delay after a follower exhausts its replication throttle budget.
-    pub replication_throttle_exhausted_backoff: Option<Time>,
-    /// Retry delay after sending a replication request fails.
-    pub replication_send_error_backoff: Option<Time>,
-    /// Retry delay when the leader does not yet know the topic.
-    pub replication_unknown_topic_retry_delay: Option<Time>,
-    /// Retry delay after a leader-epoch fence.
-    pub replication_epoch_fence_backoff: Option<Time>,
-    /// Retry delay after an unexpected replication error.
-    pub replication_unexpected_error_backoff: Option<Time>,
-    /// Initial delay before a follower reconnects to a leader.
-    pub replication_reconnect_initial_delay: Option<Time>,
-    /// Maximum delay between leader reconnection attempts.
-    pub replication_reconnect_delay_cap: Option<Time>,
-    /// Cadence of the consumer-group session expiry scan.
-    pub coordinator_session_expiry_tick: Option<Time>,
-    /// Maximum wait for coordinator shutdown acknowledgements.
-    pub coordinator_shutdown_ack_timeout: Option<Time>,
-    /// Default KIP-848 consumer-group session timeout, Kafka's
-    /// `group.consumer.session.timeout.ms`.
-    pub consumer_group_session_timeout: Option<Time>,
-    /// Default KIP-848 consumer-group heartbeat interval, Kafka's
-    /// `group.consumer.heartbeat.interval.ms`.
-    pub consumer_group_heartbeat_interval: Option<Time>,
-    /// Lower bound on the negotiated consumer-group session timeout, Kafka's
-    /// `group.consumer.min.session.timeout.ms`.
-    pub consumer_group_min_session_timeout: Option<Time>,
-    /// Upper bound on the negotiated consumer-group session timeout, Kafka's
-    /// `group.consumer.max.session.timeout.ms`.
-    pub consumer_group_max_session_timeout: Option<Time>,
-    /// Lower bound on the negotiated consumer-group heartbeat interval,
-    /// Kafka's `group.consumer.min.heartbeat.interval.ms`.
-    pub consumer_group_min_heartbeat_interval: Option<Time>,
-    /// Upper bound on the negotiated consumer-group heartbeat interval,
-    /// Kafka's `group.consumer.max.heartbeat.interval.ms`.
-    pub consumer_group_max_heartbeat_interval: Option<Time>,
     /// Maximum number of members in one consumer group, Kafka's
     /// `group.consumer.max.size`.
     pub consumer_group_max_size: Option<usize>,

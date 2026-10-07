@@ -22,8 +22,8 @@ use bytes::{BufMut, Bytes, BytesMut};
 use crate::{
     coordinator::unified::persistence::{
         flex::{
-            get_compact_array_len, get_compact_string, get_uuid, put_compact_array_len,
-            put_compact_string, put_empty_tagged_fields, put_uuid, skip_tagged_fields,
+            get_compact_array, get_compact_string, get_uuid, put_compact_array, put_compact_string,
+            put_empty_tagged_fields, put_uuid, skip_tagged_fields,
         },
         get_i16, get_i32,
     },
@@ -51,13 +51,12 @@ impl StreamsGroupPartitionMetadataValue {
     pub fn encode(&self) -> Bytes {
         let mut buf = BytesMut::new();
         buf.put_i16(0);
-        put_compact_array_len(&mut buf, self.topics.len());
-        for t in &self.topics {
-            put_compact_string(&mut buf, &t.topic_name);
-            put_uuid(&mut buf, *t.topic_id.as_bytes());
+        put_compact_array(&mut buf, self.topics.iter(), |buf, t| {
+            put_compact_string(buf, &t.topic_name);
+            put_uuid(buf, *t.topic_id.as_bytes());
             buf.put_i32(t.num_partitions);
-            put_empty_tagged_fields(&mut buf);
-        }
+            put_empty_tagged_fields(buf);
+        });
         put_empty_tagged_fields(&mut buf);
         buf.freeze()
     }
@@ -65,19 +64,17 @@ impl StreamsGroupPartitionMetadataValue {
     /// Returns an error when log I/O fails, a record or index is corrupt, or the requested offset violates the segment state.
     pub fn decode(mut buf: &[u8]) -> Result<Self, BrokerError> {
         let _v = get_i16(&mut buf)?;
-        let n = get_compact_array_len(&mut buf)?;
-        let mut topics = Vec::with_capacity(n);
-        for _ in 0..n {
-            let topic_name = get_compact_string(&mut buf)?;
-            let topic_id = uuid::Uuid::from_bytes(get_uuid(&mut buf)?);
-            let num_partitions = get_i32(&mut buf)?;
-            skip_tagged_fields(&mut buf)?;
-            topics.push(StreamsTopicMeta {
+        let topics = get_compact_array(&mut buf, |buf| {
+            let topic_name = get_compact_string(buf)?;
+            let topic_id = uuid::Uuid::from_bytes(get_uuid(buf)?);
+            let num_partitions = get_i32(buf)?;
+            skip_tagged_fields(buf)?;
+            Ok(StreamsTopicMeta {
                 topic_name,
                 topic_id,
                 num_partitions,
-            });
-        }
+            })
+        })?;
         skip_tagged_fields(&mut buf)?;
         Ok(Self { topics })
     }

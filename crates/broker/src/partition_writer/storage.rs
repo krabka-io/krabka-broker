@@ -85,6 +85,37 @@ pub(super) async fn run_log_mutation<T: Send + 'static>(
     result
 }
 
+/// Read the writer-owned watermark, then run one clocked maintenance pass
+/// under the log lock and apply the usual panic/storage-error classification.
+pub(super) async fn maintain_log(
+    storage: (&Arc<Mutex<Log>>, &Arc<ArcSwap<PathBuf>>, &LogDirRegistry),
+    replica_state: &tokio::sync::Mutex<crate::replica_state::ReplicaState>,
+    ack: tokio::sync::oneshot::Sender<Result<(), crate::error::BrokerError>>,
+    panic_context: &'static str,
+    operation: impl FnOnce(
+        &mut Log,
+        std::time::SystemTime,
+        krabka_log::Offset,
+    ) -> Result<(), krabka_log::LogError>
+    + Send
+    + 'static,
+) {
+    let (log, log_dir, log_dir_status) = storage;
+    let high_watermark = replica_state.lock().await.hw;
+    let now = std::time::SystemTime::now();
+    let log = Arc::clone(log);
+    let result = run_log_mutation(
+        move || {
+            operation(&mut lock_log(&log), now, high_watermark)
+                .map_err(crate::error::BrokerError::from)
+        },
+        panic_context,
+        (log_dir, log_dir_status),
+    )
+    .await;
+    let _ = ack.send(result);
+}
+
 #[cfg(test)]
 mod tests {
     use assert2::{assert, check};

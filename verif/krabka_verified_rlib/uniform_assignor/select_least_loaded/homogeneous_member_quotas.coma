@@ -1,50 +1,50 @@
-(* #"/workspace/crates/verified/src/uniform_assignor/select_least_loaded.rs" 111 0 115 32 *)
+(* #"/workspace/crates/verified/src/uniform_assignor/select_least_loaded.rs" 112 0 116 32 *)
 
-let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
-let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
-let%span swell_founded = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/well_founded.rs" 43 8 43 33
-let%span sslice = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 331 18 331 22
-let%span svec = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 104 18 104 36
-let%span svec'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 18 14 18 41
-let%span svec'1 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 118 18 118 48
-let%span sselect_least_loaded = "/workspace/crates/verified/src/uniform_assignor/select_least_loaded.rs" 116 50 116 60
-let%span sselect_least_loaded'0 = "/workspace/crates/verified/src/uniform_assignor/select_least_loaded.rs" 118 16 118 22
-let%span sselect_least_loaded'1 = "/workspace/crates/verified/src/uniform_assignor/select_least_loaded.rs" 137 14 137 31
-let%span sselect_least_loaded'2 = "/workspace/crates/verified/src/uniform_assignor/select_least_loaded.rs" 138 14 138 25
-let%span sselect_least_loaded'3 = "/workspace/crates/verified/src/uniform_assignor/select_least_loaded.rs" 131 16 136 10
-let%span sselect_least_loaded'4 = "/workspace/crates/verified/src/uniform_assignor/select_least_loaded.rs" 129 16 130 94
-let%span sselect_least_loaded'5 = "/workspace/crates/verified/src/uniform_assignor/select_least_loaded.rs" 123 16 128 5
-let%span sselect_least_loaded'6 = "/workspace/crates/verified/src/uniform_assignor/select_least_loaded.rs" 122 16 122 49
-let%span sselect_least_loaded'7 = "/workspace/crates/verified/src/uniform_assignor/select_least_loaded.rs" 121 16 121 93
-let%span sselect_least_loaded'8 = "/workspace/crates/verified/src/uniform_assignor/select_least_loaded.rs" 120 16 120 35
-let%span sselect_least_loaded'9 = "/workspace/crates/verified/src/uniform_assignor/select_least_loaded.rs" 119 16 119 34
-let%span sselect_least_loaded'10 = "/workspace/crates/verified/src/uniform_assignor/select_least_loaded.rs" 139 27 139 38
-let%span sselect_least_loaded'11 = "/workspace/crates/verified/src/uniform_assignor/select_least_loaded.rs" 139 27 139 42
-let%span sselect_least_loaded'12 = "/workspace/crates/verified/src/uniform_assignor/select_least_loaded.rs" 141 26 141 27
-let%span sselect_least_loaded'13 = "/workspace/crates/verified/src/uniform_assignor/select_least_loaded.rs" 141 32 141 40
-let%span sselect_least_loaded'14 = "/workspace/crates/verified/src/uniform_assignor/select_least_loaded.rs" 141 31 141 88
-let%span sselect_least_loaded'15 = "/workspace/crates/verified/src/uniform_assignor/select_least_loaded.rs" 141 12 141 88
-let%span sselect_least_loaded'16 = "/workspace/crates/verified/src/uniform_assignor/select_least_loaded.rs" 143 28 143 29
-let%span sselect_least_loaded'17 = "/workspace/crates/verified/src/uniform_assignor/select_least_loaded.rs" 143 12 143 29
-let%span sselect_least_loaded'18 = "/workspace/crates/verified/src/uniform_assignor/select_least_loaded.rs" 147 24 147 32
-let%span sselect_least_loaded'19 = "/workspace/crates/verified/src/uniform_assignor/select_least_loaded.rs" 147 44 147 52
-let%span sselect_least_loaded'20 = "/workspace/crates/verified/src/uniform_assignor/select_least_loaded.rs" 151 18 151 33
-let%span sselect_least_loaded'21 = "/workspace/crates/verified/src/uniform_assignor/select_least_loaded.rs" 148 8 152 10
-let%span sselect_least_loaded'22 = "/workspace/crates/verified/src/uniform_assignor/select_least_loaded.rs" 154 27 154 28
-let%span sselect_least_loaded'23 = "/workspace/crates/verified/src/uniform_assignor/select_least_loaded.rs" 154 12 154 28
-let%span sselect_least_loaded'24 = "/workspace/crates/verified/src/uniform_assignor/select_least_loaded.rs" 156 13 156 14
-let%span sselect_least_loaded'25 = "/workspace/crates/verified/src/uniform_assignor/select_least_loaded.rs" 156 8 156 14
-let%span sselect_least_loaded'26 = "/workspace/crates/verified/src/uniform_assignor/select_least_loaded.rs" 92 11 92 40
-let%span sselect_least_loaded'27 = "/workspace/crates/verified/src/uniform_assignor/select_least_loaded.rs" 93 11 93 39
-let%span sselect_least_loaded'28 = "/workspace/crates/verified/src/uniform_assignor/select_least_loaded.rs" 94 10 94 39
-let%span sselect_least_loaded'29 = "/workspace/crates/verified/src/uniform_assignor/select_least_loaded.rs" 95 10 100 1
-let%span sselect_least_loaded'30 = "/workspace/crates/verified/src/uniform_assignor/select_least_loaded.rs" 101 10 102 90
-let%span sselect_least_loaded'31 = "/workspace/crates/verified/src/uniform_assignor/select_least_loaded.rs" 103 10 108 6
-let%span sselect_least_loaded'32 = "/workspace/crates/verified/src/uniform_assignor/select_least_loaded.rs" 109 10 109 86
-let%span sselect_least_loaded'33 = "/workspace/crates/verified/src/uniform_assignor/select_least_loaded.rs" 77 16 77 71
-let%span sselect_least_loaded'34 = "/workspace/crates/verified/src/uniform_assignor/select_least_loaded.rs" 38 16 38 89
-let%span sselect_least_loaded'35 = "/workspace/crates/verified/src/uniform_assignor/select_least_loaded.rs" 48 10 48 15
-let%span sselect_least_loaded'36 = "/workspace/crates/verified/src/uniform_assignor/select_least_loaded.rs" 56 8 66 9
+let%span sord = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sord'0 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span swell_founded = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/well_founded.rs" 43 8 43 33
+let%span sslice = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 331 18 331 22
+let%span svec = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 104 18 104 36
+let%span svec'0 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 18 14 18 41
+let%span svec'1 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 118 18 118 48
+let%span sselect_least_loaded = "/workspace/crates/verified/src/uniform_assignor/select_least_loaded.rs" 117 50 117 60
+let%span sselect_least_loaded'0 = "/workspace/crates/verified/src/uniform_assignor/select_least_loaded.rs" 119 16 119 22
+let%span sselect_least_loaded'1 = "/workspace/crates/verified/src/uniform_assignor/select_least_loaded.rs" 138 14 138 31
+let%span sselect_least_loaded'2 = "/workspace/crates/verified/src/uniform_assignor/select_least_loaded.rs" 139 14 139 25
+let%span sselect_least_loaded'3 = "/workspace/crates/verified/src/uniform_assignor/select_least_loaded.rs" 132 16 137 10
+let%span sselect_least_loaded'4 = "/workspace/crates/verified/src/uniform_assignor/select_least_loaded.rs" 130 16 131 94
+let%span sselect_least_loaded'5 = "/workspace/crates/verified/src/uniform_assignor/select_least_loaded.rs" 124 16 129 5
+let%span sselect_least_loaded'6 = "/workspace/crates/verified/src/uniform_assignor/select_least_loaded.rs" 123 16 123 49
+let%span sselect_least_loaded'7 = "/workspace/crates/verified/src/uniform_assignor/select_least_loaded.rs" 122 16 122 93
+let%span sselect_least_loaded'8 = "/workspace/crates/verified/src/uniform_assignor/select_least_loaded.rs" 121 16 121 35
+let%span sselect_least_loaded'9 = "/workspace/crates/verified/src/uniform_assignor/select_least_loaded.rs" 120 16 120 34
+let%span sselect_least_loaded'10 = "/workspace/crates/verified/src/uniform_assignor/select_least_loaded.rs" 140 27 140 38
+let%span sselect_least_loaded'11 = "/workspace/crates/verified/src/uniform_assignor/select_least_loaded.rs" 140 27 140 42
+let%span sselect_least_loaded'12 = "/workspace/crates/verified/src/uniform_assignor/select_least_loaded.rs" 142 26 142 27
+let%span sselect_least_loaded'13 = "/workspace/crates/verified/src/uniform_assignor/select_least_loaded.rs" 142 32 142 40
+let%span sselect_least_loaded'14 = "/workspace/crates/verified/src/uniform_assignor/select_least_loaded.rs" 142 31 142 88
+let%span sselect_least_loaded'15 = "/workspace/crates/verified/src/uniform_assignor/select_least_loaded.rs" 142 12 142 88
+let%span sselect_least_loaded'16 = "/workspace/crates/verified/src/uniform_assignor/select_least_loaded.rs" 144 28 144 29
+let%span sselect_least_loaded'17 = "/workspace/crates/verified/src/uniform_assignor/select_least_loaded.rs" 144 12 144 29
+let%span sselect_least_loaded'18 = "/workspace/crates/verified/src/uniform_assignor/select_least_loaded.rs" 148 24 148 32
+let%span sselect_least_loaded'19 = "/workspace/crates/verified/src/uniform_assignor/select_least_loaded.rs" 148 44 148 52
+let%span sselect_least_loaded'20 = "/workspace/crates/verified/src/uniform_assignor/select_least_loaded.rs" 152 18 152 33
+let%span sselect_least_loaded'21 = "/workspace/crates/verified/src/uniform_assignor/select_least_loaded.rs" 149 8 153 10
+let%span sselect_least_loaded'22 = "/workspace/crates/verified/src/uniform_assignor/select_least_loaded.rs" 155 27 155 28
+let%span sselect_least_loaded'23 = "/workspace/crates/verified/src/uniform_assignor/select_least_loaded.rs" 155 12 155 28
+let%span sselect_least_loaded'24 = "/workspace/crates/verified/src/uniform_assignor/select_least_loaded.rs" 157 13 157 14
+let%span sselect_least_loaded'25 = "/workspace/crates/verified/src/uniform_assignor/select_least_loaded.rs" 157 8 157 14
+let%span sselect_least_loaded'26 = "/workspace/crates/verified/src/uniform_assignor/select_least_loaded.rs" 93 11 93 40
+let%span sselect_least_loaded'27 = "/workspace/crates/verified/src/uniform_assignor/select_least_loaded.rs" 94 11 94 39
+let%span sselect_least_loaded'28 = "/workspace/crates/verified/src/uniform_assignor/select_least_loaded.rs" 95 10 95 39
+let%span sselect_least_loaded'29 = "/workspace/crates/verified/src/uniform_assignor/select_least_loaded.rs" 96 10 101 1
+let%span sselect_least_loaded'30 = "/workspace/crates/verified/src/uniform_assignor/select_least_loaded.rs" 102 10 103 90
+let%span sselect_least_loaded'31 = "/workspace/crates/verified/src/uniform_assignor/select_least_loaded.rs" 104 10 109 6
+let%span sselect_least_loaded'32 = "/workspace/crates/verified/src/uniform_assignor/select_least_loaded.rs" 110 10 110 86
+let%span sselect_least_loaded'33 = "/workspace/crates/verified/src/uniform_assignor/select_least_loaded.rs" 78 16 78 71
+let%span sselect_least_loaded'34 = "/workspace/crates/verified/src/uniform_assignor/select_least_loaded.rs" 39 16 39 89
+let%span sselect_least_loaded'35 = "/workspace/crates/verified/src/uniform_assignor/select_least_loaded.rs" 49 10 49 15
+let%span sselect_least_loaded'36 = "/workspace/crates/verified/src/uniform_assignor/select_least_loaded.rs" 57 8 67 9
 
 use seq.Seq
 use creusot.int.UInt64
@@ -88,14 +88,14 @@ let len_usize (self_: Slice64.slice UInt64.t) (return (x: UInt64.t)) = any
     = UInt64.t'int result}
     (! return {result}) ]
 
-function member_target [#"/workspace/crates/verified/src/uniform_assignor/select_least_loaded.rs" 76 0 76 78] (minimum_quota: int) (quota: t_HomogeneousMemberQuota) : int
+function member_target [#"/workspace/crates/verified/src/uniform_assignor/select_least_loaded.rs" 77 0 77 78] (minimum_quota: int) (quota: t_HomogeneousMemberQuota) : int
  = [%#sselect_least_loaded'33] minimum_quota + (if quota.takes_extra then 1 else 0)
 
-predicate keeps_extra_quota [#"/workspace/crates/verified/src/uniform_assignor/select_least_loaded.rs" 32 0 37 9] (minimum_quota: int) (extras_left: int) (owned: int) (members_left: int) =
+predicate keeps_extra_quota [#"/workspace/crates/verified/src/uniform_assignor/select_least_loaded.rs" 33 0 38 9] (minimum_quota: int) (extras_left: int) (owned: int) (members_left: int) =
   [%#sselect_least_loaded'34] gt_log_Int extras_left 0
   /\ (gt_log_Int owned minimum_quota \/ members_left <= extras_left)
 
-function extras_left_before [#"/workspace/crates/verified/src/uniform_assignor/select_least_loaded.rs" 49 0 54 8] (minimum_quota: int) (extra_quotas: int) (owned: Seq.seq UInt64.t) (index: int) : int
+function extras_left_before [#"/workspace/crates/verified/src/uniform_assignor/select_least_loaded.rs" 50 0 55 8] (minimum_quota: int) (extra_quotas: int) (owned: Seq.seq UInt64.t) (index: int) : int
 
 axiom extras_left_before_def:
   forall minimum_quota: int, extra_quotas: int, owned: Seq.seq UInt64.t, index: int [extras_left_before minimum_quota extra_quotas owned index]. extras_left_before minimum_quota extra_quotas owned index
@@ -122,7 +122,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let homogeneous_member_quotas [#"/workspace/crates/verified/src/uniform_assignor/select_least_loaded.rs" 111 0 115 32]
+let homogeneous_member_quotas [#"/workspace/crates/verified/src/uniform_assignor/select_least_loaded.rs" 112 0 116 32]
   (minimum_quota: UInt64.t) (extra_quotas: UInt64.t) (owned: Slice64.slice UInt64.t)
   (return (x: t_Vec_HomogeneousMemberQuota_Global)) =
 {[@stop_split] [@expl:homogeneous_member_quotas requires] ([@stop_split] [@expl:homogeneous_member_quotas requires #0] [%#sselect_least_loaded'26] UInt64.t'int extra_quotas

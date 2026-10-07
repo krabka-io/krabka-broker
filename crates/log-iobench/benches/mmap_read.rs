@@ -38,10 +38,8 @@ use std::{
     path::PathBuf,
 };
 
-use bytes::Bytes;
 use criterion::{Criterion, black_box, criterion_group, criterion_main};
 use krabka_log::{Log, LogConfig, Offset};
-use krabka_protocol::records::{Record, RecordBatch};
 use krabka_units::prelude::{ByteSize, ByteSizeExt as _, kibibytes, mebibytes};
 use memmap2::Mmap;
 use tempfile::TempDir;
@@ -55,21 +53,7 @@ const SMALL_READ_LEN: ByteSize = kibibytes(16);
 /// such segments.
 const SEGMENT_SIZE: ByteSize = mebibytes(8);
 
-fn make_batch(n: i32, payload_size: usize) -> RecordBatch {
-    let mut b = RecordBatch {
-        last_offset_delta: (n - 1).max(0),
-        ..RecordBatch::default()
-    };
-    for i in 0..n {
-        b.records.push(Record {
-            offset_delta: i,
-            key: Some(Bytes::from(format!("k{i:08}"))),
-            value: Some(Bytes::from(vec![0xABu8; payload_size])),
-            ..Default::default()
-        });
-    }
-    b
-}
+krabka_macros::record_batch_fixture!(make_batch);
 
 /// Build a log with several *sealed* segments.
 ///

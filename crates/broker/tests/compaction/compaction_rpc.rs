@@ -83,13 +83,10 @@ pub(crate) async fn get_topic_id(addr: SocketAddr, topic: &str) -> Uuid {
     };
     let version: i16 = 12; // flexible
     let mut stream = TcpStream::connect(addr).await.expect("connect");
-    let mut body = BytesMut::new();
-    req.encode(&mut body, version).expect("encode Metadata");
-    let resp_bytes = kafka_wire::round_trip(&mut stream, 3, version, 1, CLIENT_ID, true, &body)
-        .await
-        .expect("Metadata round-trip");
-    let mut cur: &[u8] = &resp_bytes;
-    let resp = MetadataResponse::decode(&mut cur, version).expect("decode MetadataResponse");
+    let resp: MetadataResponse =
+        kafka_wire::exchange(&mut stream, &req, 3, version, 1, CLIENT_ID, true)
+            .await
+            .expect("Metadata round-trip");
     resp.topics
         .iter()
         .find(|t| t.name.as_deref() == Some(topic))
@@ -135,13 +132,10 @@ pub(crate) async fn produce_record(
 
     let version: i16 = 9; // flexible, pre-KIP-516 (no topic_id required on the wire at v9)
     let mut stream = TcpStream::connect(addr).await.expect("connect");
-    let mut body = BytesMut::new();
-    req.encode(&mut body, version).expect("encode Produce");
-    let resp_bytes = kafka_wire::round_trip(&mut stream, 0, version, 1, CLIENT_ID, true, &body)
-        .await
-        .expect("Produce round-trip");
-    let mut cur: &[u8] = &resp_bytes;
-    let resp = ProduceResponse::decode(&mut cur, version).expect("decode ProduceResponse");
+    let resp: ProduceResponse =
+        kafka_wire::exchange(&mut stream, &req, 0, version, 1, CLIENT_ID, true)
+            .await
+            .expect("Produce round-trip");
     let part = &resp.responses[0].partition_responses[0];
     assert!(
         part.error_code == 0,

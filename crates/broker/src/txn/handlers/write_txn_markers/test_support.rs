@@ -5,7 +5,6 @@
 use std::{path::Path, sync::Arc};
 
 use krabka_ids::PartitionIndex;
-use krabka_log::{Log, LogConfig};
 
 use crate::broker::{Broker, BrokerHandle};
 
@@ -17,18 +16,7 @@ pub(crate) fn open_partition(
     topic: &str,
     partition: i32,
 ) -> Arc<crate::partition::Partition> {
-    let part_dir = crate::log_dir::partition_dir(log_dir, topic, partition);
-    std::fs::create_dir_all(&part_dir).expect("create partition dir");
-    let log = Log::open(&part_dir, LogConfig::default()).expect("open partition log");
-    let part = crate::broker::spawn_partition(
-        topic.to_string(),
-        PartitionIndex(partition),
-        log_dir.to_path_buf(),
-        log,
-        crate::log_dir_status::LogDirRegistry::default(),
-        Arc::new(crate::producer_state::ProducerState::new()),
-        false,
-    );
+    let part = crate::test_support::open_partition(log_dir, topic, partition);
     broker
         .partitions
         .insert(topic.into(), PartitionIndex(partition), Arc::clone(&part));

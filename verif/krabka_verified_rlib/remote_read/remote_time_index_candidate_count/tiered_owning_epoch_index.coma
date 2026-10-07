@@ -1,26 +1,26 @@
-(* #"/workspace/crates/verified/src/remote_read/remote_time_index_candidate_count.rs" 128 0 133 18 *)
+(* #"/workspace/crates/verified/src/remote_read/remote_time_index_candidate_count.rs" 109 0 114 18 *)
 
-let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
-let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
-let%span swell_founded = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/well_founded.rs" 43 8 43 33
-let%span sslice = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 331 18 331 22
-let%span sremote_time_index_candidate_count = "/workspace/crates/verified/src/remote_read/remote_time_index_candidate_count.rs" 135 20 135 26
-let%span sremote_time_index_candidate_count'0 = "/workspace/crates/verified/src/remote_read/remote_time_index_candidate_count.rs" 150 14 150 36
-let%span sremote_time_index_candidate_count'1 = "/workspace/crates/verified/src/remote_read/remote_time_index_candidate_count.rs" 151 18 151 30
-let%span sremote_time_index_candidate_count'2 = "/workspace/crates/verified/src/remote_read/remote_time_index_candidate_count.rs" 137 16 149 5
-let%span sremote_time_index_candidate_count'3 = "/workspace/crates/verified/src/remote_read/remote_time_index_candidate_count.rs" 136 16 136 39
-let%span sremote_time_index_candidate_count'4 = "/workspace/crates/verified/src/remote_read/remote_time_index_candidate_count.rs" 152 11 152 24
-let%span sremote_time_index_candidate_count'5 = "/workspace/crates/verified/src/remote_read/remote_time_index_candidate_count.rs" 152 28 152 29
-let%span sremote_time_index_candidate_count'6 = "/workspace/crates/verified/src/remote_read/remote_time_index_candidate_count.rs" 152 33 152 46
-let%span sremote_time_index_candidate_count'7 = "/workspace/crates/verified/src/remote_read/remote_time_index_candidate_count.rs" 152 67 152 80
-let%span sremote_time_index_candidate_count'8 = "/workspace/crates/verified/src/remote_read/remote_time_index_candidate_count.rs" 154 33 154 48
-let%span sremote_time_index_candidate_count'9 = "/workspace/crates/verified/src/remote_read/remote_time_index_candidate_count.rs" 154 52 154 65
-let%span sremote_time_index_candidate_count'10 = "/workspace/crates/verified/src/remote_read/remote_time_index_candidate_count.rs" 158 17 158 18
-let%span sremote_time_index_candidate_count'11 = "/workspace/crates/verified/src/remote_read/remote_time_index_candidate_count.rs" 158 8 158 18
-let%span sremote_time_index_candidate_count'12 = "/workspace/crates/verified/src/remote_read/remote_time_index_candidate_count.rs" 111 11 111 41
-let%span sremote_time_index_candidate_count'13 = "/workspace/crates/verified/src/remote_read/remote_time_index_candidate_count.rs" 112 11 112 30
-let%span sremote_time_index_candidate_count'14 = "/workspace/crates/verified/src/remote_read/remote_time_index_candidate_count.rs" 113 11 113 41
-let%span sremote_time_index_candidate_count'15 = "/workspace/crates/verified/src/remote_read/remote_time_index_candidate_count.rs" 114 10 126 1
+let%span sord = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sord'0 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span swell_founded = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/well_founded.rs" 43 8 43 33
+let%span sslice = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 331 18 331 22
+let%span sremote_time_index_candidate_count = "/workspace/crates/verified/src/remote_read/remote_time_index_candidate_count.rs" 116 20 116 26
+let%span sremote_time_index_candidate_count'0 = "/workspace/crates/verified/src/remote_read/remote_time_index_candidate_count.rs" 131 14 131 36
+let%span sremote_time_index_candidate_count'1 = "/workspace/crates/verified/src/remote_read/remote_time_index_candidate_count.rs" 132 18 132 30
+let%span sremote_time_index_candidate_count'2 = "/workspace/crates/verified/src/remote_read/remote_time_index_candidate_count.rs" 118 16 130 5
+let%span sremote_time_index_candidate_count'3 = "/workspace/crates/verified/src/remote_read/remote_time_index_candidate_count.rs" 117 16 117 39
+let%span sremote_time_index_candidate_count'4 = "/workspace/crates/verified/src/remote_read/remote_time_index_candidate_count.rs" 133 11 133 24
+let%span sremote_time_index_candidate_count'5 = "/workspace/crates/verified/src/remote_read/remote_time_index_candidate_count.rs" 133 28 133 29
+let%span sremote_time_index_candidate_count'6 = "/workspace/crates/verified/src/remote_read/remote_time_index_candidate_count.rs" 133 33 133 46
+let%span sremote_time_index_candidate_count'7 = "/workspace/crates/verified/src/remote_read/remote_time_index_candidate_count.rs" 133 67 133 80
+let%span sremote_time_index_candidate_count'8 = "/workspace/crates/verified/src/remote_read/remote_time_index_candidate_count.rs" 135 33 135 48
+let%span sremote_time_index_candidate_count'9 = "/workspace/crates/verified/src/remote_read/remote_time_index_candidate_count.rs" 135 52 135 65
+let%span sremote_time_index_candidate_count'10 = "/workspace/crates/verified/src/remote_read/remote_time_index_candidate_count.rs" 139 17 139 18
+let%span sremote_time_index_candidate_count'11 = "/workspace/crates/verified/src/remote_read/remote_time_index_candidate_count.rs" 139 8 139 18
+let%span sremote_time_index_candidate_count'12 = "/workspace/crates/verified/src/remote_read/remote_time_index_candidate_count.rs" 92 11 92 41
+let%span sremote_time_index_candidate_count'13 = "/workspace/crates/verified/src/remote_read/remote_time_index_candidate_count.rs" 93 11 93 30
+let%span sremote_time_index_candidate_count'14 = "/workspace/crates/verified/src/remote_read/remote_time_index_candidate_count.rs" 94 11 94 41
+let%span sremote_time_index_candidate_count'15 = "/workspace/crates/verified/src/remote_read/remote_time_index_candidate_count.rs" 95 10 107 1
 
 use creusot.int.UInt64
 use seq.Seq
@@ -62,7 +62,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let tiered_owning_epoch_index [#"/workspace/crates/verified/src/remote_read/remote_time_index_candidate_count.rs" 128 0 133 18]
+let tiered_owning_epoch_index [#"/workspace/crates/verified/src/remote_read/remote_time_index_candidate_count.rs" 109 0 114 18]
   (epochs: Slice64.slice Int32.t) (starts: Slice64.slice Int64.t) (segment_start: Int64.t) (segment_end: Int64.t)
   (return (x: t_Option_usize)) =
 {[@stop_split] [@expl:tiered_owning_epoch_index requires] ([@stop_split] [@expl:tiered_owning_epoch_index requires #0] [%#sremote_time_index_candidate_count'12] Seq.length (Slice64.view epochs)

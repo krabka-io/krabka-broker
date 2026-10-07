@@ -127,3 +127,30 @@ mod oauth_completion;
 mod jwks_publication;
 
 mod controller_session;
+
+fn oracle_next_producer_decision(
+    last: Option<&ProducerSnapshotEntryFacts>,
+    request: (i16, i32, i32, bool),
+    end: i64,
+) -> ProducerDecision {
+    let sequence = |value: i64| i32::try_from(value.rem_euclid(1_i64 << 31)).unwrap();
+    match last {
+        Some(last) if request.0 < last.producer_epoch => ProducerDecision::Fenced,
+        Some(last) if request.0 > last.producer_epoch => {
+            if request.1 == 0 {
+                ProducerDecision::Append
+            } else {
+                ProducerDecision::OutOfOrder
+            }
+        }
+        Some(last) => {
+            if request.1 == sequence(i64::from(last.last_sequence) + 1) {
+                ProducerDecision::Append
+            } else {
+                ProducerDecision::OutOfOrder
+            }
+        }
+        None if request.3 && end == 0 && request.1 != 0 => ProducerDecision::OutOfOrder,
+        None => ProducerDecision::Append,
+    }
+}

@@ -36,11 +36,6 @@ async fn exclude_key_drops_a_middle_record_without_shifting_later_offsets() {
 
     let (_target, target_dir) = run_restore(archive.path(), &["--exclude-key", "^drop"]).await;
 
-    let log = reopen(&target_dir, "orders", 0);
-    check!(log.log_end_offset() == Offset(4));
-    let read = log
-        .read(Offset(0), LogConfig::default().segment_size)
-        .expect("read back");
     let expected = vec![
         RecordBatch {
             records: vec![
@@ -51,7 +46,7 @@ async fn exclude_key_drops_a_middle_record_without_shifting_later_offsets() {
         },
         fixture[1].clone(),
     ];
-    check!(read.batches == expected);
+    crate::harness::check_batches(&target_dir, 4, &expected);
 }
 
 // ---------------------------------------------------------------------
@@ -72,13 +67,6 @@ async fn exclude_key_matching_every_record_of_one_batch_still_claims_its_offsets
 
     let (_target, target_dir) = run_restore(archive.path(), &["--exclude-key", "^drop"]).await;
 
-    let log = reopen(&target_dir, "orders", 0);
-    // The emptied batch's offset range (0..=1) is still claimed, so the
-    // untouched batch after it lands at its own original offset (2).
-    check!(log.log_end_offset() == Offset(3));
-    let read = log
-        .read(Offset(0), LogConfig::default().segment_size)
-        .expect("read back");
     let expected = vec![
         RecordBatch {
             records: Vec::new(),
@@ -86,7 +74,7 @@ async fn exclude_key_matching_every_record_of_one_batch_still_claims_its_offsets
         },
         fixture[1].clone(),
     ];
-    check!(read.batches == expected);
+    crate::harness::check_batches(&target_dir, 3, &expected);
 }
 
 // ---------------------------------------------------------------------
@@ -111,11 +99,6 @@ async fn exclude_key_dropping_a_batchs_trailing_record_survives_the_full_pipelin
 
     let (_target, target_dir) = run_restore(archive.path(), &["--exclude-key", "^drop"]).await;
 
-    let log = reopen(&target_dir, "orders", 0);
-    check!(log.log_end_offset() == Offset(3));
-    let read = log
-        .read(Offset(0), LogConfig::default().segment_size)
-        .expect("read back");
     let expected = vec![
         RecordBatch {
             records: vec![keyed_record(0, "keep-x", "v0")],
@@ -123,7 +106,7 @@ async fn exclude_key_dropping_a_batchs_trailing_record_survives_the_full_pipelin
         },
         fixture[1].clone(),
     ];
-    check!(read.batches == expected);
+    crate::harness::check_batches(&target_dir, 3, &expected);
 }
 
 // ---------------------------------------------------------------------
@@ -143,11 +126,6 @@ async fn exclude_header_matches_on_name_and_value_not_name_alone() {
     let (_target, target_dir) =
         run_restore(archive.path(), &["--exclude-header", "trace=^bad"]).await;
 
-    let log = reopen(&target_dir, "orders", 0);
-    check!(log.log_end_offset() == Offset(3));
-    let read = log
-        .read(Offset(0), LogConfig::default().segment_size)
-        .expect("read back");
     let expected = vec![RecordBatch {
         records: vec![
             headered_record(1, "v1", "trace", "good-1"),
@@ -155,7 +133,7 @@ async fn exclude_header_matches_on_name_and_value_not_name_alone() {
         ],
         ..fixture[0].clone()
     }];
-    check!(read.batches == expected);
+    crate::harness::check_batches(&target_dir, 3, &expected);
 }
 
 // ---------------------------------------------------------------------

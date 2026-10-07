@@ -59,6 +59,36 @@ fn oauth_session_adapter_returns_the_exact_effective_expiry() {
     );
 }
 
+async fn reauthenticate(
+    validator: &krabka_security::OAuthBearerValidator,
+    now_ms: i64,
+    token: &str,
+) -> (ConnectionAuth, SaslAuthenticateResponse) {
+    let mut auth = ConnectionAuth::Reauthenticating {
+        previous: AuthenticatedSnapshot {
+            principal: Principal {
+                name: "alice".to_string(),
+                auth_method: krabka_security::AuthMethod::SaslOAuthBearer,
+                groups: vec![],
+            },
+            mechanism: SaslMechanism::OAuthBearer,
+            expires_at_ms: Some(now_ms + 1_000),
+            authenticated_via_token: false,
+        },
+        exchange: SaslExchange::OAuthBearer,
+        pending_token_expiry_ms: None,
+    };
+    let response = handle_authenticate_oauthbearer(
+        &oauthbearer_client_response(token),
+        &mut auth,
+        validator,
+        || now_ms,
+        None,
+    )
+    .await;
+    (auth, response)
+}
+
 #[tokio::test]
 async fn signed_validator_fails_closed_for_stale_or_changing_jwks_cache() {
     let now_ms = 1_000_000;
@@ -264,28 +294,7 @@ async fn authenticate_during_reauth_same_principal_transitions_back_to_authentic
     let new_token_exp_seconds: i64 = 1_000_000_900;
     let new_token_exp_millis: i64 = new_token_exp_seconds * 1000;
     let token = unsecured_token("alice", new_token_exp_seconds);
-    let mut auth = ConnectionAuth::Reauthenticating {
-        previous: AuthenticatedSnapshot {
-            principal: Principal {
-                name: "alice".to_string(),
-                auth_method: krabka_security::AuthMethod::SaslOAuthBearer,
-                groups: vec![],
-            },
-            mechanism: SaslMechanism::OAuthBearer,
-            expires_at_ms: Some(now_ms + 1_000), // about to expire
-            authenticated_via_token: false,
-        },
-        exchange: SaslExchange::OAuthBearer,
-        pending_token_expiry_ms: None,
-    };
-    let resp = handle_authenticate_oauthbearer(
-        &oauthbearer_client_response(&token),
-        &mut auth,
-        &validator,
-        || now_ms,
-        None,
-    )
-    .await;
+    let (auth, resp) = reauthenticate(&validator, now_ms, &token).await;
     assert_success_authenticate_response(&resp, b"", new_token_exp_millis - now_ms);
     assert!(matches!(
         auth,
@@ -314,28 +323,7 @@ async fn authenticate_during_reauth_different_principal_rejected_with_sasl_auth_
     let now_ms = 1_000_000_000_000;
     // Token belongs to "bob", but the prior session is "alice".
     let token = unsecured_token("bob", 1_000_000_900);
-    let mut auth = ConnectionAuth::Reauthenticating {
-        previous: AuthenticatedSnapshot {
-            principal: Principal {
-                name: "alice".to_string(),
-                auth_method: krabka_security::AuthMethod::SaslOAuthBearer,
-                groups: vec![],
-            },
-            mechanism: SaslMechanism::OAuthBearer,
-            expires_at_ms: Some(now_ms + 1_000),
-            authenticated_via_token: false,
-        },
-        exchange: SaslExchange::OAuthBearer,
-        pending_token_expiry_ms: None,
-    };
-    let resp = handle_authenticate_oauthbearer(
-        &oauthbearer_client_response(&token),
-        &mut auth,
-        &validator,
-        || now_ms,
-        None,
-    )
-    .await;
+    let (auth, resp) = reauthenticate(&validator, now_ms, &token).await;
     // Kafka's `ensurePrincipalUnchanged` message.
     assert_failed_authenticate_response(
         &resp,

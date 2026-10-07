@@ -1,13 +1,13 @@
-(* #"/workspace/crates/verified/src/compaction/retain_decision.rs" 55 0 55 74 *)
+(* #"/workspace/crates/verified/src/compaction/retain_decision.rs" 56 0 56 74 *)
 
-let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
-let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
-let%span snum = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 347 20 348 51
-let%span snum'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 351 26 351 83
-let%span snum'1 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 352 26 352 83
-let%span sretain_decision = "/workspace/crates/verified/src/compaction/retain_decision.rs" 56 4 56 46
-let%span sretain_decision'0 = "/workspace/crates/verified/src/compaction/retain_decision.rs" 53 10 53 71
-let%span sretain_decision'1 = "/workspace/crates/verified/src/compaction/retain_decision.rs" 38 8 44 9
+let%span sord = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sord'0 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span snum = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 347 20 348 51
+let%span snum'0 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 351 26 351 83
+let%span snum'1 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 352 26 352 83
+let%span sretain_decision = "/workspace/crates/verified/src/compaction/retain_decision.rs" 57 4 57 46
+let%span sretain_decision'0 = "/workspace/crates/verified/src/compaction/retain_decision.rs" 54 10 54 71
+let%span sretain_decision'1 = "/workspace/crates/verified/src/compaction/retain_decision.rs" 39 8 45 9
 
 use creusot.int.Int64
 use creusot.prelude.Any
@@ -37,7 +37,7 @@ let saturating_add (self_: Int64.t) (rhs: Int64.t) (return (x: Int64.t)) = any
       + Int64.to_int rhs) (Int64.to_int const_MAX) -> Int64.to_int result = Int64.to_int const_MAX)}
     (! return {result}) ]
 
-function compute_horizon_model [#"/workspace/crates/verified/src/compaction/retain_decision.rs" 36 0 36 74] (now_ms: Int64.t) (delete_retention_ms: Int64.t) : int
+function compute_horizon_model [#"/workspace/crates/verified/src/compaction/retain_decision.rs" 37 0 37 74] (now_ms: Int64.t) (delete_retention_ms: Int64.t) : int
  = [%#sretain_decision'1] if gt_log_Int (Int64.to_int now_ms
   + Int64.to_int delete_retention_ms) 9223372036854775807 then
     9223372036854775807
@@ -53,8 +53,8 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let compute_horizon [#"/workspace/crates/verified/src/compaction/retain_decision.rs" 55 0 55 74]
-  (now_ms: Int64.t) (delete_retention_ms: Int64.t) (return (x: Int64.t)) = (! bb0
+let compute_horizon [#"/workspace/crates/verified/src/compaction/retain_decision.rs" 56 0 56 74] (now_ms: Int64.t)
+  (delete_retention_ms: Int64.t) (return (x: Int64.t)) = (! bb0
   [ bb0 = s0
     [ s0 = saturating_add [%#sretain_decision] {now_ms} {delete_retention_ms} (fun (_x: Int64.t) -> [ &_ret <- _x ] s1)
     | s1 = return {_ret} ] ]

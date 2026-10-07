@@ -7,7 +7,7 @@
 //! only configuration here that admits an unresolvable record.
 
 use assert2::check;
-use krabka_broker::{Broker, BrokerConfig, file_config::FileConfig};
+use krabka_broker::{BrokerConfig, file_config::FileConfig};
 use krabka_client_core::Client;
 use wiremock::{Mock, MockServer, ResponseTemplate, matchers::method};
 
@@ -20,28 +20,9 @@ async fn a_broker_with_no_registry_rejects_a_topic_that_asks_for_validation() {
     // No `[schema_registry]` section at all.
     let dir = tempfile::tempdir().expect("tempdir");
     let config = BrokerConfig::for_tests(dir.path().to_path_buf());
-    let broker = Broker::start(config).await.expect("broker start");
-    let client = Client::builder()
-        .bootstrap(broker.listen_addr().to_string())
-        .client_id("schema-validation-test")
-        .build()
-        .await
-        .expect("client build");
+    let (broker, client) = crate::harness::boot_config(config).await;
 
-    let id = create_topic(&broker, &client, "validated", VALIDATED).await;
-
-    // Fail closed. Admitting the record would make the topic's setting a lie.
-    let out = produce(
-        &client,
-        "validated",
-        id,
-        batch_with_value(Some(framed(KNOWN_ID, b"anything"))),
-    )
-    .await;
-
-    check!(out.error_code == INVALID_RECORD, "{out:?}");
-    check!(broker.local_log_end_offset("validated", 0) == Some(0));
-
+    expect_fail_closed(&broker, &client).await;
     broker.shutdown().await;
 }
 
@@ -57,19 +38,7 @@ async fn an_unreachable_registry_fails_closed_by_default() {
         .await;
 
     let (broker, client, _dir) = boot(&registry.uri()).await;
-    let id = create_topic(&broker, &client, "validated", VALIDATED).await;
-
-    let out = produce(
-        &client,
-        "validated",
-        id,
-        batch_with_value(Some(framed(KNOWN_ID, b"anything"))),
-    )
-    .await;
-
-    check!(out.error_code == INVALID_RECORD, "{out:?}");
-    check!(broker.local_log_end_offset("validated", 0) == Some(0));
-
+    expect_fail_closed(&broker, &client).await;
     broker.shutdown().await;
 }
 
@@ -95,13 +64,7 @@ async fn fail_open_admits_a_record_the_registry_could_not_answer_for() {
     file.apply_to(&mut config)
         .expect("[schema_registry] applies");
 
-    let broker = Broker::start(config).await.expect("broker start");
-    let client = Client::builder()
-        .bootstrap(broker.listen_addr().to_string())
-        .client_id("schema-validation-test")
-        .build()
-        .await
-        .expect("client build");
+    let (broker, client) = crate::harness::boot_config(config).await;
     let id = create_topic(&broker, &client, "validated", VALIDATED).await;
 
     let out = produce(
@@ -116,4 +79,19 @@ async fn fail_open_admits_a_record_the_registry_could_not_answer_for() {
     check!(broker.local_log_end_offset("validated", 0) == Some(1));
 
     broker.shutdown().await;
+}
+
+async fn expect_fail_closed(broker: &krabka_broker::BrokerHandle, client: &Client) {
+    let id = create_topic(broker, client, "validated", VALIDATED).await;
+
+    let out = produce(
+        client,
+        "validated",
+        id,
+        batch_with_value(Some(framed(KNOWN_ID, b"anything"))),
+    )
+    .await;
+
+    check!(out.error_code == INVALID_RECORD, "{out:?}");
+    check!(broker.local_log_end_offset("validated", 0) == Some(0));
 }

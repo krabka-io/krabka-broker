@@ -31,7 +31,7 @@ use super::codec::{
 use crate::{
     coordinator::unified::persistence::{
         flex::{
-            get_compact_array_len, get_compact_string, get_string_array, put_compact_array_len,
+            get_compact_array, get_compact_string, get_string_array, put_compact_array,
             put_compact_string, put_empty_tagged_fields, put_string_array, skip_tagged_fields,
         },
         get_i16, get_i32,
@@ -120,41 +120,26 @@ impl StoredSubtopology {
         put_compact_string(buf, &self.subtopology_id);
         put_string_array(buf, &self.source_topics);
         put_string_array(buf, &self.source_topic_regex);
-        put_compact_array_len(buf, self.state_changelog_topics.len());
-        for t in &self.state_changelog_topics {
+        put_compact_array(buf, self.state_changelog_topics.iter(), |buf, t| {
             t.encode_into(buf);
-        }
+        });
         put_string_array(buf, &self.repartition_sink_topics);
-        put_compact_array_len(buf, self.repartition_source_topics.len());
-        for t in &self.repartition_source_topics {
+        put_compact_array(buf, self.repartition_source_topics.iter(), |buf, t| {
             t.encode_into(buf);
-        }
-        put_compact_array_len(buf, self.copartition_groups.len());
-        for cg in &self.copartition_groups {
+        });
+        put_compact_array(buf, self.copartition_groups.iter(), |buf, cg| {
             cg.encode_into(buf);
-        }
+        });
         put_empty_tagged_fields(buf);
     }
     fn decode_from(buf: &mut &[u8]) -> Result<Self, BrokerError> {
         let subtopology_id = get_compact_string(buf)?;
         let source_topics = get_string_array(buf)?;
         let source_topic_regex = get_string_array(buf)?;
-        let scn = get_compact_array_len(buf)?;
-        let mut state_changelog_topics = Vec::with_capacity(scn);
-        for _ in 0..scn {
-            state_changelog_topics.push(StoredTopicInfo::decode_from(buf)?);
-        }
+        let state_changelog_topics = get_compact_array(buf, StoredTopicInfo::decode_from)?;
         let repartition_sink_topics = get_string_array(buf)?;
-        let rsn = get_compact_array_len(buf)?;
-        let mut repartition_source_topics = Vec::with_capacity(rsn);
-        for _ in 0..rsn {
-            repartition_source_topics.push(StoredTopicInfo::decode_from(buf)?);
-        }
-        let cgn = get_compact_array_len(buf)?;
-        let mut copartition_groups = Vec::with_capacity(cgn);
-        for _ in 0..cgn {
-            copartition_groups.push(StoredCopartitionGroup::decode_from(buf)?);
-        }
+        let repartition_source_topics = get_compact_array(buf, StoredTopicInfo::decode_from)?;
+        let copartition_groups = get_compact_array(buf, StoredCopartitionGroup::decode_from)?;
         skip_tagged_fields(buf)?;
         Ok(Self {
             subtopology_id,
@@ -182,10 +167,9 @@ impl StreamsGroupTopologyValue {
         let mut buf = BytesMut::new();
         buf.put_i16(0);
         buf.put_i32(self.epoch);
-        put_compact_array_len(&mut buf, self.subtopologies.len());
-        for s in &self.subtopologies {
-            s.encode_into(&mut buf);
-        }
+        put_compact_array(&mut buf, self.subtopologies.iter(), |buf, s| {
+            s.encode_into(buf);
+        });
         put_empty_tagged_fields(&mut buf);
         buf.freeze()
     }
@@ -194,11 +178,7 @@ impl StreamsGroupTopologyValue {
     pub fn decode(mut buf: &[u8]) -> Result<Self, BrokerError> {
         let _v = get_i16(&mut buf)?;
         let epoch = get_i32(&mut buf)?;
-        let n = get_compact_array_len(&mut buf)?;
-        let mut subtopologies = Vec::with_capacity(n);
-        for _ in 0..n {
-            subtopologies.push(StoredSubtopology::decode_from(&mut buf)?);
-        }
+        let subtopologies = get_compact_array(&mut buf, StoredSubtopology::decode_from)?;
         skip_tagged_fields(&mut buf)?;
         Ok(Self {
             epoch,

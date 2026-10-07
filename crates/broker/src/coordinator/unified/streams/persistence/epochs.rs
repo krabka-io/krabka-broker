@@ -27,7 +27,7 @@ use bytes::{BufMut, Bytes, BytesMut};
 
 use crate::{
     coordinator::unified::persistence::{
-        flex::{put_empty_tagged_fields, put_tagged_fields, read_tagged, skip_tagged_fields},
+        flex::{epoch_value, put_tagged_fields, read_tagged},
         get_i16, get_i32, get_i64,
     },
     error::BrokerError,
@@ -130,30 +130,10 @@ impl StreamsGroupMetadataValue {
     }
 }
 
-/// Key v20 value: the target-assignment epoch.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct StreamsGroupTargetAssignmentMetadataValue {
-    pub assignment_epoch: i32,
-}
-
-impl StreamsGroupTargetAssignmentMetadataValue {
-    #[must_use]
-    pub fn encode(self) -> Bytes {
-        let mut buf = BytesMut::new();
-        buf.put_i16(0);
-        buf.put_i32(self.assignment_epoch);
-        put_empty_tagged_fields(&mut buf);
-        buf.freeze()
-    }
-    /// # Errors
-    /// Returns an error when log I/O fails, a record or index is corrupt, or the requested offset violates the segment state.
-    pub fn decode(mut buf: &[u8]) -> Result<Self, BrokerError> {
-        let _v = get_i16(&mut buf)?;
-        let assignment_epoch = get_i32(&mut buf)?;
-        skip_tagged_fields(&mut buf)?;
-        Ok(Self { assignment_epoch })
-    }
-}
+epoch_value!(
+    /// Key v20 value: the target-assignment epoch.
+    StreamsGroupTargetAssignmentMetadataValue { assignment_epoch }
+);
 
 #[cfg(test)]
 mod tests {

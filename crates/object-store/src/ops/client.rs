@@ -9,7 +9,7 @@
 use std::sync::Arc;
 
 use bytes::Bytes;
-use futures_util::TryStreamExt as _;
+use futures_util::{StreamExt as _, TryStreamExt as _};
 use object_store::{
     GetOptions, GetRange, MultipartUpload, ObjectMeta, ObjectStoreExt as _, PutOptions, PutPayload,
     PutResult, UploadPart, WriteMultipart, path::Path,
@@ -124,11 +124,7 @@ impl ObjectOps for ObjectStoreClient {
     ) -> Result<PutOutcome, ObjectStoreError> {
         let create_precondition = matches!(req.mode, object_store::PutMode::Create);
         let size_bytes = bytes.len() as u64;
-        let sha256 = req.digest.then(|| {
-            let mut hasher = Sha256::new();
-            hasher.update(&bytes);
-            hasher.finalize().into()
-        });
+        let sha256 = req.digest.then(|| Sha256::digest(&bytes).into());
         let result = self
             .inner
             .put_opts(
@@ -167,32 +163,7 @@ impl ObjectOps for ObjectStoreClient {
 
         let len = tokio::fs::metadata(src).await?.len();
         if len < threshold {
-            let create_precondition = matches!(req.mode, object_store::PutMode::Create);
-            let bytes = tokio::fs::read(src).await?;
-            let size_bytes = bytes.len() as u64;
-            let sha256 = req.digest.then(|| {
-                let mut hasher = Sha256::new();
-                hasher.update(&bytes);
-                hasher.finalize().into()
-            });
-            let result = self
-                .inner
-                .put_opts(
-                    key,
-                    PutPayload::from(bytes),
-                    PutOptions {
-                        mode: req.mode,
-                        ..Default::default()
-                    },
-                )
-                .await?;
-            return Ok(PutOutcome {
-                size_bytes,
-                sha256,
-                e_tag: result.e_tag,
-                version_id: result.version,
-                create_precondition,
-            });
+            return self.put(key, tokio::fs::read(src).await?.into(), req).await;
         }
         // `req.mode` cannot reach multipart completion. Atomically reserve the
         // key with a retained empty version so only its winner may proceed.
@@ -229,7 +200,6 @@ impl ObjectOps for ObjectStoreClient {
         }
         let result = writer.finish().await?;
         let expected_sha256 = hasher.map(|hasher| hasher.finalize().into());
-        let mut verified_sha256 = expected_sha256;
         let mut e_tag = result.e_tag;
         let mut version_id = result.version;
         if matches!(req.mode, object_store::PutMode::Create) {
@@ -262,13 +232,12 @@ impl ObjectOps for ObjectStoreClient {
                             .into(),
                     });
                 }
-                verified_sha256 = Some(actual);
             }
             e_tag = meta.e_tag;
         }
         Ok(PutOutcome {
             size_bytes,
-            sha256: verified_sha256,
+            sha256: expected_sha256,
             e_tag,
             version_id,
             create_precondition: false,
@@ -292,12 +261,10 @@ impl ObjectOps for ObjectStoreClient {
     }
 
     async fn list(&self, prefix: Option<Path>) -> Result<Vec<ObjectMeta>, ObjectStoreError> {
-        use futures_util::stream::TryStreamExt as _;
         self.list_stream(prefix).try_collect::<Vec<_>>().await
     }
 
     fn list_stream(&self, prefix: Option<Path>) -> ObjectStream {
-        use futures_util::stream::StreamExt as _;
         // `object_store`'s listing owns its paging state rather than borrowing
         // the store, so the mapped stream is `'static` without cloning the
         // handle into it.

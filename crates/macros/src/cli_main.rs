@@ -52,19 +52,16 @@ mod tests {
     use moxy::token::TokenStream;
 
     use super::{expand, split};
+    use crate::meta::compact;
 
     /// `tokens` parsed, split, and each side printed without whitespace.
     fn split_text(tokens: &str) -> (String, String) {
         let tokens: TokenStream = tokens.parse().expect("tokens");
-        let compact = |side: &[_]| {
-            TokenStream::from(side)
-                .to_string()
-                .chars()
-                .filter(|c| !c.is_whitespace())
-                .collect::<String>()
-        };
         let (path, runtime) = split(&tokens);
-        (compact(path), compact(runtime))
+        (
+            compact(&TokenStream::from(path)),
+            compact(&TokenStream::from(runtime)),
+        )
     }
 
     #[test]
@@ -93,12 +90,7 @@ mod tests {
     /// `cli_main!($tokens)` expanded and printed without whitespace.
     fn expanded(tokens: &str) -> String {
         let tokens: TokenStream = tokens.parse().expect("tokens");
-        expand(tokens)
-            .expect("expands")
-            .to_string()
-            .chars()
-            .filter(|c| !c.is_whitespace())
-            .collect()
+        compact(&expand(tokens).expect("expands"))
     }
 
     /// The `main` that `cli_main!` writes under the runtime attribute

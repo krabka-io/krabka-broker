@@ -6,19 +6,11 @@
 use std::time::Duration;
 
 use assert2::assert;
-use krabka_broker::Broker;
 use krabka_client_core::Client;
-use krabka_protocol::{
-    owned::produce_request::{PartitionProduceData, ProduceRequest, TopicProduceData},
-    records::{Record, RecordBatch},
-};
 
 use crate::{
     ACCEPT, NONE, REJECT, RELEASE,
-    harness::{
-        bootstrap_share_state, broker_config, broker_test_permit, connect, create_topic, join,
-        produce_n, topic_id, wait_for_share_init, wire,
-    },
+    harness::{bootstrap_share_state, broker_test_permit, join, produce_n, wait_for_share_init},
     share_rpc::{acquired_count, fetch_until_acquired, share_ack, share_fetch},
 };
 
@@ -35,18 +27,8 @@ use crate::{
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn acquire_past_leading_batch_returns_bytes() {
     let _permit = broker_test_permit().await;
-    let dir = tempfile::TempDir::new().unwrap();
-    let broker = Broker::start(broker_config(dir.path().to_path_buf()))
-        .await
-        .unwrap();
-    let client = connect(&broker.listen_addr().to_string()).await;
-    create_topic(&broker, &client, "t", 1).await;
-    let tid = topic_id(&broker, "t");
-    bootstrap_share_state(&broker, &client, "g1").await;
-    // One 3-record batch at offsets 0..2.
-    produce_n(&client, "t", tid, 0, 3).await;
-    let (member, member_epoch) = join(&client, "g1", "t").await;
-    wait_for_share_init(&broker, &client, &member, member_epoch, tid).await;
+    let (broker, client, _dir, tid) = crate::support::share::topic_fixture("t", 1, |_| {}).await;
+    let (member, _) = crate::harness::initialize_consumption(&broker, &client, tid, 3).await;
 
     // Acquire 0..2 and Reject them → archived, SPSO advances to 3.
     let row = fetch_until_acquired(&client, "g1", &member, tid, 0, 0).await;
@@ -104,50 +86,14 @@ async fn acquire_past_leading_batch_returns_bytes() {
 /// byte-exact disjoint offsets. This helper retries while the partition is still
 /// materializing.
 async fn produce_one(client: &Client, topic: &str, tid: uuid::Uuid, partition: i32, value: &str) {
-    for _ in 0..40 {
-        let resp = client
-            .send(ProduceRequest {
-                transactional_id: None,
-                acks: -1,
-                timeout_ms: 5_000,
-                topic_data: vec![TopicProduceData {
-                    name: topic.to_string(),
-                    topic_id: wire(tid),
-                    partition_data: vec![PartitionProduceData {
-                        index: partition,
-                        records: Some(
-                            RecordBatch {
-                                last_offset_delta: 0,
-                                records: vec![Record {
-                                    offset_delta: 0,
-                                    value: Some(bytes::Bytes::copy_from_slice(value.as_bytes())),
-                                    ..Default::default()
-                                }],
-                                ..Default::default()
-                            }
-                            .into(),
-                        ),
-                        ..Default::default()
-                    }],
-                    ..Default::default()
-                }],
-                ..Default::default()
-            })
-            .await
-            .expect("Produce");
-        let p = &resp.responses[0].partition_responses[0];
-        if p.error_code == 0 {
-            return;
-        }
-        if p.error_code == 3 || p.error_code == 6 {
-            // intentional: bounded produce-retry backoff while the partition
-            // leader materializes; this helper has no BrokerHandle to await on.
-            tokio::time::sleep(Duration::from_millis(100)).await;
-            continue;
-        }
-        panic!("produce failed: {p:?}");
-    }
-    panic!("partition never became produceable for {topic}:{partition}");
+    crate::support::share::produce_values(
+        client,
+        topic,
+        tid,
+        partition,
+        vec![bytes::Bytes::from(value.to_string())],
+    )
+    .await;
 }
 
 /// F5 (fragmented window): a single share fetch that returns DISJOINT acquired
@@ -168,13 +114,7 @@ async fn produce_one(client: &Client, topic: &str, tid: uuid::Uuid, partition: i
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn fragmented_window_records_match_acquired_offsets() {
     let _permit = broker_test_permit().await;
-    let dir = tempfile::TempDir::new().unwrap();
-    let broker = Broker::start(broker_config(dir.path().to_path_buf()))
-        .await
-        .unwrap();
-    let client = connect(&broker.listen_addr().to_string()).await;
-    create_topic(&broker, &client, "t", 1).await;
-    let tid = topic_id(&broker, "t");
+    let (broker, client, _dir, tid) = crate::support::share::topic_fixture("t", 1, |_| {}).await;
     bootstrap_share_state(&broker, &client, "g1").await;
     // Three separate single-record batches: offset 0=v0, 1=v1, 2=v2.
     produce_one(&client, "t", tid, 0, "v0").await;

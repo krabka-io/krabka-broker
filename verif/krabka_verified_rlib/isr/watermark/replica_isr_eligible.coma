@@ -1,11 +1,11 @@
-(* #"/workspace/crates/verified/src/isr/watermark.rs" 46 0 46 63 *)
+(* #"/workspace/crates/verified/src/isr/watermark.rs" 47 0 47 63 *)
 
-let%span swatermark = "/workspace/crates/verified/src/isr/watermark.rs" 48 15 48 20
-let%span swatermark'0 = "/workspace/crates/verified/src/isr/watermark.rs" 52 13 52 18
-let%span swatermark'1 = "/workspace/crates/verified/src/isr/watermark.rs" 51 49 51 51
-let%span swatermark'2 = "/workspace/crates/verified/src/isr/watermark.rs" 51 39 51 70
-let%span swatermark'3 = "/workspace/crates/verified/src/isr/watermark.rs" 44 10 44 56
-let%span swatermark'4 = "/workspace/crates/verified/src/isr/watermark.rs" 15 8 22 13
+let%span swatermark = "/workspace/crates/verified/src/isr/watermark.rs" 49 15 49 20
+let%span swatermark'0 = "/workspace/crates/verified/src/isr/watermark.rs" 53 13 53 18
+let%span swatermark'1 = "/workspace/crates/verified/src/isr/watermark.rs" 52 49 52 51
+let%span swatermark'2 = "/workspace/crates/verified/src/isr/watermark.rs" 52 39 52 70
+let%span swatermark'3 = "/workspace/crates/verified/src/isr/watermark.rs" 45 10 45 56
+let%span swatermark'4 = "/workspace/crates/verified/src/isr/watermark.rs" 16 8 23 13
 
 use creusot.int.Int64
 use creusot.prelude.Any
@@ -29,7 +29,7 @@ let elim_Some (_x: t_Option_i64) (return (f0'0: Int64.t)) = any
       end}
     any) ]
 
-predicate kafka_is_replica_isr_eligible [#"/workspace/crates/verified/src/isr/watermark.rs" 13 0 13 68] (facts: t_IsrEligibilityFacts) =
+predicate kafka_is_replica_isr_eligible [#"/workspace/crates/verified/src/isr/watermark.rs" 14 0 14 68] (facts: t_IsrEligibilityFacts) =
   [%#swatermark'4] not facts.fenced
   /\ not facts.shutting_down
   /\ match facts.fetch_broker_epoch with
@@ -44,8 +44,8 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let replica_isr_eligible [#"/workspace/crates/verified/src/isr/watermark.rs" 46 0 46 63]
-  (facts: t_IsrEligibilityFacts) (return (x: bool)) = (! bb0
+let replica_isr_eligible [#"/workspace/crates/verified/src/isr/watermark.rs" 47 0 47 63] (facts: t_IsrEligibilityFacts)
+  (return (x: bool)) = (! bb0
   [ bb0 = any [ br0 -> {facts.fenced = false} (! bb1) | br1 -> {facts.fenced} (! bb2) ]
   | bb1 = any [ br0 -> {facts.shutting_down = false} (! bb3) | br1 -> {facts.shutting_down} (! bb2) ]
   | bb2 = s0 [ s0 = [ &_ret <- [%#swatermark] false ] s1 | s1 = return {_ret} ]

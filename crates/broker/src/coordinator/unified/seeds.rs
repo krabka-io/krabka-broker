@@ -82,3 +82,29 @@ pub struct StreamsGroupSeed {
         streams::persistence::StreamsGroupCurrentMemberAssignmentValue,
     >,
 }
+
+/// The shared member/assignment tombstone mutations for all three seed types.
+/// Each replay supplies its protocol-specific records as additional match arms.
+macro_rules! scrub_seed_assignments {
+    ($seed:ident, $key:expr, $kind:ident, $epoch:ident; $($pattern:pat => $value:expr),* $(,)?) => {
+        match $key {
+            $kind::MemberMetadata { member_id, .. } => {
+                $seed.members.remove(member_id);
+                $seed.target_per_member.remove(member_id);
+                $seed.current_per_member.remove(member_id);
+            }
+            $kind::TargetAssignmentMetadata { .. } => {
+                $seed.$epoch = 0;
+                $seed.target_per_member.clear();
+            }
+            $kind::TargetAssignmentMember { member_id, .. } => {
+                $seed.target_per_member.remove(member_id);
+            }
+            $kind::CurrentMemberAssignment { member_id, .. } => {
+                $seed.current_per_member.remove(member_id);
+            }
+            $($pattern => $value),*
+        }
+    };
+}
+pub(super) use scrub_seed_assignments;

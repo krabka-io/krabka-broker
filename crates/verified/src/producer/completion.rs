@@ -108,6 +108,9 @@ pub fn producer_completion_window(
             && (forall<j: Int> 0 <= j && j < selected@.len() ==> selected@[j]@ == j));
         #[cfg(creusot)]
         proof_assert!(coverage::lemma_identity_window(selected@));
+        // Expose source membership directly to the eviction postcondition.
+        proof_assert!(forall<i: Int> 0 <= i && i < selected@.len()
+            ==> completion_source_selected(selected@, i));
         proof_assert!(accepted ==>
             position@ < selected@.len() && selected@[position@]@ == position@ && ends@[position@] == incoming);
         return (accepted, selected);

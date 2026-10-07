@@ -5,8 +5,7 @@ use assert2::assert;
 
 use crate::jvm_acceptance::{
     KAFKA_IMAGE_TXN, broker0_advertised, docker_run_kafka_tool_with_image_and_mount,
-    nc_check_connectivity, plain_jaas, start_three_broker_sasl_plaintext_jvm_cluster_with_users,
-    write_client_props,
+    nc_check_connectivity, start_three_broker_sasl_plaintext_jvm_cluster_with_users,
 };
 
 /// JVM acceptance: `kafka-configs --describe --entity-type users` round-trip for
@@ -26,12 +25,7 @@ async fn jvm_kafka_configs_describe_users_scram_credentials_end_to_end() {
         start_three_broker_sasl_plaintext_jvm_cluster_with_users(ADMIN, ADMIN_PASS, &[]).await;
     nc_check_connectivity();
 
-    let admin_props = write_client_props(&format!(
-        "security.protocol=SASL_PLAINTEXT\n\
-         sasl.mechanism=PLAIN\n\
-         sasl.jaas.config={}\n",
-        plain_jaas(ADMIN, ADMIN_PASS),
-    ));
+    let admin_props = crate::jvm_acceptance::write_plain_props(ADMIN, ADMIN_PASS);
     let admin_mount = admin_props.mount_str();
 
     // Provision a SCRAM user via kafka-configs --alter (hits AlterUserScramCredentials, api_key 51).

@@ -172,7 +172,7 @@ pub(crate) async fn signed_s3_get_xml<T: DeserializeOwned>(
 #[cfg(test)]
 mod tests {
     use assert2::check;
-    use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+    use tokio::io::AsyncWriteExt as _;
 
     use super::*;
 
@@ -184,13 +184,7 @@ mod tests {
         let server = tokio::spawn(async move {
             for (expected_request, status, body) in pages {
                 let (mut socket, _) = listener.accept().await.unwrap();
-                let mut request = Vec::new();
-                while !request.ends_with(b"\r\n\r\n") {
-                    let mut chunk = [0; 1024];
-                    let read = socket.read(&mut chunk).await.unwrap();
-                    request.extend_from_slice(&chunk[..read]);
-                }
-                let request = String::from_utf8(request).unwrap();
+                let request = crate::test_support::read_request(&mut socket).await;
                 check!(request.starts_with(expected_request));
                 check!(
                     request

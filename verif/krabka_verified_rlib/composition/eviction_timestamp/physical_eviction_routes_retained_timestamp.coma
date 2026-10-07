@@ -1,39 +1,35 @@
 (* #"/workspace/crates/verified/src/composition/eviction_timestamp.rs" 33 0 40 38 *)
 
-let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
-let%span sconvert = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/convert.rs" 274 26 274 51
-let%span soption = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/option.rs" 193 19 193 79
-let%span soption'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/option.rs" 194 18 197 9
-let%span strim = "/workspace/crates/verified/src/composition/trim.rs" 151 11 151 61
-let%span strim'0 = "/workspace/crates/verified/src/composition/trim.rs" 152 11 152 90
-let%span strim'1 = "/workspace/crates/verified/src/composition/trim.rs" 153 10 153 33
-let%span strim'2 = "/workspace/crates/verified/src/composition/trim.rs" 154 10 154 35
-let%span strim'3 = "/workspace/crates/verified/src/composition/trim.rs" 156 4 156 33
-let%span sretained_timestamp = "/workspace/crates/verified/src/composition/retained_timestamp.rs" 12 11 12 45
-let%span sretained_timestamp'0 = "/workspace/crates/verified/src/composition/retained_timestamp.rs" 13 11 13 38
-let%span sretained_timestamp'1 = "/workspace/crates/verified/src/composition/retained_timestamp.rs" 14 11 14 94
-let%span sretained_timestamp'2 = "/workspace/crates/verified/src/composition/retained_timestamp.rs" 15 11 15 106
-let%span sretained_timestamp'3 = "/workspace/crates/verified/src/composition/retained_timestamp.rs" 16 11 17 79
-let%span sretained_timestamp'4 = "/workspace/crates/verified/src/composition/retained_timestamp.rs" 18 11 19 79
-let%span sretained_timestamp'5 = "/workspace/crates/verified/src/composition/retained_timestamp.rs" 20 10 27 1
+let%span sord = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span soption = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/option.rs" 193 19 193 79
+let%span soption'0 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/option.rs" 194 18 197 9
+let%span sconvert = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/convert.rs" 274 26 274 51
+let%span stime_index = "/workspace/crates/verified/src/composition/time_index.rs" 20 8 23 129
+let%span strim = "/workspace/crates/verified/src/composition/trim.rs" 164 11 164 61
+let%span strim'0 = "/workspace/crates/verified/src/composition/trim.rs" 165 11 165 90
+let%span strim'1 = "/workspace/crates/verified/src/composition/trim.rs" 166 10 166 33
+let%span strim'2 = "/workspace/crates/verified/src/composition/trim.rs" 167 10 167 35
+let%span strim'3 = "/workspace/crates/verified/src/composition/trim.rs" 169 4 169 33
+let%span sretained_timestamp = "/workspace/crates/verified/src/composition/retained_timestamp.rs" 14 11 14 73
+let%span sretained_timestamp'0 = "/workspace/crates/verified/src/composition/retained_timestamp.rs" 15 11 15 38
+let%span sretained_timestamp'1 = "/workspace/crates/verified/src/composition/retained_timestamp.rs" 16 11 16 94
+let%span sretained_timestamp'2 = "/workspace/crates/verified/src/composition/retained_timestamp.rs" 17 10 24 1
 let%span seviction_timestamp = "/workspace/crates/verified/src/composition/eviction_timestamp.rs" 41 23 48 5
 let%span seviction_timestamp'0 = "/workspace/crates/verified/src/composition/eviction_timestamp.rs" 49 19 49 92
 let%span seviction_timestamp'1 = "/workspace/crates/verified/src/composition/eviction_timestamp.rs" 49 19 50 72
-let%span seviction_timestamp'2 = "/workspace/crates/verified/src/composition/eviction_timestamp.rs" 12 11 12 82
-let%span seviction_timestamp'3 = "/workspace/crates/verified/src/composition/eviction_timestamp.rs" 13 11 14 57
-let%span seviction_timestamp'4 = "/workspace/crates/verified/src/composition/eviction_timestamp.rs" 15 11 16 57
-let%span seviction_timestamp'5 = "/workspace/crates/verified/src/composition/eviction_timestamp.rs" 17 11 17 94
-let%span seviction_timestamp'6 = "/workspace/crates/verified/src/composition/eviction_timestamp.rs" 18 11 18 106
-let%span seviction_timestamp'7 = "/workspace/crates/verified/src/composition/eviction_timestamp.rs" 19 11 19 131
-let%span seviction_timestamp'8 = "/workspace/crates/verified/src/composition/eviction_timestamp.rs" 20 11 20 148
-let%span seviction_timestamp'9 = "/workspace/crates/verified/src/composition/eviction_timestamp.rs" 21 10 21 64
-let%span seviction_timestamp'10 = "/workspace/crates/verified/src/composition/eviction_timestamp.rs" 22 10 22 64
-let%span seviction_timestamp'11 = "/workspace/crates/verified/src/composition/eviction_timestamp.rs" 23 10 23 108
-let%span seviction_timestamp'12 = "/workspace/crates/verified/src/composition/eviction_timestamp.rs" 24 10 32 1
-let%span seviction_timestamp'13 = "/workspace/crates/verified/src/composition/eviction_timestamp.rs" 50 46 50 61
-let%span seviction_timestamp'14 = "/workspace/crates/verified/src/composition/eviction_timestamp.rs" 50 36 50 62
-let%span seviction_timestamp'15 = "/workspace/crates/verified/src/composition/eviction_timestamp.rs" 50 29 50 62
-let%span seviction_timestamp'16 = "/workspace/crates/verified/src/composition/eviction_timestamp.rs" 50 13 50 20
+let%span seviction_timestamp'2 = "/workspace/crates/verified/src/composition/eviction_timestamp.rs" 14 11 14 73
+let%span seviction_timestamp'3 = "/workspace/crates/verified/src/composition/eviction_timestamp.rs" 15 11 15 44
+let%span seviction_timestamp'4 = "/workspace/crates/verified/src/composition/eviction_timestamp.rs" 16 11 17 57
+let%span seviction_timestamp'5 = "/workspace/crates/verified/src/composition/eviction_timestamp.rs" 18 11 19 57
+let%span seviction_timestamp'6 = "/workspace/crates/verified/src/composition/eviction_timestamp.rs" 20 11 20 94
+let%span seviction_timestamp'7 = "/workspace/crates/verified/src/composition/eviction_timestamp.rs" 21 10 21 64
+let%span seviction_timestamp'8 = "/workspace/crates/verified/src/composition/eviction_timestamp.rs" 22 10 22 64
+let%span seviction_timestamp'9 = "/workspace/crates/verified/src/composition/eviction_timestamp.rs" 23 10 23 108
+let%span seviction_timestamp'10 = "/workspace/crates/verified/src/composition/eviction_timestamp.rs" 24 10 32 1
+let%span seviction_timestamp'11 = "/workspace/crates/verified/src/composition/eviction_timestamp.rs" 50 46 50 61
+let%span seviction_timestamp'12 = "/workspace/crates/verified/src/composition/eviction_timestamp.rs" 50 36 50 62
+let%span seviction_timestamp'13 = "/workspace/crates/verified/src/composition/eviction_timestamp.rs" 50 29 50 62
+let%span seviction_timestamp'14 = "/workspace/crates/verified/src/composition/eviction_timestamp.rs" 50 13 50 20
 
 use creusot.int.Int64
 use creusot.slice.Slice64
@@ -99,38 +95,31 @@ type tup3_ref_slice_u32_ref_slice_i64_ref_slice_tup2_usize_usize = {
 
 type t_Option_usize = None | Some UInt64.t
 
+predicate sparse_timestamp_window_valid [#"/workspace/crates/verified/src/composition/time_index.rs" 14 0 18 9] (offsets: Seq.seq UInt32.t) (timestamps: Seq.seq Int64.t) (rows: Seq.seq tup2_usize_usize) =
+  [%#stime_index] Seq.length offsets = Seq.length timestamps
+  /\ (forall i: int, j: int. 0 <= i /\ i < j /\ j < Seq.length offsets
+      -> UInt32.t'int (Seq.get offsets i) < UInt32.t'int (Seq.get offsets j))
+  /\ (forall i: int. 0 <= i /\ i < Seq.length rows
+      -> UInt64.t'int (Seq.get rows i).f0'1 <= UInt64.t'int (Seq.get rows i).f1'1
+      /\ UInt64.t'int (Seq.get rows i).f1'1 < Seq.length timestamps)
+  /\ (forall i: int, j: int. 0 <= i /\ i < j /\ j < Seq.length rows
+    -> UInt64.t'int (Seq.get rows i).f0'1 < UInt64.t'int (Seq.get rows j).f0'1
+    /\ UInt64.t'int (Seq.get rows i).f1'1 <= UInt64.t'int (Seq.get rows j).f1'1)
+
 constant const_MAX: Int64.t = (9223372036854775807: Int64.t)
 
 let constructed_index_retained_candidate (window: tup3_ref_slice_u32_ref_slice_i64_ref_slice_tup2_usize_usize)
   (base: Int64.t) (minimum: Int64.t) (target: Int64.t) (return (x: t_Option_usize)) =
-{[@stop_split] [@expl:constructed_index_retained_candidate requires] ([@stop_split] [@expl:constructed_index_retained_candidate requires #0] [%#sretained_timestamp] Seq.length (Slice64.view window.f0'2)
-    = Seq.length (Slice64.view window.f1'2))
+{[@stop_split] [@expl:constructed_index_retained_candidate requires] ([@stop_split] [@expl:constructed_index_retained_candidate requires #0] [%#sretained_timestamp] sparse_timestamp_window_valid (Slice64.view window.f0'2) (Slice64.view window.f1'2) (Slice64.view window.f2'2))
   /\ ([@stop_split] [@expl:constructed_index_retained_candidate requires #1] [%#sretained_timestamp'0] ge_log_Int (Int64.to_int base) 0
     /\ ge_log_Int (Int64.to_int minimum) 0)
   /\ ([@stop_split] [@expl:constructed_index_retained_candidate requires #2] [%#sretained_timestamp'1] forall i: int. 0
-          <= i
-        /\ i < Seq.length (Slice64.view window.f0'2)
-      -> Int64.to_int base + UInt32.t'int (Seq.get (Slice64.view window.f0'2) i) <= Int64.to_int const_MAX)
-  /\ ([@stop_split] [@expl:constructed_index_retained_candidate requires #3] [%#sretained_timestamp'2] forall i: int, j: int. 0
-          <= i
-        /\ i < j /\ j < Seq.length (Slice64.view window.f0'2)
-      -> UInt32.t'int (Seq.get (Slice64.view window.f0'2) i) < UInt32.t'int (Seq.get (Slice64.view window.f0'2) j))
-  /\ ([@stop_split] [@expl:constructed_index_retained_candidate requires #4] [%#sretained_timestamp'3] forall i: int. 0
-          <= i
-        /\ i < Seq.length (Slice64.view window.f2'2)
-      -> UInt64.t'int (Seq.get (Slice64.view window.f2'2) i).f0'1
-        <= UInt64.t'int (Seq.get (Slice64.view window.f2'2) i).f1'1
-      /\ UInt64.t'int (Seq.get (Slice64.view window.f2'2) i).f1'1 < Seq.length (Slice64.view window.f1'2))
-  /\ ([@stop_split] [@expl:constructed_index_retained_candidate requires #5] [%#sretained_timestamp'4] forall i: int, j: int. 0
         <= i
-      /\ i < j /\ j < Seq.length (Slice64.view window.f2'2)
-    -> UInt64.t'int (Seq.get (Slice64.view window.f2'2) i).f0'1
-      < UInt64.t'int (Seq.get (Slice64.view window.f2'2) j).f0'1
-    /\ UInt64.t'int (Seq.get (Slice64.view window.f2'2) i).f1'1
-    <= UInt64.t'int (Seq.get (Slice64.view window.f2'2) j).f1'1)}
+      /\ i < Seq.length (Slice64.view window.f0'2)
+    -> Int64.to_int base + UInt32.t'int (Seq.get (Slice64.view window.f0'2) i) <= Int64.to_int const_MAX)}
   any
   [ return (result: t_Option_usize) ->
-  {[@stop_split] [@expl:constructed_index_retained_candidate ensures] [%#sretained_timestamp'5] match result with
+  {[@stop_split] [@expl:constructed_index_retained_candidate ensures] [%#sretained_timestamp'2] match result with
       | None -> forall i: int. 0 <= i /\ i < Seq.length (Slice64.view window.f0'2)
         -> Int64.to_int base + UInt32.t'int (Seq.get (Slice64.view window.f0'2) i) < Int64.to_int minimum
         \/ Int64.to_int (Seq.get (Slice64.view window.f1'2) i) < Int64.to_int target
@@ -161,10 +150,10 @@ let closure0 [#"/workspace/crates/verified/src/composition/eviction_timestamp.rs
         (fun (_ptr: Opaque.ptr) -> -{Slice64.slice_ptr_len _ptr = Slice64.length self.c1}- [ &_10 <- _ptr ] s2)
     | s2 = [ &_11 <- Slice64.slice_ptr_len _10 ] s3
     | s3 = [ &_12 <- UInt64.lt _9 _11 ] s4
-    | s4 = {[@expl:index in bounds] [%#seviction_timestamp'13] _12} s5
-    | s5 = Slice64.get [%#seviction_timestamp'13] <UInt32.t> {self.c1} {_9} (fun (r: UInt32.t) -> [ &_8 <- r ] s6)
-    | s6 = from_i64 [%#seviction_timestamp'14] {_8} (fun (_x: Int64.t) -> [ &_7 <- _x ] s7)
-    | s7 = Int64.add [%#seviction_timestamp'15] {self.c0} {_7} (fun (_x: Int64.t) -> [ &_5 <- _x ] s8)
+    | s4 = {[@expl:index in bounds] [%#seviction_timestamp'11] _12} s5
+    | s5 = Slice64.get [%#seviction_timestamp'11] <UInt32.t> {self.c1} {_9} (fun (r: UInt32.t) -> [ &_8 <- r ] s6)
+    | s6 = from_i64 [%#seviction_timestamp'12] {_8} (fun (_x: Int64.t) -> [ &_7 <- _x ] s7)
+    | s7 = Int64.add [%#seviction_timestamp'13] {self.c0} {_7} (fun (_x: Int64.t) -> [ &_5 <- _x ] s8)
     | s8 = [ &_4 <- Int64.lt _5 self.c2 ] s9
     | s9 = [ &_ret <- { f0'3 = index; f1'3 = _4 } ] s10
     | s10 = return {_ret} ] ]
@@ -187,7 +176,7 @@ meta "rewrite_def" predicate closure0'post'return
 type t_Option_tup2_usize_bool = None'0 | Some'0 tup2_usize_bool
 
 predicate precondition_closure0 (self: closure0) (args: UInt64.t) =
-  [%#seviction_timestamp'16] let index = args in closure0'pre self index
+  [%#seviction_timestamp'14] let index = args in closure0'pre self index
 
 meta "rewrite_def" predicate precondition_closure0
 
@@ -196,7 +185,7 @@ predicate resolve_closure0 [@inline:trivial] (_1: closure0) = true
 meta "rewrite_def" predicate resolve_closure0
 
 predicate postcondition_once_closure0 (self: closure0) (args: UInt64.t) (result: tup2_usize_bool) =
-  [%#seviction_timestamp'16] let index = args in closure0'post'return self index result
+  [%#seviction_timestamp'14] let index = args in closure0'post'return self index result
 
 meta "rewrite_def" predicate postcondition_once_closure0
 
@@ -222,48 +211,31 @@ let physical_eviction_routes_retained_timestamp [#"/workspace/crates/verified/sr
   (frontiers: tup5_i64_i64_i64_i64_i64) (applied: Slice64.slice bool)
   (window: tup3_ref_slice_u32_ref_slice_i64_ref_slice_tup2_usize_usize) (base: Int64.t) (logical_floor: Int64.t)
   (target: Int64.t) (return (x: tup3_i64_i64_Option_tup2_usize_bool)) =
-{[@stop_split] [@expl:physical_eviction_routes_retained_timestamp requires] ([@stop_split] [@expl:physical_eviction_routes_retained_timestamp requires #0] [%#seviction_timestamp'2] ge_log_Int (Int64.to_int base) 0
-    /\ ge_log_Int (Int64.to_int logical_floor) 0
-    /\ Seq.length (Slice64.view window.f0'2) = Seq.length (Slice64.view window.f1'2))
-  /\ ([@stop_split] [@expl:physical_eviction_routes_retained_timestamp requires #1] [%#seviction_timestamp'3] 0
+{[@stop_split] [@expl:physical_eviction_routes_retained_timestamp requires] ([@stop_split] [@expl:physical_eviction_routes_retained_timestamp requires #0] [%#seviction_timestamp'2] sparse_timestamp_window_valid (Slice64.view window.f0'2) (Slice64.view window.f1'2) (Slice64.view window.f2'2))
+  /\ ([@stop_split] [@expl:physical_eviction_routes_retained_timestamp requires #1] [%#seviction_timestamp'3] ge_log_Int (Int64.to_int base) 0
+    /\ ge_log_Int (Int64.to_int logical_floor) 0)
+  /\ ([@stop_split] [@expl:physical_eviction_routes_retained_timestamp requires #2] [%#seviction_timestamp'4] 0
       <= Int64.to_int frontiers.f3
     /\ Int64.to_int frontiers.f3 <= Int64.to_int frontiers.f0
     /\ Int64.to_int frontiers.f3 + MinMax.max (Int64.to_int frontiers.f2) 0 <= Int64.to_int frontiers.f1)
-  /\ ([@stop_split] [@expl:physical_eviction_routes_retained_timestamp requires #2] [%#seviction_timestamp'4] 0
+  /\ ([@stop_split] [@expl:physical_eviction_routes_retained_timestamp requires #3] [%#seviction_timestamp'5] 0
       <= Int64.to_int frontiers.f4
     /\ Int64.to_int frontiers.f4 <= Int64.to_int frontiers.f0
     /\ Int64.to_int frontiers.f4 + MinMax.max (Int64.to_int frontiers.f2) 0 <= Int64.to_int frontiers.f1)
-  /\ ([@stop_split] [@expl:physical_eviction_routes_retained_timestamp requires #3] [%#seviction_timestamp'5] forall i: int. 0
-          <= i
-        /\ i < Seq.length (Slice64.view window.f0'2)
-      -> Int64.to_int base + UInt32.t'int (Seq.get (Slice64.view window.f0'2) i) <= Int64.to_int const_MAX)
-  /\ ([@stop_split] [@expl:physical_eviction_routes_retained_timestamp requires #4] [%#seviction_timestamp'6] forall i: int, j: int. 0
-          <= i
-        /\ i < j /\ j < Seq.length (Slice64.view window.f0'2)
-      -> UInt32.t'int (Seq.get (Slice64.view window.f0'2) i) < UInt32.t'int (Seq.get (Slice64.view window.f0'2) j))
-  /\ ([@stop_split] [@expl:physical_eviction_routes_retained_timestamp requires #5] [%#seviction_timestamp'7] forall i: int. 0
-          <= i
-        /\ i < Seq.length (Slice64.view window.f2'2)
-      -> UInt64.t'int (Seq.get (Slice64.view window.f2'2) i).f0'1
-        <= UInt64.t'int (Seq.get (Slice64.view window.f2'2) i).f1'1
-      /\ UInt64.t'int (Seq.get (Slice64.view window.f2'2) i).f1'1 < Seq.length (Slice64.view window.f1'2))
-  /\ ([@stop_split] [@expl:physical_eviction_routes_retained_timestamp requires #6] [%#seviction_timestamp'8] forall i: int, j: int. 0
+  /\ ([@stop_split] [@expl:physical_eviction_routes_retained_timestamp requires #4] [%#seviction_timestamp'6] forall i: int. 0
         <= i
-      /\ i < j /\ j < Seq.length (Slice64.view window.f2'2)
-    -> UInt64.t'int (Seq.get (Slice64.view window.f2'2) i).f0'1
-      < UInt64.t'int (Seq.get (Slice64.view window.f2'2) j).f0'1
-    /\ UInt64.t'int (Seq.get (Slice64.view window.f2'2) i).f1'1
-    <= UInt64.t'int (Seq.get (Slice64.view window.f2'2) j).f1'1)}
+      /\ i < Seq.length (Slice64.view window.f0'2)
+    -> Int64.to_int base + UInt32.t'int (Seq.get (Slice64.view window.f0'2) i) <= Int64.to_int const_MAX)}
   (! bb0
   [ bb0 = s0
     [ s0 = diskless_trim_reconciliation_preserves_coverage [%#seviction_timestamp] {frontiers.f0} {frontiers.f1}
-        {frontiers.f2} {frontiers.f3} {frontiers.f4} {applied} (fun (_x: tup2_i64_i64) -> [ &_51 <- _x ] s1)
-    | s1 = [ &wal <- _51.f0'0 ] s2
-    | s2 = [ &local <- _51.f1'0 ] s3
+        {frontiers.f2} {frontiers.f3} {frontiers.f4} {applied} (fun (_x: tup2_i64_i64) -> [ &_46 <- _x ] s1)
+    | s1 = [ &wal <- _46.f0'0 ] s2
+    | s2 = [ &local <- _46.f1'0 ] s3
     | s3 = constructed_index_retained_candidate [%#seviction_timestamp'0] {window} {base} {logical_floor} {target}
-        (fun (_x: t_Option_usize) -> [ &_59 <- _x ] s4)
-    | s4 = [ &_64 <- { c0 = base; c1 = window.f0'2; c2 = local } ] s5
-    | s5 = map_usize [%#seviction_timestamp'1] {_59} {_64}
+        (fun (_x: t_Option_usize) -> [ &_54 <- _x ] s4)
+    | s4 = [ &_59 <- { c0 = base; c1 = window.f0'2; c2 = local } ] s5
+    | s5 = map_usize [%#seviction_timestamp'1] {_54} {_59}
         (fun (_x: t_Option_tup2_usize_bool) -> [ &selected <- _x ] s6)
     | s6 = [ &_ret <- { f0'4 = wal; f1'4 = local; f2'4 = selected } ] s7
     | s7 = return {_ret} ] ]
@@ -276,22 +248,22 @@ let physical_eviction_routes_retained_timestamp [#"/workspace/crates/verified/sr
   | & target: Int64.t = target
   | & wal: Int64.t = Any.any_l ()
   | & local: Int64.t = Any.any_l ()
-  | & _51: tup2_i64_i64 = Any.any_l ()
+  | & _46: tup2_i64_i64 = Any.any_l ()
   | & selected: t_Option_tup2_usize_bool = Any.any_l ()
-  | & _59: t_Option_usize = Any.any_l ()
-  | & _64: closure0 = Any.any_l () ])
+  | & _54: t_Option_usize = Any.any_l ()
+  | & _59: closure0 = Any.any_l () ])
   [ return (result: tup3_i64_i64_Option_tup2_usize_bool) ->
-  {[@stop_split] [@expl:physical_eviction_routes_retained_timestamp ensures] ([@stop_split] [@expl:physical_eviction_routes_retained_timestamp ensures #0] [%#seviction_timestamp'9] Int64.to_int frontiers.f3
+  {[@stop_split] [@expl:physical_eviction_routes_retained_timestamp ensures] ([@stop_split] [@expl:physical_eviction_routes_retained_timestamp ensures #0] [%#seviction_timestamp'7] Int64.to_int frontiers.f3
         <= Int64.to_int result.f0'4
       /\ Int64.to_int frontiers.f4 <= Int64.to_int result.f1'4)
-    /\ ([@stop_split] [@expl:physical_eviction_routes_retained_timestamp ensures #1] [%#seviction_timestamp'10] Int64.to_int result.f0'4
+    /\ ([@stop_split] [@expl:physical_eviction_routes_retained_timestamp ensures #1] [%#seviction_timestamp'8] Int64.to_int result.f0'4
         <= Int64.to_int frontiers.f0
       /\ Int64.to_int result.f1'4 <= Int64.to_int frontiers.f0)
-    /\ ([@stop_split] [@expl:physical_eviction_routes_retained_timestamp ensures #2] [%#seviction_timestamp'11] Int64.to_int result.f0'4
+    /\ ([@stop_split] [@expl:physical_eviction_routes_retained_timestamp ensures #2] [%#seviction_timestamp'9] Int64.to_int result.f0'4
           + MinMax.max (Int64.to_int frontiers.f2) 0
         <= Int64.to_int frontiers.f1
       /\ Int64.to_int result.f1'4 + MinMax.max (Int64.to_int frontiers.f2) 0 <= Int64.to_int frontiers.f1)
-    /\ ([@stop_split] [@expl:physical_eviction_routes_retained_timestamp ensures #3] [%#seviction_timestamp'12] match result.f2'4 with
+    /\ ([@stop_split] [@expl:physical_eviction_routes_retained_timestamp ensures #3] [%#seviction_timestamp'10] match result.f2'4 with
       | None'0 -> forall i: int. 0 <= i /\ i < Seq.length (Slice64.view window.f0'2)
         -> Int64.to_int base + UInt32.t'int (Seq.get (Slice64.view window.f0'2) i) < Int64.to_int logical_floor
         \/ Int64.to_int (Seq.get (Slice64.view window.f1'2) i) < Int64.to_int target

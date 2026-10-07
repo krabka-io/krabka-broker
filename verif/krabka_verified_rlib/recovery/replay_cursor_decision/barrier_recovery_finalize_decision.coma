@@ -1,12 +1,12 @@
-(* #"/workspace/crates/verified/src/recovery/replay_cursor_decision.rs" 176 0 181 36 *)
+(* #"/workspace/crates/verified/src/recovery/replay_cursor_decision.rs" 177 0 182 36 *)
 
-let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
-let%span sreplay_cursor_decision = "/workspace/crates/verified/src/recovery/replay_cursor_decision.rs" 185 34 185 35
-let%span sreplay_cursor_decision'0 = "/workspace/crates/verified/src/recovery/replay_cursor_decision.rs" 151 10 151 80
-let%span sreplay_cursor_decision'1 = "/workspace/crates/verified/src/recovery/replay_cursor_decision.rs" 152 10 153 73
-let%span sreplay_cursor_decision'2 = "/workspace/crates/verified/src/recovery/replay_cursor_decision.rs" 154 10 158 45
-let%span sreplay_cursor_decision'3 = "/workspace/crates/verified/src/recovery/replay_cursor_decision.rs" 159 10 166 10
-let%span sreplay_cursor_decision'4 = "/workspace/crates/verified/src/recovery/replay_cursor_decision.rs" 167 10 174 10
+let%span sord = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sreplay_cursor_decision = "/workspace/crates/verified/src/recovery/replay_cursor_decision.rs" 186 34 186 35
+let%span sreplay_cursor_decision'0 = "/workspace/crates/verified/src/recovery/replay_cursor_decision.rs" 152 10 152 80
+let%span sreplay_cursor_decision'1 = "/workspace/crates/verified/src/recovery/replay_cursor_decision.rs" 153 10 154 73
+let%span sreplay_cursor_decision'2 = "/workspace/crates/verified/src/recovery/replay_cursor_decision.rs" 155 10 159 45
+let%span sreplay_cursor_decision'3 = "/workspace/crates/verified/src/recovery/replay_cursor_decision.rs" 160 10 167 10
+let%span sreplay_cursor_decision'4 = "/workspace/crates/verified/src/recovery/replay_cursor_decision.rs" 168 10 175 10
 
 use creusot.int.Int32
 use creusot.prelude.Any
@@ -37,7 +37,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let barrier_recovery_finalize_decision [#"/workspace/crates/verified/src/recovery/replay_cursor_decision.rs" 176 0 181 36]
+let barrier_recovery_finalize_decision [#"/workspace/crates/verified/src/recovery/replay_cursor_decision.rs" 177 0 182 36]
   (has_pending: bool) (current_coordinator_epoch: t_Option_i32) (frozen_coordinator_epoch: Int32.t)
   (targets_valid: bool) (return (x: t_BarrierRecoveryFinalizeDecision)) = (! bb0
   [ bb0 = any [ br0 -> {has_pending = false} (! bb1) | br1 -> {has_pending} (! bb2) ]

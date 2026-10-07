@@ -253,41 +253,8 @@ mod tests {
         // 127.0.0.1 host/port, so the broker list is compared by content
         // (as `broker_endpoint_response_preserves_non_default_fields` does)
         // rather than as a whole struct against a literal.
-        assert!(
-            (
-                resp.error_code,
-                resp.error_message.clone(),
-                resp.endpoint_type,
-                resp.cluster_id.clone(),
-                // Not requested: stays at the "not present" sentinel even
-                // though Describe is denied (#704 gates only this field,
-                // never the rest of the response).
-                resp.cluster_authorized_operations,
-                resp.throttle_time_ms
-            ) == (
-                codes::NONE,
-                None,
-                1,
-                crate::cluster_id::encode(broker.controller.current_image().cluster_id()),
-                i32::MIN,
-                0
-            )
-        );
+        check_cluster_data(&broker, &resp);
         assert!(resp.brokers.len() == 2);
-        let seeded_row = resp
-            .brokers
-            .iter()
-            .find(|b| b.broker_id == 42)
-            .expect("seeded broker row");
-        let expected_seeded_row = DescribeClusterBroker {
-            broker_id: 42,
-            host: "broker-a".into(),
-            port: 29092,
-            rack: Some("rack-a".into()),
-            is_fenced: false,
-            unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(vec![]),
-        };
-        assert!(*seeded_row == expected_seeded_row);
         broker_handle.shutdown().await;
     }
 
@@ -303,37 +270,7 @@ mod tests {
             .await
             .expect("handle");
 
-        assert!(
-            (
-                resp.error_code,
-                resp.error_message.clone(),
-                resp.endpoint_type,
-                resp.cluster_id.clone(),
-                resp.cluster_authorized_operations,
-                resp.throttle_time_ms
-            ) == (
-                codes::NONE,
-                None,
-                1,
-                crate::cluster_id::encode(broker.controller.current_image().cluster_id()),
-                i32::MIN,
-                0
-            )
-        );
-        let broker_row = resp
-            .brokers
-            .iter()
-            .find(|b| b.broker_id == 42)
-            .expect("seeded broker row");
-        let expected_row = DescribeClusterBroker {
-            broker_id: 42,
-            host: "broker-a".into(),
-            port: 29092,
-            rack: Some("rack-a".into()),
-            is_fenced: false,
-            unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(vec![]),
-        };
-        assert!(*broker_row == expected_row);
+        check_cluster_data(&broker, &resp);
         broker_handle.shutdown().await;
     }
 
@@ -625,5 +562,41 @@ mod tests {
             );
         }
         broker_handle.shutdown().await;
+    }
+    fn check_cluster_data(broker: &Broker, resp: &DescribeClusterResponse) {
+        assert!(
+            (
+                resp.error_code,
+                resp.error_message.clone(),
+                resp.endpoint_type,
+                resp.cluster_id.clone(),
+                // Not requested: stays at the "not present" sentinel even
+                // though Describe is denied (#704 gates only this field,
+                // never the rest of the response).
+                resp.cluster_authorized_operations,
+                resp.throttle_time_ms
+            ) == (
+                codes::NONE,
+                None,
+                1,
+                crate::cluster_id::encode(broker.controller.current_image().cluster_id()),
+                i32::MIN,
+                0
+            )
+        );
+        let seeded_row = resp
+            .brokers
+            .iter()
+            .find(|b| b.broker_id == 42)
+            .expect("seeded broker row");
+        let expected_seeded_row = DescribeClusterBroker {
+            broker_id: 42,
+            host: "broker-a".into(),
+            port: 29092,
+            rack: Some("rack-a".into()),
+            is_fenced: false,
+            unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(vec![]),
+        };
+        assert!(*seeded_row == expected_seeded_row);
     }
 }

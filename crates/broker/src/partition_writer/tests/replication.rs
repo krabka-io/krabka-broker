@@ -2,39 +2,21 @@
 //! supplied offset and the truncation that undoes one.
 
 use assert2::assert;
-use krabka_log::{LogConfig, Offset};
-use tempfile::tempdir;
+use krabka_log::Offset;
 use tokio::sync::oneshot;
 
 use super::*;
-use crate::{
-    partition::{ProduceData, ProduceJob},
-    partition_writer::test_support::sample_batch,
-};
+use crate::partition_writer::test_support::sample_batch;
 
 #[tokio::test]
 async fn writer_handles_replicate_with_caller_offset() {
-    let dir = tempdir().expect("tempdir");
-    let log = Arc::new(Mutex::new(
-        Log::open(dir.path(), LogConfig::default()).expect("open log"),
-    ));
-    let (tx, rx) = mpsc::channel(1);
-    let notify = Arc::new(Notify::new());
-    let writer = tokio::spawn(run_writer!(
-        "t".to_string(),
-        PartitionIndex(0),
-        log.clone(),
-        Arc::new(ArcSwap::from_pointee(dir.path().to_path_buf())),
-        rx,
-        notify.clone(),
-        Arc::new(tokio::sync::Mutex::new(
-            crate::replica_state::ReplicaState::new(),
-        )),
-        Arc::new(Notify::new()),
-        crate::log_dir_status::LogDirRegistry::default(),
-        Arc::new(ProducerState::new()),
-        None,
-    ));
+    let DefaultWriter {
+        dir: _dir,
+        log,
+        sender: tx,
+        writer,
+        notify: _notify,
+    } = default_writer();
 
     // First replicate batch must start at offset 0 to match the
     // empty local log's `log_end_offset()`.
@@ -53,27 +35,13 @@ async fn writer_handles_replicate_with_caller_offset() {
 
 #[tokio::test]
 async fn writer_replicate_offset_mismatch_surfaces_error() {
-    let dir = tempdir().expect("tempdir");
-    let log = Arc::new(Mutex::new(
-        Log::open(dir.path(), LogConfig::default()).expect("open log"),
-    ));
-    let (tx, rx) = mpsc::channel(1);
-    let notify = Arc::new(Notify::new());
-    let writer = tokio::spawn(run_writer!(
-        "t".to_string(),
-        PartitionIndex(0),
-        log.clone(),
-        Arc::new(ArcSwap::from_pointee(dir.path().to_path_buf())),
-        rx,
-        notify.clone(),
-        Arc::new(tokio::sync::Mutex::new(
-            crate::replica_state::ReplicaState::new(),
-        )),
-        Arc::new(Notify::new()),
-        crate::log_dir_status::LogDirRegistry::default(),
-        Arc::new(ProducerState::new()),
-        None,
-    ));
+    let DefaultWriter {
+        dir: _dir,
+        log,
+        sender: tx,
+        writer,
+        notify: _notify,
+    } = default_writer();
 
     // Kafka's `appendAsFollower` takes a first offset at or past the log end
     // offset and refuses one below it. Offset 7 leaves a hole, the way a
@@ -101,38 +69,17 @@ async fn writer_replicate_offset_mismatch_surfaces_error() {
 
 #[tokio::test]
 async fn writer_truncate_drops_records() {
-    let dir = tempdir().expect("tempdir");
-    let log = Arc::new(Mutex::new(
-        Log::open(dir.path(), LogConfig::default()).expect("open log"),
-    ));
-    let (tx, rx) = mpsc::channel(1);
-    let notify = Arc::new(Notify::new());
-    let writer = tokio::spawn(run_writer!(
-        "t".to_string(),
-        PartitionIndex(0),
-        log.clone(),
-        Arc::new(ArcSwap::from_pointee(dir.path().to_path_buf())),
-        rx,
-        notify.clone(),
-        Arc::new(tokio::sync::Mutex::new(
-            crate::replica_state::ReplicaState::new(),
-        )),
-        Arc::new(Notify::new()),
-        crate::log_dir_status::LogDirRegistry::default(),
-        Arc::new(ProducerState::new()),
-        None,
-    ));
+    let DefaultWriter {
+        dir: _dir,
+        log,
+        sender: tx,
+        writer,
+        notify: _notify,
+    } = default_writer();
 
     // Produce two batches so the log has some data.
     for _ in 0..2 {
-        let (ack, ack_rx) = oneshot::channel();
-        tx.send(WriterMessage::Produce(ProduceJob {
-            data: ProduceData::Owned(sample_batch(2)),
-            ack,
-            producer_check: None,
-        }))
-        .await
-        .expect("send produce");
+        let ack_rx = queue_batch(&tx, sample_batch(2)).await;
         ack_rx.await.expect("ack").expect("ok");
     }
     assert!(log.lock().unwrap().log_end_offset() == 4);

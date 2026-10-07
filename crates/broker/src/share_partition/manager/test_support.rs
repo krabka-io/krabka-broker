@@ -7,8 +7,9 @@
 use std::{path::Path, sync::Arc, time::Duration};
 
 use krabka_ids::PartitionIndex;
-use krabka_log::{Log, LogConfig, Offset};
+use krabka_log::Offset;
 use krabka_metadata::{MetadataImage, NodeId};
+use krabka_protocol::records::RecordBatch;
 use krabka_security::ListenerProtocol;
 
 use super::SharePartitionLeaderManager;
@@ -149,33 +150,12 @@ pub(crate) async fn open_data_partition(
     batches: &[(i64, &[&'static [u8]])],
     hw: Offset,
 ) {
-    let part_dir = crate::log_dir::partition_dir(log_dir, topic, partition);
-    std::fs::create_dir_all(&part_dir).expect("create partition dir");
-    let log = Log::open(&part_dir, LogConfig::default()).expect("open partition log");
-    let part = crate::broker::spawn_partition(
-        topic.to_string(),
-        PartitionIndex(partition),
-        log_dir.to_path_buf(),
-        log,
-        crate::log_dir_status::LogDirRegistry::default(),
-        Arc::new(crate::producer_state::ProducerState::new()),
-        false,
-    );
+    let part = crate::test_support::open_partition(log_dir, topic, partition);
     for (timestamp_ms, values) in batches {
-        let mut batch = krabka_protocol::records::RecordBatch {
+        let mut batch = RecordBatch {
+            partition_leader_epoch: 0,
             last_offset_delta: i32::try_from(values.len() - 1).expect("record count fits"),
-            base_timestamp: *timestamp_ms,
-            max_timestamp: *timestamp_ms,
-            records: values
-                .iter()
-                .enumerate()
-                .map(|(idx, value)| krabka_protocol::records::Record {
-                    offset_delta: i32::try_from(idx).expect("offset delta fits"),
-                    value: Some(bytes::Bytes::from_static(value)),
-                    ..Default::default()
-                })
-                .collect(),
-            ..Default::default()
+            ..crate::test_support::static_records_batch(values, *timestamp_ms)
         };
         part.log
             .lock()

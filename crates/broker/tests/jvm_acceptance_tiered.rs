@@ -29,32 +29,7 @@ async fn tiered_storage_round_trip_through_minio() {
     let _minio = MinioContainer::start();
     minio_make_bucket(MINIO_BUCKET);
 
-    let s3 = krabka_remote_storage::S3Config {
-        bucket: MINIO_BUCKET.to_string(),
-        region: "us-east-1".to_string(),
-        prefix: None,
-        endpoint: Some(format!("http://127.0.0.1:{minio_port}")),
-        access_key_id: Some(MINIO_ACCESS_KEY.to_string()),
-        secret_access_key: Some(MINIO_SECRET_KEY.to_string()),
-        allow_http: true,
-        // Force multipart on segments above 4 KiB so the multipart code
-        // path actually fires for the small `TIERED_SEGMENT_SIZE` test
-        // fixture. `mc ls` doesn't distinguish single-PUT from multipart-
-        // composed objects on read, so the consume assertion below
-        // covers both paths transparently.
-        multipart_threshold: 4 * 1024,
-        // MinIO permits parts < 5 MiB. Keep small so the test fixture
-        // doesn't have to bloat segments to exercise multiple parts.
-        multipart_chunk_size: 1024,
-        // These suites cover the ordinary mutable tier, so they pin the
-        // two integrity knobs off and keep exercising exactly the request
-        // shapes they always have. The WORM suite is what covers them on.
-        conditional_put: false,
-        checksum_sha256: false,
-        // The request bounds are not what this suite exercises; take the
-        // backend's own defaults.
-        ..krabka_remote_storage::S3Config::default()
-    };
+    let s3 = mutable_minio_config(minio_port);
     let (broker, _dir, _cfg) =
         start_host_broker_with_minio_tier(s3, krabka_broker::RlmmKind::InMemory).await;
     nc_check_connectivity();
@@ -103,22 +78,7 @@ async fn tiered_storage_disable_needs_delete_on_disable() {
     let _minio = MinioContainer::start();
     minio_make_bucket(MINIO_BUCKET);
 
-    let s3 = krabka_remote_storage::S3Config {
-        bucket: MINIO_BUCKET.to_string(),
-        region: "us-east-1".to_string(),
-        prefix: None,
-        endpoint: Some(format!("http://127.0.0.1:{minio_port}")),
-        access_key_id: Some(MINIO_ACCESS_KEY.to_string()),
-        secret_access_key: Some(MINIO_SECRET_KEY.to_string()),
-        allow_http: true,
-        multipart_threshold: 4 * 1024,
-        multipart_chunk_size: 1024,
-        conditional_put: false,
-        checksum_sha256: false,
-        // The request bounds are not what this suite exercises; take the
-        // backend's own defaults.
-        ..krabka_remote_storage::S3Config::default()
-    };
+    let s3 = mutable_minio_config(minio_port);
     let (broker, _dir, _cfg) =
         start_host_broker_with_minio_tier(s3, krabka_broker::RlmmKind::InMemory).await;
     nc_check_connectivity();
@@ -214,25 +174,7 @@ async fn tiered_storage_topic_rlmm_survives_restart() {
     let _minio = MinioContainer::start();
     minio_make_bucket(MINIO_BUCKET);
 
-    let s3 = krabka_remote_storage::S3Config {
-        bucket: MINIO_BUCKET.to_string(),
-        region: "us-east-1".to_string(),
-        prefix: None,
-        endpoint: Some(format!("http://127.0.0.1:{minio_port}")),
-        access_key_id: Some(MINIO_ACCESS_KEY.to_string()),
-        secret_access_key: Some(MINIO_SECRET_KEY.to_string()),
-        allow_http: true,
-        multipart_threshold: 4 * 1024,
-        multipart_chunk_size: 1024,
-        // These suites cover the ordinary mutable tier, so they pin the
-        // two integrity knobs off and keep exercising exactly the request
-        // shapes they always have. The WORM suite is what covers them on.
-        conditional_put: false,
-        checksum_sha256: false,
-        // The request bounds are not what this suite exercises; take the
-        // backend's own defaults.
-        ..krabka_remote_storage::S3Config::default()
-    };
+    let s3 = mutable_minio_config(minio_port);
 
     // Boot with the durable topic-backed RLMM.
     //
@@ -390,22 +332,7 @@ async fn restored_cluster_serves_the_jvm_console_consumer() {
     let _minio = MinioContainer::start();
     minio_make_bucket(MINIO_BUCKET);
 
-    let s3 = krabka_remote_storage::S3Config {
-        bucket: MINIO_BUCKET.to_string(),
-        region: "us-east-1".to_string(),
-        prefix: None,
-        endpoint: Some(format!("http://127.0.0.1:{minio_port}")),
-        access_key_id: Some(MINIO_ACCESS_KEY.to_string()),
-        secret_access_key: Some(MINIO_SECRET_KEY.to_string()),
-        allow_http: true,
-        multipart_threshold: 4 * 1024,
-        multipart_chunk_size: 1024,
-        conditional_put: false,
-        checksum_sha256: false,
-        // The request bounds are not what this suite exercises; take the
-        // backend's own defaults.
-        ..krabka_remote_storage::S3Config::default()
-    };
+    let s3 = mutable_minio_config(minio_port);
     let (broker, source_dir, _cfg) =
         start_host_broker_with_minio_tier(s3, krabka_broker::RlmmKind::InMemory).await;
     nc_check_connectivity();
@@ -476,4 +403,22 @@ async fn restored_cluster_serves_the_jvm_console_consumer() {
 
     restored_broker.shutdown().await;
     // `_minio` is dropped here; the container is removed via `docker rm -f`.
+}
+
+fn mutable_minio_config(port: u16) -> krabka_remote_storage::S3Config {
+    krabka_remote_storage::S3Config {
+        bucket: MINIO_BUCKET.into(),
+        region: "us-east-1".into(),
+        prefix: None,
+        endpoint: Some(format!("http://127.0.0.1:{port}")),
+        access_key_id: Some(MINIO_ACCESS_KEY.into()),
+        secret_access_key: Some(MINIO_SECRET_KEY.into()),
+        allow_http: true,
+        // Force multipart on these small segment fixtures; MinIO permits small parts.
+        multipart_threshold: 4 * 1024,
+        multipart_chunk_size: 1024,
+        conditional_put: false,
+        checksum_sha256: false,
+        ..krabka_remote_storage::S3Config::default()
+    }
 }

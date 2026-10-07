@@ -228,28 +228,13 @@ impl GroupCoordinator {
             self.group_types.remove(group_id);
             return;
         }
-        let scrub = |seed: &mut ShareGroupSeed| match key {
-            K::GroupMetadata { .. } => unreachable!("handled above"),
-            K::MemberMetadata { member_id, .. } => {
-                seed.members.remove(member_id);
-                seed.target_per_member.remove(member_id);
-                seed.current_per_member.remove(member_id);
-            }
-            K::TargetAssignmentMetadata { .. } => {
-                seed.target_epoch = 0;
-                seed.target_per_member.clear();
-            }
-            K::TargetAssignmentMember { member_id, .. } => {
-                seed.target_per_member.remove(member_id);
-            }
-            K::CurrentMemberAssignment { member_id, .. } => {
-                seed.current_per_member.remove(member_id);
-            }
-            K::StatePartitionMetadata { .. } => {
-                seed.state_partition_metadata =
-                    share::persistence::ShareGroupStatePartitionMetadataValue::default();
-            }
+        let scrub = |seed: &mut ShareGroupSeed| {
+            super::seeds::scrub_seed_assignments!(seed, key, K, target_epoch;
+                K::GroupMetadata { .. } => unreachable!("handled above"),
+            K::StatePartitionMetadata { .. } => { seed.state_partition_metadata = share::persistence::ShareGroupStatePartitionMetadataValue::default(); },
+            );
         };
+
         {
             if let Some(mut s) = self.share_seeds.get_mut(group_id) {
                 scrub(s.value_mut());

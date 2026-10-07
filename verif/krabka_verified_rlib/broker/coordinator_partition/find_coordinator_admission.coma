@@ -1,11 +1,11 @@
-(* #"/workspace/crates/verified/src/broker/coordinator_partition.rs" 31 0 36 29 *)
+(* #"/workspace/crates/verified/src/broker/coordinator_partition.rs" 32 0 37 29 *)
 
-let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
-let%span scoordinator_partition = "/workspace/crates/verified/src/broker/coordinator_partition.rs" 42 27 42 28
-let%span scoordinator_partition'0 = "/workspace/crates/verified/src/broker/coordinator_partition.rs" 11 10 15 1
-let%span scoordinator_partition'1 = "/workspace/crates/verified/src/broker/coordinator_partition.rs" 16 10 20 1
-let%span scoordinator_partition'2 = "/workspace/crates/verified/src/broker/coordinator_partition.rs" 21 10 27 1
-let%span scoordinator_partition'3 = "/workspace/crates/verified/src/broker/coordinator_partition.rs" 28 10 29 58
+let%span sord = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span scoordinator_partition = "/workspace/crates/verified/src/broker/coordinator_partition.rs" 43 27 43 28
+let%span scoordinator_partition'0 = "/workspace/crates/verified/src/broker/coordinator_partition.rs" 12 10 16 1
+let%span scoordinator_partition'1 = "/workspace/crates/verified/src/broker/coordinator_partition.rs" 17 10 21 1
+let%span scoordinator_partition'2 = "/workspace/crates/verified/src/broker/coordinator_partition.rs" 22 10 28 1
+let%span scoordinator_partition'3 = "/workspace/crates/verified/src/broker/coordinator_partition.rs" 29 10 30 58
 
 use creusot.int.Int8
 use creusot.int.Int16
@@ -29,7 +29,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let find_coordinator_admission [#"/workspace/crates/verified/src/broker/coordinator_partition.rs" 31 0 36 29]
+let find_coordinator_admission [#"/workspace/crates/verified/src/broker/coordinator_partition.rs" 32 0 37 29]
   (api_version: Int16.t) (key_type: Int8.t) (acl_allowed: bool) (share_key_valid: bool)
   (return (x: t_FindCoordinatorAdmission)) = (! bb0
   [ bb0 = any

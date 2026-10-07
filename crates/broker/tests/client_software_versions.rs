@@ -10,16 +10,17 @@
 //! lets the test pin the version and the exact `client_software_name` and
 //! `client_software_version` bytes the broker sees.
 
+mod support;
+
 use std::{io, net::SocketAddr};
 
 use assert2::assert;
 use bytes::{Buf, BufMut, BytesMut};
-use krabka_broker::{Broker, BrokerConfig, config::ListenerSpec};
+use krabka_broker::Broker;
 use krabka_protocol::{
     Decode, Encode,
     owned::{api_versions_request::ApiVersionsRequest, api_versions_response::ApiVersionsResponse},
 };
-use krabka_security::ListenerProtocol;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::TcpStream,
@@ -37,18 +38,7 @@ async fn boot() -> (
     tempfile::TempDir,
 ) {
     let tempdir = tempfile::tempdir().unwrap();
-    let mut cfg = BrokerConfig::for_tests(tempdir.path().to_path_buf());
-    cfg.listeners = vec![ListenerSpec {
-        name: "PLAINTEXT".into(),
-        bind_addr: "127.0.0.1:0".parse().unwrap(),
-        advertised: "127.0.0.1:0".into(),
-        protocol: ListenerProtocol::Plaintext,
-        tls_config: None,
-        sasl_mechanisms: None,
-        principal_mapper: krabka_broker::SslPrincipalMapper::default(),
-    }];
-    cfg.inter_broker_listener_name = "PLAINTEXT".into();
-    cfg.metrics_listen_addr = Some("127.0.0.1:0".parse().unwrap());
+    let cfg = crate::support::client::metrics_config(tempdir.path().to_path_buf());
 
     let handle = Broker::start(cfg).await.expect("broker start");
     let kafka_addr = handle.listen_addr();
@@ -113,17 +103,7 @@ async fn send_api_versions(
 }
 
 async fn scrape(addr: SocketAddr) -> String {
-    let mut stream = TcpStream::connect(addr).await.unwrap();
-    let req = format!(
-        "GET /metrics HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\nAccept: */*\r\n\r\n",
-    );
-    stream.write_all(req.as_bytes()).await.unwrap();
-    stream.flush().await.unwrap();
-    let mut buf = Vec::new();
-    stream.read_to_end(&mut buf).await.unwrap();
-    let s = String::from_utf8(buf).unwrap();
-    let body_start = s.find("\r\n\r\n").map_or(0, |i| i + 4);
-    s[body_start..].to_string()
+    crate::support::client::scrape_metrics(addr).await
 }
 
 // ── KIP-511 validation paths ────────────────────────────────────────────────

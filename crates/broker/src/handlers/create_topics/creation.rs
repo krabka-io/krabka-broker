@@ -18,7 +18,6 @@ use uuid::Uuid;
 use super::{
     THROTTLING_QUOTA_EXCEEDED_MESSAGE, automatic_leaderships, diskless_wal_placement_error,
     inactive_brokers, invalid_topic_shape, manual_leaderships,
-    materialize::{TopicMaterialization, materialize_topic},
     name::topic_name_error,
     placement::{automatic_placement_exclusions, resolve_assignments},
     placement_failure_message,
@@ -31,6 +30,7 @@ use crate::{
     broker::Broker,
     codes,
     config_keys::{self, resolve_preferred_leader_site},
+    handlers::partition_materialization::PartitionMaterialization,
     quota::ControllerMutationQuota,
     site_placement::PlacementRng,
 };
@@ -347,26 +347,16 @@ impl<'a> TopicCreation<'a> {
 
         let failure = match broker.controller.submit_change(records).await {
             Ok(_) => {
-                materialize_topic(
-                    TopicMaterialization {
-                        partitions: &broker.partitions,
-                        log_dirs: &broker.config.all_log_dirs(),
-                        log_config: &broker.config.log_config,
-                        log_dir_status: &broker.log_dir_status,
-                        producer_state: &broker.producer_state,
-                        max_produce_group: broker.config.max_produce_group,
-                        partition_writer_queue_depth: broker.config.partition_writer_queue_depth,
-                        diskless_wal_local_replica_count: broker
-                            .config
-                            .diskless_wal_local_replica_count,
-                        node_id: broker.config.node_id,
-                        diskless: placement.diskless,
-                        topic_id: placement.topic_id,
-                        hot_tail: &broker.hot_tail,
-                        wal_shards: &broker.wal_shards,
-                        controller: &broker.controller,
-                    },
+                PartitionMaterialization {
+                    broker,
+                    log_dirs: &broker.config.all_log_dirs(),
+                    diskless: placement.diskless,
+                    topic_id: placement.topic_id,
+                }
+                .materialize(
+                    "CreateTopics",
                     name,
+                    (0..placement.assignments.len()).map(|index| i32::try_from(index).unwrap_or(0)),
                     placement.assignments,
                     placement.leaderships,
                 )

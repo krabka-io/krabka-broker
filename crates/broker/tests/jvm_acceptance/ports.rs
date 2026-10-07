@@ -89,3 +89,12 @@ pub(crate) fn host_port() -> u16 {
 pub(crate) fn minio_port() -> u16 {
     ports().minio
 }
+
+/// The first `N` broker endpoints allocated for this test process.
+pub(crate) fn cluster_listeners<const N: usize>() -> [crate::support::JvmListeners; N] {
+    std::array::from_fn(|index| crate::support::JvmListeners {
+        listen: ports().client[index].clone(),
+        advertised: ports().advertised[index].clone(),
+        controller: ports().controller[index].clone(),
+    })
+}

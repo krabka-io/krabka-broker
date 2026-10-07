@@ -47,6 +47,26 @@ pub fn img_with_partition(
     img
 }
 
+/// Independent expected result of a clean election for the three-replica fixture.
+pub fn expected_clean_election(
+    leader: u64,
+    isr: &[u64],
+    directories: Vec<Uuid>,
+) -> PartitionRecord {
+    PartitionRecord {
+        topic: "t".into(),
+        partition: 0,
+        leader: NodeId(leader),
+        replicas: vec![NodeId(1), NodeId(2), NodeId(3)],
+        isr: isr.iter().copied().map(NodeId).collect(),
+        leader_epoch: LeaderEpoch(6),
+        adding_replicas: vec![],
+        removing_replicas: vec![],
+        directories,
+        partition_epoch: 1,
+    }
+}
+
 /// The witness set for a plain, non-stretch cluster. Every pre-witness
 /// behaviour must be unchanged against it.
 pub fn no_witnesses() -> std::collections::HashSet<NodeId> {

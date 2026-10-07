@@ -32,6 +32,8 @@ mod oauthbearer_tokens;
 mod plain;
 #[path = "auth_handlers/pre_auth_limits.rs"]
 mod pre_auth_limits;
+#[path = "auth_handlers/reauth_cases.rs"]
+mod reauth_cases;
 #[path = "auth_handlers/scram.rs"]
 mod scram;
 mod support;

@@ -1,22 +1,22 @@
-(* #"/workspace/crates/verified/src/transaction/marker.rs" 128 0 131 45 *)
+(* #"/workspace/crates/verified/src/transaction/marker.rs" 147 0 150 45 *)
 
-let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
-let%span smarker = "/workspace/crates/verified/src/transaction/marker.rs" 132 29 132 30
-let%span smarker'0 = "/workspace/crates/verified/src/transaction/marker.rs" 133 36 133 37
-let%span smarker'1 = "/workspace/crates/verified/src/transaction/marker.rs" 134 39 134 41
-let%span smarker'2 = "/workspace/crates/verified/src/transaction/marker.rs" 135 36 135 38
-let%span smarker'3 = "/workspace/crates/verified/src/transaction/marker.rs" 136 39 136 41
-let%span smarker'4 = "/workspace/crates/verified/src/transaction/marker.rs" 137 73 137 75
-let%span smarker'5 = "/workspace/crates/verified/src/transaction/marker.rs" 107 10 108 44
-let%span smarker'6 = "/workspace/crates/verified/src/transaction/marker.rs" 109 10 111 61
-let%span smarker'7 = "/workspace/crates/verified/src/transaction/marker.rs" 112 10 115 67
-let%span smarker'8 = "/workspace/crates/verified/src/transaction/marker.rs" 116 10 117 89
-let%span smarker'9 = "/workspace/crates/verified/src/transaction/marker.rs" 118 10 121 54
-let%span smarker'10 = "/workspace/crates/verified/src/transaction/marker.rs" 122 10 126 55
-let%span smarker'11 = "/workspace/crates/verified/src/transaction/marker.rs" 46 8 51 81
-let%span smarker'12 = "/workspace/crates/verified/src/transaction/marker.rs" 83 8 85 71
-let%span smarker'13 = "/workspace/crates/verified/src/transaction/marker.rs" 67 8 68 71
-let%span smarker'14 = "/workspace/crates/verified/src/transaction/marker.rs" 100 8 100 92
+let%span sord = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span smarker = "/workspace/crates/verified/src/transaction/marker.rs" 151 29 151 30
+let%span smarker'0 = "/workspace/crates/verified/src/transaction/marker.rs" 152 36 152 37
+let%span smarker'1 = "/workspace/crates/verified/src/transaction/marker.rs" 153 39 153 41
+let%span smarker'2 = "/workspace/crates/verified/src/transaction/marker.rs" 154 36 154 38
+let%span smarker'3 = "/workspace/crates/verified/src/transaction/marker.rs" 155 39 155 41
+let%span smarker'4 = "/workspace/crates/verified/src/transaction/marker.rs" 156 73 156 75
+let%span smarker'5 = "/workspace/crates/verified/src/transaction/marker.rs" 126 10 127 44
+let%span smarker'6 = "/workspace/crates/verified/src/transaction/marker.rs" 128 10 130 61
+let%span smarker'7 = "/workspace/crates/verified/src/transaction/marker.rs" 131 10 134 67
+let%span smarker'8 = "/workspace/crates/verified/src/transaction/marker.rs" 135 10 136 89
+let%span smarker'9 = "/workspace/crates/verified/src/transaction/marker.rs" 137 10 140 54
+let%span smarker'10 = "/workspace/crates/verified/src/transaction/marker.rs" 141 10 145 55
+let%span smarker'11 = "/workspace/crates/verified/src/transaction/marker.rs" 65 8 70 81
+let%span smarker'12 = "/workspace/crates/verified/src/transaction/marker.rs" 102 8 104 71
+let%span smarker'13 = "/workspace/crates/verified/src/transaction/marker.rs" 86 8 87 71
+let%span smarker'14 = "/workspace/crates/verified/src/transaction/marker.rs" 119 8 119 92
 
 use creusot.int.Int64
 use creusot.int.Int16
@@ -48,7 +48,7 @@ predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other
 
 meta "rewrite_def" predicate ge_log_Int
 
-predicate marker_well_formed [#"/workspace/crates/verified/src/transaction/marker.rs" 41 0 44 9] (request: t_TransactionMarkerRequest) (current': t_TransactionMarkerPartitionState) =
+predicate marker_well_formed [#"/workspace/crates/verified/src/transaction/marker.rs" 60 0 63 9] (request: t_TransactionMarkerRequest) (current': t_TransactionMarkerPartitionState) =
   [%#smarker'11] ge_log_Int (Int64.to_int request.producer_id) 0
   /\ ge_log_Int (Int16.to_int request.producer_epoch) 0
   /\ ge_log_Int (Int32.to_int request.coordinator_epoch) (- 1)
@@ -56,23 +56,23 @@ predicate marker_well_formed [#"/workspace/crates/verified/src/transaction/marke
   /\ ge_log_Int (Int32.to_int current'.coordinator_epoch'0) (- 1)
   /\ (not current'.has_pending_transaction'0 \/ ge_log_Int (Int16.to_int current'.producer_epoch'0) 0)
 
-predicate marker_completed_retry [#"/workspace/crates/verified/src/transaction/marker.rs" 78 0 81 9] (request: t_TransactionMarkerRequest) (current': t_TransactionMarkerPartitionState) =
+predicate marker_completed_retry [#"/workspace/crates/verified/src/transaction/marker.rs" 97 0 100 9] (request: t_TransactionMarkerRequest) (current': t_TransactionMarkerPartitionState) =
   [%#smarker'12] not current'.has_pending_transaction'0
   /\ Int16.to_int request.producer_epoch = Int16.to_int current'.producer_epoch'0
   /\ Int32.to_int request.coordinator_epoch = Int32.to_int current'.coordinator_epoch'0
 
-predicate marker_generation_current [#"/workspace/crates/verified/src/transaction/marker.rs" 62 0 65 9] (request: t_TransactionMarkerRequest) (current': t_TransactionMarkerPartitionState) =
+predicate marker_generation_current [#"/workspace/crates/verified/src/transaction/marker.rs" 81 0 84 9] (request: t_TransactionMarkerRequest) (current': t_TransactionMarkerPartitionState) =
   [%#smarker'13] ge_log_Int (Int16.to_int request.producer_epoch) (Int16.to_int current'.producer_epoch'0)
   /\ ge_log_Int (Int32.to_int request.coordinator_epoch) (Int32.to_int current'.coordinator_epoch'0)
 
-predicate marker_publishes_offsets [#"/workspace/crates/verified/src/transaction/marker.rs" 95 0 98 9] (request: t_TransactionMarkerRequest) (current': t_TransactionMarkerPartitionState) =
+predicate marker_publishes_offsets [#"/workspace/crates/verified/src/transaction/marker.rs" 114 0 117 9] (request: t_TransactionMarkerRequest) (current': t_TransactionMarkerPartitionState) =
   [%#smarker'14] current'.has_pending_transaction'0 /\ request.is_commit /\ request.is_offsets_partition
 
 meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let transaction_marker_materialization_decision [#"/workspace/crates/verified/src/transaction/marker.rs" 128 0 131 45]
+let transaction_marker_materialization_decision [#"/workspace/crates/verified/src/transaction/marker.rs" 147 0 150 45]
   (request: t_TransactionMarkerRequest) (current': t_TransactionMarkerPartitionState)
   (return (x: t_TransactionMarkerMaterializationDecision)) = (! bb0
   [ bb0 = s0

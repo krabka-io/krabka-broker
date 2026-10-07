@@ -1,10 +1,10 @@
-(* #"/workspace/crates/verified/src/isr/watermark.rs" 229 0 229 65 *)
+(* #"/workspace/crates/verified/src/isr/watermark.rs" 230 0 230 65 *)
 
-let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
-let%span swatermark = "/workspace/crates/verified/src/isr/watermark.rs" 230 14 230 15
-let%span swatermark'0 = "/workspace/crates/verified/src/isr/watermark.rs" 230 4 230 28
-let%span swatermark'1 = "/workspace/crates/verified/src/isr/watermark.rs" 230 27 230 28
-let%span swatermark'2 = "/workspace/crates/verified/src/isr/watermark.rs" 227 10 227 48
+let%span sord = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span swatermark = "/workspace/crates/verified/src/isr/watermark.rs" 231 14 231 15
+let%span swatermark'0 = "/workspace/crates/verified/src/isr/watermark.rs" 231 4 231 28
+let%span swatermark'1 = "/workspace/crates/verified/src/isr/watermark.rs" 231 27 231 28
+let%span swatermark'2 = "/workspace/crates/verified/src/isr/watermark.rs" 228 10 228 48
 
 use creusot.int.UInt64
 use creusot.prelude.Any
@@ -18,8 +18,8 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let isr_proposal_changed [#"/workspace/crates/verified/src/isr/watermark.rs" 229 0 229 65]
-  (removed: UInt64.t) (added: UInt64.t) (return (x: bool)) = (! bb0
+let isr_proposal_changed [#"/workspace/crates/verified/src/isr/watermark.rs" 230 0 230 65] (removed: UInt64.t)
+  (added: UInt64.t) (return (x: bool)) = (! bb0
   [ bb0 = s0
     [ s0 = [ &_6 <- UInt64.gt removed ([%#swatermark] (0: UInt64.t)) ] s1
     | s1 = any [ br0 -> {_6 = false} (! bb2) | br1 -> {_6} (! bb1) ] ]

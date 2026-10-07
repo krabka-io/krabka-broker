@@ -141,19 +141,9 @@ pub(crate) async fn handle(
     Ok(resp)
 }
 
-/// Kafka's `StreamsGroupHeartbeatRequest.getErrorResponse`: the error code
-/// and the defaults of the generated response data, whose status list is
-/// empty.
-fn error(code: i16) -> StreamsGroupHeartbeatResponse {
-    crate::coordinator::unified::streams::actor::response::error_resp(code, None)
-}
-
-/// The early refusal: `error(code)` carrying `message`.
+/// Kafka's error response: the code, message and generated defaults.
 fn reply(code: i16, message: Option<String>) -> StreamsGroupHeartbeatResponse {
-    StreamsGroupHeartbeatResponse {
-        error_message: message,
-        ..error(code)
-    }
+    crate::coordinator::unified::streams::actor::response::error_resp(code, message)
 }
 
 #[cfg(test)]
@@ -163,63 +153,30 @@ mod tests {
     use assert2::assert;
     use krabka_metadata::{FeatureLevelRecord, MetadataRecord};
     use krabka_protocol::{Decode, owned::streams_group_heartbeat_response};
-    use krabka_security::Principal;
 
-    use crate::test_support::{peer, principal};
+    use crate::{
+        handlers::group_heartbeat_test_support::acl_authorizer,
+        test_support::{peer, principal},
+    };
 
     /// A valid join of member `m1` with a one-subtopology topology.
     fn request(group_id: &str) -> StreamsGroupHeartbeatRequest {
-        use krabka_protocol::owned::streams_group_heartbeat_request::{Subtopology, Topology};
-
-        StreamsGroupHeartbeatRequest {
-            group_id: group_id.into(),
-            member_id: "m1".into(),
-            member_epoch: 0,
-            rebalance_timeout_ms: 1_000,
-            active_tasks: Some(vec![]),
-            standby_tasks: Some(vec![]),
-            warmup_tasks: Some(vec![]),
-            topology: Some(Topology {
-                epoch: 1,
-                subtopologies: vec![Subtopology {
-                    subtopology_id: "0".into(),
-                    source_topics: vec!["in".into()],
-                    ..Default::default()
-                }],
-                ..Default::default()
-            }),
-            ..Default::default()
-        }
+        crate::handlers::group_heartbeat_test_support::streams_request(group_id, "m1")
     }
 
     /// Creates a one-partition topic on the test broker, so that a streams
     /// topology can read it.
     async fn create_source_topic(broker: &Broker, name: &str) {
-        use krabka_metadata::{LeaderEpoch, PartitionRecord, TopicRecord};
-
-        let node_id = krabka_audit::NodeId(broker.config.node_id.0);
         broker
             .controller
-            .submit_change(vec![
-                MetadataRecord::V1Topic(TopicRecord {
-                    name: name.into(),
-                    topic_id: uuid::Uuid::new_v4(),
-                    partitions: 1,
-                    replication_factor: 1,
-                }),
-                MetadataRecord::V1Partition(PartitionRecord {
-                    topic: name.into(),
-                    partition: 0,
-                    leader: node_id,
-                    replicas: vec![node_id],
-                    isr: vec![node_id],
-                    leader_epoch: LeaderEpoch(0),
-                    adding_replicas: vec![],
-                    removing_replicas: vec![],
-                    directories: vec![],
-                    partition_epoch: 0,
-                }),
-            ])
+            .submit_change(
+                crate::handlers::group_heartbeat_test_support::topic_with_partitions(
+                    name,
+                    uuid::Uuid::new_v4(),
+                    1,
+                    broker.config.node_id,
+                ),
+            )
             .await
             .expect("create the source topic");
     }
@@ -252,10 +209,10 @@ mod tests {
         .await;
         broker_handle.wait_until_group_coordinator_ready().await;
         let broker = broker_handle.broker_arc_for_test();
-        finalize_streams_version(&broker).await;
+        set_streams_version(&broker, 1).await;
         let principal = principal("alice");
         let peer = peer();
-        let ctx = context(&principal, &peer);
+        let ctx = test_context(&principal, &peer);
         let config = |name: &str, value: &str| KeyValue {
             key: name.into(),
             value: value.into(),
@@ -393,10 +350,10 @@ mod tests {
         let version = streams_group_heartbeat_response::MAX_VERSION;
         let (broker_handle, _dir) = start_broker(true).await;
         let broker = broker_handle.broker_arc_for_test();
-        finalize_streams_version(&broker).await;
+        set_streams_version(&broker, 1).await;
         let principal = principal("alice");
         let peer = peer();
-        let ctx = context(&principal, &peer);
+        let ctx = test_context(&principal, &peer);
 
         // (group id, source topic, the expected error message)
         let rows = [
@@ -450,11 +407,11 @@ mod tests {
         let version = streams_group_heartbeat_response::MAX_VERSION;
         let (broker_handle, _dir) = start_broker_with_grants().await;
         let broker = broker_handle.broker_arc_for_test();
-        finalize_streams_version(&broker).await;
+        set_streams_version(&broker, 1).await;
         let peer = peer();
         // `Group:Read` only: the source topic `in` gets no `Describe`.
         let principal = crate::test_support::principal("Group:Read");
-        let ctx = context(&principal, &peer);
+        let ctx = test_context(&principal, &peer);
 
         let resp = handle(&broker, request("describe-denied"), version, &ctx)
             .await
@@ -489,13 +446,13 @@ mod tests {
         let version = streams_group_heartbeat_response::MAX_VERSION;
         let (broker_handle, _dir) = start_broker_with_grants().await;
         let broker = broker_handle.broker_arc_for_test();
-        finalize_streams_version(&broker).await;
+        set_streams_version(&broker, 1).await;
         create_source_topic(&broker, "in").await;
         let peer = peer();
         // `Read` on the group and `Describe` on the topics, but no `Create`
         // anywhere.
         let principal = crate::test_support::principal("Group:Read+Topic:Describe");
-        let ctx = context(&principal, &peer);
+        let ctx = test_context(&principal, &peer);
 
         let mut req = request("no-create-grant");
         let topology = req.topology.as_mut().expect("the join carries a topology");
@@ -542,10 +499,10 @@ mod tests {
         let version = streams_group_heartbeat_response::MAX_VERSION;
         let (broker_handle, _dir) = start_broker(true).await;
         let broker = broker_handle.broker_arc_for_test();
-        finalize_streams_version(&broker).await;
+        set_streams_version(&broker, 1).await;
         let principal = principal("alice");
         let peer = peer();
-        let ctx = context(&principal, &peer);
+        let ctx = test_context(&principal, &peer);
         broker.group_coordinator.mark_share("share");
         let _consumer = broker
             .group_coordinator
@@ -612,10 +569,10 @@ mod tests {
         let version = streams_group_heartbeat_response::MAX_VERSION;
         let (broker_handle, _dir) = start_broker(true).await;
         let broker = broker_handle.broker_arc_for_test();
-        finalize_streams_version(&broker).await;
+        set_streams_version(&broker, 1).await;
         let principal = principal("alice");
         let peer = peer();
-        let ctx = context(&principal, &peer);
+        let ctx = test_context(&principal, &peer);
         let req = StreamsGroupHeartbeatRequest {
             member_id: String::new(),
             ..request("invalid-join")
@@ -658,11 +615,11 @@ mod tests {
         let version = streams_group_heartbeat_response::MAX_VERSION;
         let (broker_handle, _dir) = start_broker(true).await;
         let broker = broker_handle.broker_arc_for_test();
-        finalize_streams_version(&broker).await;
+        set_streams_version(&broker, 1).await;
         create_source_topic(&broker, "in").await;
         let principal = principal("alice");
         let peer = peer();
-        let ctx = context(&principal, &peer);
+        let ctx = test_context(&principal, &peer);
         let with_subtopology = |group_id: &str, subtopology: Subtopology| {
             let mut req = request(group_id);
             req.topology
@@ -736,12 +693,7 @@ mod tests {
         broker_handle.shutdown().await;
     }
 
-    fn context<'a>(
-        principal: &'a Principal,
-        peer: &'a SocketAddr,
-    ) -> crate::handlers::RequestContext<'a> {
-        crate::test_support::request_context(principal, peer, "streams-client")
-    }
+    crate::test_support::context_helper!(client_id = "streams-client");
 
     async fn start_broker(
         streams_enabled: bool,
@@ -765,20 +717,6 @@ mod tests {
             cfg.streams_group.enable = true;
         })
         .await
-    }
-
-    /// Finalizes `streams.version` 1, the level that turns the streams
-    /// protocol on.
-    async fn finalize_streams_version(broker: &Broker) {
-        set_streams_version(broker, 1).await;
-    }
-
-    /// Removes the finalized `streams.version`. A broker bootstrapped at
-    /// `4.2-IV1` or later finalizes level 1 by default, as Kafka's
-    /// `StreamsVersion.SV_1` does, so a test that needs the protocol off has
-    /// to take it away.
-    async fn unfinalize_streams_version(broker: &Broker) {
-        set_streams_version(broker, 0).await;
     }
 
     /// Writes a `streams.version` `FeatureLevelRecord` at `level` and waits
@@ -831,10 +769,10 @@ mod tests {
         .await;
         broker_handle.wait_until_group_coordinator_ready().await;
         let broker = broker_handle.broker_arc_for_test();
-        finalize_streams_version(&broker).await;
+        set_streams_version(&broker, 1).await;
         let principal = principal("alice");
         let peer = peer();
-        let ctx = context(&principal, &peer);
+        let ctx = test_context(&principal, &peer);
         // Through the dispatch registry: v0 drops the int64 lag on the wire.
         let heartbeat = |req: StreamsGroupHeartbeatRequest, version: i16| {
             let broker = &broker;
@@ -906,7 +844,7 @@ mod tests {
         .await;
         broker_handle.wait_until_group_coordinator_ready().await;
         let broker = broker_handle.broker_arc_for_test();
-        finalize_streams_version(&broker).await;
+        set_streams_version(&broker, 1).await;
         broker
             .controller
             .submit_change(vec![MetadataRecord::V1GroupConfig(
@@ -921,7 +859,7 @@ mod tests {
             .expect("store the group override");
         let principal = principal("alice");
         let peer = peer();
-        let ctx = context(&principal, &peer);
+        let ctx = test_context(&principal, &peer);
         // Through the dispatch registry: v0 drops the status the v1 adds.
         let heartbeat = |group_id: &str, version: i16| {
             let req = request(group_id);
@@ -972,10 +910,10 @@ mod tests {
         let version = streams_group_heartbeat_response::MAX_VERSION;
         let (broker_handle, _dir) = start_broker(true).await;
         let broker = broker_handle.broker_arc_for_test();
-        unfinalize_streams_version(&broker).await;
+        set_streams_version(&broker, 0).await;
         let principal = principal("alice");
         let peer = peer();
-        let ctx = context(&principal, &peer);
+        let ctx = test_context(&principal, &peer);
         let resp = handle(
             &broker,
             request("streams-app-disabled-feature"),
@@ -994,10 +932,10 @@ mod tests {
         let version = streams_group_heartbeat_response::MAX_VERSION;
         let (broker_handle, _dir) = start_broker(false).await;
         let broker = broker_handle.broker_arc_for_test();
-        finalize_streams_version(&broker).await;
+        set_streams_version(&broker, 1).await;
         let principal = principal("alice");
         let peer = peer();
-        let ctx = context(&principal, &peer);
+        let ctx = test_context(&principal, &peer);
         let resp = handle(
             &broker,
             request("streams-app-disabled-config"),
@@ -1016,10 +954,10 @@ mod tests {
         let version = streams_group_heartbeat_response::MAX_VERSION;
         let (broker_handle, _dir) = start_broker(true).await;
         let broker = broker_handle.broker_arc_for_test();
-        finalize_streams_version(&broker).await;
+        set_streams_version(&broker, 1).await;
         let principal = principal("alice");
         let peer = peer();
-        let ctx = context(&principal, &peer);
+        let ctx = test_context(&principal, &peer);
 
         let resp = handle(&broker, request("identity-group"), version, &ctx)
             .await
@@ -1067,12 +1005,9 @@ mod tests {
 
     #[test]
     fn group_read_denied_yields_group_authorization_failed() {
-        use krabka_protocol::owned::streams_group_heartbeat_response::{
-            self, StreamsGroupHeartbeatResponse,
-        };
+        use krabka_protocol::owned::streams_group_heartbeat_response::StreamsGroupHeartbeatResponse;
 
-        let authorizer =
-            crate::authorizer::SimpleAclAuthorizer::new(std::collections::HashSet::new());
+        let authorizer = acl_authorizer();
         let image = krabka_metadata::MetadataImage::new(uuid::Uuid::nil());
         let principal = crate::test_support::principal("ANONYMOUS");
         let peer = peer();
@@ -1081,7 +1016,7 @@ mod tests {
         assert!(group_read_denied(&authorizer, &image, &ctx, "g"));
 
         let bytes = crate::handlers::encode_response(
-            &error(codes::GROUP_AUTHORIZATION_FAILED),
+            &reply(codes::GROUP_AUTHORIZATION_FAILED, None),
             streams_group_heartbeat_response::MAX_VERSION,
         )
         .expect("encode");

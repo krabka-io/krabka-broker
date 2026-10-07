@@ -12,6 +12,7 @@ use std::{
 };
 
 use assert2::assert;
+use tracing_subscriber::layer::SubscriberExt as _;
 
 type ApiVersion = i16;
 type CorrelationId = i32;
@@ -253,50 +254,37 @@ mod handlers {
         crate::reply(parts).map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
     }
 
-    pub mod list_groups {
-        use crate::{
-            ApiVersion, Broker, BrokerError, RequestContext,
-            krabka_protocol::owned::list_groups_request::ListGroupsRequest,
-        };
+    macro_rules! typed_handlers {
+        ($($module:ident: $schema:ident::$request:ident),* $(,)?) => {
+            $(pub mod $module {
+                use crate::{
+                    ApiVersion, Broker, BrokerError, RequestContext,
+                    krabka_protocol::owned::$schema::$request,
+                };
 
-        pub fn handle(
-            broker: &Broker,
-            request: ListGroupsRequest,
-            version: ApiVersion,
-            ctx: &RequestContext<'_>,
-        ) -> std::future::Ready<Result<String, BrokerError>> {
-            let ListGroupsRequest(text) = request;
-            std::future::ready(super::typed_reply(&[
-                &"list_groups",
-                &broker.name,
-                &version,
-                &ctx.client_id,
-                &text,
-            ]))
-        }
+                pub fn handle(
+                    broker: &Broker,
+                    request: $request,
+                    version: ApiVersion,
+                    ctx: &RequestContext<'_>,
+                ) -> std::future::Ready<Result<String, BrokerError>> {
+                    let $request(text) = request;
+                    std::future::ready(super::typed_reply(&[
+                        &stringify!($module),
+                        &broker.name,
+                        &version,
+                        &ctx.client_id,
+                        &text,
+                    ]))
+                }
+            })*
+        };
     }
 
-    pub mod heartbeat {
-        use crate::{
-            ApiVersion, Broker, BrokerError, RequestContext,
-            krabka_protocol::owned::heartbeat_request::HeartbeatRequest,
-        };
-
-        pub fn handle(
-            broker: &Broker,
-            request: HeartbeatRequest,
-            version: ApiVersion,
-            ctx: &RequestContext<'_>,
-        ) -> std::future::Ready<Result<String, BrokerError>> {
-            let HeartbeatRequest(text) = request;
-            std::future::ready(super::typed_reply(&[
-                &"heartbeat",
-                &broker.name,
-                &version,
-                &ctx.client_id,
-                &text,
-            ]))
-        }
+    typed_handlers! {
+        list_groups: list_groups_request::ListGroupsRequest,
+        heartbeat: heartbeat_request::HeartbeatRequest,
+        update_features: update_features_request::UpdateFeaturesRequest,
     }
 
     pub mod list_config_resources {
@@ -340,29 +328,6 @@ mod handlers {
                 "describe_acls {} {version} {} {text}",
                 broker.name, ctx.client_id
             )
-        }
-    }
-
-    pub mod update_features {
-        use crate::{
-            ApiVersion, Broker, BrokerError, RequestContext,
-            krabka_protocol::owned::update_features_request::UpdateFeaturesRequest,
-        };
-
-        pub fn handle(
-            broker: &Broker,
-            request: UpdateFeaturesRequest,
-            version: ApiVersion,
-            ctx: &RequestContext<'_>,
-        ) -> std::future::Ready<Result<String, BrokerError>> {
-            let UpdateFeaturesRequest(text) = request;
-            std::future::ready(super::typed_reply(&[
-                &"update_features",
-                &broker.name,
-                &version,
-                &ctx.client_id,
-                &text,
-            ]))
         }
     }
 
@@ -751,8 +716,6 @@ where
 
 /// Calls `api`'s adapter on `body` and returns what it traced.
 fn trace(registry: &DispatchRegistry, api: ApiKey, body: &[u8]) -> Vec<Traced> {
-    use tracing_subscriber::layer::SubscriberExt as _;
-
     let capture = Capture::default();
     let subscriber = tracing_subscriber::registry().with(capture.clone());
     let entry = registry.0[&(api as i16)];

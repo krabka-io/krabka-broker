@@ -37,17 +37,14 @@
 
 use std::collections::BTreeSet;
 
-use krabka_metadata::{
-    BrokerConfigRecord, DEFAULT_BROKER_CONFIG_NODE_ID, MetadataImage, MetadataRecord,
-    PartitionRecord, TopicConfigRecord, TopicRecord,
-};
+use krabka_metadata::{MetadataImage, PartitionRecord};
 
 use super::{
     bounds::{NB, NB_U8, has, model_broker, node},
     state::DpState,
 };
 use crate::{
-    config_keys::{MIN_INSYNC_REPLICAS, effective_min_insync_replicas},
+    config_keys::effective_min_insync_replicas,
     elr::{maintain::next_partition_elr, state::PartitionElr},
 };
 
@@ -65,25 +62,11 @@ pub(super) const PARTITION: i32 = 0;
 /// rule clears the set at and the one the watermark stops at cannot drift
 /// apart.
 pub(super) fn image(min_isr: usize) -> MetadataImage {
-    let mut image = MetadataImage::new(uuid::Uuid::nil());
-    image.apply(&MetadataRecord::V1Topic(TopicRecord {
-        name: TOPIC.to_string(),
-        topic_id: uuid::Uuid::from_u128(1),
-        partitions: 1,
-        replication_factor: i16::try_from(NB).expect("the modelled cluster is tiny"),
-    }));
-    image.apply(&MetadataRecord::V1TopicConfig(TopicConfigRecord {
-        topic: TOPIC.to_string(),
-        overrides: [(MIN_INSYNC_REPLICAS.to_string(), min_isr.to_string())]
-            .into_iter()
-            .collect(),
-    }));
-    image.apply(&MetadataRecord::V1BrokerConfig(BrokerConfigRecord {
-        node_id: DEFAULT_BROKER_CONFIG_NODE_ID,
-        config_name: MIN_INSYNC_REPLICAS.to_string(),
-        config_value: Some(min_isr.to_string()),
-    }));
-    image
+    crate::test_support::elr_model_image(
+        TOPIC,
+        i16::try_from(NB).expect("the modelled cluster is tiny"),
+        min_isr,
+    )
 }
 
 /// The `min.insync.replicas` that `image` resolves for the modelled topic.

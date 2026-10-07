@@ -8,10 +8,7 @@
 use std::sync::Arc;
 
 use assert2::assert;
-use krabka_metadata::{FeatureLevelRecord, MetadataRecord};
-use krabka_protocol::{
-    UnknownTaggedFields, owned::alter_user_scram_credentials_request::ScramCredentialDeletion,
-};
+use krabka_protocol::owned::alter_user_scram_credentials_request::ScramCredentialDeletion;
 use krabka_security::{SaslMechanism, scram::MIN_SCRAM_ITERATIONS};
 
 use super::*;
@@ -55,41 +52,7 @@ fn scram_gate_permits_unknown_and_at_or_above_level() {
 
 #[tokio::test]
 async fn handle_denies_invalid_rows_before_scram_validation() {
-    let (broker_handle, _dir) = start_broker(Arc::new(DenyAll)).await;
-    let broker = broker_handle.broker_arc_for_test();
-    test_ctx!(ctx, "admin");
-    let mut invalid_upsertion = valid_upsertion("bob");
-    invalid_upsertion.iterations = MIN_SCRAM_ITERATIONS - 1;
-    let req = AlterUserScramCredentialsRequest {
-        deletions: vec![ScramCredentialDeletion {
-            name: "alice".into(),
-            mechanism: 99,
-            ..Default::default()
-        }],
-        upsertions: vec![invalid_upsertion, valid_upsertion("bob")],
-        ..Default::default()
-    };
-
-    let resp = answer(&broker, req, &ctx).await;
-
-    let expected = AlterUserScramCredentialsResponse {
-        throttle_time_ms: 0,
-        results: vec![
-            expected_result(
-                "alice",
-                codes::CLUSTER_AUTHORIZATION_FAILED,
-                Some("Request AlterUserScramCredentials needs ALTER permission."),
-            ),
-            expected_result(
-                "bob",
-                codes::CLUSTER_AUTHORIZATION_FAILED,
-                Some("Request AlterUserScramCredentials needs ALTER permission."),
-            ),
-        ],
-        unknown_tagged_fields: UnknownTaggedFields(Vec::new()),
-    };
-    assert!(resp == expected);
-    broker_handle.shutdown().await;
+    denied_invalid_rows(false).await;
 }
 
 #[tokio::test]
@@ -105,11 +68,10 @@ async fn handle_authorizes_and_persists_valid_upsertion() {
 
     let resp = answer(&broker, req, &ctx).await;
 
-    let expected = AlterUserScramCredentialsResponse {
-        throttle_time_ms: 0,
-        results: vec![expected_result("alice", 0, None)],
-        unknown_tagged_fields: UnknownTaggedFields(Vec::new()),
-    };
+    let expected =
+        crate::handlers::alter_user_scram_credentials::test_support::expected_response(vec![
+            expected_result("alice", 0, None),
+        ]);
     assert!(resp == expected);
     let image = broker.controller.current_image();
     assert!(
@@ -132,15 +94,14 @@ async fn handle_denies_valid_upsertion_without_cluster_alter() {
 
     let resp = answer(&broker, req, &ctx).await;
 
-    let expected = AlterUserScramCredentialsResponse {
-        throttle_time_ms: 0,
-        results: vec![expected_result(
-            "alice",
-            codes::CLUSTER_AUTHORIZATION_FAILED,
-            Some("Request AlterUserScramCredentials needs ALTER permission."),
-        )],
-        unknown_tagged_fields: UnknownTaggedFields(Vec::new()),
-    };
+    let expected =
+        crate::handlers::alter_user_scram_credentials::test_support::expected_response(vec![
+            expected_result(
+                "alice",
+                codes::CLUSTER_AUTHORIZATION_FAILED,
+                Some("Request AlterUserScramCredentials needs ALTER permission."),
+            ),
+        ]);
     assert!(resp == expected);
     let image = broker.controller.current_image();
     assert!(
@@ -156,14 +117,8 @@ async fn handle_unsupported_metadata_version_reports_every_requested_user() {
     let (broker_handle, _dir) = start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
     let broker = broker_handle.broker_arc_for_test();
     crate::test_support::wait_for_controller_leader(&broker).await;
-    broker
-        .controller
-        .submit_change(vec![MetadataRecord::V1FeatureLevel(FeatureLevelRecord {
-            name: crate::features::METADATA_VERSION.to_string(),
-            level: krabka_metadata::metadata_version::SCRAM_MIN_LEVEL - 1,
-        })])
-        .await
-        .expect("seed low metadata.version");
+    crate::handlers::alter_user_scram_credentials::test_support::low_metadata_version(&broker)
+        .await;
     test_ctx!(ctx, "admin");
     let req = AlterUserScramCredentialsRequest {
         deletions: vec![deletion("alice")],
@@ -174,31 +129,58 @@ async fn handle_unsupported_metadata_version_reports_every_requested_user() {
     let resp = answer(&broker, req, &ctx).await;
 
     let msg = "The current metadata.version does not support SCRAM";
-    let expected = AlterUserScramCredentialsResponse {
-        throttle_time_ms: 0,
-        results: vec![
+    let expected =
+        crate::handlers::alter_user_scram_credentials::test_support::expected_response(vec![
             expected_result("alice", codes::UNSUPPORTED_VERSION, Some(msg)),
             expected_result("bob", codes::UNSUPPORTED_VERSION, Some(msg)),
-        ],
-        unknown_tagged_fields: UnknownTaggedFields(Vec::new()),
-    };
+        ]);
     assert!(resp == expected);
     broker_handle.shutdown().await;
 }
 
 #[tokio::test]
 async fn handle_low_metadata_version_denied_request_reports_authorization_per_distinct_user() {
-    let (broker_handle, _dir) = start_broker(Arc::new(DenyAll)).await;
+    denied_invalid_rows(true).await;
+}
+
+#[tokio::test]
+async fn handle_low_metadata_version_authorized_request_deduplicates_unsupported_users() {
+    let (broker_handle, _dir) = start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
     let broker = broker_handle.broker_arc_for_test();
     crate::test_support::wait_for_controller_leader(&broker).await;
-    broker
-        .controller
-        .submit_change(vec![MetadataRecord::V1FeatureLevel(FeatureLevelRecord {
-            name: crate::features::METADATA_VERSION.to_string(),
-            level: krabka_metadata::metadata_version::SCRAM_MIN_LEVEL - 1,
-        })])
-        .await
-        .expect("seed low metadata.version");
+    crate::handlers::alter_user_scram_credentials::test_support::low_metadata_version(&broker)
+        .await;
+    test_ctx!(ctx, "admin");
+    let req = AlterUserScramCredentialsRequest {
+        deletions: vec![deletion("alice")],
+        upsertions: vec![
+            valid_upsertion("bob"),
+            valid_upsertion("bob"),
+            valid_upsertion("alice"),
+        ],
+        ..Default::default()
+    };
+
+    let resp = answer(&broker, req, &ctx).await;
+
+    let msg = "The current metadata.version does not support SCRAM";
+    let expected =
+        crate::handlers::alter_user_scram_credentials::test_support::expected_response(vec![
+            expected_result("alice", codes::UNSUPPORTED_VERSION, Some(msg)),
+            expected_result("bob", codes::UNSUPPORTED_VERSION, Some(msg)),
+        ]);
+    assert!(resp == expected);
+    broker_handle.shutdown().await;
+}
+
+async fn denied_invalid_rows(low_metadata_version: bool) {
+    let (broker_handle, _dir) = start_broker(Arc::new(DenyAll)).await;
+    let broker = broker_handle.broker_arc_for_test();
+    if low_metadata_version {
+        crate::test_support::wait_for_controller_leader(&broker).await;
+        crate::handlers::alter_user_scram_credentials::test_support::low_metadata_version(&broker)
+            .await;
+    }
     test_ctx!(ctx, "admin");
     let mut invalid_upsertion = valid_upsertion("bob");
     invalid_upsertion.iterations = MIN_SCRAM_ITERATIONS - 1;
@@ -214,9 +196,8 @@ async fn handle_low_metadata_version_denied_request_reports_authorization_per_di
 
     let resp = answer(&broker, req, &ctx).await;
 
-    let expected = AlterUserScramCredentialsResponse {
-        throttle_time_ms: 0,
-        results: vec![
+    let expected =
+        crate::handlers::alter_user_scram_credentials::test_support::expected_response(vec![
             expected_result(
                 "alice",
                 codes::CLUSTER_AUTHORIZATION_FAILED,
@@ -227,48 +208,7 @@ async fn handle_low_metadata_version_denied_request_reports_authorization_per_di
                 codes::CLUSTER_AUTHORIZATION_FAILED,
                 Some("Request AlterUserScramCredentials needs ALTER permission."),
             ),
-        ],
-        unknown_tagged_fields: UnknownTaggedFields(Vec::new()),
-    };
-    assert!(resp == expected);
-    broker_handle.shutdown().await;
-}
-
-#[tokio::test]
-async fn handle_low_metadata_version_authorized_request_deduplicates_unsupported_users() {
-    let (broker_handle, _dir) = start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
-    let broker = broker_handle.broker_arc_for_test();
-    crate::test_support::wait_for_controller_leader(&broker).await;
-    broker
-        .controller
-        .submit_change(vec![MetadataRecord::V1FeatureLevel(FeatureLevelRecord {
-            name: crate::features::METADATA_VERSION.to_string(),
-            level: krabka_metadata::metadata_version::SCRAM_MIN_LEVEL - 1,
-        })])
-        .await
-        .expect("seed low metadata.version");
-    test_ctx!(ctx, "admin");
-    let req = AlterUserScramCredentialsRequest {
-        deletions: vec![deletion("alice")],
-        upsertions: vec![
-            valid_upsertion("bob"),
-            valid_upsertion("bob"),
-            valid_upsertion("alice"),
-        ],
-        ..Default::default()
-    };
-
-    let resp = answer(&broker, req, &ctx).await;
-
-    let msg = "The current metadata.version does not support SCRAM";
-    let expected = AlterUserScramCredentialsResponse {
-        throttle_time_ms: 0,
-        results: vec![
-            expected_result("alice", codes::UNSUPPORTED_VERSION, Some(msg)),
-            expected_result("bob", codes::UNSUPPORTED_VERSION, Some(msg)),
-        ],
-        unknown_tagged_fields: UnknownTaggedFields(Vec::new()),
-    };
+        ]);
     assert!(resp == expected);
     broker_handle.shutdown().await;
 }

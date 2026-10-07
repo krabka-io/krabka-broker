@@ -119,26 +119,7 @@ mod tests {
         batch
     }
 
-    fn timestamped_batch_at(base_offset: i64, timestamps: &[i64], value_byte: u8) -> RecordBatch {
-        let base_timestamp = timestamps.first().copied().unwrap_or_default();
-        RecordBatch {
-            base_offset,
-            last_offset_delta: i32::try_from(timestamps.len().saturating_sub(1)).unwrap(),
-            base_timestamp,
-            max_timestamp: timestamps.iter().copied().max().unwrap_or_default(),
-            records: timestamps
-                .iter()
-                .enumerate()
-                .map(|(offset_delta, timestamp)| Record {
-                    timestamp_delta: timestamp - base_timestamp,
-                    offset_delta: i32::try_from(offset_delta).unwrap(),
-                    value: Some(Bytes::from(vec![value_byte; 4])),
-                    ..Default::default()
-                })
-                .collect(),
-            ..Default::default()
-        }
-    }
+    krabka_macros::timestamped_batch!(timestamped_batch_at);
 
     fn encoded(batches: &[RecordBatch]) -> Bytes {
         let mut buf = BytesMut::new();

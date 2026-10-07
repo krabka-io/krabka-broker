@@ -4,9 +4,7 @@
 use std::{net::SocketAddr, sync::Arc};
 
 use assert2::{assert, check};
-use krabka_metadata::{
-    AclEntry, AclOperation, MetadataRecord, PatternType, PermissionType, ResourceType,
-};
+use krabka_metadata::{AclEntry, AclOperation, MetadataRecord, PatternType, ResourceType};
 use krabka_protocol::{
     owned::{
         create_topics_request::{CreatableTopic, CreateTopicsRequest},
@@ -358,22 +356,7 @@ async fn handle_authorizes_delete_per_topic_when_cluster_delete_is_denied() {
         deleted: &'static [&'static str],
     }
 
-    fn acl(
-        resource_type: ResourceType,
-        resource_name: &str,
-        pattern_type: PatternType,
-        operation: AclOperation,
-    ) -> AclEntry {
-        AclEntry {
-            resource_type,
-            resource_name: resource_name.into(),
-            pattern_type,
-            principal: "User:alice".into(),
-            host: "*".into(),
-            operation,
-            permission_type: PermissionType::Allow,
-        }
-    }
+    use crate::handlers::test_support::acl;
 
     let cluster_create = acl(
         ResourceType::Cluster,

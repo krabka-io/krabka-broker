@@ -1,7 +1,7 @@
-(* #"/workspace/crates/verified/src/storage/remote_partition_delete_transition.rs" 83 0 87 22 *)
+(* #"/workspace/crates/verified/src/storage/remote_partition_delete_transition.rs" 84 0 88 22 *)
 
-let%span sremote_partition_delete_transition = "/workspace/crates/verified/src/storage/remote_partition_delete_transition.rs" 64 10 81 1
-let%span sremote_partition_delete_transition'0 = "/workspace/crates/verified/src/storage/remote_partition_delete_transition.rs" 13 4 19 5
+let%span sremote_partition_delete_transition = "/workspace/crates/verified/src/storage/remote_partition_delete_transition.rs" 65 10 82 1
+let%span sremote_partition_delete_transition'0 = "/workspace/crates/verified/src/storage/remote_partition_delete_transition.rs" 14 4 20 5
 
 use creusot.prelude.Any
 
@@ -27,7 +27,7 @@ type tup2_RemoteSegmentLifecycle_RemoteSegmentLifecycle = {
   f0'0: t_RemoteSegmentLifecycle;
   f1'0: t_RemoteSegmentLifecycle }
 
-predicate segment_forward_edge [#"/workspace/crates/verified/src/storage/remote_partition_delete_transition.rs" 12 0 12 89] (from: t_RemoteSegmentLifecycle) (to': t_RemoteSegmentLifecycle) =
+predicate segment_forward_edge [#"/workspace/crates/verified/src/storage/remote_partition_delete_transition.rs" 13 0 13 89] (from: t_RemoteSegmentLifecycle) (to': t_RemoteSegmentLifecycle) =
   [%#sremote_partition_delete_transition'0] match { f0'0 = from; f1'0 = to' } with
     | {f0'0 = CopyStarted; f1'0 = CopyFinished} | {f0'0 = CopyStarted; f1'0 = DeleteStarted} | {f0'0 = CopyFinished; f1'0 = DeleteStarted} | {f0'0 = DeleteStarted; f1'0 = DeleteFinished} -> true
     | _ -> false
@@ -37,7 +37,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let remote_cache_action [#"/workspace/crates/verified/src/storage/remote_partition_delete_transition.rs" 83 0 87 22]
+let remote_cache_action [#"/workspace/crates/verified/src/storage/remote_partition_delete_transition.rs" 84 0 88 22]
   (current': t_Option_RemoteSegmentLifecycle) (target: t_RemoteSegmentLifecycle) (exact_retry: bool)
   (return (x: t_RemoteCacheAction)) = (! bb0
   [ bb0 = s0

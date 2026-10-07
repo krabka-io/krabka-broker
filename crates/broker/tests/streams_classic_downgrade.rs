@@ -24,8 +24,6 @@ mod support;
 
 // ── error codes ──────────────────────────────────────────────────────────────
 const ERR_NONE: i16 = 0;
-const ERR_COORDINATOR_LOAD_IN_PROGRESS: i16 = 14;
-const ERR_MEMBER_ID_REQUIRED: i16 = 79;
 const ERR_GROUP_ID_NOT_FOUND: i16 = 69;
 const ERR_NON_EMPTY_GROUP: i16 = 68;
 

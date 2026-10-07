@@ -73,25 +73,5 @@ pub async fn seed_topic(handle: &BrokerHandle, name: &str, partitions: i32, rf: 
 }
 
 pub async fn seed_controller_quota(handle: &BrokerHandle, rate: f64) {
-    handle
-        .broker_arc_for_test()
-        .controller
-        .submit_change(vec![MetadataRecord::V1ClientQuota(
-            krabka_metadata::ClientQuotaRecord {
-                entity: vec![
-                    krabka_metadata::QuotaEntity {
-                        entity_type: "user".into(),
-                        entity_name: Some("admin".into()),
-                    },
-                    krabka_metadata::QuotaEntity {
-                        entity_type: "client-id".into(),
-                        entity_name: Some("admin-client".into()),
-                    },
-                ],
-                config_key: "controller_mutation_rate".into(),
-                config_value: Some(rate),
-            },
-        )])
-        .await
-        .expect("seed quota");
+    crate::handlers::test_support::seed_controller_quota(handle, rate).await;
 }

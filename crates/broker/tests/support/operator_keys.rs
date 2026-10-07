@@ -93,11 +93,7 @@ pub async fn start_with_operator_keys(
     keys: &[&OperatorKey],
     approvers: &[&str],
 ) -> (BrokerHandle, Client, BrokerConfig) {
-    let entries: Vec<_> = keys.iter().map(|k| k.entry()).collect();
-    let mut config = BrokerConfig::for_tests(dir.to_path_buf());
-    config.operator_keys = krabka_broker::operator_keys::OperatorKeys::load(&entries)
-        .expect("load the operator trust set");
-    config.break_glass.approvers = approvers.iter().map(|a| (*a).to_owned()).collect();
+    let config = operator_config(dir, keys, approvers);
 
     let broker = Broker::start(config.clone()).await.expect("broker start");
     let client = Client::builder()
@@ -135,11 +131,7 @@ pub async fn start_with_operator_keys_sasl(
     approvers: &[&str],
     users: &[(&str, &str)],
 ) -> (BrokerHandle, String, BrokerConfig) {
-    let entries: Vec<_> = keys.iter().map(|k| k.entry()).collect();
-    let mut config = BrokerConfig::for_tests(dir.to_path_buf());
-    config.operator_keys = krabka_broker::operator_keys::OperatorKeys::load(&entries)
-        .expect("load the operator trust set");
-    config.break_glass.approvers = approvers.iter().map(|a| (*a).to_owned()).collect();
+    let mut config = operator_config(dir, keys, approvers);
     config.listeners = vec![krabka_broker::config::ListenerSpec {
         name: "SASL_PLAINTEXT".to_owned(),
         bind_addr: "127.0.0.1:0".parse().expect("bind addr"),
@@ -187,4 +179,20 @@ pub async fn sasl_client(bootstrap: &str, user: &str, pass: &str) -> Client {
         .build()
         .await
         .expect("client build")
+}
+
+fn operator_config(
+    dir: &std::path::Path,
+    keys: &[&OperatorKey],
+    approvers: &[&str],
+) -> BrokerConfig {
+    let entries: Vec<_> = keys.iter().map(|key| key.entry()).collect();
+    let mut config = BrokerConfig::for_tests(dir.to_path_buf());
+    config.operator_keys = krabka_broker::operator_keys::OperatorKeys::load(&entries)
+        .expect("load the operator trust set");
+    config.break_glass.approvers = approvers
+        .iter()
+        .map(|principal| (*principal).to_owned())
+        .collect();
+    config
 }

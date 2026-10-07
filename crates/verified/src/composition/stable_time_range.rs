@@ -1,6 +1,8 @@
 use creusot_std::prelude::*;
 
 #[cfg(creusot)]
+use super::time_index::sparse_timestamp_window_valid;
+#[cfg(creusot)]
 use super::time_index::time_segment_valid;
 use super::{
     FetchWatermarks, SparseTimestampWindow, committed_fetch_excludes_unstable,
@@ -13,12 +15,9 @@ use super::{
 /// Complete decoded records and a valid minimum-equivalent transaction snapshot,
 /// coherent publication, physical reads and client-side abort filtering remain
 /// external. This proves prefix gating only.
+#[requires(sparse_timestamp_window_valid(window.0@, window.1@, window.2@))]
 #[requires(span.0@ >= 0 && w.log_start@ >= 0 && targets.0@ <= targets.1@)]
-#[requires(window.0@.len() == window.1@.len())]
 #[requires(forall<i: Int> 0 <= i && i < window.0@.len() ==> span.0@ + window.0@[i]@ <= i64::MAX@)]
-#[requires(forall<i: Int, j: Int> 0 <= i && i < j && j < window.0@.len() ==> window.0@[i]@ < window.0@[j]@)]
-#[requires(forall<i: Int> 0 <= i && i < window.2@.len() ==> window.2@[i].0@ <= window.2@[i].1@ && window.2@[i].1@ < window.1@.len())]
-#[requires(forall<i: Int, j: Int> 0 <= i && i < j && j < window.2@.len() ==> window.2@[i].0@ < window.2@[j].0@ && window.2@[i].1@ <= window.2@[j].1@)]
 #[ensures(match result {
     Err(()) => (exists<i: Int> 0 <= i && i < starts@.len() && starts@[i]@ > w.log_end@)
         || !time_segment_valid(span.0@, span.1@)

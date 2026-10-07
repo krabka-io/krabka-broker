@@ -1,11 +1,11 @@
-(* #"/workspace/crates/verified/src/compaction/retain_decision.rs" 16 0 20 25 *)
+(* #"/workspace/crates/verified/src/compaction/retain_decision.rs" 17 0 21 25 *)
 
-let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
-let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
-let%span sretain_decision = "/workspace/crates/verified/src/compaction/retain_decision.rs" 21 27 21 28
-let%span sretain_decision'0 = "/workspace/crates/verified/src/compaction/retain_decision.rs" 9 10 9 76
-let%span sretain_decision'1 = "/workspace/crates/verified/src/compaction/retain_decision.rs" 10 10 12 44
-let%span sretain_decision'2 = "/workspace/crates/verified/src/compaction/retain_decision.rs" 13 10 14 68
+let%span sord = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span sord'0 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sretain_decision = "/workspace/crates/verified/src/compaction/retain_decision.rs" 22 27 22 28
+let%span sretain_decision'0 = "/workspace/crates/verified/src/compaction/retain_decision.rs" 10 10 10 76
+let%span sretain_decision'1 = "/workspace/crates/verified/src/compaction/retain_decision.rs" 11 10 13 44
+let%span sretain_decision'2 = "/workspace/crates/verified/src/compaction/retain_decision.rs" 14 10 15 68
 
 use creusot.int.UInt64
 use creusot.prelude.Any
@@ -25,7 +25,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let compaction_decode_step [#"/workspace/crates/verified/src/compaction/retain_decision.rs" 16 0 20 25]
+let compaction_decode_step [#"/workspace/crates/verified/src/compaction/retain_decision.rs" 17 0 21 25]
   (remaining_before: UInt64.t) (decode_succeeded: bool) (remaining_after: UInt64.t)
   (return (x: t_CompactionDecodeStep)) = (! bb0
   [ bb0 = s0

@@ -106,44 +106,11 @@ pub fn test_refresher(
 pub async fn serve_jwks_https(
     body: &'static str,
 ) -> (std::net::SocketAddr, CancellationToken, std::path::PathBuf) {
-    use std::sync::Arc;
-
-    use rustls::pki_types::{CertificateDer, PrivateKeyDer, pem::PemObject};
     use tokio::io::AsyncWriteExt as _;
-    use tokio_rustls::TlsAcceptor;
 
     // Install the rustls CryptoProvider once (idempotent — discards Err
     // on re-install). Required for rustls::ServerConfig::builder.
-    let _ = rustls::crypto::ring::default_provider().install_default();
-
-    // Generate a fresh self-signed cert with 127.0.0.1 as a SAN so the
-    // client's hostname-verification accepts the loopback connection.
-    let params = rcgen::CertificateParams::new(vec!["127.0.0.1".to_string()]).unwrap();
-    let key = rcgen::KeyPair::generate_for(&rcgen::PKCS_ECDSA_P256_SHA256).unwrap();
-    let cert = params.self_signed(&key).unwrap();
-
-    // Leak the tempdir for the test's lifetime so the PEM remains
-    // readable when the refresher task fetches.
-    let dir = Box::leak(Box::new(tempfile::tempdir().unwrap()));
-    let cert_path = dir.path().join("cert.pem");
-    std::fs::write(&cert_path, cert.pem()).unwrap();
-    let key_path = dir.path().join("key.pem");
-    std::fs::write(&key_path, key.serialize_pem()).unwrap();
-
-    let certs: Vec<CertificateDer<'static>> = CertificateDer::pem_file_iter(&cert_path)
-        .unwrap()
-        .collect::<Result<_, _>>()
-        .unwrap();
-    let priv_key = PrivateKeyDer::from_pem_file(&key_path).unwrap();
-    let server_cfg = Arc::new(
-        rustls::ServerConfig::builder()
-            .with_no_client_auth()
-            .with_single_cert(certs, priv_key)
-            .unwrap(),
-    );
-    let acceptor = TlsAcceptor::from(server_cfg);
-
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let (listener, acceptor, cert_path) = crate::test_support::loopback_tls_listener().await;
     let addr = listener.local_addr().unwrap();
     let shutdown = CancellationToken::new();
     let srv_shutdown = shutdown.clone();

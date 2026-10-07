@@ -132,6 +132,17 @@ fn a_request_with_a_record_string_over_32767_bytes_is_refused() {
             }),
         ],
     );
+    macro_rules! offset_commit_mutations {
+        ($($extra:expr),* $(,)?) => {
+            &[$($extra,)*
+                ("group id", |r, s| r.group_id = s),
+                ("member id", |r, s| r.member_id = s),
+                ("instance id", |r, s| r.group_instance_id = Some(s)),
+                ("topic name", |r, s| r.topics[0].name = s),
+                ("metadata", |r, s| r.topics[0].partitions[0].committed_metadata = Some(s)),
+            ]
+        };
+    }
     // The last version of each that names its topics: the next one names them by
     // id.
     check_request(
@@ -143,15 +154,7 @@ fn a_request_with_a_record_string_over_32767_bytes_is_refused() {
             }],
             ..Default::default()
         },
-        &[
-            ("group id", |r, s| r.group_id = s),
-            ("member id", |r, s| r.member_id = s),
-            ("instance id", |r, s| r.group_instance_id = Some(s)),
-            ("topic name", |r, s| r.topics[0].name = s),
-            ("metadata", |r, s| {
-                r.topics[0].partitions[0].committed_metadata = Some(s);
-            }),
-        ],
+        offset_commit_mutations!(),
     );
     check_request(
         5,
@@ -162,16 +165,7 @@ fn a_request_with_a_record_string_over_32767_bytes_is_refused() {
             }],
             ..Default::default()
         },
-        &[
-            ("transactional id", |r, s| r.transactional_id = s),
-            ("group id", |r, s| r.group_id = s),
-            ("member id", |r, s| r.member_id = s),
-            ("instance id", |r, s| r.group_instance_id = Some(s)),
-            ("topic name", |r, s| r.topics[0].name = s),
-            ("metadata", |r, s| {
-                r.topics[0].partitions[0].committed_metadata = Some(s);
-            }),
-        ],
+        offset_commit_mutations!(("transactional id", |r, s| r.transactional_id = s)),
     );
 }
 

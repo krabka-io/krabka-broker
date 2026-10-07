@@ -1,16 +1,16 @@
-(* #"/workspace/crates/verified/src/list_offsets/selection_model.rs" 85 0 85 98 *)
+(* #"/workspace/crates/verified/src/list_offsets/selection_model.rs" 86 0 86 98 *)
 
-let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
-let%span sselection_model = "/workspace/crates/verified/src/list_offsets/selection_model.rs" 86 28 86 30
-let%span sselection_model'0 = "/workspace/crates/verified/src/list_offsets/selection_model.rs" 86 50 86 51
-let%span sselection_model'1 = "/workspace/crates/verified/src/list_offsets/selection_model.rs" 87 32 87 34
-let%span sselection_model'2 = "/workspace/crates/verified/src/list_offsets/selection_model.rs" 87 61 87 62
-let%span sselection_model'3 = "/workspace/crates/verified/src/list_offsets/selection_model.rs" 88 32 88 34
-let%span sselection_model'4 = "/workspace/crates/verified/src/list_offsets/selection_model.rs" 88 63 88 64
-let%span sselection_model'5 = "/workspace/crates/verified/src/list_offsets/selection_model.rs" 88 88 88 89
-let%span sselection_model'6 = "/workspace/crates/verified/src/list_offsets/selection_model.rs" 92 40 92 42
-let%span sselection_model'7 = "/workspace/crates/verified/src/list_offsets/selection_model.rs" 94 39 94 40
-let%span sselection_model'8 = "/workspace/crates/verified/src/list_offsets/selection_model.rs" 65 10 84 1
+let%span sord = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sselection_model = "/workspace/crates/verified/src/list_offsets/selection_model.rs" 87 28 87 30
+let%span sselection_model'0 = "/workspace/crates/verified/src/list_offsets/selection_model.rs" 87 50 87 51
+let%span sselection_model'1 = "/workspace/crates/verified/src/list_offsets/selection_model.rs" 88 32 88 34
+let%span sselection_model'2 = "/workspace/crates/verified/src/list_offsets/selection_model.rs" 88 61 88 62
+let%span sselection_model'3 = "/workspace/crates/verified/src/list_offsets/selection_model.rs" 89 32 89 34
+let%span sselection_model'4 = "/workspace/crates/verified/src/list_offsets/selection_model.rs" 89 63 89 64
+let%span sselection_model'5 = "/workspace/crates/verified/src/list_offsets/selection_model.rs" 89 88 89 89
+let%span sselection_model'6 = "/workspace/crates/verified/src/list_offsets/selection_model.rs" 93 40 93 42
+let%span sselection_model'7 = "/workspace/crates/verified/src/list_offsets/selection_model.rs" 95 39 95 40
+let%span sselection_model'8 = "/workspace/crates/verified/src/list_offsets/selection_model.rs" 66 10 85 1
 
 use creusot.int.Int32
 use creusot.int.Int8
@@ -35,7 +35,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let list_offsets_bound_decision [#"/workspace/crates/verified/src/list_offsets/selection_model.rs" 85 0 85 98]
+let list_offsets_bound_decision [#"/workspace/crates/verified/src/list_offsets/selection_model.rs" 86 0 86 98]
   (facts: t_ListOffsetsBoundFacts) (return (x: t_ListOffsetsBoundDecision)) = (! bb0
   [ bb0 = s0
     [ s0 = [ &_9 <- facts.replica_id <> ([%#sselection_model] (-1: Int32.t)) ] s1

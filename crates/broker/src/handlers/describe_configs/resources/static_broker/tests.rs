@@ -61,41 +61,26 @@ fn kafka_defaults_report_at_default_config_source() {
     assert!(
         entries
             == vec![
-                DescribeConfigsResourceResult {
-                    name: config_keys::TRANSACTIONAL_ID_EXPIRATION_MS.to_owned(),
-                    value: Some("604800000".to_owned()),
-                    read_only: true,
-                    config_source: CONFIG_SOURCE_DEFAULT,
-                    is_sensitive: false,
-                    synonyms: vec![DescribeConfigsSynonym {
-                        name: config_keys::TRANSACTIONAL_ID_EXPIRATION_MS.to_owned(),
-                        value: Some("604800000".to_owned()),
-                        source: CONFIG_SOURCE_DEFAULT,
-                        unknown_tagged_fields: UnknownTaggedFields::default(),
-                    }],
-                    config_type: INT,
-                    documentation: Some(doc_for(config_keys::TRANSACTIONAL_ID_EXPIRATION_MS)),
-                    unknown_tagged_fields: UnknownTaggedFields::default(),
-                },
-                DescribeConfigsResourceResult {
-                    name: config_keys::TRANSACTION_REMOVE_EXPIRED_CLEANUP_INTERVAL_MS.to_owned(),
-                    value: Some("3600000".to_owned()),
-                    read_only: true,
-                    config_source: CONFIG_SOURCE_DEFAULT,
-                    is_sensitive: false,
-                    synonyms: vec![DescribeConfigsSynonym {
-                        name: config_keys::TRANSACTION_REMOVE_EXPIRED_CLEANUP_INTERVAL_MS
-                            .to_owned(),
-                        value: Some("3600000".to_owned()),
-                        source: CONFIG_SOURCE_DEFAULT,
-                        unknown_tagged_fields: UnknownTaggedFields::default(),
-                    }],
-                    config_type: INT,
-                    documentation: Some(doc_for(
-                        config_keys::TRANSACTION_REMOVE_EXPIRED_CLEANUP_INTERVAL_MS
-                    )),
-                    unknown_tagged_fields: UnknownTaggedFields::default(),
-                },
+                expected_entry(
+                    config_keys::TRANSACTIONAL_ID_EXPIRATION_MS,
+                    "604800000",
+                    CONFIG_SOURCE_DEFAULT,
+                    vec![expected_synonym(
+                        config_keys::TRANSACTIONAL_ID_EXPIRATION_MS,
+                        "604800000",
+                        CONFIG_SOURCE_DEFAULT
+                    )]
+                ),
+                expected_entry(
+                    config_keys::TRANSACTION_REMOVE_EXPIRED_CLEANUP_INTERVAL_MS,
+                    "3600000",
+                    CONFIG_SOURCE_DEFAULT,
+                    vec![expected_synonym(
+                        config_keys::TRANSACTION_REMOVE_EXPIRED_CLEANUP_INTERVAL_MS,
+                        "3600000",
+                        CONFIG_SOURCE_DEFAULT
+                    )]
+                ),
             ]
     );
 }
@@ -110,58 +95,40 @@ fn an_operator_override_heads_the_chain_over_the_retained_default() {
     assert!(
         entries
             == vec![
-                DescribeConfigsResourceResult {
-                    name: config_keys::TRANSACTIONAL_ID_EXPIRATION_MS.to_owned(),
-                    value: Some("120000".to_owned()),
-                    read_only: true,
-                    config_source: CONFIG_SOURCE_STATIC_BROKER,
-                    is_sensitive: false,
-                    synonyms: vec![
-                        DescribeConfigsSynonym {
-                            name: config_keys::TRANSACTIONAL_ID_EXPIRATION_MS.to_owned(),
-                            value: Some("120000".to_owned()),
-                            source: CONFIG_SOURCE_STATIC_BROKER,
-                            unknown_tagged_fields: UnknownTaggedFields::default(),
-                        },
-                        DescribeConfigsSynonym {
-                            name: config_keys::TRANSACTIONAL_ID_EXPIRATION_MS.to_owned(),
-                            value: Some("604800000".to_owned()),
-                            source: CONFIG_SOURCE_DEFAULT,
-                            unknown_tagged_fields: UnknownTaggedFields::default(),
-                        },
-                    ],
-                    config_type: INT,
-                    documentation: Some(doc_for(config_keys::TRANSACTIONAL_ID_EXPIRATION_MS)),
-                    unknown_tagged_fields: UnknownTaggedFields::default(),
-                },
-                DescribeConfigsResourceResult {
-                    name: config_keys::TRANSACTION_REMOVE_EXPIRED_CLEANUP_INTERVAL_MS.to_owned(),
-                    value: Some("60000".to_owned()),
-                    read_only: true,
-                    config_source: CONFIG_SOURCE_STATIC_BROKER,
-                    is_sensitive: false,
-                    synonyms: vec![
-                        DescribeConfigsSynonym {
-                            name: config_keys::TRANSACTION_REMOVE_EXPIRED_CLEANUP_INTERVAL_MS
-                                .to_owned(),
-                            value: Some("60000".to_owned()),
-                            source: CONFIG_SOURCE_STATIC_BROKER,
-                            unknown_tagged_fields: UnknownTaggedFields::default(),
-                        },
-                        DescribeConfigsSynonym {
-                            name: config_keys::TRANSACTION_REMOVE_EXPIRED_CLEANUP_INTERVAL_MS
-                                .to_owned(),
-                            value: Some("3600000".to_owned()),
-                            source: CONFIG_SOURCE_DEFAULT,
-                            unknown_tagged_fields: UnknownTaggedFields::default(),
-                        },
-                    ],
-                    config_type: INT,
-                    documentation: Some(doc_for(
-                        config_keys::TRANSACTION_REMOVE_EXPIRED_CLEANUP_INTERVAL_MS
-                    )),
-                    unknown_tagged_fields: UnknownTaggedFields::default(),
-                },
+                expected_entry(
+                    config_keys::TRANSACTIONAL_ID_EXPIRATION_MS,
+                    "120000",
+                    CONFIG_SOURCE_STATIC_BROKER,
+                    vec![
+                        expected_synonym(
+                            config_keys::TRANSACTIONAL_ID_EXPIRATION_MS,
+                            "120000",
+                            CONFIG_SOURCE_STATIC_BROKER
+                        ),
+                        expected_synonym(
+                            config_keys::TRANSACTIONAL_ID_EXPIRATION_MS,
+                            "604800000",
+                            CONFIG_SOURCE_DEFAULT
+                        ),
+                    ]
+                ),
+                expected_entry(
+                    config_keys::TRANSACTION_REMOVE_EXPIRED_CLEANUP_INTERVAL_MS,
+                    "60000",
+                    CONFIG_SOURCE_STATIC_BROKER,
+                    vec![
+                        expected_synonym(
+                            config_keys::TRANSACTION_REMOVE_EXPIRED_CLEANUP_INTERVAL_MS,
+                            "60000",
+                            CONFIG_SOURCE_STATIC_BROKER
+                        ),
+                        expected_synonym(
+                            config_keys::TRANSACTION_REMOVE_EXPIRED_CLEANUP_INTERVAL_MS,
+                            "3600000",
+                            CONFIG_SOURCE_DEFAULT
+                        ),
+                    ]
+                ),
             ]
     );
 }
@@ -176,26 +143,22 @@ fn a_bare_request_carries_the_value_without_synonyms_or_documentation() {
         entries
             == vec![
                 DescribeConfigsResourceResult {
-                    name: config_keys::TRANSACTIONAL_ID_EXPIRATION_MS.to_owned(),
-                    value: Some("604800000".to_owned()),
-                    read_only: true,
-                    config_source: CONFIG_SOURCE_DEFAULT,
-                    is_sensitive: false,
-                    synonyms: Vec::new(),
-                    config_type: INT,
                     documentation: None,
-                    unknown_tagged_fields: UnknownTaggedFields::default(),
+                    ..expected_entry(
+                        config_keys::TRANSACTIONAL_ID_EXPIRATION_MS,
+                        "604800000",
+                        CONFIG_SOURCE_DEFAULT,
+                        Vec::new()
+                    )
                 },
                 DescribeConfigsResourceResult {
-                    name: config_keys::TRANSACTION_REMOVE_EXPIRED_CLEANUP_INTERVAL_MS.to_owned(),
-                    value: Some("3600000".to_owned()),
-                    read_only: true,
-                    config_source: CONFIG_SOURCE_DEFAULT,
-                    is_sensitive: false,
-                    synonyms: Vec::new(),
-                    config_type: INT,
                     documentation: None,
-                    unknown_tagged_fields: UnknownTaggedFields::default(),
+                    ..expected_entry(
+                        config_keys::TRANSACTION_REMOVE_EXPIRED_CLEANUP_INTERVAL_MS,
+                        "3600000",
+                        CONFIG_SOURCE_DEFAULT,
+                        Vec::new()
+                    )
                 },
             ]
     );
@@ -250,49 +213,33 @@ fn a_supplied_value_identical_to_the_default_still_reports_as_static() {
     assert!(
         entries
             == vec![
-                DescribeConfigsResourceResult {
-                    name: config_keys::TRANSACTIONAL_ID_EXPIRATION_MS.to_owned(),
-                    value: Some("604800000".to_owned()),
-                    read_only: true,
-                    config_source: CONFIG_SOURCE_STATIC_BROKER,
-                    is_sensitive: false,
-                    synonyms: vec![
-                        DescribeConfigsSynonym {
-                            name: config_keys::TRANSACTIONAL_ID_EXPIRATION_MS.to_owned(),
-                            value: Some("604800000".to_owned()),
-                            source: CONFIG_SOURCE_STATIC_BROKER,
-                            unknown_tagged_fields: UnknownTaggedFields::default(),
-                        },
-                        DescribeConfigsSynonym {
-                            name: config_keys::TRANSACTIONAL_ID_EXPIRATION_MS.to_owned(),
-                            value: Some("604800000".to_owned()),
-                            source: CONFIG_SOURCE_DEFAULT,
-                            unknown_tagged_fields: UnknownTaggedFields::default(),
-                        },
-                    ],
-                    config_type: INT,
-                    documentation: Some(doc_for(config_keys::TRANSACTIONAL_ID_EXPIRATION_MS)),
-                    unknown_tagged_fields: UnknownTaggedFields::default(),
-                },
-                DescribeConfigsResourceResult {
-                    name: config_keys::TRANSACTION_REMOVE_EXPIRED_CLEANUP_INTERVAL_MS.to_owned(),
-                    value: Some("3600000".to_owned()),
-                    read_only: true,
-                    config_source: CONFIG_SOURCE_DEFAULT,
-                    is_sensitive: false,
-                    synonyms: vec![DescribeConfigsSynonym {
-                        name: config_keys::TRANSACTION_REMOVE_EXPIRED_CLEANUP_INTERVAL_MS
-                            .to_owned(),
-                        value: Some("3600000".to_owned()),
-                        source: CONFIG_SOURCE_DEFAULT,
-                        unknown_tagged_fields: UnknownTaggedFields::default(),
-                    }],
-                    config_type: INT,
-                    documentation: Some(doc_for(
-                        config_keys::TRANSACTION_REMOVE_EXPIRED_CLEANUP_INTERVAL_MS
-                    )),
-                    unknown_tagged_fields: UnknownTaggedFields::default(),
-                },
+                expected_entry(
+                    config_keys::TRANSACTIONAL_ID_EXPIRATION_MS,
+                    "604800000",
+                    CONFIG_SOURCE_STATIC_BROKER,
+                    vec![
+                        expected_synonym(
+                            config_keys::TRANSACTIONAL_ID_EXPIRATION_MS,
+                            "604800000",
+                            CONFIG_SOURCE_STATIC_BROKER
+                        ),
+                        expected_synonym(
+                            config_keys::TRANSACTIONAL_ID_EXPIRATION_MS,
+                            "604800000",
+                            CONFIG_SOURCE_DEFAULT
+                        ),
+                    ]
+                ),
+                expected_entry(
+                    config_keys::TRANSACTION_REMOVE_EXPIRED_CLEANUP_INTERVAL_MS,
+                    "3600000",
+                    CONFIG_SOURCE_DEFAULT,
+                    vec![expected_synonym(
+                        config_keys::TRANSACTION_REMOVE_EXPIRED_CLEANUP_INTERVAL_MS,
+                        "3600000",
+                        CONFIG_SOURCE_DEFAULT
+                    )]
+                ),
             ]
     );
 }
@@ -305,35 +252,22 @@ fn topic_creation_defaults_report_their_provenance() {
     let wanted = |key: &str| {
         key == config_keys::NUM_PARTITIONS || key == config_keys::DEFAULT_REPLICATION_FACTOR
     };
-    let default_synonym = |key: &str| DescribeConfigsSynonym {
-        name: key.to_owned(),
-        value: Some("1".to_owned()),
-        source: CONFIG_SOURCE_DEFAULT,
-        unknown_tagged_fields: UnknownTaggedFields::default(),
-    };
-    let entry = |key: &str, named: Option<&str>| DescribeConfigsResourceResult {
-        name: key.to_owned(),
-        value: Some(named.unwrap_or("1").to_owned()),
-        read_only: true,
-        config_source: if named.is_some() {
-            CONFIG_SOURCE_STATIC_BROKER
-        } else {
-            CONFIG_SOURCE_DEFAULT
-        },
-        is_sensitive: false,
-        synonyms: named
-            .map(|value| DescribeConfigsSynonym {
-                name: key.to_owned(),
-                value: Some(value.to_owned()),
-                source: CONFIG_SOURCE_STATIC_BROKER,
-                unknown_tagged_fields: UnknownTaggedFields::default(),
-            })
-            .into_iter()
-            .chain(std::iter::once(default_synonym(key)))
-            .collect(),
-        config_type: INT,
-        documentation: Some(doc_for(key)),
-        unknown_tagged_fields: UnknownTaggedFields::default(),
+    let default_synonym = |key: &str| expected_synonym(key, "1", CONFIG_SOURCE_DEFAULT);
+    let entry = |key: &str, named: Option<&str>| {
+        expected_entry(
+            key,
+            named.unwrap_or("1"),
+            if named.is_some() {
+                CONFIG_SOURCE_STATIC_BROKER
+            } else {
+                CONFIG_SOURCE_DEFAULT
+            },
+            named
+                .map(|value| expected_synonym(key, value, CONFIG_SOURCE_STATIC_BROKER))
+                .into_iter()
+                .chain(std::iter::once(default_synonym(key)))
+                .collect(),
+        )
     };
 
     for (label, num_partitions, default_replication_factor, expected) in [
@@ -374,22 +308,10 @@ fn topic_creation_defaults_report_their_provenance() {
 /// it.
 #[test]
 fn static_boolean_keys_report_their_provenance() {
-    let synonym = |key: &str, value: &str, source| DescribeConfigsSynonym {
-        name: key.to_owned(),
-        value: Some(value.to_owned()),
-        source,
-        unknown_tagged_fields: UnknownTaggedFields::default(),
-    };
+    let synonym = |key: &str, value: &str, source| expected_synonym(key, value, source);
     let entry = |key: &str, value: &str, source, synonyms| DescribeConfigsResourceResult {
-        name: key.to_owned(),
-        value: Some(value.to_owned()),
-        read_only: true,
-        config_source: source,
-        is_sensitive: false,
-        synonyms,
         config_type: registry::ConfigType::Boolean.wire(),
-        documentation: Some(doc_for(key)),
-        unknown_tagged_fields: UnknownTaggedFields::default(),
+        ..expected_entry(key, value, source, synonyms)
     };
     let not_named = |key: &'static str| {
         vec![entry(
@@ -514,5 +436,34 @@ fn static_settings_name_the_metadata_log_dir_and_the_metadata_log_keys() {
         file.apply_to(&mut config).expect("apply runtime config");
 
         check!(static_settings(&config) == expected, "{label}");
+    }
+}
+
+/// Fully pinned independent expectations, shared by each static-config case.
+fn expected_synonym(key: &str, value: &str, source: i8) -> DescribeConfigsSynonym {
+    DescribeConfigsSynonym {
+        name: key.to_owned(),
+        value: Some(value.to_owned()),
+        source,
+        unknown_tagged_fields: UnknownTaggedFields::default(),
+    }
+}
+
+fn expected_entry(
+    key: &str,
+    value: &str,
+    source: i8,
+    synonyms: Vec<DescribeConfigsSynonym>,
+) -> DescribeConfigsResourceResult {
+    DescribeConfigsResourceResult {
+        name: key.to_owned(),
+        value: Some(value.to_owned()),
+        read_only: true,
+        config_source: source,
+        is_sensitive: false,
+        synonyms,
+        config_type: INT,
+        documentation: Some(doc_for(key)),
+        unknown_tagged_fields: UnknownTaggedFields::default(),
     }
 }

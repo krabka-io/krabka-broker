@@ -3,21 +3,20 @@
 //! batches it holds.
 
 use std::{
-    path::Path,
+    path::{Path, PathBuf},
     sync::{
-        Arc,
+        Arc, Mutex,
         atomic::{AtomicU64, Ordering},
     },
 };
 
 use bytes::Bytes;
 use krabka_ids::PartitionIndex;
-use krabka_log::{Log, LogConfig};
 use krabka_protocol::records::{Attributes, Record, RecordBatch};
 use krabka_units::{mebibytes, millis};
 
 use super::MovePolicy;
-use crate::{log_dir, partition::Partition};
+use crate::partition::Partition;
 
 #[derive(Debug)]
 pub(super) struct TestStampSource(pub(super) AtomicU64);
@@ -44,42 +43,11 @@ pub(super) fn fixture_partition(
     topic: &str,
     partition: PartitionIndex,
 ) -> Arc<Partition> {
-    let part_dir = log_dir::partition_dir(log_dir, topic, partition.get());
-    std::fs::create_dir_all(&part_dir).unwrap();
-    let log = Log::open(&part_dir, LogConfig::default()).unwrap();
-    crate::broker::spawn_partition(
-        topic.to_string(),
-        partition,
-        log_dir.to_path_buf(),
-        log,
-        crate::log_dir_status::LogDirRegistry::default(),
-        Arc::new(crate::producer_state::ProducerState::new()),
-        false,
-    )
+    crate::test_support::open_partition(log_dir, topic, partition.get())
 }
 
 pub(super) fn append_records(part: &Arc<Partition>, count: i32) {
-    let mut batch = RecordBatch {
-        base_offset: 0,
-        partition_leader_epoch: -1,
-        attributes: Attributes::default(),
-        last_offset_delta: count - 1,
-        base_timestamp: 1_700_000_000,
-        max_timestamp: 1_700_000_000,
-        producer_id: -1,
-        producer_epoch: -1,
-        base_sequence: -1,
-        records: (0..count)
-            .map(|i| Record {
-                attributes: 0,
-                offset_delta: i,
-                timestamp_delta: 0,
-                key: None,
-                value: Some(Bytes::from_static(b"v")),
-                headers: vec![],
-            })
-            .collect(),
-    };
+    let mut batch = crate::test_support::repeated_records_batch(count, 1_700_000_000);
     part.log
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -119,4 +87,12 @@ pub(super) fn append_epoch_batch(part: &Arc<Partition>, value_size: usize, leade
         .unwrap_or_else(std::sync::PoisonError::into_inner)
         .append(&mut batch)
         .expect("append source batch");
+}
+
+/// Open a staged future replica at the same path a real move uses.
+pub(super) fn open_future_log(target: &Path) -> (PathBuf, Arc<Mutex<krabka_log::Log>>) {
+    let path = crate::log_dir::future_partition_dir(target, "t", 0);
+    std::fs::create_dir_all(&path).unwrap();
+    let log = krabka_log::Log::open(&path, krabka_log::LogConfig::default()).unwrap();
+    (path, Arc::new(Mutex::new(log)))
 }

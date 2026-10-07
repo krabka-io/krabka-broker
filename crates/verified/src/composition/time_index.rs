@@ -6,6 +6,24 @@ use super::{
     restore_index_frontier, time_index_lookup, validated_remote_and_local_time_starts_agree,
 };
 
+/// Coherent decoded records and ordered sparse rows for timestamp scans.
+// cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
+#[cfg(creusot)]
+#[cfg_attr(test, mutants::skip)]
+#[logic(open)]
+pub fn sparse_timestamp_window_valid(
+    offsets: Seq<u32>,
+    timestamps: Seq<i64>,
+    rows: Seq<(usize, usize)>,
+) -> bool {
+    pearlite! {
+        offsets.len() == timestamps.len()
+            && (forall<i: Int, j: Int> 0 <= i && i < j && j < offsets.len() ==> offsets[i]@ < offsets[j]@)
+            && (forall<i: Int> 0 <= i && i < rows.len() ==> rows[i].0@ <= rows[i].1@ && rows[i].1@ < timestamps.len())
+            && (forall<i: Int, j: Int> 0 <= i && i < j && j < rows.len() ==> rows[i].0@ < rows[j].0@ && rows[i].1@ <= rows[j].1@)
+    }
+}
+
 // cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
 #[cfg(creusot)]
 #[cfg_attr(test, mutants::skip)]

@@ -1,6 +1,6 @@
-(* #"/workspace/crates/verified/src/consensus/failover.rs" 81 0 81 62 *)
+(* #"/workspace/crates/verified/src/consensus/failover.rs" 82 0 82 62 *)
 
-let%span sfailover = "/workspace/crates/verified/src/consensus/failover.rs" 49 10 79 1
+let%span sfailover = "/workspace/crates/verified/src/consensus/failover.rs" 50 10 80 1
 
 use creusot.prelude.Any
 
@@ -30,8 +30,8 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let failover_action [#"/workspace/crates/verified/src/consensus/failover.rs" 81 0 81 62]
-  (facts: t_FailoverFacts) (return (x: t_FailoverAction)) = (! bb0
+let failover_action [#"/workspace/crates/verified/src/consensus/failover.rs" 82 0 82 62] (facts: t_FailoverFacts)
+  (return (x: t_FailoverAction)) = (! bb0
   [ bb0 = any [ br0 -> {facts.leader_dead = false} (! bb1) | br1 -> {facts.leader_dead} (! bb5) ]
   | bb5 = any
     [ br0 -> {facts.live_isr = Empty} (! bb9)

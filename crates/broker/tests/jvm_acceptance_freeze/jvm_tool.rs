@@ -6,10 +6,7 @@
 //! output streams, and each case decides what that means. The rest of the
 //! module is the argument list of each tool the suite drives.
 
-use std::{
-    io::Write as _,
-    process::{Command, ExitStatus, Output, Stdio},
-};
+use std::process::{Command, ExitStatus, Output, Stdio};
 
 use crate::{
     jvm_acceptance::{ClientPropsFile, KAFKA_IMAGE_TXN},
@@ -89,24 +86,7 @@ pub(super) fn run_tool(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
 
-    let out = match stdin {
-        None => {
-            command.stdin(Stdio::null());
-            command.output().expect("spawn docker run")
-        }
-        Some(text) => {
-            command.stdin(Stdio::piped());
-            let mut child = command.spawn().expect("spawn docker run");
-            child
-                .stdin
-                .as_mut()
-                .expect("the container has a piped stdin")
-                .write_all(text.as_bytes())
-                .expect("write the record to the tool's stdin");
-            drop(child.stdin.take());
-            child.wait_with_output().expect("wait for docker run")
-        }
-    };
+    let out = support::docker_output(&mut command, stdin, "write the record to the tool's stdin");
     ToolRun::from_output(&out, args)
 }
 

@@ -1,7 +1,7 @@
-(* #"/workspace/crates/verified/src/raft/metadata_record_offset_deltas.rs" 124 0 124 74 *)
+(* #"/workspace/crates/verified/src/raft/metadata_record_offset_deltas.rs" 125 0 125 74 *)
 
-let%span smetadata_record_offset_deltas = "/workspace/crates/verified/src/raft/metadata_record_offset_deltas.rs" 125 4 125 33
-let%span smetadata_record_offset_deltas'0 = "/workspace/crates/verified/src/raft/metadata_record_offset_deltas.rs" 123 28 123 73
+let%span smetadata_record_offset_deltas = "/workspace/crates/verified/src/raft/metadata_record_offset_deltas.rs" 126 4 126 33
+let%span smetadata_record_offset_deltas'0 = "/workspace/crates/verified/src/raft/metadata_record_offset_deltas.rs" 124 28 124 73
 
 use creusot.int.Int64
 use creusot.prelude.Any
@@ -11,7 +11,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let in_half_open_window [#"/workspace/crates/verified/src/raft/metadata_record_offset_deltas.rs" 124 0 124 74]
+let in_half_open_window [#"/workspace/crates/verified/src/raft/metadata_record_offset_deltas.rs" 125 0 125 74]
   (value: Int64.t) (start: Int64.t) (end': Int64.t) (return (x: bool)) = (! bb0
   [ bb0 = s0
     [ s0 = [ &_8 <- Int64.le start value ] s1 | s1 = any [ br0 -> {_8 = false} (! bb2) | br1 -> {_8} (! bb1) ] ]

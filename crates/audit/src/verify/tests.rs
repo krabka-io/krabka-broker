@@ -83,6 +83,26 @@ fn audit_records_to_batch(recs: &[AuditRecord], base_offset: i64) -> RecordBatch
     batch
 }
 
+fn append_lifecycle_chain(
+    log: &mut Log,
+    chain: &mut ChainState,
+    offset: &mut i64,
+    values: std::ops::Range<u8>,
+) {
+    for i in values {
+        let mut record = AuditRecord {
+            class: crate::event::AuditEventClass::ApplicationLifecycle,
+            value: format!("{{\"i\":{i}}}").into_bytes(),
+            headers: vec![("event_class".into(), b"application_lifecycle".to_vec())],
+        };
+        let (seq, previous) = chain.extend(&record.value);
+        record.push_chain_headers(seq, &previous);
+        log.append(&mut audit_record_to_batch(&record, *offset))
+            .unwrap();
+        *offset += 1;
+    }
+}
+
 /// Build a valid chained and checkpointed partition on disk, and return the
 /// public key.
 fn build_partition(tmp: &std::path::Path) -> Vec<u8> {
@@ -90,18 +110,7 @@ fn build_partition(tmp: &std::path::Path) -> Vec<u8> {
     let mut log = Log::open(tmp, LogConfig::default()).unwrap();
     let mut chain = ChainState::new();
     let mut offset = 0i64;
-    for i in 0..3u8 {
-        let mut rec = AuditRecord {
-            class: crate::event::AuditEventClass::ApplicationLifecycle,
-            value: format!("{{\"i\":{i}}}").into_bytes(),
-            headers: vec![("event_class".into(), b"application_lifecycle".to_vec())],
-        };
-        let (seq, prev) = chain.extend(&rec.value);
-        rec.push_chain_headers(seq, &prev);
-        let mut b = audit_record_to_batch(&rec, offset);
-        log.append(&mut b).unwrap();
-        offset += 1;
-    }
+    append_lifecycle_chain(&mut log, &mut chain, &mut offset, 0..3);
     // checkpoint over the chain head
     let cp = Checkpoint::signed(
         s.as_ref(),
@@ -350,18 +359,7 @@ fn unanchored_tail_records_are_counted() {
     let mut offset = 0i64;
 
     // 3 records + checkpoint (seq_high=2)
-    for i in 0..3u8 {
-        let mut rec = crate::sink::AuditRecord {
-            class: crate::event::AuditEventClass::ApplicationLifecycle,
-            value: format!("{{\"i\":{i}}}").into_bytes(),
-            headers: vec![("event_class".into(), b"application_lifecycle".to_vec())],
-        };
-        let (seq, prev) = chain.extend(&rec.value);
-        rec.push_chain_headers(seq, &prev);
-        let mut b = audit_record_to_batch(&rec, offset);
-        log.append(&mut b).unwrap();
-        offset += 1;
-    }
+    append_lifecycle_chain(&mut log, &mut chain, &mut offset, 0..3);
     let cp = Checkpoint::signed(
         s.as_ref(),
         Seq(chain.next_seq() - 1),
@@ -373,18 +371,7 @@ fn unanchored_tail_records_are_counted() {
     offset += 1;
 
     // 2 more records WITHOUT a trailing checkpoint
-    for i in 3..5u8 {
-        let mut rec = crate::sink::AuditRecord {
-            class: crate::event::AuditEventClass::ApplicationLifecycle,
-            value: format!("{{\"i\":{i}}}").into_bytes(),
-            headers: vec![("event_class".into(), b"application_lifecycle".to_vec())],
-        };
-        let (seq, prev) = chain.extend(&rec.value);
-        rec.push_chain_headers(seq, &prev);
-        let mut b = audit_record_to_batch(&rec, offset);
-        log.append(&mut b).unwrap();
-        offset += 1;
-    }
+    append_lifecycle_chain(&mut log, &mut chain, &mut offset, 3..5);
 
     let trusted = TrustedKeys::single("k1".into(), pubkey);
     let report = verify_partition_dir(tmp.path(), &trusted).unwrap();

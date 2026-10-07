@@ -118,16 +118,11 @@ impl<L: SimNodeLog> Sim<L> {
         self.nodes
             .values()
             .map(|n| {
-                let hwm = match n.machine.role() {
-                    Role::Leader { high_watermark, .. } => *high_watermark,
-                    _ => n.high_watermark,
-                };
-                (
+                krabka_kraft_core::simulation_support::fingerprint(
                     n.id,
-                    n.machine.role().name(),
-                    n.machine.quorum_state().leader_epoch,
+                    &n.machine,
                     n.log.record_count(),
-                    hwm,
+                    n.high_watermark,
                 )
             })
             .collect()

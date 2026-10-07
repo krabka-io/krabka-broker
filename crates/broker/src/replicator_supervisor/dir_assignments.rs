@@ -135,14 +135,15 @@ mod tests {
     use std::sync::atomic::Ordering;
 
     use assert2::assert;
-    use krabka_metadata::{MetadataRecord, TopicRecord};
     use krabka_raft::NodeId;
     use uuid::Uuid;
 
     use super::*;
     use crate::replicator_supervisor::{
-        materialize::{MaterializePartitionConfig, materialize_partition},
-        test_support::{image_with, partition_record, static_source, supervisor_fixture},
+        materialize::materialize_partition,
+        test_support::{
+            MaterializeFixture, single_partition_image, static_source, supervisor_fixture,
+        },
     };
 
     /// A reporter that dials a plaintext controller listener and knows no
@@ -180,15 +181,7 @@ mod tests {
     #[tokio::test]
     async fn report_dir_assignments_sends_and_records_successful_updates() {
         let topic_id = Uuid::new_v4();
-        let img = image_with(&[
-            MetadataRecord::V1Topic(TopicRecord {
-                name: "t".into(),
-                topic_id,
-                partitions: 1,
-                replication_factor: 1,
-            }),
-            partition_record("t", 0, NodeId(2), vec![NodeId(2)], 0),
-        ]);
+        let img = single_partition_image("t", topic_id, NodeId(2));
         let (supervisor, partitions, reporter, _dir) = supervisor_fixture(img.clone());
         supervisor
             .materialize_local_partition(&img, "t", 0)
@@ -218,52 +211,22 @@ mod tests {
     #[tokio::test]
     async fn collect_changed_assignments_reports_new_then_skips_unchanged() {
         use krabka_log::LogConfig;
-        use krabka_metadata::{MetadataImage, MetadataRecord, PartitionRecord, TopicRecord};
         use tempfile::tempdir;
         use uuid::Uuid;
 
         // Build image with a single topic+partition.
         let topic_id = Uuid::new_v4();
-        let mut img = MetadataImage::new(Uuid::nil());
-        img.apply(&MetadataRecord::V1Topic(TopicRecord {
-            name: "t".into(),
-            topic_id,
-            partitions: 1,
-            replication_factor: 1,
-        }));
-        img.apply(&MetadataRecord::V1Partition(PartitionRecord {
-            topic: "t".into(),
-            partition: 0,
-            leader: krabka_audit::NodeId(1),
-            replicas: vec![krabka_audit::NodeId(1)],
-            isr: vec![krabka_audit::NodeId(1)],
-            leader_epoch: krabka_metadata::LeaderEpoch(0),
-            adding_replicas: vec![],
-            removing_replicas: vec![],
-            directories: vec![],
-            partition_epoch: 0,
-        }));
+        let img = single_partition_image("t", topic_id, krabka_raft::NodeId(1));
 
         // Materialize the partition under a temp dir.
         let dir = tempdir().expect("tempdir");
         let partitions = Arc::new(PartitionRegistry::new());
-        materialize_partition(MaterializePartitionConfig {
-            partitions: &partitions,
-            topic: "t",
-            topic_id: None,
-            partition: 0,
-            log_dirs: &[dir.path().to_path_buf()],
-            log_config: &LogConfig::default(),
-            log_dir_status: &crate::log_dir_status::LogDirRegistry::default(),
-            producer_state: &Arc::new(crate::producer_state::ProducerState::new()),
-            max_produce_group: 1_024,
-            partition_writer_queue_depth: 64,
-            diskless_wal_local_replica_count: 3,
-            diskless: false,
-            hot_tail: None,
-            wal_shards: None,
-            sequencer: None,
-        })
+        materialize_partition(MaterializeFixture::default().config(
+            &partitions,
+            "t",
+            &[dir.path().to_path_buf()],
+            &LogConfig::default(),
+        ))
         .expect("materialize");
 
         // Resolve LogDirIds over the same temp dir.

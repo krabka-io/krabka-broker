@@ -243,31 +243,13 @@ impl GroupCoordinator {
             | K::CurrentMemberAssignment { group_id, .. }
             | K::RegularExpression { group_id, .. } => group_id.as_str(),
         };
-        let scrub = |seed: &mut GroupSeed| match key {
-            // Unreachable: the `GroupMetadata` tombstone removes the whole seed
-            // and returns above. Kept only for match exhaustiveness.
-            K::GroupMetadata { .. } => {
-                seed.group_epoch = 0;
-            }
-            K::MemberMetadata { member_id, .. } => {
-                seed.members.remove(member_id);
-                seed.target_per_member.remove(member_id);
-                seed.current_per_member.remove(member_id);
-            }
-            K::TargetAssignmentMetadata { .. } => {
-                seed.target_epoch = 0;
-                seed.target_per_member.clear();
-            }
-            K::TargetAssignmentMember { member_id, .. } => {
-                seed.target_per_member.remove(member_id);
-            }
-            K::CurrentMemberAssignment { member_id, .. } => {
-                seed.current_per_member.remove(member_id);
-            }
-            K::RegularExpression { regex, .. } => {
-                seed.resolved_regexes.remove(regex);
-            }
+        let scrub = |seed: &mut GroupSeed| {
+            super::seeds::scrub_seed_assignments!(seed, key, K, target_epoch;
+                K::GroupMetadata { .. } => { seed.group_epoch = 0; },
+            K::RegularExpression { regex, .. } => { seed.resolved_regexes.remove(regex); },
+            );
         };
+
         {
             if let Some(mut s) = self.seeds.get_mut(group_id) {
                 scrub(s.value_mut());

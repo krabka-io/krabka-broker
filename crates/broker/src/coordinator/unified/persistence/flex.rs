@@ -44,6 +44,67 @@ use krabka_protocol::{
 
 use crate::error::BrokerError;
 
+// The consumer, share and streams assignment epochs have the same Kafka
+// value layout. Keep their domain types distinct while sharing the codec.
+macro_rules! epoch_value {
+    ($(#[$meta:meta])* $name:ident { $field:ident }) => {
+        $(#[$meta])*
+        #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+        pub struct $name {
+            pub $field: i32,
+        }
+
+        impl $name {
+            #[must_use]
+            pub fn encode(self) -> bytes::Bytes {
+                let mut buf = bytes::BytesMut::new();
+                bytes::BufMut::put_i16(&mut buf, 0);
+                bytes::BufMut::put_i32(&mut buf, self.$field);
+                $crate::coordinator::unified::persistence::flex::put_empty_tagged_fields(&mut buf);
+                buf.freeze()
+            }
+
+            /// # Errors
+            /// Returns an error when a field or the tagged-field trailer is truncated.
+            pub fn decode(mut buf: &[u8]) -> Result<Self, $crate::error::BrokerError> {
+                $crate::coordinator::unified::persistence::get_i16(&mut buf)?;
+                let $field = $crate::coordinator::unified::persistence::get_i32(&mut buf)?;
+                $crate::coordinator::unified::persistence::flex::skip_tagged_fields(&mut buf)?;
+                Ok(Self { $field })
+            }
+        }
+    };
+}
+
+pub(crate) use epoch_value;
+
+/// Implements a version-0 flexible value with one array-shaped field.
+macro_rules! array_value_codec {
+    ($name:ident, $field:ident, $encode:path, $decode:path) => {
+        impl $name {
+            #[must_use]
+            pub fn encode(&self) -> bytes::Bytes {
+                let mut buf = bytes::BytesMut::new();
+                bytes::BufMut::put_i16(&mut buf, 0);
+                $encode(&mut buf, &self.$field);
+                $crate::coordinator::unified::persistence::flex::put_empty_tagged_fields(&mut buf);
+                buf.freeze()
+            }
+
+            /// # Errors
+            /// Returns an error when a field or the tagged-field trailer is truncated.
+            pub fn decode(mut buf: &[u8]) -> Result<Self, $crate::error::BrokerError> {
+                $crate::coordinator::unified::persistence::get_i16(&mut buf)?;
+                let $field = $decode(&mut buf)?;
+                $crate::coordinator::unified::persistence::flex::skip_tagged_fields(&mut buf)?;
+                Ok(Self { $field })
+            }
+        }
+    };
+}
+
+pub(crate) use array_value_codec;
+
 fn protocol(e: ProtocolError) -> BrokerError {
     BrokerError::Protocol(e)
 }
@@ -146,40 +207,49 @@ where
 
 // ───────────────────────────────────────────────────── array conveniences ──
 
+/// Writes a compact array in iterator order with the supplied element codec.
+pub(crate) fn put_compact_array<T>(
+    buf: &mut BytesMut,
+    items: impl ExactSizeIterator<Item = T>,
+    mut write: impl FnMut(&mut BytesMut, T),
+) {
+    put_compact_array_len(buf, items.len());
+    for item in items {
+        write(buf, item);
+    }
+}
+
+/// Reads a compact array with the supplied element codec.
+pub(crate) fn get_compact_array<T>(
+    buf: &mut &[u8],
+    mut read: impl FnMut(&mut &[u8]) -> Result<T, BrokerError>,
+) -> Result<Vec<T>, BrokerError> {
+    let n = get_compact_array_len(buf)?;
+    let mut out = Vec::with_capacity(n);
+    for _ in 0..n {
+        out.push(read(buf)?);
+    }
+    Ok(out)
+}
+
 /// Writes a compact array of `i32`, the `[]int32` of the schemas.
 pub(crate) fn put_i32_array(buf: &mut BytesMut, items: &[i32]) {
-    put_compact_array_len(buf, items.len());
-    for v in items {
-        buf.put_i32(*v);
-    }
+    put_compact_array(buf, items.iter(), |buf, &v| buf.put_i32(v));
 }
 
 /// Reads the `[]int32` written by [`put_i32_array`].
 pub(crate) fn get_i32_array(buf: &mut &[u8]) -> Result<Vec<i32>, BrokerError> {
-    let n = get_compact_array_len(buf)?;
-    let mut out = Vec::with_capacity(n);
-    for _ in 0..n {
-        out.push(super::get_i32(buf)?);
-    }
-    Ok(out)
+    get_compact_array(buf, super::get_i32)
 }
 
 /// Writes a compact array of compact strings, the `[]string` of the schemas.
 pub(crate) fn put_string_array(buf: &mut BytesMut, items: &[String]) {
-    put_compact_array_len(buf, items.len());
-    for s in items {
-        put_compact_string(buf, s);
-    }
+    put_compact_array(buf, items.iter(), |buf, s| put_compact_string(buf, s));
 }
 
 /// Reads the `[]string` written by [`put_string_array`].
 pub(crate) fn get_string_array(buf: &mut &[u8]) -> Result<Vec<String>, BrokerError> {
-    let n = get_compact_array_len(buf)?;
-    let mut out = Vec::with_capacity(n);
-    for _ in 0..n {
-        out.push(get_compact_string(buf)?);
-    }
-    Ok(out)
+    get_compact_array(buf, get_compact_string)
 }
 
 #[cfg(test)]
