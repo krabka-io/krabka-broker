@@ -779,13 +779,15 @@ mod tests {
         }
     }
 
-    /// `krabka.version` bootstraps at its latest production level, 1, unless
-    /// `--feature krabka.version=N` overrides it, as `kafka-storage format
-    /// --feature` overrides a Kafka feature. Level 0 seeds no record, as Kafka
-    /// omits every level-0 feature from `bootstrap.checkpoint`, and a level
-    /// past the supported range is `Feature.fromFeatureLevel`'s refusal.
+    /// `krabka.version` bootstraps at level 0, which seeds no record, as Kafka
+    /// omits every level-0 feature from `bootstrap.checkpoint`. A JVM node in
+    /// a mixed cluster supports only level 0, so the level is left for an
+    /// operator to finalize once every node is krabka. `--feature
+    /// krabka.version=N` overrides it, as `kafka-storage format --feature`
+    /// overrides a Kafka feature, and a level past the supported range is
+    /// `Feature.fromFeatureLevel`'s refusal.
     #[test]
-    fn krabka_version_bootstraps_at_its_latest_level_unless_overridden() {
+    fn krabka_version_bootstraps_at_level_zero_unless_overridden() {
         // (case, --feature flags, the seeded records or the error)
         type Case<'a> = (
             &'a str,
@@ -814,7 +816,7 @@ mod tests {
         };
         let krabka = |level| vec![("krabka.version".to_owned(), level)];
         let cases: [Case<'_>; 4] = [
-            ("no override", vec![], Ok(with_krabka(1))),
+            ("no override", vec![], Ok(release_defaults.clone())),
             ("override to 1", krabka(1), Ok(with_krabka(1))),
             ("override to 0", krabka(0), Ok(release_defaults.clone())),
             (

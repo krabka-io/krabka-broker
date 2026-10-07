@@ -75,10 +75,14 @@ replica, because two racing writes can both commit; a field value that no
 build accepts now stops the controller too.
 
 `krabka.version` is the feature krabka owns for its own format changes.
-Nodes advertise it at `[0, 1]`, `krabka-format` seeds the latest level unless
-`--feature krabka.version=N` overrides it, and `kafka-features upgrade
---feature krabka.version=N` finalizes it under Kafka's rules for a feature
-other than `metadata.version`. Levels 0 and 1 both mean the 1.0.0 formats.
+Nodes advertise it at `[0, 1]`. Levels 0 and 1 both mean the 1.0.0 formats.
+A fresh cluster carries no `krabka.version` record, so it runs at level 0
+unless `krabka-format --feature krabka.version=N` overrides it. Once every
+node is krabka, an operator finalizes level 1 with `kafka-features upgrade
+--feature krabka.version=1`, under Kafka's rules for a feature other than
+`metadata.version`. The level starts at 0 because a cluster can mix in Kafka
+nodes, which support only level 0: a bootstrapped level 1 crashes a JVM
+standby controller and keeps a JVM broker from joining.
 The private controller RPCs 1003, 1004 and 1005 now negotiate their version
 from the finalized `krabka.version`: a sender uses the version every peer
 serves at that level, and the bytes stay v0 at levels 0 and 1. `krabka-raft`

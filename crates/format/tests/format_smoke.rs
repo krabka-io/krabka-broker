@@ -90,7 +90,6 @@ fn format_with_add_scram_writes_credential_record() {
             == std::collections::BTreeMap::from([
                 ("eligible.leader.replicas.version", 1),
                 ("group.version", 1),
-                ("krabka.version", 1),
                 ("metadata.version", 30),
                 ("share.version", 1),
                 ("streams.version", 1),
@@ -102,12 +101,12 @@ fn format_with_add_scram_writes_credential_record() {
     assert2::assert!(!offset_zero_checkpoint(&dir).exists());
 }
 
-/// `krabka.version` is seeded at its latest production level, 1, unless
-/// `--feature krabka.version=N` overrides it. Level 0 writes no record.
+/// `krabka.version` bootstraps at level 0, which writes no record, unless
+/// `--feature krabka.version=N` overrides it.
 #[test]
-fn format_seeds_krabka_version_unless_overridden() {
+fn format_seeds_krabka_version_only_when_overridden() {
     let cases: [(&[&str], Option<i16>); 3] = [
-        (&[], Some(1)),
+        (&[], None),
         (&["--feature", "krabka.version=1"], Some(1)),
         (&["--feature", "krabka.version=0"], None),
     ];
