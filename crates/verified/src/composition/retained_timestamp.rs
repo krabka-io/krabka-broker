@@ -40,10 +40,19 @@ pub(super) fn constructed_index_retained_candidate(
     }
     proof_assert!(forall<i: Int> start@ <= i && i < offsets@.len()
         ==> minimum@ <= base@ + offsets@[i]@);
+    let retained_offsets = &offsets[start..];
+    let retained_timestamps = &timestamps[start..];
+    // Expose the suffix's original indexes before proving its sparse prefix bound.
+    proof_assert!(forall<i: Int> 0 <= i && i < retained_offsets@.len()
+        ==> retained_offsets@[i] == offsets@[start@ + i]
+            && retained_timestamps@[i] == timestamps@[start@ + i]);
+    proof_assert!(forall<i: Int, j: Int> 0 <= i && i < entries@.len()
+        && 0 <= j && j < retained_offsets@.len() && retained_offsets@[j]@ < entries@[i].1@
+        ==> retained_timestamps@[j]@ <= entries@[i].0@);
     let selected = indexed_timestamp_scan_finds_first(
         &entries,
-        &offsets[start..],
-        &timestamps[start..],
+        retained_offsets,
+        retained_timestamps,
         target,
     )?;
     Some(start + selected)
