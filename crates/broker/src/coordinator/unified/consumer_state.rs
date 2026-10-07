@@ -20,6 +20,7 @@ mod regex;
 #[cfg(test)]
 pub(crate) mod test_support;
 
+pub(crate) use self::reconcile::same_assignment;
 pub use self::{
     group::GroupState,
     member::{ClassicMemberFacade, MemberState},

@@ -67,9 +67,6 @@ pub struct ShareGroupState {
     pub group_epoch: i32,
     pub members: HashMap<String, ShareMemberState>,
     pub target: ShareTargetAssignment,
-    /// Set whenever membership or subscription changes, so the actor knows a
-    /// reconcile is pending. It clears once the reconcile installs a target.
-    pub dirty: bool,
     /// KIP-932: `(topic_id, partition)` share-states this
     /// group has already Initialized in the share-state persister. Seeded from
     /// the replayed `ShareGroupStatePartitionMetadata` (key v15) so a
@@ -122,7 +119,6 @@ impl ShareGroupState {
                 epoch: INITIAL_GROUP_EPOCH,
                 per_member: HashMap::new(),
             },
-            dirty: false,
             initialized: HashSet::new(),
             initializing: HashMap::new(),
             metadata_hash: 0,
@@ -162,15 +158,10 @@ impl ShareGroupState {
 
     pub fn add_or_update_member(&mut self, m: ShareMemberState) {
         self.members.insert(m.member_id.clone(), m);
-        self.dirty = true;
     }
 
     pub fn remove_member(&mut self, member_id: &str) -> Option<ShareMemberState> {
-        let r = self.members.remove(member_id);
-        if r.is_some() {
-            self.dirty = true;
-        }
-        r
+        self.members.remove(member_id)
     }
 
     /// Validates the `member_epoch` of a heartbeat from `member_id`, as Kafka's
@@ -200,6 +191,22 @@ impl ShareGroupState {
         }
     }
 
+    /// The members whose session expired at `now`, without removing them.
+    #[must_use]
+    pub fn expired_members(
+        &self,
+        now: Instant,
+        session_timeout: std::time::Duration,
+    ) -> Vec<String> {
+        super::super::expired_member_ids(
+            self.members
+                .iter()
+                .map(|(id, member)| (id.as_str(), member.last_seen)),
+            now,
+            session_timeout,
+        )
+    }
+
     crate::coordinator::unified::member_helpers::evict_expired! {
         /// Remove members whose `last_seen` is older than `session_timeout`, and
         /// return the evicted member ids.
@@ -209,34 +216,78 @@ impl ShareGroupState {
     /// group epoch, and record that the calculation finished at `now_ms`, the
     /// wall-clock time that Kafka's `TargetAssignmentBuilder` writes as the
     /// record's `AssignmentTimestamp`.
+    ///
+    /// Every member gets a target, an empty one when the assignor gave it
+    /// nothing, as Kafka's `TargetAssignmentBuilder.newMemberAssignment` does.
+    /// It returns the members whose target differs from the one they held, a
+    /// member that held none included, sorted: the members for which Kafka's
+    /// builder writes a target assignment record.
     pub fn install_target(
         &mut self,
-        per_member: HashMap<String, HashMap<Uuid, Vec<i32>>>,
+        mut per_member: HashMap<String, HashMap<Uuid, Vec<i32>>>,
         now_ms: i64,
-    ) {
+    ) -> Vec<String> {
+        let mut changed = Vec::new();
+        let mut target = HashMap::with_capacity(self.members.len());
+        for member_id in self.members.keys() {
+            let mut assignment = per_member.remove(member_id).unwrap_or_default();
+            assignment.retain(|_, partitions| !partitions.is_empty());
+            for partitions in assignment.values_mut() {
+                partitions.sort_unstable();
+            }
+            if !self.target.per_member.get(member_id).is_some_and(|held| {
+                crate::coordinator::unified::consumer_state::same_assignment(held, &assignment)
+            }) {
+                changed.push(member_id.clone());
+            }
+            target.insert(member_id.clone(), assignment);
+        }
+        changed.sort_unstable();
         self.target = ShareTargetAssignment {
             epoch: self.group_epoch,
-            per_member,
+            per_member: target,
         };
         self.assignment_timestamp_ms = now_ms;
+        changed
     }
 
-    /// Advance a member to the target assignment epoch and hand it the
-    /// partitions that the latest target assignment gave it.
-    ///
-    /// The target epoch is the group epoch unless the assignment interval is
-    /// holding the next target back, and Kafka's
-    /// `shareGroupHeartbeat` moves a member to `targetAssignmentEpoch`, not to
-    /// the group epoch.
-    pub fn advance_member_epoch(&mut self, member_id: &str) {
-        if let Some(m) = self.members.get_mut(member_id) {
-            if m.member_epoch != self.target.epoch {
-                m.previous_member_epoch = m.member_epoch;
-                m.member_epoch = self.target.epoch;
-            }
-            if let Some(a) = self.target.per_member.get(member_id) {
-                m.assigned_partitions.clone_from(a);
-            }
+    /// Kafka's `GroupMetadataManager.maybeReconcile` with
+    /// `ShareGroupAssignmentBuilder` for `member_id`: a member behind the
+    /// target epoch moves to it, stable, with its target filtered to the
+    /// topics it subscribes to; a member at the target epoch whose
+    /// subscription changed in this heartbeat gets its filtered target; any
+    /// other member stays as it is. `metadata` names the topics of the target.
+    pub fn reconcile_member(
+        &mut self,
+        member_id: &str,
+        has_subscription_changed: bool,
+        metadata: &dyn crate::coordinator::unified::actor::MetadataProvider,
+    ) {
+        let target_epoch = self.target.epoch;
+        let target = self
+            .target
+            .per_member
+            .get(member_id)
+            .cloned()
+            .unwrap_or_default();
+        let Some(m) = self.members.get_mut(member_id) else {
+            return;
+        };
+        if m.member_epoch == target_epoch && !has_subscription_changed {
+            return;
+        }
+        let filtered: HashMap<Uuid, Vec<i32>> = target
+            .into_iter()
+            .filter(|(topic_id, _)| {
+                metadata
+                    .topic_name(topic_id)
+                    .is_some_and(|name| m.subscribed_topic_names.contains(&name))
+            })
+            .collect();
+        m.assigned_partitions = filtered;
+        if m.member_epoch != target_epoch {
+            m.previous_member_epoch = m.member_epoch;
+            m.member_epoch = target_epoch;
         }
     }
 }
@@ -250,7 +301,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn add_member_bumps_nothing_until_reconcile() {
+    fn add_member_bumps_nothing() {
         let mut g = ShareGroupState::new("g1");
         // Kafka's `ModernGroup` starts at group epoch 1 and
         // `TargetAssignmentMetadata.INITIAL` at assignment epoch 1.
@@ -262,7 +313,7 @@ mod tests {
             ["t1".to_string()].into_iter().collect(),
         ));
         assert!(g.members.len() == 1);
-        assert!(g.dirty);
+        assert!((g.group_epoch, g.target.epoch) == (1, 1));
     }
 
     #[test]

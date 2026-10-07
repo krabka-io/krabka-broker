@@ -20,39 +20,50 @@ use crate::coordinator::unified::{
     },
 };
 
-/// Bumps the group epoch and recomputes the target assignment when Kafka's
-/// `GroupMetadataManager.shareGroupHeartbeat` would.
+/// The group epoch cannot move past `i32::MAX`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct EpochExhausted;
+
+/// Steps 1 and 2 of Kafka's `GroupMetadataManager.shareGroupHeartbeat` after
+/// the member update: the epoch bump and the target assignment.
 ///
-/// The epoch bumps when membership or a subscription changed, when the
-/// subscribed topics changed in the metadata image (Kafka's metadata hash),
-/// or when initialized partitions of a subscribed topic are not assigned yet
-/// (`initializedAssignmentPending`). The target is recomputed whenever the
-/// group epoch is ahead of the target epoch, from the previous target and
-/// over the initialized partitions only (`withTopicAssignablePartitionsMap`),
-/// unless the group's `assignment_interval` since the last target has not
-/// elapsed (`canComputeNextTargetAssignment`). Returns `false` when the group
-/// epoch is exhausted.
+/// The epoch bumps when the heartbeat changed the member's subscription
+/// (`subscription_changed`), when the subscribed topics changed in the
+/// metadata image (Kafka's metadata hash), or, for a group whose target is
+/// current, when initialized partitions of a subscribed topic are not
+/// assigned yet (`initializedAssignmentPending`). The target is recomputed
+/// whenever the group epoch is ahead of the target epoch, from the previous
+/// target and over the initialized partitions only
+/// (`withTopicAssignablePartitionsMap`), unless the group's
+/// `assignment_interval` since the last target has not elapsed
+/// (`canComputeNextTargetAssignment`).
+///
+/// It returns the members whose target changed when it computed a target.
+///
+/// # Errors
+///
+/// Returns [`EpochExhausted`] when the epoch must move and cannot.
 pub(super) fn reconcile(
     state: &mut ShareGroupState,
     metadata: &dyn MetadataProvider,
     assignment_interval: Duration,
-) -> bool {
+    subscription_changed: bool,
+) -> Result<Option<Vec<String>>, EpochExhausted> {
     let input = metadata.snapshot();
     let metadata_hash = metadata_hash(state, &input);
     let metadata_changed = metadata_hash != state.metadata_hash;
     let pending = state.target.epoch >= state.group_epoch && initialized_assignment_pending(state);
-    if (state.dirty || metadata_changed || pending) && !state.bump_epoch() {
-        return false;
+    if (subscription_changed || metadata_changed || pending) && !state.bump_epoch() {
+        return Err(EpochExhausted);
     }
     state.metadata_hash = metadata_hash;
-    state.dirty = false;
     if state.target.epoch >= state.group_epoch
         || state.assignment_delayed(
             assignment_interval,
             crate::coordinator::unified::wall_clock_ms(),
         )
     {
-        return true;
+        return Ok(None);
     }
 
     let members: Vec<MemberSubscription> = state
@@ -91,8 +102,10 @@ pub(super) fn reconcile(
         assignable.entry(*topic_id).or_default().insert(*partition);
     }
     let assignment = ShareGroupAssignor.assign(&group, &topics, Some(&assignable));
-    state.install_target(assignment, crate::coordinator::unified::wall_clock_ms());
-    true
+    Ok(Some(state.install_target(
+        assignment,
+        crate::coordinator::unified::wall_clock_ms(),
+    )))
 }
 
 /// Kafka's `ModernGroup.computeMetadataHash` over the topics that the
@@ -161,7 +174,8 @@ mod tests {
     use assert2::{assert, check};
 
     use super::{
-        MetadataProvider, ReconcileInput, ShareGroupState, ShareMemberState, Uuid, reconcile,
+        EpochExhausted, MetadataProvider, ReconcileInput, ShareGroupState, ShareMemberState, Uuid,
+        reconcile,
     };
 
     #[derive(Debug)]
@@ -207,13 +221,21 @@ mod tests {
             ("partition 1 initialized", 2, Some(1), 5, vec![0, 1]),
             ("retry after growth", 2, None, 5, vec![0, 1]),
         ];
-        for (step, partitions, initialized, epoch, target) in steps {
+        for (index, (step, partitions, initialized, epoch, target)) in steps.into_iter().enumerate()
+        {
             if let Some(partition) = initialized {
                 state.mark_initialized((topic, partition));
                 state.topic_names.insert(topic, "t".to_owned());
             }
+            // Only the join changes the member's subscription.
             check!(
-                reconcile(&mut state, &Metadata { topic, partitions }, Duration::ZERO),
+                reconcile(
+                    &mut state,
+                    &Metadata { topic, partitions },
+                    Duration::ZERO,
+                    index == 0,
+                )
+                .is_ok(),
                 "{step}"
             );
             check!(state.group_epoch == epoch, "{step}");
@@ -290,7 +312,13 @@ mod tests {
                 },
             );
             check!(
-                reconcile(&mut state, &Metadata { topic, partitions }, Duration::ZERO),
+                reconcile(
+                    &mut state,
+                    &Metadata { topic, partitions },
+                    Duration::ZERO,
+                    false
+                )
+                .is_ok(),
                 "{case}"
             );
             check!(
@@ -311,14 +339,17 @@ mod tests {
             ShareMemberState::joining("m", "client", "host", HashSet::from(["t".to_owned()])),
         );
 
-        assert!(!reconcile(
-            &mut state,
-            &Metadata {
-                topic,
-                partitions: 1,
-            },
-            Duration::ZERO,
-        ));
+        assert!(
+            reconcile(
+                &mut state,
+                &Metadata {
+                    topic,
+                    partitions: 1,
+                },
+                Duration::ZERO,
+                false,
+            ) == Err(EpochExhausted)
+        );
         check!(state.group_epoch == i32::MAX);
         assert!(state.target.per_member.is_empty());
     }

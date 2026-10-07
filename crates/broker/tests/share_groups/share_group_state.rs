@@ -464,13 +464,13 @@ async fn unassigned_partitions_keep_their_share_state() {
 }
 
 /// The start offset that the group coordinator initializes a share partition
-/// at, as Kafka's `buildInitializeShareGroupStateRequest` picks it: `-1` for
-/// every partition of a topic that the group sees for the first time, and `0`
-/// for a new partition of a topic that the group already knows, so records
-/// produced to that partition before its share partition loads are not
-/// skipped.
+/// at, as Kafka 4.3.1's `buildInitializeShareGroupStateRequest` picks it:
+/// `-1` for every partition, a new partition of a topic that the group
+/// already knows included. The share partition resolves
+/// `share.auto.offset.reset` when it first loads (`SharePartition.
+/// startOffsetDuringInitialization`).
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn new_partitions_of_a_known_topic_start_at_offset_zero() {
+async fn every_initialized_partition_starts_uninitialized() {
     use krabka_protocol::owned::create_partitions_request::{
         CreatePartitionsRequest, CreatePartitionsTopic,
     };
@@ -531,5 +531,5 @@ async fn new_partitions_of_a_known_topic_start_at_offset_zero() {
             .expect("initialized");
         start_offsets.push(start_offset);
     }
-    assert!(start_offsets == vec![UNINITIALIZED_START_OFFSET, UNINITIALIZED_START_OFFSET, 0, 0]);
+    assert!(start_offsets == vec![UNINITIALIZED_START_OFFSET; 4]);
 }

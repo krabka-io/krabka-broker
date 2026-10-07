@@ -11,9 +11,9 @@ use krabka_protocol::owned::{
 
 use super::{
     assignment::reconcile,
-    records::{PendingShareRecords, chrono_now_ms, flush_pending, snapshot_pending_after_change},
+    records::{PendingShareRecords, ShareRecorder, chrono_now_ms, flush_pending},
     response::{build_assignment_resp, error_resp},
-    share_state::reconcile_share_state,
+    share_state::{cleanup_deleted_topics, prepare_initialize, start_initialize},
 };
 use crate::{
     codes,
@@ -23,7 +23,6 @@ use crate::{
         offsets_log::OffsetsLog,
         share::{
             config::ShareGroupConfig,
-            persistence::ShareGroupMetadataValue,
             state::{ShareGroupState, ShareMemberState},
         },
     },
@@ -55,52 +54,60 @@ pub(super) async fn handle_heartbeat(
         .await;
     }
 
-    // ─── First-join path ─────────────────────────────────────────
+    // ─── Member lookup ───────────────────────────────────────────
     // KIP-932 mirrors KIP-848: the client mints its own member UUID and
     // sends it with `member_epoch == 0`. Epoch 0 from an unknown member is a
     // first join under the client's id, which the handler has checked is set
-    // (`KafkaApis.isMemberIdValid`). Epoch 0 from a known member is a rejoin
-    // and takes the existing-member path below.
-    if req.member_epoch == 0 && !state.members.contains_key(&req.member_id) {
+    // (`KafkaApis.isMemberIdValid`). Epoch 0 from a known member is a rejoin.
+    // Kafka's `getOrMaybeCreateMember` creates a new member with its defaults,
+    // and the heartbeat then updates it like any other.
+    let joining = req.member_epoch == 0 && !state.members.contains_key(&req.member_id);
+    if joining {
         if state.members.len() >= config.max_size {
             return Ok(error_resp(codes::GROUP_MAX_SIZE_REACHED, config));
         }
-        let new_member_id = req.member_id.clone();
-        let m = build_member(&new_member_id, req, client, now);
-        state.add_or_update_member(m);
-        if !reconcile(state, metadata, config.assignment_interval) {
-            state.remove_member(&new_member_id);
-            return Ok(error_resp(codes::INVALID_REQUEST, config));
-        }
-        state.advance_member_epoch(&new_member_id);
-        let pending = snapshot_pending_after_change(state, std::slice::from_ref(&new_member_id));
-        flush_pending(state, pending, offsets_log, coordinator, now_ms).await?;
-        reconcile_share_state(state, config, offsets_log, coordinator, now_ms).await;
-        return Ok(build_assignment_resp(state, &new_member_id, config, true));
+    } else if let Err(error_code) = state.validate_member_epoch(&req.member_id, req.member_epoch) {
+        return Ok(error_resp(error_code, config));
     }
-
-    // ─── Existing-member: validate epoch ─────────────────────────
-    let cur_epoch = match state.validate_member_epoch(&req.member_id, req.member_epoch) {
-        Ok(epoch) => epoch,
-        Err(error_code) => return Ok(error_resp(error_code, config)),
-    };
-
-    // ─── Steady-state: update subscription / last_seen ───────────
+    let recorder = ShareRecorder::start(state, &[&req.member_id]);
     let assigned_before = state
         .members
         .get(&req.member_id)
         .map(|m| m.assigned_partitions.clone());
-    let Some(changed) = update_member_state(state, config, metadata, req, client, now, cur_epoch)
-    else {
+    if joining {
+        state.add_or_update_member(ShareMemberState::joining(
+            &req.member_id,
+            client.id,
+            client.host,
+            HashSet::new(),
+        ));
+    }
+    let subscription_changed = update_member(state, req, client, now);
+    let Ok(target) = reconcile(
+        state,
+        metadata,
+        config.assignment_interval,
+        subscription_changed,
+    ) else {
+        if joining {
+            state.remove_member(&req.member_id);
+        }
         return Ok(error_resp(codes::INVALID_REQUEST, config));
     };
-    if changed {
-        let pending = snapshot_pending_after_change(state, std::slice::from_ref(&req.member_id));
-        flush_pending(state, pending, offsets_log, coordinator, now_ms).await?;
+    state.reconcile_member(&req.member_id, subscription_changed, metadata);
+    let mut pending = recorder.finish(state, target.as_deref());
+    // Kafka's `maybeCreateInitializeShareGroupStateRequest` writes the
+    // partitions it initializes last in the heartbeat's batch.
+    let initialize =
+        prepare_initialize(state, config, coordinator, now_ms).map(|(value, initialize)| {
+            pending.state_partition_metadata = Some(value);
+            initialize
+        });
+    flush_pending(state, pending, offsets_log, coordinator, now_ms).await?;
+    if let Some(initialize) = initialize {
+        start_initialize(state, coordinator, initialize);
     }
-    // KIP-932 lifecycle: every steady-state heartbeat initializes the
-    // subscribed partitions that are not initialized yet.
-    reconcile_share_state(state, config, offsets_log, coordinator, now_ms).await;
+    cleanup_deleted_topics(state, offsets_log, coordinator, now_ms).await;
     // Kafka sends the assignment only on a full request (a rejoin at epoch 0
     // or a request that carries the subscription) or when it changed.
     let assigned_changed = state
@@ -118,53 +125,41 @@ pub(super) async fn handle_heartbeat(
     ))
 }
 
-/// Apply steady-state member updates and run reconciliation. Returns `true`
-/// if anything changed that requires a log write.
-fn update_member_state(
+/// Kafka's `ShareGroupMember.Builder` updates of `shareGroupHeartbeat`, and
+/// whether the heartbeat changed the member's subscribed topic names
+/// (`hasMemberSubscriptionChanged`).
+fn update_member(
     state: &mut ShareGroupState,
-    config: &ShareGroupConfig,
-    metadata: &dyn MetadataProvider,
     req: &ShareGroupHeartbeatRequest,
     client: ClientIdentity<'_>,
     now: Instant,
-    cur_epoch: i32,
-) -> Option<bool> {
-    let mut member_metadata_changed = false;
-    if let Some(m) = state.members.get_mut(&req.member_id) {
-        m.last_seen = now;
-        member_metadata_changed |= client.update_metadata(&mut m.client_id, &mut m.client_host);
-        // Kafka's `ShareGroupMember.Builder.maybeUpdateRackId`: a heartbeat that
-        // carries a rack id replaces the stored one, a rejoin included.
-        member_metadata_changed |= crate::coordinator::unified::member_helpers::update_present(
-            &mut m.rack_id,
-            req.rack_id.as_ref(),
-        );
-        if let Some(ref names) = req.subscribed_topic_names {
-            let set: HashSet<String> = names.iter().cloned().collect();
-            if set != m.subscribed_topic_names {
-                m.subscribed_topic_names = set;
-                state.dirty = true;
-                member_metadata_changed = true;
-            }
+) -> bool {
+    let Some(m) = state.members.get_mut(&req.member_id) else {
+        return false;
+    };
+    m.last_seen = now;
+    client.update_metadata(&mut m.client_id, &mut m.client_host);
+    // Kafka's `ShareGroupMember.Builder.maybeUpdateRackId`: a heartbeat that
+    // carries a rack id replaces the stored one, a rejoin included.
+    crate::coordinator::unified::member_helpers::update_present(
+        &mut m.rack_id,
+        req.rack_id.as_ref(),
+    );
+    if let Some(ref names) = req.subscribed_topic_names {
+        let set: HashSet<String> = names.iter().cloned().collect();
+        if set != m.subscribed_topic_names {
+            m.subscribed_topic_names = set;
+            return true;
         }
     }
-    let group_epoch_before = state.group_epoch;
-    if !reconcile(state, metadata, config.assignment_interval) {
-        return None;
-    }
-    let epoch_advanced = state.target.epoch > cur_epoch;
-    if epoch_advanced {
-        state.advance_member_epoch(&req.member_id);
-    }
-    Some(member_metadata_changed || state.group_epoch != group_epoch_before || epoch_advanced)
+    false
 }
 
 /// Handle a leave-group heartbeat (`member_epoch == -1`).
 ///
 /// It follows Kafka's `GroupMetadataManager.shareGroupLeave`. An unknown
 /// member answers `UNKNOWN_MEMBER_ID` with Kafka's message and writes no
-/// record. A known member is fenced: its records are tombstoned, the group
-/// epoch is bumped, and the response echoes the member id and epoch `-1`.
+/// record. A known member is fenced (`shareGroupFenceMember`).
 async fn handle_leave(
     state: &mut ShareGroupState,
     config: &ShareGroupConfig,
@@ -184,27 +179,29 @@ async fn handle_leave(
             ..Default::default()
         });
     }
-    if crate::metadata_epoch::next_i32(state.group_epoch).is_none() {
+    let Some(pending) = fence_member(state, metadata, &req.member_id) else {
         return Ok(error_resp(codes::INVALID_REQUEST, config));
-    }
-    let mut pending = PendingShareRecords::default();
-    crate::coordinator::unified::persistence::tombstone_members!(pending, [&req.member_id]);
-    state.remove_member(&req.member_id);
-    if !state.bump_epoch() {
-        return Ok(error_resp(codes::INVALID_REQUEST, config));
-    }
-    // Kafka's `shareGroupFenceMember` writes the hash of the subscriptions
-    // that remain.
-    state.metadata_hash = super::assignment::metadata_hash(state, &metadata.snapshot());
-    pending.group_metadata = Some(ShareGroupMetadataValue {
-        epoch: state.group_epoch,
-        metadata_hash: state.metadata_hash,
-    });
+    };
     flush_pending(state, pending, offsets_log, coordinator, now_ms).await?;
-    // Initialize the partitions that the remaining members gained. The share
-    // state of a dropped partition stays, as in Kafka.
-    reconcile_share_state(state, config, offsets_log, coordinator, now_ms).await;
     Ok(leave_resp(&req.member_id, req.member_epoch))
+}
+
+/// Kafka's `shareGroupFenceMember`: the member's current assignment, target
+/// assignment and subscription tombstones, and the group epoch bumped with
+/// the metadata hash of the subscriptions that remain. The target waits for
+/// the next heartbeat. `None` when the epoch is exhausted; the group is then
+/// unchanged.
+pub(super) fn fence_member(
+    state: &mut ShareGroupState,
+    metadata: &dyn MetadataProvider,
+    member_id: &str,
+) -> Option<PendingShareRecords> {
+    crate::metadata_epoch::next_i32(state.group_epoch)?;
+    let recorder = ShareRecorder::start(state, &[member_id]);
+    state.remove_member(member_id);
+    state.bump_epoch();
+    state.metadata_hash = super::assignment::metadata_hash(state, &metadata.snapshot());
+    Some(recorder.finish(state, None))
 }
 
 /// The response to a successful leave: Kafka's `shareGroupLeave` sets only
@@ -215,24 +212,6 @@ fn leave_resp(member_id: &str, member_epoch: i32) -> ShareGroupHeartbeatResponse
         member_epoch,
         ..Default::default()
     }
-}
-
-pub(super) fn build_member(
-    member_id: &str,
-    req: &ShareGroupHeartbeatRequest,
-    client: ClientIdentity<'_>,
-    now: Instant,
-) -> ShareMemberState {
-    let subs: HashSet<String> = req
-        .subscribed_topic_names
-        .clone()
-        .unwrap_or_default()
-        .into_iter()
-        .collect();
-    let mut m = ShareMemberState::joining(member_id, client.id, client.host, subs);
-    m.rack_id.clone_from(&req.rack_id);
-    m.last_seen = now;
-    m
 }
 
 #[cfg(test)]

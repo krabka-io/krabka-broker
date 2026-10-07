@@ -61,7 +61,6 @@ pub(super) fn apply_seed(state: &mut ShareGroupState, seed: ShareGroupSeed) {
         ShareGroupState::mark_initialized,
     );
     state.forget_unused_topic_names();
-    state.dirty = false;
 }
 
 /// Restore every topic name before applying its partition lifecycle action.

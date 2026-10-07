@@ -52,7 +52,7 @@ const MAX_DEPTH: usize = 64;
 // considering a field -- into a failure instead of a silently smaller search
 // that still passes the upper bound. The *generated* count is deliberately not
 // pinned: it depends on dedupe timing across the BFS worker threads.
-const PINNED_UNIQUE_STATES: usize = 55_900;
+const PINNED_UNIQUE_STATES: usize = 54_860;
 const WITNESS_STALE_FENCED: u8 = 1 << 0;
 const WITNESS_FORWARD_FENCED: u8 = 1 << 1;
 const WITNESS_TIMEOUT: u8 = 1 << 2;
@@ -93,7 +93,6 @@ type GroupProjection = (
     i32,
     i64,
     i32,
-    bool,
     u8,
     i32,
     Vec<MemberProjection>,
@@ -136,7 +135,6 @@ impl State {
             self.group.group_epoch,
             self.group.metadata_hash,
             self.group.target.epoch,
-            self.group.dirty,
             self.clock,
             self.partitions,
             members,
@@ -276,19 +274,21 @@ fn durable_projection(group: &ShareGroupState) -> DurableProjection {
     )
 }
 
-/// Reconciles the metadata heartbeat before advancing its member to a new target.
-macro_rules! reconcile_and_advance_member {
-    ($state:ident, $member_id:ident, $current:ident) => {
-        if !reconcile(
+/// Reconciles the group and then the member against its target, as a share
+/// heartbeat does: `true` for a joining member.
+macro_rules! reconcile_group_and_member {
+    ($state:ident, $member_id:ident, $joining:expr) => {
+        let metadata = metadata($state.partitions);
+        reconcile(
             &mut $state.group,
-            &metadata($state.partitions),
+            &metadata,
             std::time::Duration::ZERO,
-        ) {
-            return None;
-        }
-        if $state.group.target.epoch > $current {
-            $state.group.advance_member_epoch($member_id);
-        }
+            $joining,
+        )
+        .ok()?;
+        $state
+            .group
+            .reconcile_member($member_id, $joining, &metadata);
     };
 }
 
@@ -356,14 +356,7 @@ impl Model for ShareModel {
                 );
                 member.last_seen = at(&state);
                 state.group.add_or_update_member(member);
-                if !reconcile(
-                    &mut state.group,
-                    &metadata(state.partitions),
-                    std::time::Duration::ZERO,
-                ) {
-                    return None;
-                }
-                state.group.advance_member_epoch(member_id);
+                reconcile_group_and_member! { state, member_id, true }
             }
             Action::Heartbeat(member_id, kind) => {
                 let current = state.group.members.get(member_id)?.member_epoch;
@@ -375,7 +368,7 @@ impl Model for ShareModel {
                 match state.group.validate_member_epoch(member_id, requested) {
                     Ok(_) => {
                         state.group.members.get_mut(member_id)?.last_seen = at(&state);
-                        reconcile_and_advance_member! { state, member_id, current }
+                        reconcile_group_and_member! { state, member_id, false }
                     }
                     Err(error) => match kind {
                         EpochKind::Stale => {
@@ -403,21 +396,21 @@ impl Model for ShareModel {
                     .evict_expired(at(&state), Duration::from_secs(1));
                 if !expired.is_empty() {
                     state.witnesses |= WITNESS_TIMEOUT;
-                    if !reconcile(
-                        &mut state.group,
-                        &metadata(state.partitions),
-                        std::time::Duration::ZERO,
-                    ) {
-                        return None;
+                    // Kafka fences each expired member on its own, with an
+                    // epoch bump each, and computes no target.
+                    for _ in &expired {
+                        if !state.group.bump_epoch() {
+                            return None;
+                        }
                     }
                 }
             }
             Action::MetadataHeartbeat(member_id, partitions) => {
-                let current = state.group.members.get(member_id)?.member_epoch;
+                state.group.members.get(member_id)?;
                 state.partitions = partitions;
                 initialize(&mut state.group, partitions);
                 let before = state.group.group_epoch;
-                reconcile_and_advance_member! { state, member_id, current }
+                reconcile_group_and_member! { state, member_id, false }
                 if state.group.group_epoch > before {
                     state.witnesses |= WITNESS_METADATA;
                 }

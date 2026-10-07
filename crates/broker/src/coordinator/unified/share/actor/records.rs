@@ -26,7 +26,7 @@ use crate::{
     error::BrokerError,
 };
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, PartialEq)]
 pub(crate) struct PendingShareRecords {
     pub group_metadata: Option<ShareGroupMetadataValue>,
     /// `Some(value)` writes the record. `None` writes a tombstone, which is a
@@ -41,7 +41,7 @@ pub(crate) struct PendingShareRecords {
 }
 
 impl PendingShareRecords {
-    fn is_empty(&self) -> bool {
+    pub(super) fn is_empty(&self) -> bool {
         self.group_metadata.is_none()
             && self.member_metadata.is_empty()
             && self.target_metadata.is_none()
@@ -168,44 +168,131 @@ impl PendingShareRecords {
     }
 }
 
-/// Build a `PendingShareRecords` set that carries the state changes for the
-/// listed `affected_members`. It always includes the current group epoch, and
-/// it includes the target epoch when that epoch is non-zero.
-pub(super) fn snapshot_pending_after_change(
-    state: &ShareGroupState,
-    affected_members: &[String],
-) -> PendingShareRecords {
-    let mut pending = PendingShareRecords {
-        group_metadata: Some(ShareGroupMetadataValue {
-            epoch: state.group_epoch,
-            metadata_hash: state.metadata_hash,
-        }),
-        ..Default::default()
-    };
-    if state.target.epoch > 0 {
-        pending.target_metadata = Some(ShareGroupTargetAssignmentMetadataValue {
-            assignment_epoch: state.target.epoch,
-            assignment_timestamp_ms: state.assignment_timestamp_ms,
-        });
-    }
-    crate::coordinator::unified::persistence::snapshot_members!(
-        pending, state, affected_members;
-        member_metadata_value, current_assignment_value;
-        |mid, member| {
-            if let Some(target) = state.target.per_member.get(mid) {
-                pending.target_per_member.push((mid.clone(), Some(target_assignment_value(target))));
-            }
-        }
-    );
-    pending
+/// The topics in id order and the partitions ascending, so that two equal
+/// assignments give equal records.
+fn sorted_partitions(partitions: &HashMap<Uuid, Vec<i32>>) -> Vec<(Uuid, Vec<i32>)> {
+    let mut topics: Vec<(Uuid, Vec<i32>)> = partitions
+        .iter()
+        .filter(|(_, partitions)| !partitions.is_empty())
+        .map(|(topic_id, partitions)| {
+            let mut partitions = partitions.clone();
+            partitions.sort_unstable();
+            (*topic_id, partitions)
+        })
+        .collect();
+    topics.sort_by_key(|(topic_id, _)| topic_id.0);
+    topics
 }
 
+/// The records of one share-group transition, as Kafka's
+/// `GroupMetadataManager` writes them: a record only where the transition
+/// changed what it holds. [`ShareRecorder::start`] takes the values of the
+/// members that the transition may change and the group epoch, and
+/// [`ShareRecorder::finish`] compares them with the group after it: a member
+/// that went gets `shareGroupFenceMember`'s tombstones, a changed
+/// subscription a member record (`hasMemberSubscriptionChanged`), a changed
+/// current assignment its record (`maybeReconcile`), a moved epoch the group
+/// record, and a computed target the targets that changed and the target
+/// metadata (`TargetAssignmentBuilder`).
+pub(super) struct ShareRecorder {
+    group_epoch: i32,
+    members: Vec<(
+        String,
+        Option<(
+            ShareGroupMemberMetadataValue,
+            ShareGroupCurrentMemberAssignmentValue,
+        )>,
+    )>,
+}
+
+impl ShareRecorder {
+    pub(super) fn start(state: &ShareGroupState, member_ids: &[&str]) -> Self {
+        Self {
+            group_epoch: state.group_epoch,
+            members: member_ids
+                .iter()
+                .map(|member_id| {
+                    (
+                        (*member_id).to_owned(),
+                        state.members.get(*member_id).map(|member| {
+                            (
+                                member_metadata_value(member),
+                                current_assignment_value(member),
+                            )
+                        }),
+                    )
+                })
+                .collect(),
+        }
+    }
+
+    /// The records of the transition. `target` lists the members whose target
+    /// changed when the transition computed a target.
+    pub(super) fn finish(
+        self,
+        state: &ShareGroupState,
+        target: Option<&[String]>,
+    ) -> PendingShareRecords {
+        let mut pending = PendingShareRecords::default();
+        for (member_id, before) in self.members {
+            match (before, state.members.get(&member_id)) {
+                (Some(_), None) => {
+                    pending.member_metadata.push((member_id.clone(), None));
+                    pending.target_per_member.push((member_id.clone(), None));
+                    pending.current_per_member.push((member_id, None));
+                }
+                (before, Some(member)) => {
+                    let metadata = member_metadata_value(member);
+                    let current = current_assignment_value(member);
+                    if before.as_ref().map(|(metadata, _)| metadata) != Some(&metadata) {
+                        pending
+                            .member_metadata
+                            .push((member_id.clone(), Some(metadata)));
+                    }
+                    if before.as_ref().map(|(_, current)| current) != Some(&current) {
+                        pending.current_per_member.push((member_id, Some(current)));
+                    }
+                }
+                (None, None) => {}
+            }
+        }
+        if state.group_epoch != self.group_epoch {
+            pending.group_metadata = Some(ShareGroupMetadataValue {
+                epoch: state.group_epoch,
+                metadata_hash: state.metadata_hash,
+            });
+        }
+        if let Some(changed) = target {
+            pending.target_metadata = Some(ShareGroupTargetAssignmentMetadataValue {
+                assignment_epoch: state.target.epoch,
+                assignment_timestamp_ms: state.assignment_timestamp_ms,
+            });
+            for member_id in changed {
+                let target = state
+                    .target
+                    .per_member
+                    .get(member_id)
+                    .cloned()
+                    .unwrap_or_default();
+                pending
+                    .target_per_member
+                    .push((member_id.clone(), Some(target_assignment_value(&target))));
+            }
+        }
+        pending
+    }
+}
+
+/// Kafka's `newShareGroupMemberSubscriptionRecord`: the topic names sorted.
 pub(super) fn member_metadata_value(member: &ShareMemberState) -> ShareGroupMemberMetadataValue {
+    let mut subscribed_topic_names: Vec<String> =
+        member.subscribed_topic_names.iter().cloned().collect();
+    subscribed_topic_names.sort_unstable();
     ShareGroupMemberMetadataValue {
         rack_id: member.rack_id.clone(),
         client_id: member.client_id.clone(),
         client_host: member.client_host.clone(),
-        subscribed_topic_names: member.subscribed_topic_names.iter().cloned().collect(),
+        subscribed_topic_names,
     }
 }
 
@@ -215,11 +302,7 @@ pub(super) fn current_assignment_value(
     ShareGroupCurrentMemberAssignmentValue {
         member_epoch: member.member_epoch,
         previous_member_epoch: member.previous_member_epoch,
-        assigned_partitions: member
-            .assigned_partitions
-            .iter()
-            .map(|(topic, parts)| (*topic, parts.clone()))
-            .collect(),
+        assigned_partitions: sorted_partitions(&member.assigned_partitions),
     }
 }
 
@@ -227,10 +310,7 @@ pub(super) fn target_assignment_value(
     target: &HashMap<Uuid, Vec<i32>>,
 ) -> ShareGroupTargetAssignmentMemberValue {
     ShareGroupTargetAssignmentMemberValue {
-        topic_partitions: target
-            .iter()
-            .map(|(topic, parts)| (*topic, parts.clone()))
-            .collect(),
+        topic_partitions: sorted_partitions(target),
     }
 }
 
