@@ -50,7 +50,7 @@ mod tests;
 
 pub(crate) use self::{
     commit_validation::validate_commit,
-    pending_records::PendingRecords,
+    pending_records::{GroupTombstone, PendingRecords, group_tombstone_keys},
     persistence::{classic_group_metadata_record, full_pending_records},
 };
 pub use self::{

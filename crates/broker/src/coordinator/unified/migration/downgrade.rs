@@ -12,7 +12,7 @@ use krabka_verified::{
 
 use super::assignment::member_target_assignment;
 use crate::coordinator::unified::{
-    actor::{PendingRecords, classic_group_metadata_record},
+    actor::{GroupTombstone, PendingRecords, classic_group_metadata_record},
     classic_state::{ClassicGroup as ClassicState, Member as ClassicMember, select_protocol},
     consumer_state::GroupState as ConsumerState,
     reconciler::ReconcileInput,
@@ -121,19 +121,28 @@ pub(crate) fn downgrade_pending_records(
 ) -> PendingRecords {
     let plan =
         group_migration_record_plan(GroupMigrationDirection::Downgrade, consumer.members.len());
-    let mut pending = PendingRecords {
-        next_gen_group_metadata_tombstone: plan.next_gen_group
-            == GroupMigrationRecordAction::Tombstone,
-        next_gen_target_metadata_tombstone: plan.next_gen_target
-            == GroupMigrationRecordAction::Tombstone,
+    let pending = PendingRecords {
+        // Kafka's `convertToClassicGroup` writes
+        // `ConsumerGroup.createGroupTombstoneRecords`, which tombstones every
+        // member's records, the target metadata, the resolved regular
+        // expressions, the deprecated k4 record and the group epoch.
+        group_tombstone: (plan.next_gen_group == GroupMigrationRecordAction::Tombstone
+            && plan.next_gen_target == GroupMigrationRecordAction::Tombstone
+            && plan.member_metadata == GroupMigrationRecordAction::Tombstone)
+            .then(|| GroupTombstone {
+                members: consumer.members.keys().cloned().collect(),
+                regexes: consumer.resolved_regex_names(),
+            }),
         classic_group_metadata: (plan.classic_group == GroupMigrationRecordAction::Write)
             .then(|| classic_group_metadata_record(classic, now_ms)),
         ..Default::default()
     };
-    if plan.member_metadata == GroupMigrationRecordAction::Tombstone {
-        super::super::persistence::tombstone_members!(pending, consumer.members.keys());
-    }
-    super::super::persistence::assert_member_record_count!(pending, plan.member_count);
+    assert2::debug_assert!(
+        pending
+            .group_tombstone
+            .as_ref()
+            .is_some_and(|tombstone| tombstone.members.len() == plan.member_count)
+    );
     pending
 }
 
@@ -253,8 +262,9 @@ mod tests {
         let second = downgrade_pending_records(&state, &classic, 7)
             .to_batch("g", 7)
             .unwrap();
-        // Kafka's `createGroupTombstoneRecordsWithReplacedMember` always
-        // tombstones the deprecated k4 record, just before the k3 tombstone.
+        // Kafka's `convertToClassicGroup`: the group's tombstones in the
+        // order of `ConsumerGroup.createGroupTombstoneRecords`, the deprecated
+        // k4 record always among them, then the classic k2 value.
         let ng = |key: NextGenKey| {
             crate::coordinator::unified::persistence_next_gen::encode_key(&key).unwrap()
         };
@@ -267,7 +277,7 @@ mod tests {
         check!(
             keys == vec![
                 (
-                    ng(NextGenKey::MemberMetadata {
+                    ng(NextGenKey::CurrentMemberAssignment {
                         group_id: member().0,
                         member_id: member().1,
                     }),
@@ -281,7 +291,13 @@ mod tests {
                     true
                 ),
                 (
-                    ng(NextGenKey::CurrentMemberAssignment {
+                    ng(NextGenKey::TargetAssignmentMetadata {
+                        group_id: "g".into()
+                    }),
+                    true
+                ),
+                (
+                    ng(NextGenKey::MemberMetadata {
                         group_id: member().0,
                         member_id: member().1,
                     }),
@@ -295,12 +311,6 @@ mod tests {
                 ),
                 (
                     ng(NextGenKey::GroupMetadata {
-                        group_id: "g".into()
-                    }),
-                    true
-                ),
-                (
-                    ng(NextGenKey::TargetAssignmentMetadata {
                         group_id: "g".into()
                     }),
                     true

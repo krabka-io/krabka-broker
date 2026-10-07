@@ -4,9 +4,11 @@
 //! as the single `RecordBatch` that `OffsetsLog::append` takes, and applies the
 //! same delta to the coordinator's respawn cache once the append succeeds.
 
+use krabka_protocol::records::RecordBatch;
+
 use crate::{
     coordinator::unified::{
-        GroupCoordinator,
+        GroupCoordinator, OffsetRecordBatchBuilder,
         persistence_next_gen::{
             CurrentMemberAssignmentValue, GroupMetadataValue, MemberMetadataValue, NextGenKey,
             RegularExpressionValue, TargetAssignmentMemberValue, TargetAssignmentMetadataValue,
@@ -34,6 +36,73 @@ pub(crate) enum PartitionMetadataWrite {
     Tombstone,
 }
 
+/// What Kafka's `ConsumerGroup.createGroupTombstoneRecords` tombstones: the
+/// members, each with its current assignment, target assignment and
+/// subscription, and the resolved regular expressions.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub(crate) struct GroupTombstone {
+    pub members: Vec<String>,
+    pub regexes: Vec<String>,
+}
+
+/// The keys of Kafka's `ConsumerGroup.createGroupTombstoneRecords`, in its
+/// order: every member's current assignment (k8), every member's target
+/// assignment (k7), the target assignment metadata (k6), every member's
+/// subscription (k5), every resolved regular expression (k16), the
+/// deprecated subscription metadata (k4) whether or not the log holds one,
+/// and the group epoch (k3).
+///
+/// The order is what lets Kafka's replay accept the tombstones: a member
+/// tombstone needs the member's current assignment tombstoned and its target
+/// gone, the target metadata tombstone needs every target gone, and the
+/// group tombstone needs every member gone and the target metadata
+/// tombstoned. Kafka iterates the hash maps of the group; the broker sorts
+/// the member ids and regexes so that the bytes do not depend on map order.
+///
+/// # Errors
+///
+/// Returns [`BrokerError::Protocol`] when a string of a key is longer than
+/// 32767 bytes.
+pub(crate) fn group_tombstone_keys(
+    group_id: &str,
+    tombstone: &GroupTombstone,
+) -> Result<Vec<bytes::Bytes>, BrokerError> {
+    let mut members = tombstone.members.clone();
+    members.sort_unstable();
+    let mut regexes = tombstone.regexes.clone();
+    regexes.sort_unstable();
+    let group = || group_id.to_owned();
+    let mut keys = Vec::new();
+    for member_id in &members {
+        keys.push(NextGenKey::CurrentMemberAssignment {
+            group_id: group(),
+            member_id: member_id.clone(),
+        });
+    }
+    for member_id in &members {
+        keys.push(NextGenKey::TargetAssignmentMember {
+            group_id: group(),
+            member_id: member_id.clone(),
+        });
+    }
+    keys.push(NextGenKey::TargetAssignmentMetadata { group_id: group() });
+    for member_id in &members {
+        keys.push(NextGenKey::MemberMetadata {
+            group_id: group(),
+            member_id: member_id.clone(),
+        });
+    }
+    for regex in regexes {
+        keys.push(NextGenKey::RegularExpression {
+            group_id: group(),
+            regex,
+        });
+    }
+    keys.push(NextGenKey::PartitionMetadata { group_id: group() });
+    keys.push(NextGenKey::GroupMetadata { group_id: group() });
+    keys.iter().map(encode_key).collect()
+}
+
 #[derive(Debug, Default)]
 pub(crate) struct PendingRecords {
     pub group_metadata: Option<GroupMetadataValue>,
@@ -54,10 +123,9 @@ pub(crate) struct PendingRecords {
     /// does for a group that holds one. A k3 tombstone carries a k4 tombstone
     /// whatever this says, as Kafka's `createGroupTombstoneRecords` does.
     pub partition_metadata: PartitionMetadataWrite,
-    /// Tombstone the next-gen k3 `GroupMetadata` (downgrade flip).
-    pub next_gen_group_metadata_tombstone: bool,
-    /// Tombstone the next-gen k6 `TargetAssignmentMetadata` (downgrade flip).
-    pub next_gen_target_metadata_tombstone: bool,
+    /// The tombstones of the whole consumer group, in the order of Kafka's
+    /// `ConsumerGroup.createGroupTombstoneRecords` (downgrade flip).
+    pub group_tombstone: Option<GroupTombstone>,
     /// Write the classic k2 `GroupMetadata` value (downgrade flip).
     pub classic_group_metadata:
         Option<crate::coordinator::unified::persistence::GroupMetadataValue>,
@@ -73,93 +141,172 @@ impl PendingRecords {
             && self.current_per_member.is_empty()
             && !self.classic_group_metadata_tombstone
             && self.partition_metadata == PartitionMetadataWrite::Keep
-            && !self.next_gen_group_metadata_tombstone
-            && !self.next_gen_target_metadata_tombstone
+            && self.group_tombstone.is_none()
             && self.classic_group_metadata.is_none()
     }
 
-    crate::coordinator::unified::persistence::encode_membership_records! {
-        @method
-        /// Encodes the delta as the one batch that `OffsetsLog::append` takes.
-        ///
-        /// # Errors
-        ///
-        /// Returns [`crate::error::BrokerError::Protocol`] when a string of a record key or of the
-        /// classic group value is longer than 32767 bytes, which a non-flexible
-        /// field cannot carry.
-        fn to_batch(&self);
-        batch, self, group_id, now_ms, borrowed;
-            (typed, encode_key, NextGenKey);
-            before_members {
-                // Kafka's `updateSubscriptionMetadata` adds the k4 tombstone right
-                // after the epoch record.
-                if self.group_metadata.is_some()
-                    && self.partition_metadata == PartitionMetadataWrite::Tombstone
-                {
-                    batch.push(partition_metadata_key(group_id)?, None);
-                }
-                batch.extend_values(
-                    self.resolved_regexes
-                        .iter()
-                        .map(|(id, value)| (id, value.as_ref())),
-                    |regex| {
-                        encode_key(&NextGenKey::RegularExpression {
-                            group_id: group_id.into(),
-                            regex: regex.clone(),
-                        })
+    /// Encodes the delta as the one batch that `OffsetsLog::append` takes, in
+    /// the order of Kafka's `GroupMetadataManager`:
+    ///
+    /// 1. the classic k2 tombstone of an upgrade, before any consumer record,
+    ///    as Kafka's `convertToConsumerGroup` writes it, since the replay of a
+    ///    consumer record refuses a group that is still classic;
+    /// 2. the tombstones of each removed member, current assignment (k8),
+    ///    target assignment (k7) and subscription (k5), as Kafka's
+    ///    `removeMember` writes them and its replay requires;
+    /// 3. the group epoch (k3) with the deprecated k4 tombstone, the
+    ///    subscriptions (k5) and the resolved regular expressions (k16);
+    /// 4. the target assignment of `TargetAssignmentBuilder`: the members'
+    ///    targets (k7), then its metadata (k6);
+    /// 5. the current assignments (k8);
+    /// 6. the group tombstones of [`group_tombstone_keys`], and the classic
+    ///    k2 value of a downgrade after them.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BrokerError::Protocol`] when a string of a record key or of the
+    /// classic group value is longer than 32767 bytes, which a non-flexible
+    /// field cannot carry.
+    pub fn to_batch(&self, group_id: &str, now_ms: i64) -> Result<RecordBatch, BrokerError> {
+        let mut batch = OffsetRecordBatchBuilder::default();
+        let key = |key: NextGenKey| encode_key(&key);
+        let group = || group_id.to_owned();
+
+        if self.classic_group_metadata_tombstone {
+            batch.push(
+                crate::coordinator::unified::persistence::encode_key(
+                    &crate::coordinator::unified::persistence::Key::GroupMetadata {
+                        group_id: group(),
                     },
-                    RegularExpressionValue::encode,
-                )?;
+                )?,
+                None,
+            );
+        }
+        let removed: Vec<&String> = self
+            .member_metadata
+            .iter()
+            .filter(|(_, value)| value.is_none())
+            .map(|(member_id, _)| member_id)
+            .collect();
+        let is_removed = |member_id: &String| removed.contains(&member_id);
+        for member_id in &removed {
+            if self
+                .current_per_member
+                .iter()
+                .any(|(id, value)| id == *member_id && value.is_none())
+            {
+                batch.push(
+                    key(NextGenKey::CurrentMemberAssignment {
+                        group_id: group(),
+                        member_id: (*member_id).clone(),
+                    })?,
+                    None,
+                );
             }
-            before_target {}
-            after_members {
-                if self.classic_group_metadata_tombstone {
-                    batch.push(
-                        crate::coordinator::unified::persistence::encode_key(
-                            &crate::coordinator::unified::persistence::Key::GroupMetadata {
-                                group_id: group_id.into(),
-                            },
-                        )?,
-                        None,
-                    );
-                }
-                // A deletion or a downgrade tombstones k4 just before k3, as Kafka's
-                // `createGroupTombstoneRecords` does.
-                if self.next_gen_group_metadata_tombstone {
-                    batch.push(partition_metadata_key(group_id)?, None);
-                }
-                if self.next_gen_group_metadata_tombstone {
-                    batch.push(
-                        encode_key(&NextGenKey::GroupMetadata {
-                            group_id: group_id.into(),
-                        })?,
-                        None,
-                    );
-                }
-                if self.next_gen_target_metadata_tombstone {
-                    batch.push(
-                        encode_key(&NextGenKey::TargetAssignmentMetadata {
-                            group_id: group_id.into(),
-                        })?,
-                        None,
-                    );
-                }
-                if let Some(v) = &self.classic_group_metadata {
-                    batch.push(
-                        crate::coordinator::unified::persistence::encode_key(
-                            &crate::coordinator::unified::persistence::Key::GroupMetadata {
-                                group_id: group_id.into(),
-                            },
-                        )?,
-                        Some(v.encode_value()?),
-                    );
-                }
+            if self
+                .target_per_member
+                .iter()
+                .any(|(id, value)| id == *member_id && value.is_none())
+            {
+                batch.push(
+                    key(NextGenKey::TargetAssignmentMember {
+                        group_id: group(),
+                        member_id: (*member_id).clone(),
+                    })?,
+                    None,
+                );
             }
+            batch.push(
+                key(NextGenKey::MemberMetadata {
+                    group_id: group(),
+                    member_id: (*member_id).clone(),
+                })?,
+                None,
+            );
+        }
+        if let Some(v) = self.group_metadata {
+            batch.push(
+                key(NextGenKey::GroupMetadata { group_id: group() })?,
+                Some(v.encode()),
+            );
+            // Kafka's `updateSubscriptionMetadata` adds the k4 tombstone right
+            // after the epoch record.
+            if self.partition_metadata == PartitionMetadataWrite::Tombstone {
+                batch.push(partition_metadata_key(group_id)?, None);
+            }
+        }
+        for (member_id, v) in &self.member_metadata {
+            if let Some(v) = v {
+                batch.push(
+                    key(NextGenKey::MemberMetadata {
+                        group_id: group(),
+                        member_id: member_id.clone(),
+                    })?,
+                    Some(v.encode()),
+                );
+            }
+        }
+        for (regex, v) in &self.resolved_regexes {
+            batch.push(
+                key(NextGenKey::RegularExpression {
+                    group_id: group(),
+                    regex: regex.clone(),
+                })?,
+                v.as_ref().map(RegularExpressionValue::encode),
+            );
+        }
+        for (member_id, v) in &self.target_per_member {
+            if is_removed(member_id) && v.is_none() {
+                continue;
+            }
+            batch.push(
+                key(NextGenKey::TargetAssignmentMember {
+                    group_id: group(),
+                    member_id: member_id.clone(),
+                })?,
+                v.as_ref().map(TargetAssignmentMemberValue::encode),
+            );
+        }
+        if let Some(v) = self.target_metadata {
+            batch.push(
+                key(NextGenKey::TargetAssignmentMetadata { group_id: group() })?,
+                Some(v.encode()),
+            );
+        }
+        for (member_id, v) in &self.current_per_member {
+            if is_removed(member_id) && v.is_none() {
+                continue;
+            }
+            batch.push(
+                key(NextGenKey::CurrentMemberAssignment {
+                    group_id: group(),
+                    member_id: member_id.clone(),
+                })?,
+                v.as_ref().map(CurrentMemberAssignmentValue::encode),
+            );
+        }
+        if let Some(tombstone) = &self.group_tombstone {
+            for key in group_tombstone_keys(group_id, tombstone)? {
+                batch.push(key, None);
+            }
+        }
+        if let Some(v) = &self.classic_group_metadata {
+            batch.push(
+                crate::coordinator::unified::persistence::encode_key(
+                    &crate::coordinator::unified::persistence::Key::GroupMetadata {
+                        group_id: group(),
+                    },
+                )?,
+                Some(v.encode_value()?),
+            );
+        }
+
+        Ok(batch.finish(now_ms))
     }
 
     /// Apply exactly this durable next-gen record delta to the respawn cache.
     pub(super) fn apply_to_cache(self, coordinator: &GroupCoordinator, group_id: &str) {
-        if self.next_gen_group_metadata_tombstone {
+        if self.group_tombstone.is_some() {
             coordinator.remove_cached_seed(group_id);
             return;
         }
@@ -188,10 +335,6 @@ impl PendingRecords {
             if let Some(value) = self.target_metadata {
                 seed.target_epoch = value.assignment_epoch;
                 seed.assignment_timestamp_ms = value.assignment_timestamp_ms;
-            }
-            if self.next_gen_target_metadata_tombstone {
-                seed.target_epoch = 0;
-                seed.assignment_timestamp_ms = 0;
             }
             for (member_id, value) in self.target_per_member {
                 if let Some(value) = value {
@@ -305,8 +448,10 @@ mod tests {
             current_per_member: vec![("m".into(), None)],
             classic_group_metadata_tombstone: true,
             partition_metadata: PartitionMetadataWrite::Tombstone,
-            next_gen_group_metadata_tombstone: true,
-            next_gen_target_metadata_tombstone: true,
+            group_tombstone: Some(GroupTombstone {
+                members: vec!["m".into()],
+                regexes: vec!["r".into()],
+            }),
             classic_group_metadata: Some(ClassicGroupValue {
                 protocol_type: "consumer".into(),
                 generation: 1,
@@ -542,12 +687,144 @@ mod tests {
         );
     }
 
+    /// The records of one transition come in the order of Kafka's
+    /// `GroupMetadataManager`, which is also the order its replay accepts: a
+    /// classic tombstone before the consumer records of an upgrade, a removed
+    /// member's k8, k7 and k5 tombstones first, then the subscriptions, the
+    /// epoch, the targets and their metadata, the current assignments, and
+    /// the group tombstones of `createGroupTombstoneRecords` last.
+    #[test]
+    fn records_follow_kafkas_order() {
+        use crate::coordinator::unified::persistence::{Key, encode_key as encode_classic_key};
+
+        let ng = |key: NextGenKey| encode_key(&key).unwrap();
+        let group = || "g".to_string();
+        let member = |id: &str| id.to_string();
+        let k3 = ng(NextGenKey::GroupMetadata { group_id: group() });
+        let k5 = |id: &str| {
+            ng(NextGenKey::MemberMetadata {
+                group_id: group(),
+                member_id: member(id),
+            })
+        };
+        let k6 = ng(NextGenKey::TargetAssignmentMetadata { group_id: group() });
+        let k7 = |id: &str| {
+            ng(NextGenKey::TargetAssignmentMember {
+                group_id: group(),
+                member_id: member(id),
+            })
+        };
+        let k8 = |id: &str| {
+            ng(NextGenKey::CurrentMemberAssignment {
+                group_id: group(),
+                member_id: member(id),
+            })
+        };
+        let k2 = encode_classic_key(&Key::GroupMetadata { group_id: group() }).unwrap();
+        let metadata = MemberMetadataValue {
+            instance_id: None,
+            rack_id: None,
+            client_id: "c".into(),
+            client_host: "h".into(),
+            subscribed_topic_names: vec![],
+            subscribed_topic_regex: None,
+            server_assignor: None,
+            rebalance_timeout_ms: 1,
+            classic: None,
+        };
+        let current = CurrentMemberAssignmentValue {
+            member_epoch: 2,
+            previous_member_epoch: 1,
+            state: MemberAssignmentState::Stable,
+            assigned_partitions: vec![],
+            partitions_pending_revocation: vec![],
+        };
+        let target = TargetAssignmentMemberValue {
+            topic_partitions: vec![],
+        };
+        // (case, the delta, its (key, is a tombstone) in order)
+        let rows = [
+            (
+                "a member leaves and the group assigns again",
+                PendingRecords {
+                    group_metadata: Some(GroupMetadataValue {
+                        epoch: 2,
+                        metadata_hash: 0,
+                    }),
+                    member_metadata: vec![
+                        ("stays".into(), Some(metadata.clone())),
+                        ("leaves".into(), None),
+                    ],
+                    target_metadata: Some(TargetAssignmentMetadataValue {
+                        assignment_epoch: 2,
+                        assignment_timestamp_ms: 0,
+                    }),
+                    target_per_member: vec![
+                        ("leaves".into(), None),
+                        ("stays".into(), Some(target.clone())),
+                    ],
+                    current_per_member: vec![
+                        ("stays".into(), Some(current.clone())),
+                        ("leaves".into(), None),
+                    ],
+                    ..Default::default()
+                },
+                vec![
+                    (k8("leaves"), true),
+                    (k7("leaves"), true),
+                    (k5("leaves"), true),
+                    (k3.clone(), false),
+                    (k5("stays"), false),
+                    (k7("stays"), false),
+                    (k6.clone(), false),
+                    (k8("stays"), false),
+                ],
+            ),
+            (
+                "an upgrade tombstones the classic group first",
+                PendingRecords {
+                    classic_group_metadata_tombstone: true,
+                    group_metadata: Some(GroupMetadataValue {
+                        epoch: 2,
+                        metadata_hash: 0,
+                    }),
+                    member_metadata: vec![("m".into(), Some(metadata.clone()))],
+                    target_metadata: Some(TargetAssignmentMetadataValue {
+                        assignment_epoch: 2,
+                        assignment_timestamp_ms: 0,
+                    }),
+                    target_per_member: vec![("m".into(), Some(target.clone()))],
+                    current_per_member: vec![("m".into(), Some(current.clone()))],
+                    ..Default::default()
+                },
+                vec![
+                    (k2.clone(), true),
+                    (k3.clone(), false),
+                    (k5("m"), false),
+                    (k7("m"), false),
+                    (k6.clone(), false),
+                    (k8("m"), false),
+                ],
+            ),
+        ];
+        for (case, pending, expected) in rows {
+            let written: Vec<_> = pending
+                .to_batch("g", 0)
+                .unwrap()
+                .records
+                .into_iter()
+                .map(|record| (record.key.unwrap(), record.value.is_none()))
+                .collect();
+            assert!(written == expected, "{case}");
+        }
+    }
+
     #[test]
     fn pending_group_tombstone_removes_cached_seed() {
         let (coordinator, _) = make_coordinator();
         coordinator.update_cached_seed("g", |seed| seed.group_epoch = 7);
         PendingRecords {
-            next_gen_group_metadata_tombstone: true,
+            group_tombstone: Some(GroupTombstone::default()),
             ..Default::default()
         }
         .apply_to_cache(&coordinator, "g");

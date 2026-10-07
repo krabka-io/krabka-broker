@@ -90,6 +90,13 @@ impl GroupState {
         self.resolved_regexes.len()
     }
 
+    /// The regular expressions that the group holds a resolution of: the keys
+    /// of Kafka's `ConsumerGroup.resolvedRegularExpressions`.
+    #[must_use]
+    pub(crate) fn resolved_regex_names(&self) -> Vec<String> {
+        self.resolved_regexes.keys().cloned().collect()
+    }
+
     /// Kafka's `ConsumerGroup.updateResolvedRegularExpression`.
     pub(crate) fn set_resolved_regex(
         &mut self,
