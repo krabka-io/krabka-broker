@@ -17,10 +17,59 @@ makes no promise about the Rust API, so read the entries for that. Before
 
 The layout follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 The history before krabka-broker became its own repository is in
-[robot-head/crabka](https://github.com/robot-head/crabka), which still publishes
-the `krabka-*` names to crates.io.
+[robot-head/crabka](https://github.com/robot-head/crabka).
 
 ## [Unreleased]
+
+## [1.0.0] - 2026-10-07
+
+1.0.0 is the first release with a compatibility promise. Every 1.x broker
+reads every on-disk artifact that an earlier 1.x broker wrote, so a rolling
+upgrade within 1.x works without a reformat. A format change after 1.0.0 is
+turned on by a feature level that the operator finalizes, as Kafka gates a
+metadata change on `metadata.version`.
+[Persisted formats](docs/persisted_formats.md) lists every artifact, its
+version marker and the rules for changing it.
+
+A data directory that a 0.x broker wrote is not covered. Format it again with
+`krabka-format` before you start 1.0.0 on it.
+
+Every krabka-owned on-disk artifact now carries a version marker, and every
+reader refuses a version it does not know, or a layout without one, instead of
+skipping, regenerating or treating the artifact as absent:
+
+- `.stampindex`, `bootstrap.records.bin`, the audit spool and its three state
+  files start with an `i16` version (the audit files after the magic `KAUD`).
+  `high-watermark` and the diskless WAL `wal-durable-offset.checkpoint` start
+  with a version line. The diskless WAL `quorum-state.json`, `WormChainRecord`,
+  and the backup `manifest.json` and `group-offsets.json` have a required
+  `version`. `bootstrap.json` names its field `version` instead of `schema`.
+- `__diskless_wal_index` keys start with an `i16` key version that names their
+  type, and both value types start with an `i16` version. `WalFlushRecord`
+  keeps its number, 2, at the front of the value.
+- The krabka-private records in `NoOpRecord` tags start with an `i16` version,
+  and the reader checks that each tag carries its own variant. The metadata
+  record reader refuses a KIP-631 `frameVersion` other than 1, as Kafka does.
+- `quorum-state` with an unknown or missing `data_version`, or that does not
+  parse, stops the node, as Kafka's `FileQuorumStateStore` does. Before, the
+  node started as if it had never voted.
+- `leader-epoch-checkpoint` refuses a header other than `0`, and transaction
+  control records refuse a negative version or a short key or value, as
+  Kafka's `CheckpointFile`, `ControlRecordType` and `EndTransactionMarker` do.
+- The WORM manifest verifier accepts only `format_version` 2.
+- The clean-shutdown proof is Kafka's `.kafka_cleanshutdown`, holding Kafka's
+  `{"version":0,"brokerEpoch":N}`. A missing or unreadable one still makes the
+  restart unclean, as in Kafka.
+- The private controller RPCs 1003, 1004 and 1005 answer an unknown request
+  version with `UNSUPPORTED_VERSION`.
+
+A controller now stops on a committed metadata record that it cannot decode,
+in live replay, restart recovery and the image walk, as Kafka's fatal fault
+handler does. A broker-only node logs the record at error, counts it in
+`metadata-load-error-count` and stops reading that batch, as Kafka's
+`MetadataLoader` does. An invalid KRaft control record stops every node.
+Before, every one of these was logged at debug level and skipped, so a node
+could build a different metadata image from its peers.
 
 ### Added
 
@@ -1176,7 +1225,8 @@ robot-head/crabka.
 - An audit stamp carries the value that its freeze signature covers.
 - The release publishes the image digest that cosign signed.
 
-[Unreleased]: https://github.com/krabka-io/krabka-broker/compare/v0.7.0...HEAD
+[Unreleased]: https://github.com/krabka-io/krabka-broker/compare/v1.0.0...HEAD
+[1.0.0]: https://github.com/krabka-io/krabka-broker/releases/tag/v1.0.0
 [0.7.0]: https://github.com/krabka-io/krabka-broker/releases/tag/v0.7.0
 [0.6.1]: https://github.com/krabka-io/krabka-broker/releases/tag/v0.6.1
 [0.6.0]: https://github.com/krabka-io/krabka-broker/releases/tag/v0.6.0

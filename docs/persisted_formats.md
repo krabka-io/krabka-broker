@@ -50,14 +50,14 @@ Each partition directory is `<log_dir>/<topic>-<partition>/`.
 | Artifact | Location | Encoding | Version marker | Unknown-version behavior | Gating |
 | :--- | :--- | :--- | :--- | :--- | :--- |
 | Log segment | `<base>.log` | Kafka `RecordBatch` v2 | `magic` byte | A `magic` other than 2 is refused with `UnsupportedMagic`. | Kafka's rules |
-| Transaction marker | Control batch in `.log` | Kafka `EndTransactionMarker` | Key version and value version, both `i16` 0 | `crates/log/src/log/control.rs` reads both versions and ignores them. | Kafka's rules |
-| Barrier marker | Control batch in `.log`, control type 1000 | krabka, big-endian | Key version and value version, both `i16` 0 | `parse_barrier_marker` refuses any other key or value version. The generic control-record parser in `crates/log` ignores both versions. | None |
+| Transaction marker | Control batch in `.log` | Kafka `EndTransactionMarker` | Key version and value version, both `i16` 0 | As Kafka's `ControlRecordType.parseTypeId` and `EndTransactionMarker.deserializeValue`: a negative version, a key shorter than 4 bytes or a marker value shorter than 6 bytes is refused, and a higher version is read as version 0. Append, recovery and compaction all check. | Kafka's rules |
+| Barrier marker | Control batch in `.log`, control type 1000 | krabka, big-endian | Key version and value version, both `i16` 0 | `parse_barrier_marker` refuses any other key or value version. | None |
 | Offset index | `<base>.index` | Kafka, fixed width | None, as in Kafka | Not applicable | Kafka's rules |
 | Time index | `<base>.timeindex` | Kafka, fixed width | None, as in Kafka | Not applicable | Kafka's rules |
 | Transaction index | `<base>.txnindex` | Kafka | `i16` 0 per entry | A version other than 0 is refused. | Kafka's rules |
 | Producer snapshot | `<offset>.snapshot` | Kafka, with CRC | `i16` 1 | A version other than 1 is refused. | Kafka's rules |
-| Stamp index | `<base>.stampindex` | krabka, 24-byte big-endian entries `{base_offset, last_offset, stamp}` | None | Not applicable | None |
-| Leader epoch checkpoint | `leader-epoch-checkpoint` | Kafka text | Header line `0` | The reader skips the header line and does not check it. | Kafka's rules |
+| Stamp index | `<base>.stampindex` | krabka, a header, then 24-byte big-endian entries `{base_offset, last_offset, stamp}` | `STAMP_INDEX_VERSION`, `i16` 0, at the front of the file | A file without the header, which a 0.x broker wrote, or with another version is refused. | None |
+| Leader epoch checkpoint | `leader-epoch-checkpoint` | Kafka text | Header line `0` | A header other than `0` is refused, as Kafka's `CheckpointFile` refuses it. | Kafka's rules |
 | Log start offset checkpoint | `log-start-offset-checkpoint` | krabka text, `0` then the offset, one file per partition | Header line `0` | A header other than `0` is refused as corrupt. | None |
 | Replica move directory | `<topic>-<partition>-future` | krabka naming | None | Not applicable | None |
 
@@ -68,12 +68,12 @@ Kafka names a replica move directory `<topic>-<partition>.<uuid>-future`. [`form
 | Artifact | Location | Encoding | Version marker | Unknown-version behavior | Gating |
 | :--- | :--- | :--- | :--- | :--- | :--- |
 | `meta.properties` | `<log_dir>/meta.properties` | Kafka V1 properties | `version=1` | A version other than 1 is refused. | None |
-| Bootstrap records | `<metadata_log_dir>/bootstrap.records.bin` | krabka: each record is a `u32` little-endian length, then a wincode `MetadataRecord` | None | Not applicable | None |
-| Bootstrap manifest | `<metadata_log_dir>/bootstrap.json` | krabka JSON | `schema: 1` | No reader exists. The broker never reads the file. | None |
-| Incarnation id | `<log_dir>/incarnation_id` | krabka UUID text | None | An unreadable value makes the broker generate and write a new id. | None |
-| Clean-shutdown proof | `<log_dir>/clean_shutdown` | krabka decimal broker epoch | None | An unreadable value makes the restart unclean. | None |
+| Bootstrap records | `<metadata_log_dir>/bootstrap.records.bin` | krabka: a header, then for each record a `u32` little-endian length and a wincode `MetadataRecord` | `BOOTSTRAP_RECORDS_VERSION`, `i16` 0, at the front of the file | A file without the header, which a 0.x `krabka-format` wrote, or with another version is refused. The node must be formatted again. | None |
+| Bootstrap manifest | `<metadata_log_dir>/bootstrap.json` | krabka JSON | `version: 1` | No reader exists. The broker never reads the file. | None |
+| Incarnation id | `<log_dir>/incarnation_id` | krabka UUID text | None, on purpose | An unreadable value makes the broker generate and write a new id. The id is outside the strict contract: Kafka never persists it, and a new id only delays registration until the old heartbeat session expires. | None |
+| Clean-shutdown proof | `<log_dir>/.kafka_cleanshutdown` | Kafka JSON `{"version":0,"brokerEpoch":N}` | `version` 0 | A missing, unreadable or other-version file makes the restart unclean, as Kafka's `CleanShutdownFileHandler.read` does. | None |
 
-Kafka writes `bootstrap.checkpoint` and `.kafka_cleanshutdown` instead. The bootstrap checkpoint at offset zero of the metadata log, described below, replaces `bootstrap.records.bin` for a controller of a dynamic quorum.
+Kafka writes `bootstrap.checkpoint` instead. The bootstrap checkpoint at offset zero of the metadata log, described below, replaces `bootstrap.records.bin` for a controller of a dynamic quorum.
 
 ### Metadata log directory
 
@@ -81,12 +81,12 @@ The metadata partition directory is `<metadata_log_dir>/__cluster_metadata-0/`.
 
 | Artifact | Location | Encoding | Version marker | Unknown-version behavior | Gating |
 | :--- | :--- | :--- | :--- | :--- | :--- |
-| Metadata log segment | `<base>.log` | Kafka `RecordBatch` v2. Each value is the KIP-631 `ApiMessageAndVersion` frame: `frameVersion`, `apiKey`, `apiVersion`, body. | `frameVersion` 1 and the per-record `apiVersion` | The reader does not check `frameVersion`. An unknown `apiKey` decodes as `Unknown`. Live replay and startup recovery log a record that does not decode or translate at debug level and skip it. | `metadata.version` selects the `apiVersion` of each record, for example `DIRECTORY_ASSIGNMENT_MIN_LEVEL` 17, `ELR_MIN_LEVEL` 23 and `CORDONED_LOG_DIRS_MIN_LEVEL` 30. |
+| Metadata log segment | `<base>.log` | Kafka `RecordBatch` v2. Each value is the KIP-631 `ApiMessageAndVersion` frame: `frameVersion`, `apiKey`, `apiVersion`, body. | `frameVersion` 1 and the per-record `apiVersion` | A `frameVersion` other than 1 is refused, as Kafka's `MetadataRecordSerde` refuses it. On a controller, a committed record that does not decode (an unknown `apiKey`, an `apiVersion` above the supported one, a bad frame or private record) stops the controller, in live replay, startup recovery and the image walk alike, as Kafka's fatal fault handler does. On a broker-only node the observer logs it at error, counts it in `metadata-load-error-count` and stops reading that batch, as Kafka's `MetadataLoader` does. A record that decodes but names a topic or ACL that is gone, or fails validation, is skipped on every replica, because a krabka leader validates against committed state and two racing writes can both commit. | `metadata.version` selects the `apiVersion` of each record, for example `DIRECTORY_ASSIGNMENT_MIN_LEVEL` 17, `ELR_MIN_LEVEL` 23 and `CORDONED_LOG_DIRS_MIN_LEVEL` 30. |
 | Metadata snapshot | `<end>-<epoch>.checkpoint` | Kafka KIP-630 snapshot with the same record frame | As the log segment | Any record that does not decode or translate, an unknown `apiKey` included, stops the load with an error. | As the log segment |
 | Bootstrap checkpoint | `00000000000000000000-0000000000.checkpoint` | Kafka KIP-630, with `KRaftVersionRecord` and `VotersRecord` | As the snapshot | As the snapshot | As the snapshot |
 | Observer snapshot | `observer/<end>-<epoch>.checkpoint`, on a broker-only node | Kafka KIP-630 | As the snapshot | The observer discards a checkpoint it cannot read and fetches the metadata again. | As the snapshot |
-| Quorum state | `quorum-state` | Kafka `QuorumStateData` JSON | `data_version` 0 or 1 | A file that does not parse, or a `data_version` other than 0 or 1, is treated as absent. The node then restores no vote. | `kraft.version` selects `data_version` |
-| High watermark | `high-watermark` | krabka decimal text | None | A value that does not parse makes the broker use the log start offset. | None |
+| Quorum state | `quorum-state` | Kafka `QuorumStateData` JSON | `data_version` 0 or 1 | A file that does not parse, a missing `data_version` or one other than 0 or 1 stops the node, as Kafka's `FileQuorumStateStore` throws. A missing file means the node has not voted. | `kraft.version` selects `data_version` |
+| High watermark | `high-watermark` | krabka text, `0` then the offset | Header line `0` | A file without the header (0.x) or with another version stops the node. A damaged version-0 file makes the broker use the log start offset: the file is only a restart shortcut, and Kafka keeps none. | None |
 
 `FeatureLevelRecord` persists the finalized `metadata.version` and the other feature levels. A `metadata.version` downgrade writes a snapshot at the lower level and discards the incompatible log prefix, as KIP-1155 describes.
 
@@ -96,14 +96,14 @@ KIP-631 has no schema for some krabka records. Each one rides as the only tagged
 
 | Tag | Variant | Version marker | Unknown-version behavior | Gating |
 | :--- | :--- | :--- | :--- | :--- |
-| 1001 | `V1FeaturesEpoch` | The variant index, and the `V1` name prefix | A body that does not decode is a decode error. See the metadata log segment row. | None |
+| 1001 | `V1FeaturesEpoch` | `PRIVATE_RECORD_VERSION`, `i16` 0, before the wincode body | A version other than 0, a variant that belongs to another tag, or bytes after the record is a decode error. See the metadata log segment row. | None |
 | 1002 | None. The number is a gap. Do not reuse it. | Not applicable | Not applicable | Not applicable |
 | 1003 | `V1PartitionOffsetAdvance` | As tag 1001 | As tag 1001 | None |
 | 1004 | `V1TopicFreeze` | As tag 1001 | As tag 1001 | None |
 | 1005 | `V1BreakGlassProposal` | As tag 1001 | As tag 1001 | None |
 | 1006 | `V1DeleteBreakGlassProposal` | As tag 1001 | As tag 1001 | None |
 
-The reader accepts any of the five tags for any variant. It does not check that a tag matches the variant it carries.
+The reader checks that each tag carries the variant assigned to it, and refuses a tag of 1001 or above that the table does not assign. A golden-bytes test in krabka-protocol pins the wincode encoding of every `MetadataRecord` variant and of every enum its fields reach.
 
 `bootstrap.records.bin` holds wincode `MetadataRecord` values too, so every variant is on disk, not only the five above.
 
@@ -116,19 +116,19 @@ The broker also reads the topic config key `krabka.elr`, which a 0.x broker wrot
 | `__consumer_offsets` | Kafka 4.3.1 coordinator record schemas | Key version and value version | An unknown key version stops the replay of the partition with an error. The value decoders refuse an unknown value version. | Kafka's rules |
 | `__transaction_state` | Kafka | Key version and value version | Kafka's rules | Kafka's rules |
 | `__share_group_state` | Kafka `ShareSnapshot` and `ShareUpdate` | Key type and value version | An unknown key type, or a value version other than 0, is refused. | Kafka's rules |
-| `__remote_log_metadata` | Kafka `RemoteLogMetadataSerde`. `CustomMetadata` holds a krabka JSON `WormChainRecord`. | Kafka's per-record version. `WormChainRecord` has none. | `WormChainRecord` uses `deny_unknown_fields`, so a field that the reader does not know is refused. | None for `WormChainRecord` |
+| `__remote_log_metadata` | Kafka `RemoteLogMetadataSerde`. `CustomMetadata` holds a krabka JSON `WormChainRecord`. | Kafka's per-record version. `WormChainRecord` has a required `version`, 0. | A `WormChainRecord` of another version is refused. It uses `deny_unknown_fields`, so a new field needs a new version, gated on a feature level. JSON without `version` is not a chain record: another backend wrote it. | None for `WormChainRecord` |
 | `__barrier_state` | krabka, big-endian | `i16` 0 | A version other than 0 is refused. | None |
-| `__diskless_wal_index` | krabka wincode values. Keys are fixed-width binary. | `WalFlushRecord.format_version` 2. `WalDeleteFloorRecord` has none. | A `WalFlushRecord` with a version other than 2 is refused. | None |
+| `__diskless_wal_index` | krabka. Keys are fixed-width binary; values are wincode. | Each key starts with an `i16` key version that names its type: 0 for a range key, 1 for a delete-floor key. Each value starts with an `i16` version: 2 for `WalFlushRecord`, 0 for `WalDeleteFloorRecord`. | An unknown key version or value version is refused, and the live index marks its projection invalid. | None |
 | `__krabka_audit` | OCSF 1.3.0 JSON, with hash-chain headers and signed checkpoints in the signing domain `krabka-audit-ckpt-v1` | The OCSF schema version and the signing domain | Defined by `krabka-audit verify` | None |
 
 ### Other local state
 
 | Artifact | Location | Encoding | Version marker | Unknown-version behavior | Gating |
 | :--- | :--- | :--- | :--- | :--- | :--- |
-| WAL quorum membership | `<log_dir>/__diskless_wal_quorum/.../quorum-state.json` and its `.bak` | krabka JSON `{voters}` | None | A file that does not parse stops the shard from opening. | None |
-| WAL durable offset | `.../wal-durable-offset.checkpoint` and its `.bak` | krabka text, two offsets | None | A file that does not parse stops recovery with an error. | None |
-| Audit spool | `<log_dir>/audit-spool/audit.spool` by default | krabka, big-endian length-prefixed frames | None | Not applicable | None |
-| Audit spool state | `audit.losses`, `audit.replay-offset`, `audit.replay-poison` | krabka | None | Not applicable | None |
+| WAL quorum membership | `<log_dir>/__diskless_wal_quorum/.../quorum-state.json` and its `.bak` | krabka JSON `{version, voters}` | `version` 0 | A missing or other version, in the file or its `.bak`, stops the shard from opening. | None |
+| WAL durable offset | `.../wal-durable-offset.checkpoint` and its `.bak` | krabka text, `0` then the two offsets | Header line `0` | A missing or other version, in the file or its `.bak`, stops recovery with an error. | None |
+| Audit spool | `<log_dir>/audit-spool/audit.spool` by default | krabka: magic `KAUD`, a version, then big-endian length-prefixed frames | `FORMAT_VERSION`, `i16` 0, after the magic | A file without the header (0.x) or with another version is refused. A torn last frame is still the end of the data. | None |
+| Audit spool state | `audit.losses`, `audit.replay-offset`, `audit.replay-poison` | krabka, with the same header | As the audit spool | As the audit spool | None |
 | RLMM snapshot | `<log_dir>/remote-log-metadata/snapshot` by default | krabka envelope over the `MetadataEvent` codec | `SNAPSHOT_FORMAT_VERSION` 0, `u16` | A version other than 0 is refused, and the broker replays `__remote_log_metadata` from the start. | None |
 
 ### Object store
@@ -136,12 +136,12 @@ The broker also reads the topic config key `krabka.elr`, which a 0.x broker wrot
 | Artifact | Location | Encoding | Version marker | Unknown-version behavior | Gating |
 | :--- | :--- | :--- | :--- | :--- | :--- |
 | Tiered segment | KIP-405 layout | Kafka segment, index and checkpoint files | Kafka's | Kafka's rules | Kafka's rules |
-| WORM manifest | `<segment>.manifest` | krabka JSON, and a canonical big-endian layout that the chain hashes | `format_version` 2 | The verifier accepts 1 and 2 and refuses any other version. | None. The writer always writes 2. |
+| WORM manifest | `<segment>.manifest` | krabka JSON, and a canonical big-endian layout that the chain hashes | `format_version` 2 | A version other than 2 is refused. | None. The writer always writes 2. |
 | Diskless WAL object | WAL object key | krabka binary, magic `CKWL` | `OBJECT_VERSION` 1, `u16` little-endian | A version other than 1 is refused. | None |
-| Backup capture manifest | `restore-inputs/<capture-id>/manifest.json` | krabka JSON | None | Not applicable | None |
+| Backup capture manifest | `restore-inputs/<capture-id>/manifest.json` | krabka JSON | `version` 0 | A missing or other version is refused. | None |
 | Captured metadata checkpoint | `restore-inputs/<capture-id>/cluster-metadata.checkpoint` | Kafka KIP-630 | As the metadata snapshot | As the metadata snapshot | As the metadata snapshot |
 | Captured RLMM snapshot | `restore-inputs/<capture-id>/rlmm-snapshot` | As the RLMM snapshot | As the RLMM snapshot | As the RLMM snapshot | None |
-| Captured group offsets | `restore-inputs/<capture-id>/group-offsets.json` | krabka JSON | None | Not applicable | None |
+| Captured group offsets | `restore-inputs/<capture-id>/group-offsets.json` | krabka JSON | `version` 0 | A missing or other version is refused. | None |
 | Captured diskless WAL index | `restore-inputs/<capture-id>/diskless-wal-index.json` | krabka JSON `DisklessWalCapture` | `format_version` 1 | A version other than 1 is refused. | None |
 
 ### Rolling-upgrade RPCs
@@ -150,52 +150,35 @@ These records are not on disk, but nodes of two 1.x versions exchange them durin
 
 | RPC | API key | Body | Version marker | Unknown-version behavior |
 | :--- | :--- | :--- | :--- | :--- |
-| `SubmitChange` | 1003 | wincode `Vec<MetadataRecord>`. The response carries a wincode `SubmitChangeResult`. | None. Only a v0 codec exists. | A body that does not decode is an error. |
-| `MetadataFetch` | 1004 | Kafka record batches of `__cluster_metadata`, with the KIP-631 record frame | None. Only a v0 codec exists. | As the metadata log segment |
-| `DelegationTokenMutation` | 1005 | wincode `Vec<DelegationTokenMutation>` | None. Only a v0 codec exists. | A body that does not decode is an error. |
+| `SubmitChange` | 1003 | wincode `Vec<MetadataRecord>`. The response carries a wincode `SubmitChangeResult`. | The request header `api_version`, 0 | A request of another version is answered with `UNSUPPORTED_VERSION` (35) and not applied. |
+| `MetadataFetch` | 1004 | Kafka record batches of `__cluster_metadata`, with the KIP-631 record frame | The request header `api_version`, 0 | As `SubmitChange`. The records are then read as the metadata log segment. |
+| `DelegationTokenMutation` | 1005 | wincode `Vec<DelegationTokenMutation>` | The request header `api_version`, 0 | As `SubmitChange`. |
 
-`crates/raft/src/wire.rs` defines the three codecs.
+`crates/raft/src/wire.rs` defines the three codecs. No node advertises which versions of them it serves: the controller's `ApiVersions` answer is Kafka's table, and adding private keys to it would break byte-exactness with Kafka. So a sender always sends v0. A v1 needs a krabka-private way to advertise versions first.
 
 ## Known gaps before the contract can be enforced
 
-The items below are true of the code at 1.0.0. Each one is a place where the contract is a rule for future changes but the code does not yet give the protection. This document records them. It does not close them.
-
-### Formats with no version marker
-
-A format with no version marker cannot change shape without a new file name, a new key, or a new record type. These formats have none:
-
-- `.stampindex` in each partition directory.
-- `bootstrap.records.bin`. Its wincode records carry only the `MetadataRecord` variant index.
-- `high-watermark` in the metadata partition directory.
-- `WalDeleteFloorRecord` values in `__diskless_wal_index`.
-- `quorum-state.json` under `__diskless_wal_quorum`.
-- `wal-durable-offset.checkpoint` under `__diskless_wal_quorum`.
-- `audit.spool`, and `audit.losses`, `audit.replay-offset` and `audit.replay-poison` beside it.
-- The backup capture `manifest.json` and `group-offsets.json`.
-- `WormChainRecord`, the JSON in `__remote_log_metadata` `CustomMetadata`. It also uses `deny_unknown_fields`, so an added field breaks every older reader.
-- `incarnation_id` and `clean_shutdown`. Both fall back safely on an unreadable value, so the risk is low.
-- The rolling-upgrade RPCs 1003, 1004 and 1005. Each has a v0 codec only, and no node advertises which versions it supports.
-- The krabka-private `NoOpRecord` records. The only marker is the variant index and its `V1` name prefix.
-
-### Readers that ignore or skip a version
-
-- **`frameVersion` is not checked.** `decode_value_header` in `krabka-protocol` reads the KIP-631 `frameVersion` and no caller compares it with 1.
-- **The leader epoch checkpoint header is ignored.** `crates/log/src/leader_epoch_checkpoint/file.rs` reads the header line into `_version` and does not compare it.
-- **The generic control-record parser ignores versions.** `crates/log/src/log/control.rs` reads the key version and the `EndTransactionMarker` value version into unused bindings.
-- **Live replay skips records that do not decode.** `crates/raft/src/kraft/controller/apply.rs` logs a decode failure at debug level and continues. `crates/raft/src/kraft/controller/recovery.rs` and the image walk in `crates/raft/src/kraft/controller/submit.rs` do the same. So a 1.x broker that meets a record from a later format drops it in silence and builds a different image from its peers.
-- **The snapshot reader is stricter than replay.** `crates/raft/src/snapshot/reader.rs` stops the load on the same records that replay skips, an unknown `apiKey` included. The two paths disagree on a record type that one build does not know.
-- **The `bootstrap.json` schema is not read.** The broker never reads `bootstrap.json`, so its `schema: 1` field protects nothing.
-- **`__consumer_offsets` replay stops on an unknown version.** `crates/broker/src/coordinator/bootstrap/replay.rs` returns the error of `parse_key`. Kafka's `CoordinatorLoaderImpl` logs an unknown record type and ignores it, because the record can be a leftover from an aborted upgrade.
-- **`WalFlushRecord` keeps its version inside the wincode body.** `format_version` is the second field, after `object_key`, so a reader decodes a string before it reaches the version. `from_bytes` refuses version 1 and accepts only version 2.
-- **`quorum-state` treats an unknown version as absent.** The node then starts with no vote. A node that loses a vote it cast this way can vote a second time in the same epoch.
+The items below are true of the code at 1.0.0. Each one is a place where the contract is a rule for future changes but the code does not yet give the full protection. This document records them. It does not close them.
 
 ### No krabka-owned feature level
 
-The contract gates a format change on a feature level that the operator finalizes. The `metadata.version` table mirrors Kafka's table exactly, so a krabka-only change cannot take a `metadata.version` level. `krabka.metadata.downgrade` is carried only in registration feature maps and does not appear in `ApiVersions`, so it is not a level that an operator finalizes. No other krabka-owned feature exists. So none of the krabka formats above is gated today: every writer writes its current version at every feature level.
+The contract gates a format change on a feature level that the operator finalizes. The `metadata.version` table mirrors Kafka's table exactly, so a krabka-only change cannot take a `metadata.version` level. `krabka.metadata.downgrade` is carried only in registration feature maps and does not appear in `ApiVersions`, so it is not a level that an operator finalizes. No other krabka-owned feature exists. So the first krabka format change after 1.0.0 must add one before it can ship: every writer writes its current version at every feature level today.
+
+### No version negotiation for the rolling-upgrade RPCs
+
+A node refuses an unknown version of `SubmitChange`, `MetadataFetch` or `DelegationTokenMutation` with `UNSUPPORTED_VERSION`, but no node advertises the versions it serves. A v1 of any of them needs a krabka-private advertisement first, so that a sender can pick the highest version its peer serves during a roll.
+
+### Some malformed metadata records are skipped
+
+The controller stops on a committed metadata record that does not decode, but it skips one that decodes into `TranslateError::Invalid`. That variant covers both a lookup that depends on the image (an unknown partition, a directory list that does not match the replicas), which replicas can meet after a race and must skip, and a field value that no build accepts (an unknown `fenced` or `leader_recovery_state` value), which Kafka would treat as fatal. Closing this needs krabka-protocol to split the variant.
+
+### `__consumer_offsets` replay stops on an unknown version
+
+`crates/broker/src/coordinator/bootstrap/replay.rs` returns the error of `parse_key`. Kafka's `CoordinatorLoaderImpl` logs an unknown record type and ignores it, because the record can be a leftover from an aborted upgrade.
 
 ### Fixture coverage
 
-The contract asks for a golden-bytes fixture test for each persisted format. This document does not claim that every format above has one at 1.0.0.
+Every krabka-owned format in the tables above has a golden-bytes test that encodes a value, compares it with fixed bytes and decodes the bytes back. The Kafka-owned formats rely on the Kafka differential suites instead. The replay-fence key `__krabka_diskless_replay_fence` in `__diskless_wal_index` is a fixed literal with an empty value and has no version.
 
 ## Integration
 
@@ -214,5 +197,6 @@ The contract asks for a golden-bytes fixture test for each persisted format. Thi
 
 ## Testing
 
-- `crates/metadata/src/kraft_translate.rs` in krabka-protocol pins the private tag list, so a test fails when a tag changes.
+- `crates/metadata/src/kraft_translate.rs` in krabka-protocol pins the private tag list and the bytes of each private record, and `crates/metadata/src/wincode_contract.rs` pins the wincode encoding of every `MetadataRecord` variant and nested enum, so a test fails when a tag or a layout changes.
+- Each krabka-owned format has a golden-bytes test next to its codec, and a table of refused versions, including the layout a 0.x broker wrote.
 - [Verification](verification.md) lists the model checks and proofs, including the `quorum-state` load decision.
