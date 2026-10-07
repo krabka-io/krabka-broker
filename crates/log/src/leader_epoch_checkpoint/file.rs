@@ -30,7 +30,7 @@ impl LeaderEpochCheckpoint {
         /// empty checkpoint.
         /// # Errors
         /// Returns [`LogError::UnsupportedFormatVersion`] when the header line is
-        /// a version other than [`LEADER_EPOCH_CHECKPOINT_VERSION`],
+        /// a version other than `LEADER_EPOCH_CHECKPOINT_VERSION`,
         /// [`LogError::MissingFormatVersion`] when it is not a version at all, and
         /// an error when log I/O fails or a row is corrupt.
         pub fn open(path: PathBuf) -> Result<Self, LogError> {

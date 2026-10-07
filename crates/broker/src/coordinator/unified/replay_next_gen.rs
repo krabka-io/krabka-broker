@@ -146,7 +146,7 @@ impl GroupCoordinator {
     ///
     /// # Errors
     ///
-    /// Returns the error of [`Self::persisted_consumer_group`].
+    /// Returns the error of `Self::persisted_consumer_group`.
     pub fn replay_group_metadata(
         &self,
         group_id: &str,
@@ -166,7 +166,7 @@ impl GroupCoordinator {
     ///
     /// # Errors
     ///
-    /// Returns the error of [`Self::persisted_consumer_group`].
+    /// Returns the error of `Self::persisted_consumer_group`.
     pub fn replay_partition_metadata(&self, group_id: &str) -> Result<(), BrokerError> {
         self.persisted_consumer_group(group_id, true)?;
         self.update_consumer_seed(group_id, |seed| {
@@ -180,7 +180,7 @@ impl GroupCoordinator {
     ///
     /// # Errors
     ///
-    /// Returns the error of [`Self::persisted_consumer_group`].
+    /// Returns the error of `Self::persisted_consumer_group`.
     pub fn replay_member_metadata(
         &self,
         group_id: &str,
@@ -199,7 +199,7 @@ impl GroupCoordinator {
     ///
     /// # Errors
     ///
-    /// Returns the error of [`Self::persisted_consumer_group`], or Kafka's
+    /// Returns the error of `Self::persisted_consumer_group`, or Kafka's
     /// `IllegalArgumentException` for an epoch below -1 or a negative time.
     pub fn replay_target_assignment_metadata(
         &self,
@@ -220,7 +220,7 @@ impl GroupCoordinator {
     ///
     /// # Errors
     ///
-    /// Returns the error of [`Self::persisted_consumer_group`].
+    /// Returns the error of `Self::persisted_consumer_group`.
     pub fn replay_target_assignment_member(
         &self,
         group_id: &str,
@@ -240,7 +240,7 @@ impl GroupCoordinator {
     ///
     /// # Errors
     ///
-    /// Returns the error of [`Self::persisted_consumer_group`].
+    /// Returns the error of `Self::persisted_consumer_group`.
     pub fn replay_current_member_assignment(
         &self,
         group_id: &str,
@@ -263,7 +263,7 @@ impl GroupCoordinator {
     ///
     /// # Errors
     ///
-    /// Returns the error of [`Self::persisted_consumer_group`].
+    /// Returns the error of `Self::persisted_consumer_group`.
     pub fn replay_regular_expression(
         &self,
         group_id: &str,

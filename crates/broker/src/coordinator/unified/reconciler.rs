@@ -135,7 +135,7 @@ pub fn reconcile_if_dirty(
 }
 
 /// Kafka's `ModernGroup.computeMetadataHash` for a consumer group: the
-/// [`topic_hash`] group hash over every topic that the group subscribes to and
+/// `topic_hash` group hash over every topic that the group subscribes to and
 /// `input` holds.
 ///
 /// A member subscribes to its topic names and to the topics that its regex

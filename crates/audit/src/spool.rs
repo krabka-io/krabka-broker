@@ -7,7 +7,7 @@
 //! `open` heals and durably truncates a torn tail frame from a crash during an
 //! append.
 //!
-//! File: the header of [`codec::file_header`] (`KAUD`, then the `i16`
+//! File: a header (the magic `KAUD`, then the `i16`
 //! version), then frames. Frame: `[u32 len][record]`. Record: `[u8
 //! class_tag][u32 value_len][value][u32 header_count]([u32 klen][k][u32
 //! vlen][v])*`. This module uses synchronous `std::fs`, because the path is

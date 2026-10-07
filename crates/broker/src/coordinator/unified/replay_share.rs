@@ -109,7 +109,7 @@ impl GroupCoordinator {
     ///
     /// # Errors
     ///
-    /// Returns the error of [`Self::persisted_share_group`].
+    /// Returns the error of `Self::persisted_share_group`.
     pub fn replay_share_group_metadata(
         &self,
         group_id: &str,
@@ -128,7 +128,7 @@ impl GroupCoordinator {
     ///
     /// # Errors
     ///
-    /// Returns the error of [`Self::persisted_share_group`].
+    /// Returns the error of `Self::persisted_share_group`.
     pub fn replay_share_member_metadata(
         &self,
         group_id: &str,
@@ -147,7 +147,7 @@ impl GroupCoordinator {
     ///
     /// # Errors
     ///
-    /// Returns the error of [`Self::persisted_share_group`], or Kafka's
+    /// Returns the error of `Self::persisted_share_group`, or Kafka's
     /// `IllegalArgumentException` for an epoch below -1 or a negative time.
     pub fn replay_share_target_assignment_metadata(
         &self,
@@ -168,7 +168,7 @@ impl GroupCoordinator {
     ///
     /// # Errors
     ///
-    /// Returns the error of [`Self::persisted_share_group`].
+    /// Returns the error of `Self::persisted_share_group`.
     pub fn replay_share_target_assignment_member(
         &self,
         group_id: &str,
@@ -188,7 +188,7 @@ impl GroupCoordinator {
     ///
     /// # Errors
     ///
-    /// Returns the error of [`Self::persisted_share_group`].
+    /// Returns the error of `Self::persisted_share_group`.
     pub fn replay_share_current_member_assignment(
         &self,
         group_id: &str,
@@ -211,7 +211,7 @@ impl GroupCoordinator {
     ///
     /// # Errors
     ///
-    /// Returns the error of [`Self::persisted_share_group`].
+    /// Returns the error of `Self::persisted_share_group`.
     pub fn replay_share_state_partition_metadata(
         &self,
         group_id: &str,

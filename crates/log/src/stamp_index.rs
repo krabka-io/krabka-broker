@@ -93,7 +93,7 @@ impl StampIndex {
         /// # Errors
         /// Returns [`LogError::MissingFormatVersion`] for the headerless layout a
         /// broker before 1.0 wrote, [`LogError::UnsupportedFormatVersion`] for a
-        /// version other than [`STAMP_INDEX_VERSION`], and an error when log I/O
+        /// version other than `STAMP_INDEX_VERSION`, and an error when log I/O
         /// fails or the entries are not a whole number of fixed-width records.
         /// # Panics
         /// Panics if the in-place reinterpretation of a length-validated,

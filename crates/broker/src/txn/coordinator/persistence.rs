@@ -258,6 +258,8 @@ pub(super) fn replay_partition(
 /// Returns [`BrokerError`] if a read or decode fails, a record is misplaced,
 /// an offset overflows, or two transactions claim one producer ID. Everything
 /// before the failing record stays in `recovered`.
+// cargo-mutants: the log walk itself. `RecoveredTransactions` carries the
+// decisions and is mutation-tested on its own.
 #[cfg_attr(test, mutants::skip)]
 fn replay_into(
     recovered: &mut RecoveredTransactions,

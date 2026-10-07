@@ -120,7 +120,7 @@ impl GroupCoordinator {
     ///
     /// # Errors
     ///
-    /// Returns the error of [`Self::persisted_streams_group`], or
+    /// Returns the error of `Self::persisted_streams_group`, or
     /// [`BrokerError::Startup`] when the configuration list names a key twice:
     /// Kafka's `Collectors.toMap` throws `IllegalStateException` for it, which
     /// fails the load.
@@ -156,7 +156,7 @@ impl GroupCoordinator {
     ///
     /// # Errors
     ///
-    /// Returns the error of [`Self::persisted_streams_group`].
+    /// Returns the error of `Self::persisted_streams_group`.
     pub fn replay_streams_member_metadata(
         &self,
         group_id: &str,
@@ -174,7 +174,7 @@ impl GroupCoordinator {
     ///
     /// # Errors
     ///
-    /// Returns the error of [`Self::persisted_streams_group`].
+    /// Returns the error of `Self::persisted_streams_group`.
     pub fn replay_streams_topology(
         &self,
         group_id: &str,
@@ -192,7 +192,7 @@ impl GroupCoordinator {
     ///
     /// # Errors
     ///
-    /// Returns the error of [`Self::persisted_streams_group`], or Kafka's
+    /// Returns the error of `Self::persisted_streams_group`, or Kafka's
     /// `IllegalArgumentException` for an epoch below -1 or a negative time.
     pub fn replay_streams_target_assignment_metadata(
         &self,
@@ -213,7 +213,7 @@ impl GroupCoordinator {
     ///
     /// # Errors
     ///
-    /// Returns the error of [`Self::persisted_streams_group`].
+    /// Returns the error of `Self::persisted_streams_group`.
     pub fn replay_streams_target_assignment_member(
         &self,
         group_id: &str,
@@ -233,7 +233,7 @@ impl GroupCoordinator {
     ///
     /// # Errors
     ///
-    /// Returns the error of [`Self::persisted_streams_group`].
+    /// Returns the error of `Self::persisted_streams_group`.
     pub fn replay_streams_current_member_assignment(
         &self,
         group_id: &str,
