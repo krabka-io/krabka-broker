@@ -291,7 +291,8 @@ fn stamping_does_not_change_offsets_lso_or_log_bytes() {
     assert2::assert!(plain_lsos == stamped_lsos);
     assert2::assert!(plain.log_end_offset() == stamped.log_end_offset());
     // The unstamped log never sees a stamp; the stamped one does.
-    crate::log::test_support::check_stamps(&stamped, &[(0, None), (0, Some(7))]);
+    check!(plain.stamp_for_offset(Offset(0)) == None);
+    check!(stamped.stamp_for_offset(Offset(0)) == Some(7));
 
     // Byte-for-byte identical client-facing `.log` output.
     let end = plain.log_end_offset();
