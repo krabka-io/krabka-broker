@@ -147,6 +147,7 @@ mod tests {
     };
 
     use super::*;
+    use crate::coordinator::unified::persistence_next_gen::NextGenKey;
 
     #[test]
     fn downgrade_requires_every_member_to_have_a_classic_facade() {
@@ -252,7 +253,65 @@ mod tests {
         let second = downgrade_pending_records(&state, &classic, 7)
             .to_batch("g", 7)
             .unwrap();
-        check!(first.records.len() == 6);
+        // Kafka's `createGroupTombstoneRecordsWithReplacedMember` always
+        // tombstones the deprecated k4 record, just before the k3 tombstone.
+        let ng = |key: NextGenKey| {
+            crate::coordinator::unified::persistence_next_gen::encode_key(&key).unwrap()
+        };
+        let keys: Vec<_> = first
+            .records
+            .iter()
+            .map(|record| (record.key.clone().unwrap(), record.value.is_none()))
+            .collect();
+        let member = || ("g".to_string(), "m1".to_string());
+        check!(
+            keys == vec![
+                (
+                    ng(NextGenKey::MemberMetadata {
+                        group_id: member().0,
+                        member_id: member().1,
+                    }),
+                    true
+                ),
+                (
+                    ng(NextGenKey::TargetAssignmentMember {
+                        group_id: member().0,
+                        member_id: member().1,
+                    }),
+                    true
+                ),
+                (
+                    ng(NextGenKey::CurrentMemberAssignment {
+                        group_id: member().0,
+                        member_id: member().1,
+                    }),
+                    true
+                ),
+                (
+                    ng(NextGenKey::PartitionMetadata {
+                        group_id: "g".into()
+                    }),
+                    true
+                ),
+                (
+                    ng(NextGenKey::GroupMetadata {
+                        group_id: "g".into()
+                    }),
+                    true
+                ),
+                (
+                    ng(NextGenKey::TargetAssignmentMetadata {
+                        group_id: "g".into()
+                    }),
+                    true
+                ),
+                (
+                    crate::coordinator::unified::persistence::GroupMetadataValue::encode_key("g")
+                        .unwrap(),
+                    false
+                ),
+            ]
+        );
         assert!(first.records == second.records);
     }
 }

@@ -115,10 +115,10 @@ pub(super) async fn handle_actor_heartbeat(
     }
     if group.is_classic() {
         let classic = group.as_classic().expect("classic kind");
-        let new_state = migration::convert_classic_to_consumer(classic);
+        let mut new_state = migration::convert_classic_to_consumer(classic);
         let pending = migration::upgrade_pending_records(&new_state);
         if flush_pending(
-            &new_state,
+            &mut new_state,
             pending,
             services.offsets_log,
             services.coordinator,

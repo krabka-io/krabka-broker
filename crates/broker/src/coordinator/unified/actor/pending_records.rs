@@ -4,14 +4,35 @@
 //! as the single `RecordBatch` that `OffsetsLog::append` takes, and applies the
 //! same delta to the coordinator's respawn cache once the append succeeds.
 
-use crate::coordinator::unified::{
-    GroupCoordinator,
-    persistence_next_gen::{
-        CurrentMemberAssignmentValue, GroupMetadataValue, MemberMetadataValue, NextGenKey,
-        RegularExpressionValue, TargetAssignmentMemberValue, TargetAssignmentMetadataValue,
-        encode_key,
+use crate::{
+    coordinator::unified::{
+        GroupCoordinator,
+        persistence_next_gen::{
+            CurrentMemberAssignmentValue, GroupMetadataValue, MemberMetadataValue, NextGenKey,
+            RegularExpressionValue, TargetAssignmentMemberValue, TargetAssignmentMetadataValue,
+            encode_key,
+        },
     },
+    error::BrokerError,
 };
+
+/// The key of the deprecated k4 `ConsumerGroupPartitionMetadata` record.
+fn partition_metadata_key(group_id: &str) -> Result<bytes::Bytes, BrokerError> {
+    encode_key(&NextGenKey::PartitionMetadata {
+        group_id: group_id.into(),
+    })
+}
+
+/// What a transition writes for the deprecated k4
+/// `ConsumerGroupPartitionMetadata` record.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PartitionMetadataWrite {
+    /// Nothing.
+    #[default]
+    Keep,
+    /// Its tombstone, right after the k3 epoch record.
+    Tombstone,
+}
 
 #[derive(Debug, Default)]
 pub(crate) struct PendingRecords {
@@ -28,6 +49,11 @@ pub(crate) struct PendingRecords {
     /// When set, the batch also tombstones the classic k2 `GroupMetadata`
     /// record for this group. An upgrade flip sets it.
     pub classic_group_metadata_tombstone: bool,
+    /// Whether the batch tombstones the deprecated k4
+    /// `ConsumerGroupPartitionMetadata` on a metadata update, as Kafka 4.3.1
+    /// does for a group that holds one. A k3 tombstone carries a k4 tombstone
+    /// whatever this says, as Kafka's `createGroupTombstoneRecords` does.
+    pub partition_metadata: PartitionMetadataWrite,
     /// Tombstone the next-gen k3 `GroupMetadata` (downgrade flip).
     pub next_gen_group_metadata_tombstone: bool,
     /// Tombstone the next-gen k6 `TargetAssignmentMetadata` (downgrade flip).
@@ -46,6 +72,7 @@ impl PendingRecords {
             && self.target_per_member.is_empty()
             && self.current_per_member.is_empty()
             && !self.classic_group_metadata_tombstone
+            && self.partition_metadata == PartitionMetadataWrite::Keep
             && !self.next_gen_group_metadata_tombstone
             && !self.next_gen_target_metadata_tombstone
             && self.classic_group_metadata.is_none()
@@ -64,6 +91,13 @@ impl PendingRecords {
         batch, self, group_id, now_ms, borrowed;
             (typed, encode_key, NextGenKey);
             before_members {
+                // Kafka's `updateSubscriptionMetadata` adds the k4 tombstone right
+                // after the epoch record.
+                if self.group_metadata.is_some()
+                    && self.partition_metadata == PartitionMetadataWrite::Tombstone
+                {
+                    batch.push(partition_metadata_key(group_id)?, None);
+                }
                 batch.extend_values(
                     self.resolved_regexes
                         .iter()
@@ -88,6 +122,11 @@ impl PendingRecords {
                         )?,
                         None,
                     );
+                }
+                // A deletion or a downgrade tombstones k4 just before k3, as Kafka's
+                // `createGroupTombstoneRecords` does.
+                if self.next_gen_group_metadata_tombstone {
+                    batch.push(partition_metadata_key(group_id)?, None);
                 }
                 if self.next_gen_group_metadata_tombstone {
                     batch.push(
@@ -127,6 +166,9 @@ impl PendingRecords {
         coordinator.update_cached_seed(group_id, |seed| {
             if let Some(value) = self.group_metadata {
                 seed.group_epoch = value.epoch;
+            }
+            if self.partition_metadata == PartitionMetadataWrite::Tombstone {
+                seed.has_subscription_metadata_record = false;
             }
             for (regex, value) in self.resolved_regexes {
                 if let Some(value) = value {
@@ -251,6 +293,7 @@ mod tests {
             target_per_member: vec![("m".into(), None)],
             current_per_member: vec![("m".into(), None)],
             classic_group_metadata_tombstone: true,
+            partition_metadata: PartitionMetadataWrite::Tombstone,
             next_gen_group_metadata_tombstone: true,
             next_gen_target_metadata_tombstone: true,
             classic_group_metadata: Some(ClassicGroupValue {
@@ -391,6 +434,7 @@ mod tests {
         let seed = coordinator.cached_seed("g").expect("cached seed");
 
         let expected = crate::coordinator::unified::GroupSeed {
+            has_subscription_metadata_record: false,
             group_epoch: 7,
             target_epoch: 6,
             members: maplit::hashmap! {"m1".to_string() => p::MemberMetadataValue {

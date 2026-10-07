@@ -42,6 +42,22 @@ impl GroupCoordinator {
             }
         }
     }
+    /// Applies a deprecated `ConsumerGroupPartitionMetadata` value (key v4),
+    /// as Kafka 4.3.1's `GroupMetadataManager.replay` of the record does: it
+    /// creates the consumer group when the log has none yet, and marks it as
+    /// holding the record, so that the group's next metadata update writes
+    /// the record's tombstone. The topics in the value are not kept: the
+    /// metadata hash replaced them.
+    pub fn replay_partition_metadata(&self, group_id: &str) {
+        self.seeds
+            .entry(group_id.into())
+            .or_default()
+            .has_subscription_metadata_record = true;
+        self.seeds_cache
+            .entry(group_id.into())
+            .or_default()
+            .has_subscription_metadata_record = true;
+    }
     pub fn replay_member_metadata(
         &self,
         group_id: &str,
@@ -138,6 +154,9 @@ impl GroupCoordinator {
         let scrub = |seed: &mut GroupSeed| {
             super::seeds::scrub_seed_assignments!(seed, key, K, target_epoch;
                 K::GroupMetadata { .. } => { seed.group_epoch = 0; },
+            // Kafka ignores the tombstone of a group it does not hold, and
+            // otherwise clears `hasSubscriptionMetadataRecord`.
+            K::PartitionMetadata { .. } => { seed.has_subscription_metadata_record = false; },
             K::RegularExpression { regex, .. } => { seed.resolved_regexes.remove(regex); },
             );
         };
@@ -185,6 +204,7 @@ mod tests {
         coord.replay_regular_expression("g", "topic-.*", resolved.clone());
 
         let expected = GroupSeed {
+            has_subscription_metadata_record: false,
             group_epoch: 11,
             target_epoch: 12,
             members: maplit::hashmap! {"member-a".to_string() => member},

@@ -260,6 +260,7 @@ fn a_failover_keeps_the_topics_of_a_regex_without_a_heartbeat_that_carries_the_p
         },
     ];
     let seed = GroupSeed {
+        has_subscription_metadata_record: false,
         group_epoch: 5,
         target_epoch: 5,
         members: [(

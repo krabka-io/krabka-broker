@@ -182,7 +182,7 @@ fn topic_partitions_infos<'a>(
 }
 
 crate::coordinator::unified::persistence::flush_pending_records! {
-    state: ShareGroupState, pending: PendingShareRecords;
+    state: &ShareGroupState, pending: PendingShareRecords;
     offsets_log, coordinator, now_ms;
     group &state.group_id;
     encode pending.into_batch(&state.group_id, now_ms);

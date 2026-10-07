@@ -31,14 +31,16 @@ use crate::error::BrokerError;
 pub(crate) mod flex;
 
 /// Encode and append one nonempty actor delta before publishing its cache update.
-/// Each protocol supplies its original borrowed or consuming encoder and cache operation.
+/// Each protocol supplies its original borrowed or consuming encoder and cache operation,
+/// and the reference it takes its state by: a `&mut` state lets the cache operation also
+/// apply what the appended records mean to the live actor state.
 macro_rules! flush_pending_records {
     ($state:ident: $state_type:ty, $pending:ident: $pending_type:ty;
         $log:ident, $coordinator:ident, $now:ident;
         group $group:expr; encode $encode:expr; cache $cache:expr;
     ) => {
         pub(super) async fn flush_pending(
-            $state: &$state_type,
+            $state: $state_type,
             $pending: $pending_type,
             $log: &dyn $crate::coordinator::unified::offsets_log::OffsetsLog,
             $coordinator: &$crate::coordinator::unified::GroupCoordinator,
@@ -83,7 +85,7 @@ pub(super) use committed_offset_type;
 /// tables together while using the same legacy string codec.
 macro_rules! group_record_keys {
     ($visibility:vis enum $name:ident {
-        $($variant:ident $(($extra:ident))? => $version:ident,)*
+        $($(#[$variant_meta:meta])* $variant:ident $(($extra:ident))? => $version:ident,)*
     }
         $(#[$parse_docs:meta])* fn $parse:ident;
         $(#[$encode_docs:meta])* fn $encode:ident;
@@ -91,7 +93,7 @@ macro_rules! group_record_keys {
     ) => {
         #[derive(Debug, Clone, PartialEq, Eq)]
         $visibility enum $name {
-            $($variant { group_id: String, $($extra: String,)? },)*
+            $($(#[$variant_meta])* $variant { group_id: String, $($extra: String,)? },)*
         }
 
         impl $name {
@@ -153,7 +155,7 @@ pub enum Key {
     },
     /// Just `group_id`. The value carries the whole `GroupMetadataValue`.
     GroupMetadata { group_id: String },
-    /// KIP-848 next-gen consumer group record types, versions 3, 5–8.
+    /// KIP-848 next-gen consumer group record types, versions 3–8 and 16.
     NextGen(crate::coordinator::unified::persistence_next_gen::NextGenKey),
     /// KIP-932 share-group record types, versions 10–15.
     Share(crate::coordinator::unified::share::persistence::ShareGroupKey),
@@ -227,7 +229,7 @@ pub fn parse_record_key(mut buf: &[u8]) -> Result<RecordKey, BrokerError> {
             let group_id = get_string(&mut buf)?;
             Key::GroupMetadata { group_id }
         }
-        3 | 5 | 6 | 7 | 8 | 16 => Key::NextGen(
+        3..=8 | 16 => Key::NextGen(
             crate::coordinator::unified::persistence_next_gen::parse_key(version, buf)?,
         ),
         10..=15 => Key::Share(

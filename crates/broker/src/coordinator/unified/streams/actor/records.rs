@@ -130,7 +130,7 @@ fn target_member_value(
 }
 
 crate::coordinator::unified::persistence::flush_pending_records! {
-    actor: ActorState, pending: PendingStreamsRecords;
+    actor: &ActorState, pending: PendingStreamsRecords;
     offsets_log, coordinator, now_ms;
     group &actor.state.group_id;
     encode pending.into_batch(&actor.state.group_id, now_ms);

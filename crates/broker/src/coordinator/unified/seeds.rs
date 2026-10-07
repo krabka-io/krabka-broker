@@ -28,6 +28,10 @@ pub struct GroupSeed {
     /// expression.
     pub resolved_regexes:
         std::collections::HashMap<String, persistence_next_gen::RegularExpressionValue>,
+    /// Kafka's `ConsumerGroup.hasSubscriptionMetadataRecord`: the log holds a
+    /// deprecated `ConsumerGroupPartitionMetadata` value (key v4) that no
+    /// tombstone has removed yet.
+    pub has_subscription_metadata_record: bool,
 }
 
 /// Hydration seed for a [`share::actor::ShareGroupActorHandle`].

@@ -42,6 +42,9 @@ pub(super) fn check_value(key: &Key, value: &[u8]) -> Result<(), BrokerError> {
         Key::GroupMetadata { .. } => GroupMetadataValue::decode_value(value).map(|_| ()),
         Key::NextGen(key) => match key {
             NextGenKey::GroupMetadata { .. } => ng::GroupMetadataValue::decode(value).map(|_| ()),
+            NextGenKey::PartitionMetadata { .. } => {
+                ng::PartitionMetadataValue::decode(value).map(|_| ())
+            }
             NextGenKey::MemberMetadata { .. } => ng::MemberMetadataValue::decode(value).map(|_| ()),
             NextGenKey::TargetAssignmentMetadata { .. } => {
                 ng::TargetAssignmentMetadataValue::decode(value).map(|_| ())
@@ -112,6 +115,10 @@ pub(super) fn apply_next_gen_record(
         ng::NextGenKey::GroupMetadata { group_id } => {
             coordinator
                 .replay_group_metadata(&group_id, ng::GroupMetadataValue::decode(value_bytes)?);
+        }
+        ng::NextGenKey::PartitionMetadata { group_id } => {
+            ng::PartitionMetadataValue::decode(value_bytes)?;
+            coordinator.replay_partition_metadata(&group_id);
         }
         ng::NextGenKey::MemberMetadata {
             group_id,

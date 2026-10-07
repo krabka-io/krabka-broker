@@ -12,7 +12,7 @@ use krabka_protocol::primitives::uuid::Uuid;
 
 use super::{
     FALLBACK_REBALANCE_TIMEOUT_MS_I32, FALLBACK_SESSION_TIMEOUT_MS_I32, chrono_now_ms,
-    pending_records::PendingRecords,
+    pending_records::{PartitionMetadataWrite, PendingRecords},
 };
 use crate::coordinator::unified::{
     classic_state::ClassicGroup,
@@ -119,6 +119,11 @@ pub(super) fn snapshot_pending_after_change(
         group_metadata: Some(GroupMetadataValue {
             epoch: state.group_epoch,
         }),
+        partition_metadata: if state.has_subscription_metadata_record() {
+            PartitionMetadataWrite::Tombstone
+        } else {
+            PartitionMetadataWrite::Keep
+        },
         ..Default::default()
     };
     crate::coordinator::unified::persistence::snapshot_members!(pending, state, affected_members;
@@ -217,11 +222,18 @@ pub(super) async fn flush_classic_metadata(
 }
 
 crate::coordinator::unified::persistence::flush_pending_records! {
-    state: GroupState, pending: PendingRecords;
+    state: &mut GroupState, pending: PendingRecords;
     offsets_log, coordinator, now_ms;
     group &state.group_id;
     encode pending.to_batch(&state.group_id, now_ms);
-    cache pending.apply_to_cache(coordinator, &state.group_id);
+    cache {
+        // Kafka clears `hasSubscriptionMetadataRecord` when it replays the k4
+        // tombstone it just wrote.
+        if pending.partition_metadata == PartitionMetadataWrite::Tombstone {
+            state.set_has_subscription_metadata_record(false);
+        }
+        pending.apply_to_cache(coordinator, &state.group_id);
+    };
 }
 
 #[cfg(test)]
@@ -366,5 +378,66 @@ mod tests {
         check!(pending.current_per_member.len() == 1);
         check!(pending.target_metadata.is_none());
         assert!(pending.target_per_member.is_empty());
+    }
+
+    /// Kafka 4.3.1's `updateSubscriptionMetadata` adds the deprecated k4
+    /// tombstone right after the epoch record while the group holds a k4
+    /// value, and the replay of that tombstone clears the mark, so the next
+    /// write carries none.
+    #[tokio::test]
+    async fn a_held_partition_metadata_record_is_tombstoned_once() {
+        use crate::coordinator::unified::{
+            actor::test_support::make_coordinator,
+            persistence_next_gen::{NextGenKey, encode_key},
+        };
+
+        let (coordinator, log) = make_coordinator();
+        coordinator.update_cached_seed("g", |seed| seed.has_subscription_metadata_record = true);
+        let mut state = GroupState::new("g");
+        state.group_epoch = 3;
+        state.set_has_subscription_metadata_record(true);
+        let key = |key: NextGenKey| Some(encode_key(&key).unwrap());
+        let epoch_record = (
+            key(NextGenKey::GroupMetadata {
+                group_id: "g".into(),
+            }),
+            Some(GroupMetadataValue { epoch: 3 }.encode()),
+        );
+
+        for expected in [
+            vec![
+                epoch_record.clone(),
+                (
+                    key(NextGenKey::PartitionMetadata {
+                        group_id: "g".into(),
+                    }),
+                    None,
+                ),
+            ],
+            vec![epoch_record.clone()],
+        ] {
+            let pending = snapshot_pending_after_change(&state, &[], false);
+            flush_pending(&mut state, pending, log.as_ref(), &coordinator, 0)
+                .await
+                .unwrap();
+
+            let written: Vec<_> = log
+                .batches()
+                .await
+                .pop()
+                .unwrap()
+                .records
+                .into_iter()
+                .map(|record| (record.key, record.value))
+                .collect();
+            check!(written == expected);
+        }
+        check!(!state.has_subscription_metadata_record());
+        check!(
+            !coordinator
+                .cached_seed("g")
+                .unwrap()
+                .has_subscription_metadata_record
+        );
     }
 }

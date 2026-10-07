@@ -195,6 +195,28 @@ pub(crate) fn get_u16(buf: &mut &[u8]) -> Result<u16, BrokerError> {
     fixed::get_u16(buf).map_err(protocol)
 }
 
+/// Reads the leading `i16` version of a `coordinator-value` and refuses one
+/// outside `0..=highest`.
+///
+/// Kafka's `CoordinatorRecordSerde.deserialize` throws
+/// `UnknownRecordVersionException` for a value version outside the schema's
+/// `validVersions`, and the loader fails on it. Every value read here declares
+/// `"validVersions": "0"`, so `highest` is 0 for all of them today.
+pub(crate) fn get_value_version(
+    buf: &mut &[u8],
+    highest: i16,
+    record: &'static str,
+) -> Result<i16, BrokerError> {
+    let version = crate::coordinator::unified::persistence::get_i16(buf)?;
+    if (0..=highest).contains(&version) {
+        Ok(version)
+    } else {
+        Err(BrokerError::Protocol(
+            krabka_protocol::ProtocolError::InvalidValue(record),
+        ))
+    }
+}
+
 pub(crate) fn get_compact_string(buf: &mut &[u8]) -> Result<String, BrokerError> {
     string_bytes::get_compact_string_owned(buf).map_err(protocol)
 }

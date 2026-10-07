@@ -40,8 +40,10 @@
 //! `maybeDeleteGroup` appends it only for an empty group,
 //! so a reader of `__consumer_offsets` never sees a group record with no
 //! offsets and no members hanging behind a partial write. The group record is
-//! the classic k2 `GroupMetadata` for a classic group, and the next-gen k3
-//! `GroupMetadata` plus k6 `TargetAssignmentMetadata` for a KIP-848 group.
+//! the classic k2 `GroupMetadata` for a classic group, and for a KIP-848 group
+//! the k6 `TargetAssignmentMetadata`, the deprecated k4
+//! `ConsumerGroupPartitionMetadata` and the k3 `GroupMetadata`, in Kafka's
+//! order.
 //! Deleting the group stops the actor; the coordinator drops the registry
 //! entry when it reads [`ReapOutcome::group_deleted`].
 
@@ -313,19 +315,24 @@ fn tombstone_batch(
             })?,
             None,
         ),
+        // Kafka's `ConsumerGroup.createGroupTombstoneRecords`, for a group
+        // with no members: the target-assignment metadata, then the
+        // deprecated k4 subscription metadata whether or not the log holds
+        // one, then the group epoch record.
         Some(GroupKind::Consumer(_)) => {
-            builder.push(
-                encode_next_gen_key(&NextGenKey::GroupMetadata {
+            for key in [
+                NextGenKey::TargetAssignmentMetadata {
                     group_id: group_id.into(),
-                })?,
-                None,
-            );
-            builder.push(
-                encode_next_gen_key(&NextGenKey::TargetAssignmentMetadata {
+                },
+                NextGenKey::PartitionMetadata {
                     group_id: group_id.into(),
-                })?,
-                None,
-            );
+                },
+                NextGenKey::GroupMetadata {
+                    group_id: group_id.into(),
+                },
+            ] {
+                builder.push(encode_next_gen_key(&key)?, None);
+            }
         }
     }
     Ok(builder.finish(now_ms))
@@ -336,6 +343,7 @@ mod tests {
     use std::collections::HashMap;
 
     use assert2::check;
+    use bytes::Bytes;
     use krabka_log::Offset;
 
     use super::*;
@@ -543,5 +551,47 @@ mod tests {
                 }
         );
         check!(group.committed_offsets.keys().cloned().collect::<Vec<_>>() == keys(&["a"]));
+    }
+
+    /// The group's own tombstones follow Kafka 4.3.1: k2 for a classic group,
+    /// and for a consumer group with no members the k6, k4 and k3 tombstones
+    /// of `ConsumerGroup.createGroupTombstoneRecords`, in that order.
+    #[test]
+    fn group_tombstones_follow_kafka() {
+        let tombstone = |key: Bytes| (Some(key), None::<Bytes>);
+        let ng = |key: NextGenKey| tombstone(encode_next_gen_key(&key).unwrap());
+        let gid = || "g".to_string();
+        let expired = tombstone(OffsetCommitValue::encode_key("g", "t", 0).unwrap());
+        let rows = [
+            ("no group tombstone", None, vec![expired.clone()]),
+            (
+                "classic group",
+                Some(classic(ClassicGroupState::Empty, None, &[])),
+                vec![
+                    expired.clone(),
+                    tombstone(encode_key(&Key::GroupMetadata { group_id: gid() }).unwrap()),
+                ],
+            ),
+            (
+                "consumer group",
+                Some(consumer(&[])),
+                vec![
+                    expired.clone(),
+                    ng(NextGenKey::TargetAssignmentMetadata { group_id: gid() }),
+                    ng(NextGenKey::PartitionMetadata { group_id: gid() }),
+                    ng(NextGenKey::GroupMetadata { group_id: gid() }),
+                ],
+            ),
+        ];
+        for (name, kind, expected) in rows {
+            let batch = tombstone_batch("g", &keys(&["t"]), kind.as_ref(), NOW_MS).unwrap();
+
+            let records: Vec<_> = batch
+                .records
+                .into_iter()
+                .map(|record| (record.key, record.value))
+                .collect();
+            check!(records == expected, "{name}");
+        }
     }
 }

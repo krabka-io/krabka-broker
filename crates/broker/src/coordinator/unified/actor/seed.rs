@@ -107,6 +107,7 @@ fn topic_partition_map(partitions: Vec<AssignedTopicPartitions>) -> HashMap<Uuid
 pub(super) fn apply_seed(state: &mut GroupState, seed: GroupSeed, image: &ReconcileInput) {
     state.group_epoch = seed.group_epoch;
     state.target.epoch = seed.target_epoch;
+    state.set_has_subscription_metadata_record(seed.has_subscription_metadata_record);
     let group_generation = seed.group_epoch;
     // What each regular expression resolved to, as the group last recorded it:
     // the members keep the topics of their regex subscriptions across the

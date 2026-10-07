@@ -56,6 +56,10 @@ pub struct GroupState {
     /// assignment calculation finished, or `None` when there is no previous
     /// assignment or its time is unknown, as after a replay.
     assignment_timestamp: Option<Instant>,
+    /// Kafka's `ConsumerGroup.hasSubscriptionMetadataRecord`: the log holds a
+    /// deprecated `ConsumerGroupPartitionMetadata` value (key v4), so the next
+    /// metadata update writes its tombstone.
+    has_subscription_metadata_record: bool,
 }
 
 impl GroupState {
@@ -72,6 +76,7 @@ impl GroupState {
             metadata_hash: 0,
             metadata_refresh_requested: false,
             assignment_timestamp: None,
+            has_subscription_metadata_record: false,
         }
     }
 
@@ -222,6 +227,18 @@ impl GroupState {
     #[must_use]
     pub fn metadata_refresh_requested(&self) -> bool {
         self.metadata_refresh_requested
+    }
+
+    /// Kafka's `ConsumerGroup.hasSubscriptionMetadataRecord`.
+    #[must_use]
+    pub fn has_subscription_metadata_record(&self) -> bool {
+        self.has_subscription_metadata_record
+    }
+
+    /// Kafka's `ConsumerGroup.setHasSubscriptionMetadataRecord`, which the
+    /// replay of a key-v4 value sets and the replay of its tombstone clears.
+    pub fn set_has_subscription_metadata_record(&mut self, present: bool) {
+        self.has_subscription_metadata_record = present;
     }
 
     /// The metadata hash that the group recorded last.
