@@ -110,7 +110,9 @@ mod submit;
 mod timing;
 
 pub use self::{
-    activation::Activation, control_state::control_batch_image_records, records::is_kip835_noop,
+    activation::Activation,
+    control_state::control_batch_image_records,
+    records::{decode_committed_value, is_kip835_noop},
 };
 
 #[cfg(test)]

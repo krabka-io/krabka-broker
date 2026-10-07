@@ -237,6 +237,7 @@ pub(super) fn spawn_broker_gauge_updater(
             metrics.metadata_last_applied_offset.set(applied_offset);
             let metadata_lag = committed_offset.saturating_sub(applied_offset).max(0);
             metrics.metadata_lag_records.set(metadata_lag);
+            metrics.set_metadata_load_error_count(controller.metadata_load_error_count());
 
             // Broker lifecycle state (#390)
             if let Some(h) = &health {

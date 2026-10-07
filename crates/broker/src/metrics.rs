@@ -33,6 +33,7 @@ mod labels;
 mod lag;
 mod log_cleaner;
 mod log_dirs;
+mod metadata_load;
 mod phases;
 mod registration;
 mod remote_reader;
@@ -884,6 +885,20 @@ pub struct BrokerMetrics {
         Mirrors kafka.log:type=LogManager,name=OfflineLogDirectoryCount."
     )]
     pub offline_log_dirs: Gauge,
+    /// Committed metadata records a broker-only node could not decode, since
+    /// it started.
+    ///
+    /// Mirrors Kafka's
+    /// `kafka.server:type=broker-metadata-metrics,name=metadata-load-error-count`,
+    /// which Kafka's `SharedServer` bumps from the non-fatal "metadata
+    /// loading" fault handler of a node without the controller role. The
+    /// broker gauge updater samples the observer's running count, as Kafka's
+    /// gauge reads its `AtomicLong`, so the series is zero on a healthy broker.
+    /// A controller stops on such a record instead, and counts nothing here.
+    #[metric(help = "Committed metadata records this broker-only node could not \
+        decode and skipped, since it started. Mirrors \
+        kafka.server:type=broker-metadata-metrics,name=metadata-load-error-count.")]
+    pub metadata_load_error_count: Gauge,
     /// Per-partition cumulative count of compaction passes
     /// (`Partition::compact_log`) this broker's cleaner completed
     /// successfully. Bumped once per eligible (leader &&

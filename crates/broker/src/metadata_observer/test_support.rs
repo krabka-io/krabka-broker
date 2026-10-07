@@ -69,3 +69,106 @@ pub(crate) fn api_versions_response_v0() -> Vec<u8> {
     resp.encode(&mut buf, 0).expect("encode ApiVersions");
     buf.to_vec()
 }
+
+/// The KIP-631 value bytes of a `TopicRecord` for `name`: the frame version,
+/// apiKey and apiVersion are its first three bytes, each a one-byte varint.
+pub(crate) fn topic_value(name: &str, id: u128) -> Vec<u8> {
+    let record = krabka_metadata::MetadataRecord::V1Topic(krabka_metadata::TopicRecord {
+        name: name.into(),
+        topic_id: uuid::Uuid::from_u128(id),
+        partitions: 0,
+        replication_factor: 1,
+    });
+    krabka_metadata::to_kraft_values(
+        &record,
+        &krabka_metadata::MetadataImage::new(uuid::Uuid::nil()),
+    )
+    .expect("encode a topic")
+    .remove(0)
+    .to_vec()
+}
+
+/// [`topic_value`] with byte `index` set to `byte`: index 0 is the frame
+/// version, 1 the apiKey and 2 the apiVersion.
+pub(crate) fn patched_topic_value(index: usize, byte: u8) -> Vec<u8> {
+    let mut value = topic_value("patched", 99);
+    value[index] = byte;
+    value
+}
+
+/// A `NoOpRecord` carrying krabka-private tag 1003 whose body is not a
+/// record.
+pub(crate) fn undecodable_private_value() -> Vec<u8> {
+    use krabka_protocol::{
+        owned::no_op_record::NoOpRecord,
+        records::metadata::KraftMetadataRecord,
+        tagged_fields::{UnknownTaggedField, UnknownTaggedFields},
+    };
+    KraftMetadataRecord::NoOp(NoOpRecord {
+        unknown_tagged_fields: UnknownTaggedFields(vec![UnknownTaggedField {
+            tag: 1003,
+            bytes: bytes::Bytes::from_static(&[0xff, 0xff, 0xff]),
+        }]),
+    })
+    .encode_value(0)
+    .expect("encode a private carrier")
+    .to_vec()
+}
+
+/// A metadata batch at `base_offset` with one record per value.
+pub(crate) fn values_batch(
+    base_offset: i64,
+    values: &[Vec<u8>],
+) -> krabka_protocol::records::RecordBatch {
+    let records: Vec<krabka_protocol::records::Record> = (0_i32..)
+        .zip(values)
+        .map(|(offset_delta, value)| krabka_protocol::records::Record {
+            offset_delta,
+            value: Some(bytes::Bytes::from(value.clone())),
+            ..Default::default()
+        })
+        .collect();
+    krabka_protocol::records::RecordBatch {
+        base_offset,
+        last_offset_delta: i32::try_from(records.len().saturating_sub(1)).expect("delta"),
+        records,
+        ..Default::default()
+    }
+}
+
+/// A control batch at `base_offset` whose one record is a `KRaftVersionRecord`
+/// with a negative `kraft.version`, which Kafka refuses on every role.
+pub(crate) fn negative_kraft_version_batch(
+    base_offset: i64,
+) -> krabka_protocol::records::RecordBatch {
+    use krabka_protocol::{
+        owned::k_raft_version_record::KRaftVersionRecord,
+        records::{header::Attributes, metadata::control::ControlRecord},
+    };
+    let (key, value) = ControlRecord::KRaftVersion(KRaftVersionRecord {
+        k_raft_version: -1,
+        ..Default::default()
+    })
+    .encode_key_value()
+    .expect("encode a control record");
+    krabka_protocol::records::RecordBatch {
+        base_offset,
+        attributes: Attributes::default().with_control(true),
+        last_offset_delta: 0,
+        records: vec![krabka_protocol::records::Record {
+            key: Some(key),
+            value: Some(value),
+            ..Default::default()
+        }],
+        ..Default::default()
+    }
+}
+
+/// The wire bytes of `batches`, as a `MetadataFetch` response carries them.
+pub(crate) fn encode_batches(batches: &[krabka_protocol::records::RecordBatch]) -> bytes::Bytes {
+    let mut out = Vec::new();
+    for batch in batches {
+        batch.encode(&mut out).expect("encode batch");
+    }
+    bytes::Bytes::from(out)
+}

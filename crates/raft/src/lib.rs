@@ -102,7 +102,7 @@ pub use handshake::{
 };
 pub use kraft::{
     MetadataFetchSlice,
-    controller::{control_batch_image_records, is_kip835_noop},
+    controller::{control_batch_image_records, decode_committed_value, is_kip835_noop},
 };
 pub use network::{OutboundDialer, PlaintextDialer};
 pub use reconfig::{AddVoter, ReconfigOutcome, RemoveVoter, UpdateVoter};

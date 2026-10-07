@@ -8,17 +8,17 @@
 
 use std::sync::Arc;
 
-use krabka_metadata::{MetadataImage, from_kraft_value};
+use krabka_metadata::MetadataImage;
 use krabka_protocol::records::RecordBatch;
 use krabka_raft::NodeId;
 use krabka_units::convert::ByteSizeExt as _;
 use tokio::sync::watch;
-use tracing::{debug, warn};
+use tracing::{debug, error, warn};
 
 use super::{ObserverConfig, snapshot::install_snapshot, store::ObserverStore};
 
 /// What one successful observer fetch round trip learned.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct FetchOutcome {
     /// Offset to fetch from next: one past the last batch applied.
     pub(super) next_fetch_offset: u64,
@@ -37,6 +37,11 @@ pub(super) struct FetchOutcome {
     pub(super) log_start_offset: i64,
     /// The leader the responder believes is current, when it names one.
     pub(super) leader_hint: Option<NodeId>,
+    /// Committed records this round trip could not decode and skipped.
+    pub(super) load_errors: u64,
+    /// An invalid `KRaft` control record this round trip met, which stops the
+    /// broker.
+    pub(super) fatal: Option<String>,
 }
 
 /// Runs one iteration: it fetches from `addr` at `fetch_offset`, decodes and
@@ -124,9 +129,9 @@ async fn fetch_over(
         return None;
     }
 
-    let next_fetch_offset = match resp.snapshot_id {
-        Some(snapshot_id) => {
-            install_snapshot(
+    let applied = match resp.snapshot_id {
+        Some(snapshot_id) => Applied {
+            next_offset: install_snapshot(
                 config,
                 conn,
                 (target, resp.leader_epoch),
@@ -134,31 +139,73 @@ async fn fetch_over(
                 image_tx,
                 store,
             )
-            .await?
-        }
+            .await?,
+            load_errors: 0,
+            fatal: None,
+        },
         None => apply_fetch_records(fetch_offset, &resp.records, image_tx),
     };
     Some(FetchOutcome {
-        next_fetch_offset,
+        next_fetch_offset: applied.next_offset,
         quorum_high_watermark: resp.quorum_high_watermark,
         log_start_offset: resp.log_start_offset,
         leader_hint: u64::try_from(resp.leader_hint).ok().map(NodeId),
+        load_errors: applied.load_errors,
+        fatal: applied.fatal,
     })
 }
 
+/// What applying the records of one fetch response did.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct Applied {
+    /// Offset to fetch from next: one past the last batch the response
+    /// carried, or, after a fatal fault, the offset of the batch that raised
+    /// it.
+    pub(super) next_offset: u64,
+    /// Committed records that did not decode. The first one ends the apply
+    /// of the response, so this is 0 or 1.
+    pub(super) load_errors: u64,
+    /// An invalid `KRaft` control record, which stops the broker.
+    pub(super) fatal: Option<String>,
+}
+
+/// Folds the record batches of one fetch response into the image, as Kafka's
+/// `MetadataLoader.handleCommit` loads one commit.
+///
+/// A record that does not decode is classified as the controller classifies
+/// it ([`krabka_raft::decode_committed_value`]), so both roles skip the same
+/// records. A broker-only node does not stop on one: Kafka's `SharedServer`
+/// builds the "metadata loading" fault handler with
+/// `fatal = processRoles.contains(ControllerRole)`, so on a broker it is a
+/// `LoggingFaultHandler` that logs at ERROR and bumps
+/// `metadata-load-error-count`. The throw also ends `handleCommit`'s loop
+/// over the commit, so the records after it in that commit are never loaded,
+/// and the loader goes on with the next commit. The rest of this response is
+/// skipped the same way, and the fetch resumes past it.
+///
+/// An invalid `KRaft` control record is fatal on every Kafka role:
+/// `KafkaRaftClientDriver` hands it to `SharedServer.raftManagerFaultHandler`,
+/// which halts the process. The apply stops at it, and the caller stops the
+/// broker.
 fn apply_fetch_records(
     fetch_offset: u64,
     records: &[u8],
     image_tx: &watch::Sender<Arc<MetadataImage>>,
-) -> u64 {
+) -> Applied {
     // No new records: the controller had nothing past `fetch_offset`. Skip the
     // expensive full-image clone entirely.
     if records.is_empty() {
-        return fetch_offset;
+        return Applied {
+            next_offset: fetch_offset,
+            load_errors: 0,
+            fatal: None,
+        };
     }
 
     let mut next: MetadataImage = (**image_tx.borrow()).clone();
     let mut new_offset = fetch_offset;
+    let mut load_errors = 0;
+    let mut fatal = None;
     let mut buf: &[u8] = records;
     while !buf.is_empty() {
         let batch = match RecordBatch::decode(&mut buf) {
@@ -172,6 +219,12 @@ fn apply_fetch_records(
         let next_offset = index
             .saturating_add(u64::try_from(batch.last_offset_delta.max(0)).unwrap_or(0))
             .saturating_add(1);
+        // After a record that did not decode, the rest of the response is
+        // skipped: the offset moves past it, and nothing in it applies.
+        if load_errors > 0 {
+            new_offset = next_offset;
+            continue;
+        }
         // A control batch carries no metadata records. Its KIP-853
         // `KRaftVersionRecord` and `VotersRecord` set the quorum the image
         // names, as they do on a controller once committed, and every record
@@ -181,7 +234,11 @@ fn apply_fetch_records(
         if batch.attributes.is_control_batch() {
             match krabka_raft::control_batch_image_records(&batch) {
                 Ok(controls) => controls.iter().for_each(|control| next.apply(control)),
-                Err(e) => warn!(error = %e, "observer failed to decode a control record"),
+                Err(fault) => {
+                    error!(%fault, "observer met an invalid KRaft control record; stopping the broker");
+                    fatal = Some(fault.to_string());
+                    break;
+                }
             }
             new_offset = next_offset;
             continue;
@@ -190,20 +247,28 @@ fn apply_fetch_records(
             let Some(value) = r.value.as_ref() else {
                 continue;
             };
-            // A KIP-835 no-op, which the controller leader appends while the
-            // cluster is idle, changes nothing.
-            if krabka_raft::is_kip835_noop(value) {
-                continue;
-            }
-            match from_kraft_value(value, &next) {
-                Ok(rec) => {
+            let offset = batch.base_offset.saturating_add(i64::from(r.offset_delta));
+            match krabka_raft::decode_committed_value(value, &next, offset) {
+                Ok(Some(rec)) => {
                     if let Err(e) = next.validate(&rec) {
-                        warn!(error = %e, "observer skipped record failing validation");
+                        warn!(offset, error = %e, "observer skipped record failing validation");
                         continue;
                     }
                     next.apply(&rec);
                 }
-                Err(e) => warn!(error = %e, "observer failed to decode record"),
+                // A KIP-835 no-op, or a record naming state the image does
+                // not hold, which the controller skips too.
+                Ok(None) => {}
+                Err(fault) => {
+                    error!(
+                        offset,
+                        %fault,
+                        "observer could not load a committed metadata record; skipping the rest \
+                         of this fetch"
+                    );
+                    load_errors += 1;
+                    break;
+                }
             }
         }
         new_offset = next_offset;
@@ -211,7 +276,11 @@ fn apply_fetch_records(
     if new_offset != fetch_offset {
         let _ = image_tx.send_replace(Arc::new(next));
     }
-    new_offset.max(fetch_offset)
+    Applied {
+        next_offset: new_offset.max(fetch_offset),
+        load_errors,
+        fatal,
+    }
 }
 
 #[cfg(test)]
@@ -282,7 +351,7 @@ mod tests {
         let image_tx = image_channel(Uuid::new_v4());
         let records = encode_batches(&[control_batch(6)]);
 
-        let new_offset = apply_fetch_records(6, &records, &image_tx);
+        let new_offset = apply_fetch_records(6, &records, &image_tx).next_offset;
 
         assert!(new_offset == 7);
     }
@@ -345,7 +414,7 @@ mod tests {
         }
         let image_tx = image_channel(cluster_id);
 
-        let new_offset = apply_fetch_records(0, &encode_batches(&[batch]), &image_tx);
+        let new_offset = apply_fetch_records(0, &encode_batches(&[batch]), &image_tx).next_offset;
 
         let mut expected = MetadataImage::new(cluster_id);
         expected.apply(&MetadataRecord::V1KRaftVersion(
@@ -372,7 +441,7 @@ mod tests {
         let image_tx = image_channel(Uuid::new_v4());
         let records = encode_batches(&[metadata_batch(4, &topic_record("offset-topic"))]);
 
-        let new_offset = apply_fetch_records(4, &records, &image_tx);
+        let new_offset = apply_fetch_records(4, &records, &image_tx).next_offset;
 
         assert!(new_offset == 5);
         assert!(image_tx.borrow().topic("offset-topic").is_some());
@@ -384,8 +453,180 @@ mod tests {
         let mut batch = metadata_batch(4, &topic_record("multi-record-offset-topic"));
         batch.last_offset_delta = 999;
 
-        let new_offset = apply_fetch_records(4, &encode_batches(&[batch]), &image_tx);
+        let new_offset = apply_fetch_records(4, &encode_batches(&[batch]), &image_tx).next_offset;
 
         assert!(new_offset == 1_004);
+    }
+
+    /// What applying one response must do with a record that does not
+    /// apply.
+    enum Want {
+        /// Count one load error and skip the rest of the response.
+        LoadError,
+        /// Skip the record alone, as the controller skips it.
+        Skip,
+        /// Whatever the pinned `krabka-metadata` decoder says: a load error
+        /// where it refuses the bytes, an apply where it reads them.
+        AsTheDecoderSays,
+    }
+
+    /// One row per failure kind. A response carries a topic before the
+    /// failing record, a topic after it in the same batch, and a topic in a
+    /// later batch. A record that does not decode counts one load error, and
+    /// nothing after it in the response applies, as Kafka's `MetadataLoader`
+    /// abandons the rest of a commit; the broker does not stop, and the fetch
+    /// resumes past the response. A record the controller skips is skipped
+    /// alone.
+    #[test]
+    fn a_record_that_does_not_decode_counts_and_skips_the_rest_of_the_response() {
+        use crate::metadata_observer::test_support::{
+            encode_batches, patched_topic_value, topic_value, undecodable_private_value,
+            values_batch,
+        };
+
+        let unknown_topic_config = to_kraft_values(
+            &MetadataRecord::V1TopicConfig(krabka_metadata::TopicConfigRecord {
+                topic: "ghost".into(),
+                overrides: [("retention.ms".to_string(), "1".to_string())].into(),
+            }),
+            &MetadataImage::new(Uuid::nil()),
+        )
+        .expect("encode a topic config")
+        .remove(0)
+        .to_vec();
+        let cases: [(&str, Vec<u8>, Want); 6] = [
+            (
+                "unknown apiKey",
+                patched_topic_value(1, 99),
+                Want::LoadError,
+            ),
+            (
+                "value version above the highest supported",
+                patched_topic_value(2, 99),
+                Want::LoadError,
+            ),
+            (
+                "undecodable krabka-private record",
+                undecodable_private_value(),
+                Want::LoadError,
+            ),
+            // `krabka-metadata` checks the KIP-631 frame version from the
+            // revision that versions the private records on.
+            (
+                "frame version other than 1",
+                patched_topic_value(0, 2),
+                Want::AsTheDecoderSays,
+            ),
+            ("validate failure", unknown_topic_config, Want::Skip),
+            (
+                "empty KIP-835 no-op",
+                krabka_protocol::records::metadata::KraftMetadataRecord::NoOp(
+                    krabka_protocol::owned::no_op_record::NoOpRecord::default(),
+                )
+                .encode_value(0)
+                .expect("encode a no-op")
+                .to_vec(),
+                Want::Skip,
+            ),
+        ];
+
+        for (case, failing, want) in cases {
+            let cluster_id = Uuid::nil();
+            let image_tx = image_channel(cluster_id);
+            let records = encode_batches(&[
+                values_batch(0, &[topic_value("before", 1)]),
+                values_batch(1, &[failing.clone(), topic_value("same-batch", 2)]),
+                values_batch(3, &[topic_value("after", 3)]),
+            ]);
+
+            let applied = apply_fetch_records(0, &records, &image_tx);
+
+            let load_error = match want {
+                Want::LoadError => {
+                    let refused = krabka_metadata::from_kraft_value(
+                        &failing,
+                        &MetadataImage::new(cluster_id),
+                    )
+                    .is_err();
+                    assert!(refused, "{case}: the decoder must refuse the bytes");
+                    true
+                }
+                Want::Skip => false,
+                Want::AsTheDecoderSays => {
+                    krabka_metadata::from_kraft_value(&failing, &MetadataImage::new(cluster_id))
+                        .is_err()
+                }
+            };
+            let image = image_tx.borrow().clone();
+            assert!(
+                (
+                    applied,
+                    image.topic("before").is_some(),
+                    image.topic("same-batch").is_some(),
+                    image.topic("after").is_some(),
+                ) == (
+                    Applied {
+                        next_offset: 4,
+                        load_errors: u64::from(load_error),
+                        fatal: None,
+                    },
+                    true,
+                    !load_error,
+                    !load_error,
+                ),
+                "{case}"
+            );
+        }
+    }
+
+    /// An invalid `KRaft` control record stops the apply at its batch and
+    /// reports the fault that stops the broker, as Kafka halts on one on
+    /// every role. Nothing after it applies.
+    #[test]
+    fn an_invalid_control_record_is_fatal() {
+        use crate::metadata_observer::test_support::{
+            encode_batches, negative_kraft_version_batch, topic_value, values_batch,
+        };
+
+        let undecodable = {
+            let mut batch = negative_kraft_version_batch(1);
+            batch.records[0].value = Some(Bytes::from_static(&[0xff]));
+            batch
+        };
+        let cases = [
+            ("negative kraft.version", negative_kraft_version_batch(1)),
+            ("control record that does not decode", undecodable),
+        ];
+        for (case, control) in cases {
+            let image_tx = image_channel(Uuid::nil());
+            let fault = krabka_raft::control_batch_image_records(&control)
+                .expect_err("an invalid control record")
+                .to_string();
+            let records = encode_batches(&[
+                values_batch(0, &[topic_value("before", 1)]),
+                control,
+                values_batch(2, &[topic_value("after", 2)]),
+            ]);
+
+            let applied = apply_fetch_records(0, &records, &image_tx);
+
+            let image = image_tx.borrow().clone();
+            assert!(
+                (
+                    applied,
+                    image.topic("before").is_some(),
+                    image.topic("after").is_some(),
+                ) == (
+                    Applied {
+                        next_offset: 1,
+                        load_errors: 0,
+                        fatal: Some(fault),
+                    },
+                    true,
+                    false,
+                ),
+                "{case}"
+            );
+        }
     }
 }
