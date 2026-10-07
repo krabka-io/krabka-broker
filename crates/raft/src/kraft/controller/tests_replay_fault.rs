@@ -25,6 +25,7 @@ use super::*;
 use crate::{
     error::MetadataReplayError,
     kraft::controller::{
+        control_batch_image_records,
         control_state::voter_set_from_wire,
         records::{decode_control_record, typed_control_batch},
         recovery::{replay_committed, replay_control_records},
@@ -442,4 +443,63 @@ fn only_image_lookups_are_skipped() {
 /// The value bytes of the empty KIP-835 no-op.
 fn noop_value() -> Vec<u8> {
     records::noop_record_value().expect("no-op").to_vec()
+}
+
+/// Kafka's `RecordsIterator.decodeControlRecord` refuses a control record
+/// whose key or value is missing or empty, with these messages, and the
+/// replay of a control batch stops on it. krabka's log already refuses such a
+/// batch on append, so this drives the batch decoder that replay and the
+/// broker-only observer share.
+#[test]
+fn a_control_record_without_its_key_or_value_is_invalid() {
+    let batch = typed_control_batch(
+        1,
+        &[ControlRecord::KRaftVersion(KRaftVersionRecord {
+            version: 0,
+            k_raft_version: 1,
+            ..Default::default()
+        })],
+    )
+    .expect("kraft.version batch");
+    let good = &batch.records[0];
+    let (key, value) = (good.key.clone(), good.value.clone());
+    let cases = [
+        (
+            "no key",
+            None,
+            value.clone(),
+            "Missing key in the record when a key was expected",
+        ),
+        (
+            "empty key",
+            Some(Bytes::new()),
+            value.clone(),
+            "Got an unexpected empty key in the record",
+        ),
+        (
+            "no value",
+            key.clone(),
+            None,
+            "Missing value in the record when a value was expected",
+        ),
+        (
+            "empty value",
+            key.clone(),
+            Some(Bytes::new()),
+            "Got an unexpected empty value in the record",
+        ),
+    ];
+    for (case, key, value, reason) in cases {
+        let mut malformed = batch.clone();
+        malformed.records[0].key = key;
+        malformed.records[0].value = value;
+        check!(
+            control_batch_image_records(&malformed)
+                == Err(MetadataReplayError::InvalidControlRecord {
+                    offset: malformed.base_offset,
+                    reason: reason.to_owned(),
+                }),
+            "{case}"
+        );
+    }
 }

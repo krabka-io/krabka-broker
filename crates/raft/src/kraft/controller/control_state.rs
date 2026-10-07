@@ -238,7 +238,7 @@ pub fn control_batch_image_records(
             .saturating_add(i64::from(record.offset_delta));
         let invalid = |reason: String| MetadataReplayError::InvalidControlRecord { offset, reason };
         match decode_control_record(record).map_err(|error| invalid(error.to_string()))? {
-            Some(ControlRecord::KRaftVersion(record)) => {
+            ControlRecord::KRaftVersion(record) => {
                 let kraft_version = u16::try_from(record.k_raft_version).map_err(|_| {
                     invalid(format!("negative kraft.version {}", record.k_raft_version))
                 })?;
@@ -246,7 +246,7 @@ pub fn control_batch_image_records(
                     kraft_version,
                 }));
             }
-            Some(ControlRecord::Voters(record)) => {
+            ControlRecord::Voters(record) => {
                 records.push(MetadataRecord::V1Voters(VotersRecord {
                     voters: voter_set_from_wire(&record)
                         .map_err(|error| invalid(error.to_string()))?,

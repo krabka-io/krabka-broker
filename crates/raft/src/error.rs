@@ -74,6 +74,12 @@ pub enum RaftError {
     #[error("records: {0}")]
     Records(#[from] krabka_protocol::records::RecordsError),
 
+    /// A record of a control batch lacks its key or value, or has an empty
+    /// one. The message is the text of Kafka's
+    /// `RecordsIterator.decodeControlRecord`.
+    #[error("{0}")]
+    MalformedControlRecord(&'static str),
+
     #[error("metadata: {0}")]
     Metadata(#[from] krabka_metadata::MetadataError),
 

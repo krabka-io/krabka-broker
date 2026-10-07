@@ -160,12 +160,12 @@ fn apply_control_record(
 ) -> Result<(), MetadataReplayError> {
     let invalid = |reason: String| MetadataReplayError::InvalidControlRecord { offset, reason };
     match decode_control_record(record).map_err(|error| invalid(error.to_string()))? {
-        Some(ControlRecord::KRaftVersion(record)) => {
+        ControlRecord::KRaftVersion(record) => {
             state.kraft_version = u16::try_from(record.k_raft_version).map_err(|_| {
                 invalid(format!("negative kraft.version {}", record.k_raft_version))
             })?;
         }
-        Some(ControlRecord::Voters(record)) => {
+        ControlRecord::Voters(record) => {
             state.voters =
                 voter_set_from_wire(&record).map_err(|error| invalid(error.to_string()))?;
         }

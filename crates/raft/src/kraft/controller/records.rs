@@ -171,11 +171,40 @@ pub fn typed_control_batch(
     })
 }
 
-pub fn decode_control_record(record: &Record) -> Result<Option<ControlRecord>, RaftError> {
-    let (Some(key), Some(value)) = (&record.key, &record.value) else {
-        return Ok(None);
+/// Decode one record of a control batch.
+///
+/// # Errors
+/// [`RaftError::MalformedControlRecord`] for a missing or empty key or value,
+/// as Kafka's `RecordsIterator.decodeControlRecord` throws, and the decoder's
+/// error for a key or value that does not decode.
+pub fn decode_control_record(record: &Record) -> Result<ControlRecord, RaftError> {
+    let key = match &record.key {
+        None => {
+            return Err(RaftError::MalformedControlRecord(
+                "Missing key in the record when a key was expected",
+            ));
+        }
+        Some(key) if key.is_empty() => {
+            return Err(RaftError::MalformedControlRecord(
+                "Got an unexpected empty key in the record",
+            ));
+        }
+        Some(key) => key,
     };
-    Ok(Some(ControlRecord::decode(key, value)?))
+    let value = match &record.value {
+        None => {
+            return Err(RaftError::MalformedControlRecord(
+                "Missing value in the record when a value was expected",
+            ));
+        }
+        Some(value) if value.is_empty() => {
+            return Err(RaftError::MalformedControlRecord(
+                "Got an unexpected empty value in the record",
+            ));
+        }
+        Some(value) => value,
+    };
+    Ok(ControlRecord::decode(key, value)?)
 }
 
 /// Build the leader's `LeaderChange` control batch for `epoch`: a single

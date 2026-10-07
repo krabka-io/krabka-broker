@@ -391,15 +391,32 @@ mod tests {
     /// the topic's `compression.type` says. Kafka never compresses one, and a
     /// control batch holds one small record, so the rewrite would both diverge
     /// from Kafka and buy nothing.
+    /// A transactional COMMIT control batch for producer 7 at epoch 3, built
+    /// from the batch `sample_batch` gives: its one record carries the
+    /// end-transaction marker Kafka writes, a 4-byte key (version 0, type 1)
+    /// and a 6-byte value (version 0, coordinator epoch 17), so the append
+    /// path's control-record check accepts it.
+    fn commit_marker_batch() -> krabka_protocol::records::RecordBatch {
+        let mut marker = sample_batch(1);
+        marker.attributes = marker
+            .attributes
+            .with_transactional(true)
+            .with_control(true);
+        marker.producer_id = 7;
+        marker.producer_epoch = 3;
+        for record in &mut marker.records {
+            record.key = Some(bytes::Bytes::from_static(&[0, 0, 0, 1]));
+            record.value = Some(bytes::Bytes::from_static(&[0, 0, 0, 0, 0, 17]));
+        }
+        marker
+    }
+
     #[test]
     fn append_control_batch_keeps_its_own_compression() {
         let dir = tempdir().expect("tempdir");
         let log = lz4_log(dir.path());
 
-        let mut marker = sample_batch(1);
-        marker.attributes = marker.attributes.with_control(true);
-        marker.producer_id = 7;
-        marker.producer_epoch = 3;
+        let marker = commit_marker_batch();
         assert!(marker.attributes.compression() == CompressionType::None);
 
         let (results, _, control_entries) = append_produce_batch(
@@ -493,10 +510,7 @@ mod tests {
         let dir = tempdir().expect("tempdir");
         let log = lz4_log(dir.path());
 
-        let mut marker = sample_batch(1);
-        marker.attributes = marker.attributes.with_control(true);
-        marker.producer_id = 7;
-        marker.producer_epoch = 3;
+        let marker = commit_marker_batch();
 
         let (results, _, control_entries) = append_produce_batch_at(
             &log,

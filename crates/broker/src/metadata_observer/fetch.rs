@@ -415,14 +415,26 @@ mod tests {
         }
     }
 
+    /// A control batch holding one KIP-595 `LeaderChange` control record, as a
+    /// leader starts its epoch with. The record carries a real key and value:
+    /// a control record without them is refused, as Kafka's
+    /// `RecordsIterator.decodeControlRecord` refuses it.
     fn control_batch(base_offset: i64) -> RecordBatch {
+        use krabka_protocol::{
+            owned::leader_change_message::LeaderChangeMessage,
+            records::metadata::control::ControlRecord,
+        };
+        let (key, value) = ControlRecord::LeaderChange(LeaderChangeMessage::default())
+            .encode_key_value()
+            .expect("encode the leader change record");
         RecordBatch {
             base_offset,
             attributes: Attributes::default().with_control(true),
             last_offset_delta: 0,
             records: vec![Record {
                 offset_delta: 0,
-                value: Some(Bytes::from_static(b"leader-change")),
+                key: Some(key),
+                value: Some(value),
                 ..Default::default()
             }],
             ..Default::default()
