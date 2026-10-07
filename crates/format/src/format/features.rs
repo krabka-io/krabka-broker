@@ -786,6 +786,12 @@ mod tests {
     /// past the supported range is `Feature.fromFeatureLevel`'s refusal.
     #[test]
     fn krabka_version_bootstraps_at_its_latest_level_unless_overridden() {
+        // (case, --feature flags, the seeded records or the error)
+        type Case<'a> = (
+            &'a str,
+            Vec<(String, i16)>,
+            Result<Vec<MetadataRecord>, String>,
+        );
         let feature = |name: &str, level| {
             MetadataRecord::V1FeatureLevel(krabka_metadata::FeatureLevelRecord {
                 name: name.into(),
@@ -807,12 +813,7 @@ mod tests {
             records
         };
         let krabka = |level| vec![("krabka.version".to_owned(), level)];
-        // (case, --feature flags, the seeded records or the error)
-        let cases: [(
-            &str,
-            Vec<(String, i16)>,
-            Result<Vec<MetadataRecord>, String>,
-        ); 4] = [
+        let cases: [Case<'_>; 4] = [
             ("no override", vec![], Ok(with_krabka(1))),
             ("override to 1", krabka(1), Ok(with_krabka(1))),
             ("override to 0", krabka(0), Ok(release_defaults.clone())),
