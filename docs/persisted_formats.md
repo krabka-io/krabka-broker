@@ -41,7 +41,9 @@ These rules apply to every format in the tables below. [`CLAUDE.md`](../CLAUDE.m
 
 ### Gating
 
-A `metadata.version` level is the gate when a krabka format change happens at the same level as a Kafka change. The `metadata.version` table mirrors Kafka's `MetadataVersion` enum exactly, because a JVM client throws on a level that its enum does not know. So krabka cannot add a `metadata.version` level of its own. A krabka-only format change needs a feature level that krabka owns. See [Known gaps](#known-gaps-before-the-contract-can-be-enforced).
+A `metadata.version` level is the gate when a krabka format change happens at the same level as a Kafka change. The `metadata.version` table mirrors Kafka's `MetadataVersion` enum exactly, because a JVM client throws on a level that its enum does not know. So krabka cannot add a `metadata.version` level of its own.
+
+A krabka-only format change is gated on `krabka.version`, the feature that krabka owns (`krabka_metadata::krabka_version` in krabka-protocol). Levels 0 and 1 both mean the 1.0.0 formats: Kafka advertises a feature only when its highest supported level is above 0, so a 1.0.0 node advertises `krabka.version` at `[0, 1]`, and level 1 can never carry a new format. The first krabka-only format change takes level 2. `krabka-format` seeds the latest level unless `--feature krabka.version=N` overrides it, and an operator finalizes a level with `kafka-features upgrade --feature krabka.version=N`. The controller refuses a level that a registered node does not support and accepts a safe or unsafe downgrade, as Kafka's `FeatureControlManager` does for a feature other than `metadata.version` and `kraft.version`. `kafka-features upgrade --release-version` does not move it, because that walks only Kafka's production features.
 
 ### Partition log directory
 
@@ -81,7 +83,7 @@ The metadata partition directory is `<metadata_log_dir>/__cluster_metadata-0/`.
 
 | Artifact | Location | Encoding | Version marker | Unknown-version behavior | Gating |
 | :--- | :--- | :--- | :--- | :--- | :--- |
-| Metadata log segment | `<base>.log` | Kafka `RecordBatch` v2. Each value is the KIP-631 `ApiMessageAndVersion` frame: `frameVersion`, `apiKey`, `apiVersion`, body. | `frameVersion` 1 and the per-record `apiVersion` | A `frameVersion` other than 1 is refused, as Kafka's `MetadataRecordSerde` refuses it. On a controller, a committed record that does not decode (an unknown `apiKey`, an `apiVersion` above the supported one, a bad frame or private record) stops the controller, in live replay, startup recovery and the image walk alike, as Kafka's fatal fault handler does. On a broker-only node the observer logs it at error, counts it in `metadata-load-error-count` and stops reading that batch, as Kafka's `MetadataLoader` does. A record that decodes but names a topic or ACL that is gone, or fails validation, is skipped on every replica, because a krabka leader validates against committed state and two racing writes can both commit. | `metadata.version` selects the `apiVersion` of each record, for example `DIRECTORY_ASSIGNMENT_MIN_LEVEL` 17, `ELR_MIN_LEVEL` 23 and `CORDONED_LOG_DIRS_MIN_LEVEL` 30. |
+| Metadata log segment | `<base>.log` | Kafka `RecordBatch` v2. Each value is the KIP-631 `ApiMessageAndVersion` frame: `frameVersion`, `apiKey`, `apiVersion`, body. | `frameVersion` 1 and the per-record `apiVersion` | A `frameVersion` other than 1 is refused, as Kafka's `MetadataRecordSerde` refuses it. On a controller, a committed record that does not decode (an unknown `apiKey`, an `apiVersion` above the supported one, a bad frame or private record, or a field value that no build accepts) stops the controller, in live replay, startup recovery and the image walk alike, as Kafka's fatal fault handler does. On a broker-only node the observer logs it at error, counts it in `metadata-load-error-count` and stops reading that batch, as Kafka's `MetadataLoader` does. A record that decodes but names a topic or ACL that is gone, or fails validation, is skipped on every replica, because a krabka leader validates against committed state and two racing writes can both commit. | `metadata.version` selects the `apiVersion` of each record, for example `DIRECTORY_ASSIGNMENT_MIN_LEVEL` 17, `ELR_MIN_LEVEL` 23 and `CORDONED_LOG_DIRS_MIN_LEVEL` 30. |
 | Metadata snapshot | `<end>-<epoch>.checkpoint` | Kafka KIP-630 snapshot with the same record frame | As the log segment | Any record that does not decode or translate, an unknown `apiKey` included, stops the load with an error. | As the log segment |
 | Bootstrap checkpoint | `00000000000000000000-0000000000.checkpoint` | Kafka KIP-630, with `KRaftVersionRecord` and `VotersRecord` | As the snapshot | As the snapshot | As the snapshot |
 | Observer snapshot | `observer/<end>-<epoch>.checkpoint`, on a broker-only node | Kafka KIP-630 | As the snapshot | The observer discards a checkpoint it cannot read and fetches the metadata again. | As the snapshot |
@@ -113,9 +115,9 @@ The broker also reads the topic config key `krabka.elr`, which a 0.x broker wrot
 
 | Topic | Encoding | Version marker | Unknown-version behavior | Gating |
 | :--- | :--- | :--- | :--- | :--- |
-| `__consumer_offsets` | Kafka 4.3.1 coordinator record schemas | Key version and value version | An unknown key version stops the replay of the partition with an error. The value decoders refuse an unknown value version. | Kafka's rules |
-| `__transaction_state` | Kafka | Key version and value version | Kafka's rules | Kafka's rules |
-| `__share_group_state` | Kafka `ShareSnapshot` and `ShareUpdate` | Key type and value version | An unknown key type, or a value version other than 0, is refused. | Kafka's rules |
+| `__consumer_offsets` | Kafka 4.3.1 coordinator record schemas | Key version (the record type) and value version | As Kafka's `CoordinatorLoaderImpl`: a record type the broker does not know is logged at warn and skipped, value or tombstone, since it can be left over from an aborted upgrade. A known type with an unsupported value version, a key that does not decode, a missing key or a corrupt value fails the load. | Kafka's rules |
+| `__transaction_state` | Kafka | Key version and value version | As Kafka's `TransactionStateManager`: an unknown key version or value version is logged at warn and skipped. Any other error is logged at error, and the transactions loaded before it are installed. | Kafka's rules |
+| `__share_group_state` | Kafka `ShareSnapshot` and `ShareUpdate` | Key type and value version | As `__consumer_offsets`: an unknown record type is skipped, and any other bad record fails the load. | Kafka's rules |
 | `__remote_log_metadata` | Kafka `RemoteLogMetadataSerde`. `CustomMetadata` holds a krabka JSON `WormChainRecord`. | Kafka's per-record version. `WormChainRecord` has a required `version`, 0. | A `WormChainRecord` of another version is refused. It uses `deny_unknown_fields`, so a new field needs a new version, gated on a feature level. JSON without `version` is not a chain record: another backend wrote it. | None for `WormChainRecord` |
 | `__barrier_state` | krabka, big-endian | `i16` 0 | A version other than 0 is refused. | None |
 | `__diskless_wal_index` | krabka. Keys are fixed-width binary; values are wincode. | Each key starts with an `i16` key version that names its type: 0 for a range key, 1 for a delete-floor key. Each value starts with an `i16` version: 2 for `WalFlushRecord`, 0 for `WalDeleteFloorRecord`. | An unknown key version or value version is refused, and the live index marks its projection invalid. | None |
@@ -154,27 +156,11 @@ These records are not on disk, but nodes of two 1.x versions exchange them durin
 | `MetadataFetch` | 1004 | Kafka record batches of `__cluster_metadata`, with the KIP-631 record frame | The request header `api_version`, 0 | As `SubmitChange`. The records are then read as the metadata log segment. |
 | `DelegationTokenMutation` | 1005 | wincode `Vec<DelegationTokenMutation>` | The request header `api_version`, 0 | As `SubmitChange`. |
 
-`crates/raft/src/wire.rs` defines the three codecs. No node advertises which versions of them it serves: the controller's `ApiVersions` answer is Kafka's table, and adding private keys to it would break byte-exactness with Kafka. So a sender always sends v0. A v1 needs a krabka-private way to advertise versions first.
+`crates/raft/src/wire.rs` defines the three codecs. Their versions are negotiated through `krabka.version`, as Kafka's inter-broker protocol versions follow `metadata.version`: the controller's `ApiVersions` answer stays Kafka's table, byte for byte. A sender sends the version that `krabka_metadata::private_rpc_version` gives for the level finalized in its metadata image, and v0 with no image or no finalized level. Because the controller finalizes only a level that every registered node supports, every peer serves that version. A receiver serves 0 up to the version at its own highest supported level and answers anything else with `UNSUPPORTED_VERSION`. Levels 0 and 1 give v0 for all three, so a new RPC version arrives with a new level.
 
-## Known gaps before the contract can be enforced
+## Known gaps
 
-The items below are true of the code at 1.0.0. Each one is a place where the contract is a rule for future changes but the code does not yet give the full protection. This document records them. It does not close them.
-
-### No krabka-owned feature level
-
-The contract gates a format change on a feature level that the operator finalizes. The `metadata.version` table mirrors Kafka's table exactly, so a krabka-only change cannot take a `metadata.version` level. `krabka.metadata.downgrade` is carried only in registration feature maps and does not appear in `ApiVersions`, so it is not a level that an operator finalizes. No other krabka-owned feature exists. So the first krabka format change after 1.0.0 must add one before it can ship: every writer writes its current version at every feature level today.
-
-### No version negotiation for the rolling-upgrade RPCs
-
-A node refuses an unknown version of `SubmitChange`, `MetadataFetch` or `DelegationTokenMutation` with `UNSUPPORTED_VERSION`, but no node advertises the versions it serves. A v1 of any of them needs a krabka-private advertisement first, so that a sender can pick the highest version its peer serves during a roll.
-
-### Some malformed metadata records are skipped
-
-The controller stops on a committed metadata record that does not decode, but it skips one that decodes into `TranslateError::Invalid`. That variant covers both a lookup that depends on the image (an unknown partition, a directory list that does not match the replicas), which replicas can meet after a race and must skip, and a field value that no build accepts (an unknown `fenced` or `leader_recovery_state` value), which Kafka would treat as fatal. Closing this needs krabka-protocol to split the variant.
-
-### `__consumer_offsets` replay stops on an unknown version
-
-`crates/broker/src/coordinator/bootstrap/replay.rs` returns the error of `parse_key`. Kafka's `CoordinatorLoaderImpl` logs an unknown record type and ignores it, because the record can be a leftover from an aborted upgrade.
+The items below are true of the code at 1.0.0.
 
 ### Fixture coverage
 

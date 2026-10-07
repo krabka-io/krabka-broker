@@ -69,7 +69,30 @@ handler does. A broker-only node logs the record at error, counts it in
 `metadata-load-error-count` and stops reading that batch, as Kafka's
 `MetadataLoader` does. An invalid KRaft control record stops every node.
 Before, every one of these was logged at debug level and skipped, so a node
-could build a different metadata image from its peers.
+could build a different metadata image from its peers. A record that names a
+topic or partition the image no longer holds is still skipped on every
+replica, because two racing writes can both commit; a field value that no
+build accepts now stops the controller too.
+
+`krabka.version` is the feature krabka owns for its own format changes.
+Nodes advertise it at `[0, 1]`, `krabka-format` seeds the latest level unless
+`--feature krabka.version=N` overrides it, and `kafka-features upgrade
+--feature krabka.version=N` finalizes it under Kafka's rules for a feature
+other than `metadata.version`. Levels 0 and 1 both mean the 1.0.0 formats.
+The private controller RPCs 1003, 1004 and 1005 now negotiate their version
+from the finalized `krabka.version`: a sender uses the version every peer
+serves at that level, and the bytes stay v0 at levels 0 and 1. `krabka-raft`
+drops `SUBMIT_CHANGE_VERSION`, `METADATA_FETCH_VERSION` and
+`DELEGATION_TOKEN_MUTATION_VERSION` for `private_request_version`,
+`private_api_highest_version` and `PRIVATE_BASELINE_VERSION`.
+
+The group and share coordinators load `__consumer_offsets` and
+`__share_group_state` as Kafka's `CoordinatorLoaderImpl` does: a record type
+the broker does not know is logged and skipped, and any other bad record fails
+the load. Before, an unknown type stopped the group load, and the share loader
+skipped every bad record. The transaction coordinator skips an unknown key or
+value version in `__transaction_state`, as Kafka's `TransactionStateManager`
+does.
 
 ### Added
 

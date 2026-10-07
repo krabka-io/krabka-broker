@@ -35,8 +35,11 @@ rolling upgrade, so they follow the same rules. For every one of them:
   in Kafka's KIP-584 and KIP-778. Use a `metadata.version` level only where
   Kafka defines one. Never add a level that Kafka's `MetadataVersion` does not
   have.
-  A krabka-only change needs a krabka-owned feature, which does not exist yet
-  (see the known gaps in `docs/persisted_formats.md`).
+  A krabka-only change takes a new `krabka.version` level (krabka-protocol
+  `krabka_metadata::krabka_version`). Levels 0 and 1 are the 1.0.0 formats, so
+  the first new format takes level 2. A new version of a private controller RPC
+  (1003-1005) is a row in that crate's `private_rpc_version` table at the new
+  level.
 - Add a golden-bytes fixture test for each persisted format you add or change.
   The test decodes bytes that an earlier release wrote and compares the decoded
   value. It does not compare source text.
