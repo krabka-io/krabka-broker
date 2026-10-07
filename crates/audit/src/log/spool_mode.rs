@@ -460,7 +460,7 @@ mod tests {
             std::fs::metadata(dir.path().join("audit.spool"))
                 .unwrap()
                 .len()
-                <= one.bytes_u64()
+                <= one.bytes_u64() + u64::try_from(crate::spool::FILE_HEADER_LEN).unwrap()
         );
 
         sink.set_fail(false);
@@ -490,7 +490,7 @@ mod tests {
             std::fs::metadata(dir.path().join("audit.spool"))
                 .unwrap()
                 .len()
-                <= one.bytes_u64()
+                <= one.bytes_u64() + u64::try_from(crate::spool::FILE_HEADER_LEN).unwrap()
         );
 
         finish_writer(log, handle).await;

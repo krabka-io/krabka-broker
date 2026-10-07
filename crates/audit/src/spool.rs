@@ -7,10 +7,17 @@
 //! `open` heals and durably truncates a torn tail frame from a crash during an
 //! append.
 //!
-//! Frame: `[u32 len][record]`. Record: `[u8 class_tag][u32 value_len]
-//! [value][u32 header_count]([u32 klen][k][u32 vlen][v])*`. This module uses
-//! synchronous `std::fs`, because the path is degraded and low-frequency. It
-//! treats a truncated tail frame as end-of-data.
+//! File: the header of [`codec::file_header`] (`KAUD`, then the `i16`
+//! version), then frames. Frame: `[u32 len][record]`. Record: `[u8
+//! class_tag][u32 value_len][value][u32 header_count]([u32 klen][k][u32
+//! vlen][v])*`. This module uses synchronous `std::fs`, because the path is
+//! degraded and low-frequency. It treats a truncated or corrupt tail frame as
+//! end-of-data, but a missing or unknown file header as a hard error.
+//!
+//! The sidecars carry the same header: `audit.losses` then holds the `u64`
+//! generation and the `u64` count, `audit.replay-offset` the `u64` offset,
+//! and `audit.replay-poison` the `u64` offset and one frame. Every offset and
+//! byte count here is into the frames, after the header.
 
 use std::{
     fs::{File, OpenOptions},
@@ -29,7 +36,7 @@ use krabka_verified::{
     spool_append_decision,
 };
 
-use self::codec::{decode_record, encode_frame};
+use self::codec::{HEADER_LEN, decode_record, encode_frame, file_header, strip_file_header};
 use crate::{
     ids::{MaxSpoolBytes, RecordCount, SpoolBytes},
     sink::{AuditError, AuditRecord},
@@ -39,9 +46,13 @@ mod codec;
 mod resume;
 
 #[cfg(test)]
+pub(crate) use self::codec::HEADER_LEN as FILE_HEADER_LEN;
+
+#[cfg(test)]
 mod test_support;
 
 const SPOOL_FILE: &str = "audit.spool";
+const SPOOL_TMP: &str = "audit.spool.tmp";
 const LOSS_STATE_FILE: &str = "audit.losses";
 const LOSS_STATE_TMP: &str = "audit.losses.tmp";
 const LOSS_STATE_LEN: usize = 16;
@@ -96,6 +107,7 @@ impl PendingLosses {
         let path = dir.join(LOSS_STATE_FILE);
         let state = if path.exists() {
             let bytes = std::fs::read(&path).map_err(io)?;
+            let bytes = strip_file_header(LOSS_STATE_FILE, &bytes)?;
             if bytes.len() != LOSS_STATE_LEN {
                 return Err(AuditError::Io(format!(
                     "invalid audit loss state length {}",
@@ -245,12 +257,12 @@ fn persist_loss_state(path: &Path, state: AuditLosses) -> Result<(), AuditError>
     let mut bytes = [0_u8; LOSS_STATE_LEN];
     bytes[..8].copy_from_slice(&state.generation.to_be_bytes());
     bytes[8..].copy_from_slice(&state.count.to_be_bytes());
-    persist_bytes(path, LOSS_STATE_TMP, &bytes)
+    persist_with_header(path, LOSS_STATE_TMP, &bytes)
 }
 
 fn read_or_create_u64(path: &Path, tmp_name: &str) -> Result<u64, AuditError> {
     match std::fs::read(path) {
-        Ok(bytes) => <[u8; 8]>::try_from(bytes.as_slice())
+        Ok(bytes) => <[u8; 8]>::try_from(strip_file_header(&file_name(path), &bytes)?)
             .map(u64::from_be_bytes)
             .map_err(|_| AuditError::Io(format!("invalid state length for {}", path.display()))),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
@@ -262,7 +274,23 @@ fn read_or_create_u64(path: &Path, tmp_name: &str) -> Result<u64, AuditError> {
 }
 
 fn persist_u64(path: &Path, tmp_name: &str, value: u64) -> Result<(), AuditError> {
-    persist_bytes(path, tmp_name, &value.to_be_bytes())
+    persist_with_header(path, tmp_name, &value.to_be_bytes())
+}
+
+/// The file name of `path`, for an error that names the file.
+fn file_name(path: &Path) -> String {
+    path.file_name().map_or_else(
+        || path.display().to_string(),
+        |name| name.to_string_lossy().into_owned(),
+    )
+}
+
+/// Atomically replace `path` with the file header followed by `body`.
+fn persist_with_header(path: &Path, tmp_name: &str, body: &[u8]) -> Result<(), AuditError> {
+    let mut bytes = Vec::with_capacity(HEADER_LEN + body.len());
+    bytes.extend_from_slice(&file_header());
+    bytes.extend_from_slice(body);
+    persist_bytes(path, tmp_name, &bytes)
 }
 
 fn persist_bytes(path: &Path, tmp_name: &str, bytes: &[u8]) -> Result<(), AuditError> {
@@ -340,12 +368,14 @@ impl Spool {
         let path = dir.join(SPOOL_FILE);
         let replay_offset_path = dir.join(REPLAY_OFFSET_FILE);
         let replay_offset = read_or_create_u64(&replay_offset_path, REPLAY_OFFSET_TMP)?;
-        let created = !path.exists();
+        if !path.exists() {
+            // Created whole, header included, by rename: a crash leaves either
+            // no spool or one with its header, never a headerless file.
+            persist_with_header(&path, SPOOL_TMP, &[])?;
+        }
         let file = OpenOptions::new()
             .read(true)
             .write(true)
-            .create(true)
-            .truncate(false)
             .open(&path)
             .map_err(io)?;
         let mut s = Self {
@@ -360,15 +390,13 @@ impl Spool {
             replay_offset,
             pending_losses,
         };
-        if created {
-            s.file.sync_all().map_err(io)?;
-            sync_parent(&s.path)?;
-        }
         let (records, valid_bytes) = s.scan()?;
         let physical = s.file.metadata().map_err(io)?.len();
-        s.recovered_torn_tail = valid_bytes.0 < physical;
+        s.recovered_torn_tail = header_len_u64() + valid_bytes.0 < physical;
         if s.recovered_torn_tail {
-            s.file.set_len(valid_bytes.0).map_err(io)?;
+            s.file
+                .set_len(header_len_u64() + valid_bytes.0)
+                .map_err(io)?;
             s.file.sync_all().map_err(io)?;
             tracing::warn!(
                 physical,
@@ -450,7 +478,7 @@ impl Spool {
         let path = self.path.with_file_name(REPLAY_POISON_FILE);
         let mut poison = self.replay_offset.to_be_bytes().to_vec();
         poison.extend_from_slice(&encode_frame(record));
-        persist_bytes(&path, REPLAY_POISON_TMP, &poison)
+        persist_with_header(&path, REPLAY_POISON_TMP, &poison)
     }
 
     pub(crate) fn commit_replay(&mut self, record: &AuditRecord) -> Result<(), AuditError> {
@@ -489,6 +517,7 @@ impl Spool {
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
             Err(error) => return Err(io(error)),
         };
+        let bytes = strip_file_header(REPLAY_POISON_FILE, &bytes)?;
         let poison_offset = bytes
             .get(..8)
             .and_then(|prefix| <[u8; 8]>::try_from(prefix).ok())
@@ -582,7 +611,7 @@ impl Spool {
             f.read_to_end(&mut buf).map_err(io)?;
         }
         let mut out = Vec::new();
-        let mut cur: &[u8] = &buf;
+        let mut cur: &[u8] = strip_file_header(SPOOL_FILE, &buf)?;
         let mut valid_bytes = SpoolBytes(0);
         while cur.len() >= 4 {
             let len =
@@ -658,11 +687,14 @@ impl Spool {
     /// Returns an error if the spool file cannot be truncated, or if the seek
     /// or sync that follows fails.
     pub fn truncate(&mut self) -> Result<(), AuditError> {
-        self.file.set_len(0).map_err(io)?;
+        // Down to the header, which a spool file always keeps.
+        self.file.set_len(header_len_u64()).map_err(io)?;
         self.bytes = SpoolBytes(0);
         self.count = RecordCount(0);
         self.unsynced = 0;
-        self.file.seek(SeekFrom::Start(0)).map_err(io)?;
+        self.file
+            .seek(SeekFrom::Start(header_len_u64()))
+            .map_err(io)?;
         self.file.sync_all().map_err(io)?;
         persist_u64(
             &self.path.with_file_name(REPLAY_OFFSET_FILE),
@@ -672,6 +704,11 @@ impl Spool {
         self.replay_offset = 0;
         Ok(())
     }
+}
+
+/// [`HEADER_LEN`] as a file offset.
+fn header_len_u64() -> u64 {
+    u64::try_from(HEADER_LEN).expect("a six-byte header fits u64")
 }
 
 // cargo-mutants: I/O-only wrapper with no in-process signal (fsyncs directory entry).
@@ -864,7 +901,7 @@ mod tests {
         let on_disk = std::fs::metadata(dir.path().join(SPOOL_FILE))
             .unwrap()
             .len();
-        check!(s.size() == ByteSize::from_bytes(on_disk));
+        check!(s.size() == ByteSize::from_bytes(on_disk - header_len_u64()));
     }
 
     #[test]
@@ -1187,14 +1224,14 @@ mod tests {
     fn reconcile_replay_poison_detects_torn_frame() {
         let dir = tempfile::tempdir().unwrap();
         let poison_path = dir.path().join(REPLAY_POISON_FILE);
-        let mut corrupted = Vec::new();
+        let mut corrupted = file_header().to_vec();
         corrupted.extend_from_slice(&0u64.to_be_bytes());
         corrupted.extend_from_slice(&100u32.to_be_bytes());
         corrupted.extend_from_slice(b"abcd");
         std::fs::write(&poison_path, &corrupted).unwrap();
 
         let replay_offset_path = dir.path().join(REPLAY_OFFSET_FILE);
-        std::fs::write(&replay_offset_path, 100u64.to_be_bytes()).unwrap();
+        std::fs::write(&replay_offset_path, with_header(&100u64.to_be_bytes())).unwrap();
 
         let res = Spool::open(dir.path(), ROOMY_CAP);
         check!(matches!(res, Err(AuditError::Poisoned(_))));
@@ -1218,7 +1255,11 @@ mod tests {
         drop(spool);
 
         let replay_offset_path = dir.path().join(REPLAY_OFFSET_FILE);
-        std::fs::write(&replay_offset_path, (valid_len + 100).to_be_bytes()).unwrap();
+        std::fs::write(
+            &replay_offset_path,
+            with_header(&(valid_len + 100).to_be_bytes()),
+        )
+        .unwrap();
 
         let res = Spool::open(dir.path(), ROOMY_CAP);
         check!(matches!(res, Err(AuditError::Io(_))));
@@ -1258,5 +1299,196 @@ mod tests {
         let res = Spool::open(dir.path(), ROOMY_CAP);
         let _ = std::fs::set_permissions(&poison_path, std::fs::Permissions::from_mode(0o644));
         check!(matches!(res, Err(AuditError::Io(_))));
+    }
+
+    /// `body` behind the current file header, as the spool writes it.
+    fn with_header(body: &[u8]) -> Vec<u8> {
+        let mut bytes = file_header().to_vec();
+        bytes.extend_from_slice(body);
+        bytes
+    }
+
+    /// One record, frame by frame, as `audit.spool` holds it. These bytes are
+    /// the 1.x on-disk format: a change to them breaks every 1.x spool.
+    const GOLDEN_SPOOL: &[u8] = &[
+        b'K', b'A', b'U', b'D', 0x00, 0x00, // magic, version 0
+        0x00, 0x00, 0x00, 0x16, // frame length 22
+        0x03, // class tag: application_lifecycle
+        0x00, 0x00, 0x00, 0x02, b'{', b'}', // value
+        0x00, 0x00, 0x00, 0x01, // one header
+        0x00, 0x00, 0x00, 0x01, b'k', // key
+        0x00, 0x00, 0x00, 0x02, b'v', b'1', // value
+    ];
+
+    fn golden_record() -> AuditRecord {
+        AuditRecord {
+            class: AuditEventClass::ApplicationLifecycle,
+            value: b"{}".to_vec(),
+            headers: vec![("k".into(), b"v1".to_vec())],
+        }
+    }
+
+    #[test]
+    fn spool_file_is_the_golden_bytes() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut spool = Spool::open(dir.path(), ROOMY_CAP).unwrap();
+        check!(spool.append(&golden_record()).unwrap());
+
+        check!(std::fs::read(dir.path().join(SPOOL_FILE)).unwrap() == GOLDEN_SPOOL);
+    }
+
+    #[test]
+    fn golden_spool_file_reads_back_as_its_record() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join(SPOOL_FILE), GOLDEN_SPOOL).unwrap();
+        let spool = Spool::open(dir.path(), ROOMY_CAP).unwrap();
+
+        check!(
+            (spool.recovered_torn_tail(), spool.read_all().unwrap())
+                == (false, vec![golden_record()])
+        );
+    }
+
+    /// The sidecars, as a spool that has spooled the golden record, started
+    /// its replay and lost three records in generation 1 leaves them.
+    #[test]
+    fn sidecar_files_are_the_golden_bytes() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut spool = Spool::open(dir.path(), ROOMY_CAP).unwrap();
+        check!(spool.append(&golden_record()).unwrap());
+        spool.pending_losses().add(3);
+        spool.pending_losses().persist().unwrap();
+        spool.begin_replay(&golden_record()).unwrap();
+
+        let header: &[u8] = &[b'K', b'A', b'U', b'D', 0x00, 0x00];
+        let cases: [(&str, Vec<u8>); 3] = [
+            (
+                LOSS_STATE_FILE,
+                [header, &1u64.to_be_bytes(), &3u64.to_be_bytes()].concat(),
+            ),
+            (REPLAY_OFFSET_FILE, [header, &0u64.to_be_bytes()].concat()),
+            (
+                REPLAY_POISON_FILE,
+                [header, &0u64.to_be_bytes(), &GOLDEN_SPOOL[6..]].concat(),
+            ),
+        ];
+        for (file, want) in cases {
+            check!(
+                std::fs::read(dir.path().join(file)).unwrap() == want,
+                "{file}"
+            );
+        }
+    }
+
+    /// The sidecars read back: the loss state and replay offset come back
+    /// whole, and a poison file left behind by a replay the offset already
+    /// passed is cleared.
+    #[test]
+    fn golden_sidecar_files_read_back() {
+        let dir = tempfile::tempdir().unwrap();
+        let header: &[u8] = &[b'K', b'A', b'U', b'D', 0x00, 0x00];
+        let frame_len = u64::try_from(GOLDEN_SPOOL.len() - 6).unwrap();
+        let golden_two = [GOLDEN_SPOOL, &GOLDEN_SPOOL[6..]].concat();
+        std::fs::write(dir.path().join(SPOOL_FILE), &golden_two).unwrap();
+        std::fs::write(
+            dir.path().join(LOSS_STATE_FILE),
+            [header, &1u64.to_be_bytes(), &3u64.to_be_bytes()].concat(),
+        )
+        .unwrap();
+        std::fs::write(
+            dir.path().join(REPLAY_OFFSET_FILE),
+            [header, &frame_len.to_be_bytes()].concat(),
+        )
+        .unwrap();
+        std::fs::write(
+            dir.path().join(REPLAY_POISON_FILE),
+            [header, &0u64.to_be_bytes(), &GOLDEN_SPOOL[6..]].concat(),
+        )
+        .unwrap();
+
+        let spool = Spool::open(dir.path(), ROOMY_CAP).unwrap();
+        check!(
+            (
+                spool.pending_losses().state(),
+                spool.replay_offset,
+                spool.read_all().unwrap(),
+                dir.path().join(REPLAY_POISON_FILE).exists(),
+            ) == (
+                AuditLosses {
+                    generation: 1,
+                    count: 3,
+                },
+                frame_len,
+                vec![golden_record()],
+                false,
+            )
+        );
+    }
+
+    /// Every file in the spool directory refuses a header it does not know:
+    /// none at all (the 0.x layout, which started straight with the data) is
+    /// `found: None`, and a version other than 0 is named.
+    #[test]
+    fn open_refuses_a_missing_or_unknown_file_header() {
+        let v0_frame = &GOLDEN_SPOOL[6..];
+        let future: &[u8] = &[b'K', b'A', b'U', b'D', 0x00, 0x01];
+        let negative: &[u8] = &[b'K', b'A', b'U', b'D', 0xff, 0xff];
+        // (file, contents, version the error must report)
+        let cases: Vec<(&str, Vec<u8>, Option<i16>)> = vec![
+            (SPOOL_FILE, v0_frame.to_vec(), None),
+            (SPOOL_FILE, Vec::new(), None),
+            (SPOOL_FILE, b"KAU".to_vec(), None),
+            (SPOOL_FILE, [future, v0_frame].concat(), Some(1)),
+            (SPOOL_FILE, negative.to_vec(), Some(-1)),
+            (LOSS_STATE_FILE, [0u8; 16].to_vec(), None),
+            (LOSS_STATE_FILE, [future, &[0u8; 16]].concat(), Some(1)),
+            (REPLAY_OFFSET_FILE, [0u8; 8].to_vec(), None),
+            (REPLAY_OFFSET_FILE, [future, &[0u8; 8]].concat(), Some(1)),
+            (
+                REPLAY_POISON_FILE,
+                [&0u64.to_be_bytes()[..], v0_frame].concat(),
+                None,
+            ),
+            (
+                REPLAY_POISON_FILE,
+                [future, &0u64.to_be_bytes(), v0_frame].concat(),
+                Some(1),
+            ),
+        ];
+        for (file, contents, found) in cases {
+            let dir = tempfile::tempdir().unwrap();
+            std::fs::write(dir.path().join(file), &contents).unwrap();
+            let got = match Spool::open(dir.path(), ROOMY_CAP) {
+                Err(AuditError::UnsupportedSpoolFormat { file, found }) => Some((file, found)),
+                _ => None,
+            };
+            check!(
+                got == Some((file.to_owned(), found)),
+                "{file} {contents:x?}"
+            );
+        }
+    }
+
+    #[test]
+    fn unsupported_spool_format_names_the_file_and_the_version() {
+        let cases = [
+            (
+                None,
+                "audit spool file audit.spool: has no version header; it predates krabka 1.0, \
+                 so the audit spool directory must be emptied (the node reformatted) before \
+                 this broker starts",
+            ),
+            (
+                Some(3),
+                "audit spool file audit.spool: has version 3, which this build does not read",
+            ),
+        ];
+        for (found, want) in cases {
+            let error = AuditError::UnsupportedSpoolFormat {
+                file: SPOOL_FILE.into(),
+                found,
+            };
+            check!(error.to_string() == want);
+        }
     }
 }

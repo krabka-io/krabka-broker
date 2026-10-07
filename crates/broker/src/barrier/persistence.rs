@@ -75,9 +75,9 @@ pub(crate) use self::{
 
 /// The record version that every `__barrier_state` record carries.
 ///
-/// Version 0 is the only version so far, and the decoder rejects any other
-/// value. A new version keeps a decoder for every earlier 1.x version. See
-/// `docs/persisted_formats.md`.
+/// Part of the 1.x on-disk contract. Version 0 is the only version so far,
+/// and the decoder rejects any other value. A new version keeps a decoder for
+/// every earlier 1.x version. See `docs/persisted_formats.md`.
 pub(crate) const RECORD_VERSION: i16 = 0;
 
 /// The epoch that a group record writes, because a group definition belongs to

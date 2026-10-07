@@ -114,6 +114,25 @@ pub enum AuditError {
     Indeterminate(String),
     #[error("audit spool requires explicit recovery: {0}")]
     Poisoned(String),
+    /// A file in the audit spool directory has no version header, or one this
+    /// build does not read.
+    #[error("audit spool file {file}: {}", describe_spool_version(*found))]
+    UnsupportedSpoolFormat {
+        /// The file name, such as `audit.spool`.
+        file: String,
+        /// The version the header holds, or `None` when the file has no
+        /// header at all.
+        found: Option<i16>,
+    },
+}
+
+fn describe_spool_version(found: Option<i16>) -> String {
+    match found {
+        None => "has no version header; it predates krabka 1.0, so the audit spool \
+                 directory must be emptied (the node reformatted) before this broker starts"
+            .to_owned(),
+        Some(version) => format!("has version {version}, which this build does not read"),
+    }
 }
 
 /// Destination for serialized audit records.
