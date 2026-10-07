@@ -104,6 +104,7 @@ async fn surviving_k6_write_cannot_resurrect_next_gen_ownership() {
     let (coord, acc) = replay_classic_residue(Some(
         ng::TargetAssignmentMetadataValue {
             assignment_epoch: 1,
+            assignment_timestamp_ms: 0,
         }
         .encode(),
     ));

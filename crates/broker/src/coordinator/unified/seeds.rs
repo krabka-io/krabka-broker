@@ -20,6 +20,9 @@ pub struct GroupSeed {
     /// The `MetadataHash` of the last group metadata record.
     pub metadata_hash: i64,
     pub target_epoch: i32,
+    /// The `AssignmentTimestamp` of the last target assignment metadata
+    /// record, 0 when unknown.
+    pub assignment_timestamp_ms: i64,
     pub members: std::collections::HashMap<String, persistence_next_gen::MemberMetadataValue>,
     pub target_per_member:
         std::collections::HashMap<String, persistence_next_gen::TargetAssignmentMemberValue>,
@@ -46,6 +49,9 @@ pub struct ShareGroupSeed {
     /// The `MetadataHash` of the last group metadata record.
     pub metadata_hash: i64,
     pub target_epoch: i32,
+    /// The `AssignmentTimestamp` of the last target assignment metadata
+    /// record, 0 when unknown.
+    pub assignment_timestamp_ms: i64,
     pub members:
         std::collections::HashMap<String, share::persistence::ShareGroupMemberMetadataValue>,
     pub target_per_member: std::collections::HashMap<
@@ -77,6 +83,9 @@ pub struct StreamsGroupSeed {
     /// The KIP-1331 description epochs of the last group metadata record.
     pub description_epochs: streams::persistence::DescriptionEpochs,
     pub assignment_epoch: i32,
+    /// The `AssignmentTimestamp` of the last target assignment metadata
+    /// record, 0 when unknown.
+    pub assignment_timestamp_ms: i64,
     pub topology: Option<streams::persistence::StreamsGroupTopologyValue>,
     pub members:
         std::collections::HashMap<String, streams::persistence::StreamsGroupMemberMetadataValue>,
@@ -234,6 +243,7 @@ macro_rules! scrub_seed_assignments {
             }
             $kind::TargetAssignmentMetadata { .. } => {
                 $seed.$epoch = 0;
+                $seed.assignment_timestamp_ms = 0;
                 $seed.target_per_member.clear();
             }
             $kind::TargetAssignmentMember { member_id, .. } => {

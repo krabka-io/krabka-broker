@@ -187,9 +187,11 @@ impl PendingRecords {
             }
             if let Some(value) = self.target_metadata {
                 seed.target_epoch = value.assignment_epoch;
+                seed.assignment_timestamp_ms = value.assignment_timestamp_ms;
             }
             if self.next_gen_target_metadata_tombstone {
                 seed.target_epoch = 0;
+                seed.assignment_timestamp_ms = 0;
             }
             for (member_id, value) in self.target_per_member {
                 if let Some(value) = value {
@@ -258,6 +260,7 @@ mod tests {
             )],
             target_metadata: Some(TargetAssignmentMetadataValue {
                 assignment_epoch: 1,
+                assignment_timestamp_ms: 0,
             }),
             ..Default::default()
         };
@@ -296,6 +299,7 @@ mod tests {
             member_metadata: vec![("m".into(), None)],
             target_metadata: Some(TargetAssignmentMetadataValue {
                 assignment_epoch: 1,
+                assignment_timestamp_ms: 0,
             }),
             target_per_member: vec![("m".into(), None)],
             current_per_member: vec![("m".into(), None)],
@@ -445,6 +449,7 @@ mod tests {
             group_epoch: 7,
             metadata_hash: 0,
             target_epoch: 6,
+            assignment_timestamp_ms: 0,
             members: maplit::hashmap! {"m1".to_string() => p::MemberMetadataValue {
                 instance_id: None,
                 rack_id: None,

@@ -85,6 +85,7 @@ impl GroupCoordinator {
             ) == ReplayMutation::Apply
             && replay_epoch_is_admissible(seed.target_epoch, v.assignment_epoch) => |value| {
                 seed.target_epoch = value.assignment_epoch;
+                seed.assignment_timestamp_ms = value.assignment_timestamp_ms;
             }
         );
     }
@@ -200,6 +201,7 @@ mod tests {
             "g",
             persistence_next_gen::TargetAssignmentMetadataValue {
                 assignment_epoch: 12,
+                assignment_timestamp_ms: 1_791_331_200_000,
             },
         );
         coord.replay_target_assignment_member("g", "member-a", target.clone());
@@ -216,6 +218,7 @@ mod tests {
             group_epoch: 11,
             metadata_hash: -556_879_919_459_959_918,
             target_epoch: 12,
+            assignment_timestamp_ms: 1_791_331_200_000,
             members: maplit::hashmap! {"member-a".to_string() => member},
             target_per_member: maplit::hashmap! {"member-a".to_string() => target},
             current_per_member: maplit::hashmap! {"member-a".to_string() => current},

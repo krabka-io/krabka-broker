@@ -2302,3 +2302,84 @@ fn accepted_tasks(
         ..super::response::base_resp(codes::NONE, member_epoch, &config)
     }
 }
+
+/// KIP-1263: a streams group replays the `AssignmentTimestamp` of its target
+/// assignment metadata record, and Kafka's `canComputeNextTargetAssignment`
+/// runs the assignment interval from it. A stored time inside the interval
+/// holds the next assignment back, and an unknown one (0) or an elapsed
+/// interval lets it run, which writes the time it finished.
+#[tokio::test(start_paused = true)]
+async fn the_replayed_assignment_timestamp_holds_the_interval() {
+    use std::time::Duration;
+
+    use crate::coordinator::unified::{
+        StreamsGroupSeed,
+        streams::{
+            actor::reconciliation::ASSIGNMENT_INTERVAL_DETAIL, topology::status::ASSIGNMENT_DELAYED,
+        },
+        wall_clock_ms,
+    };
+
+    // (case, milliseconds before now of the stored timestamp, or `None` for
+    // 0, the expected (member epoch, ASSIGNMENT_DELAYED detail, whether the
+    // group wrote a new timestamp))
+    let rows = [
+        ("no stored time", None, (3, None, true)),
+        (
+            "an assignment 200 ms ago",
+            Some(200),
+            (2, Some(ASSIGNMENT_INTERVAL_DETAIL.to_owned()), false),
+        ),
+        ("an assignment 1 s ago", Some(1_000), (3, None, true)),
+    ];
+    for (case, ago, expected) in rows {
+        let coord = coordinator_with_log(
+            StreamsGroupConfig {
+                initial_rebalance_delay: Duration::ZERO,
+                assignment_interval: Duration::from_secs(1),
+                ..StreamsGroupConfig::default()
+            },
+            Arc::new(InMemoryOffsetsLog::default()),
+        );
+        let handle = coord.get_or_create_streams("g");
+        let stored = ago.map_or(0, |ago| wall_clock_ms() - ago);
+        handle
+            .tx
+            .send(StreamsGroupActorMessage::Seed(StreamsGroupSeed {
+                group_epoch: 2,
+                assignment_epoch: 2,
+                assignment_timestamp_ms: stored,
+                ..StreamsGroupSeed::default()
+            }))
+            .await
+            .unwrap();
+        let before = wall_clock_ms();
+        let resp = heartbeat(
+            &handle,
+            StreamsGroupHeartbeatRequest {
+                group_id: "g".into(),
+                member_id: "m1".into(),
+                member_epoch: 0,
+                rebalance_timeout_ms: 1_000,
+                ..Default::default()
+            },
+        )
+        .await;
+        let after = wall_clock_ms();
+        let delayed = resp
+            .status
+            .unwrap_or_default()
+            .into_iter()
+            .find(|status| status.status_code == ASSIGNMENT_DELAYED)
+            .map(|status| status.status_detail);
+        let written = coord
+            .cached_streams_seed("g")
+            .unwrap()
+            .assignment_timestamp_ms;
+        // The paused clock reads the same millisecond throughout, give or
+        // take the rounding of the real clocks underneath it.
+        let fresh = (before - 1..=after + 1).contains(&written);
+        check!((resp.member_epoch, delayed, fresh) == expected, "{case}");
+        check!(fresh || written == stored, "{case}");
+    }
+}

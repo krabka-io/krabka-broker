@@ -63,6 +63,7 @@ pub(super) fn snapshot_pending_after_change(
     if state.target.epoch > INITIAL_EPOCH {
         pending.target_metadata = Some(StreamsGroupTargetAssignmentMetadataValue {
             assignment_epoch: state.target.epoch,
+            assignment_timestamp_ms: actor.assignment_timestamp_ms,
         });
     }
     crate::coordinator::unified::persistence::snapshot_members!(pending, state, affected_members;
@@ -171,6 +172,7 @@ pub(super) fn snapshot_seed(actor: &ActorState) -> StreamsGroupSeed {
         metadata_hash: actor.metadata_hash,
         description_epochs: actor.description_epochs,
         assignment_epoch: state.target.epoch,
+        assignment_timestamp_ms: actor.assignment_timestamp_ms,
         topology: actor.topology.clone(),
         members,
         target_per_member,
@@ -187,6 +189,7 @@ pub(super) fn apply_seed(actor: &mut ActorState, seed: StreamsGroupSeed) {
     actor.description_epochs = seed.description_epochs;
     state.target.epoch = seed.assignment_epoch;
     state.assignment_epoch = seed.assignment_epoch;
+    actor.assignment_timestamp_ms = seed.assignment_timestamp_ms;
     if let Some(topology) = &seed.topology {
         state.topology = Some(StoredTopologyHandle {
             epoch: topology.epoch,
@@ -295,6 +298,7 @@ mod tests {
                 failed: -1,
             },
             assignment_epoch: 4,
+            assignment_timestamp_ms: 0,
             topology: Some(StreamsGroupTopologyValue {
                 epoch: 2,
                 subtopologies: vec![],

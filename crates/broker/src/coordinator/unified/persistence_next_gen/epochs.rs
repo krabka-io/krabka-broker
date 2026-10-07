@@ -23,67 +23,19 @@
 //! tagged-field trailer, the single `0` byte whose absence is what makes
 //! Kafka's reader underflow.
 
-use bytes::{BufMut, Bytes, BytesMut};
+use crate::coordinator::unified::persistence::flex::epoch_value;
 
-use crate::{
-    coordinator::unified::persistence::{
-        flex::{epoch_value, get_value_version, put_tagged_fields, read_tagged},
-        get_i32,
-    },
-    error::BrokerError,
-};
-
-/// The tag of `ConsumerGroupMetadataValue.MetadataHash`.
-const TAG_METADATA_HASH: u32 = 0;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct GroupMetadataValue {
-    pub epoch: i32,
+epoch_value!(GroupMetadataValue("ConsumerGroupMetadataValue") {
+    epoch,
     /// Kafka's `MetadataHash`: the hash of the subscribed topics' metadata
     /// when the epoch was written.
-    pub metadata_hash: i64,
-}
-
-impl GroupMetadataValue {
-    #[must_use]
-    pub fn encode(self) -> Bytes {
-        let mut buf = BytesMut::new();
-        buf.put_i16(0);
-        buf.put_i32(self.epoch);
-        let tags = if self.metadata_hash == 0 {
-            Vec::new()
-        } else {
-            vec![(
-                TAG_METADATA_HASH,
-                Bytes::copy_from_slice(&self.metadata_hash.to_be_bytes()),
-            )]
-        };
-        put_tagged_fields(&mut buf, tags);
-        buf.freeze()
-    }
-    /// # Errors
-    /// Returns an error when `buf` ends before a field, when the value version
-    /// is not 0, or when the tagged `MetadataHash` is shorter than eight bytes.
-    pub fn decode(mut buf: &[u8]) -> Result<Self, BrokerError> {
-        get_value_version(&mut buf, 0, "unknown ConsumerGroupMetadataValue version")?;
-        let epoch = get_i32(&mut buf)?;
-        let mut metadata_hash = 0;
-        read_tagged(&mut buf, |tag, payload| {
-            if tag != TAG_METADATA_HASH {
-                return Ok(false);
-            }
-            metadata_hash = krabka_protocol::primitives::fixed::get_i64(payload)?;
-            Ok(true)
-        })?;
-        Ok(Self {
-            epoch,
-            metadata_hash,
-        })
-    }
-}
-
+    metadata_hash,
+});
 epoch_value!(TargetAssignmentMetadataValue("ConsumerGroupTargetAssignmentMetadataValue") {
-    assignment_epoch
+    assignment_epoch,
+    /// Kafka's `AssignmentTimestamp`: the wall-clock time in milliseconds at
+    /// which the assignment calculation finished, or 0 when it is unknown.
+    assignment_timestamp_ms,
 });
 
 #[cfg(test)]
@@ -147,19 +99,37 @@ mod tests {
         assert!(GroupMetadataValue::decode(truncated).is_err());
     }
 
+    /// `ConsumerGroupTargetAssignmentMetadataValue` as Kafka 4.3.1's
+    /// generated writer lays it out: i16 version 0, i32 `AssignmentEpoch`,
+    /// then the tagged-field trailer, which holds `AssignmentTimestamp` as tag
+    /// 0 with an eight-byte payload unless it is the default 0.
     #[test]
     fn target_assignment_metadata_bytes_match_kafka_schema() {
-        let v = TargetAssignmentMetadataValue {
-            assignment_epoch: 12,
-        };
-        assert!(&v.encode()[..] == b"\x00\x00\x00\x00\x00\x0c\x00");
-    }
-
-    #[test]
-    fn target_assignment_metadata_roundtrip() {
-        let v = TargetAssignmentMetadataValue {
-            assignment_epoch: 12,
-        };
-        assert!(TargetAssignmentMetadataValue::decode(&v.encode()).unwrap() == v);
+        // (case, value, Kafka's bytes)
+        let rows: [(&str, TargetAssignmentMetadataValue, &[u8]); 2] = [
+            (
+                "a converted classic group: the time is unknown",
+                TargetAssignmentMetadataValue {
+                    assignment_epoch: 12,
+                    assignment_timestamp_ms: 0,
+                },
+                b"\x00\x00\x00\x00\x00\x0c\x00",
+            ),
+            (
+                "an assignment that finished at 2026-10-07T00:00:00Z",
+                TargetAssignmentMetadataValue {
+                    assignment_epoch: 12,
+                    assignment_timestamp_ms: 1_791_331_200_000,
+                },
+                b"\x00\x00\x00\x00\x00\x0c\x01\x00\x08\x00\x00\x01\xa1\x13\xa8\xec\x00",
+            ),
+        ];
+        for (case, value, bytes) in rows {
+            check!(&value.encode()[..] == bytes, "{case}");
+            check!(
+                TargetAssignmentMetadataValue::decode(bytes).unwrap() == value,
+                "{case}"
+            );
+        }
     }
 }

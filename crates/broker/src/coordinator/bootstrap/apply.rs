@@ -259,7 +259,7 @@ pub(super) fn apply_streams_record(
         }
         sp::StreamsGroupKey::TargetAssignmentMetadata { group_id } => {
             let v = sp::StreamsGroupTargetAssignmentMetadataValue::decode(value_bytes)?;
-            coordinator.replay_streams_target_assignment_metadata(&group_id, v.assignment_epoch);
+            coordinator.replay_streams_target_assignment_metadata(&group_id, v);
             if coordinator.cached_streams_seed(&group_id).is_some() {
                 coordinator.mark_streams(&group_id);
             }

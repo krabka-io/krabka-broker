@@ -338,9 +338,13 @@ struct ActorState {
     /// first member joins an empty group, and cleared when the delayed
     /// assignment runs.
     initial_rebalance_deadline: Option<tokio::time::Instant>,
-    /// When the last target assignment was computed, for Kafka's assignment
-    /// interval. `None` until one is computed.
-    assignment_timestamp: Option<tokio::time::Instant>,
+    /// Kafka's `StreamsGroup.assignmentTimestamp`: the wall-clock time in
+    /// milliseconds at which the last target assignment calculation
+    /// finished, or 0 when there is no previous assignment or its time is
+    /// unknown. It is the `AssignmentTimestamp` of the group's target
+    /// assignment metadata record, and Kafka's assignment interval runs from
+    /// it.
+    assignment_timestamp_ms: i64,
     /// KIP-1331: what the topology description plugin holds for the group,
     /// as the group metadata record persists it.
     description_epochs: DescriptionEpochs,
@@ -362,7 +366,7 @@ impl ActorState {
             configured: false,
             configured_topology: None,
             initial_rebalance_deadline: None,
-            assignment_timestamp: None,
+            assignment_timestamp_ms: 0,
             description_epochs: DescriptionEpochs::default(),
             description: None,
             description_backoff: SolicitationBackoff::default(),

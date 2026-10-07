@@ -19,6 +19,7 @@ pub(super) fn apply_seed(state: &mut ShareGroupState, seed: ShareGroupSeed) {
     state.group_epoch = seed.group_epoch;
     state.metadata_hash = seed.metadata_hash;
     state.target.epoch = seed.target_epoch;
+    state.assignment_timestamp_ms = seed.assignment_timestamp_ms;
     for (mid, meta) in seed.members {
         let subs: HashSet<String> = meta.subscribed_topic_names.into_iter().collect();
         let mut m = ShareMemberState::joining(mid.clone(), meta.client_id, meta.client_host, subs);
@@ -93,6 +94,7 @@ pub(super) fn snapshot_seed(state: &ShareGroupState) -> ShareGroupSeed {
         group_epoch: state.group_epoch,
         metadata_hash: state.metadata_hash,
         target_epoch: state.target.epoch,
+        assignment_timestamp_ms: state.assignment_timestamp_ms,
         members,
         target_per_member,
         current_per_member,

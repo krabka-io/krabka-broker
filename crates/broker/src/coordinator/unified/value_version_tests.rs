@@ -49,6 +49,7 @@ fn every_coordinator_value_refuses_an_unknown_version() {
             "ConsumerGroupTargetAssignmentMetadataValue",
             ng::TargetAssignmentMetadataValue {
                 assignment_epoch: 1,
+                assignment_timestamp_ms: 0,
             }
             .encode(),
             |b| ng::TargetAssignmentMetadataValue::decode(b).map(|_| ()),
@@ -91,6 +92,7 @@ fn every_coordinator_value_refuses_an_unknown_version() {
             "ShareGroupTargetAssignmentMetadataValue",
             sp::ShareGroupTargetAssignmentMetadataValue {
                 assignment_epoch: 1,
+                assignment_timestamp_ms: 0,
             }
             .encode(),
             |b| sp::ShareGroupTargetAssignmentMetadataValue::decode(b).map(|_| ()),
@@ -129,6 +131,7 @@ fn every_coordinator_value_refuses_an_unknown_version() {
             "StreamsGroupTargetAssignmentMetadataValue",
             st::StreamsGroupTargetAssignmentMetadataValue {
                 assignment_epoch: 1,
+                assignment_timestamp_ms: 0,
             }
             .encode(),
             |b| st::StreamsGroupTargetAssignmentMetadataValue::decode(b).map(|_| ()),

@@ -461,6 +461,7 @@ fn consumer_group_seed(topic_id: WireUuid) -> GroupSeed {
     GroupSeed {
         group_epoch: 5,
         target_epoch: 5,
+        assignment_timestamp_ms: 0,
         members: [
             ("native".to_string(), metadata(false)),
             ("classic".to_string(), metadata(true)),

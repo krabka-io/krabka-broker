@@ -229,7 +229,10 @@ pub(super) fn run_reconcile(
     }
     // Kafka's `maybeUpdateTargetAssignment`: the target assignment waits for
     // the group's assignment interval.
-    if state.assignment_delayed(config.assignment_interval, Instant::now()) {
+    if state.assignment_delayed(
+        config.assignment_interval,
+        crate::coordinator::unified::wall_clock_ms(),
+    ) {
         return false;
     }
     let input = metadata.snapshot();
@@ -237,7 +240,7 @@ pub(super) fn run_reconcile(
     let recomputed =
         reconciler::reconcile_if_dirty(state, &input, &*assignor) == ReconcileOutcome::Recomputed;
     if recomputed {
-        state.record_assignment(Instant::now());
+        state.record_assignment(crate::coordinator::unified::wall_clock_ms());
     }
     recomputed
 }

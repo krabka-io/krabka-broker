@@ -98,25 +98,59 @@ macro_rules! value_codec {
 
 pub(crate) use value_codec;
 
-// The consumer, share and streams assignment epochs have the same Kafka
-// value layout. Keep their domain types distinct while sharing the codec.
+/// Implements a version-0 flexible value of an `int32` epoch followed by a
+/// tagged-field trailer whose one field is an `int64` at tag 0 with default 0.
+///
+/// Four Kafka 4.3.1 records have that layout: `ConsumerGroupMetadataValue`,
+/// whose tag is `MetadataHash`, and the consumer, share and streams
+/// `*TargetAssignmentMetadataValue`, whose tag is KIP-1263's
+/// `AssignmentTimestamp`. The macro keeps their domain types distinct while
+/// they share the codec. The string literal is Kafka's record name, which the
+/// value-version error names.
 macro_rules! epoch_value {
-    ($(#[$meta:meta])* $name:ident($record:literal) { $field:ident }) => {
+    (
+        $(#[$meta:meta])*
+        $name:ident($record:literal) {
+            $(#[$epoch_meta:meta])* $epoch:ident,
+            $(#[$tagged_meta:meta])* $tagged:ident $(,)?
+        }
+    ) => {
         $(#[$meta])*
         #[derive(Debug, Clone, Copy, PartialEq, Eq)]
         pub struct $name {
-            pub $field: i32,
+            $(#[$epoch_meta])*
+            pub $epoch: i32,
+            $(#[$tagged_meta])*
+            pub $tagged: i64,
         }
 
-        $crate::coordinator::unified::persistence::flex::value_codec! {
-            $name($record),
-            encode(self) -> buf {
-                bytes::BufMut::put_i32(buf, self.$field);
+        impl $name {
+            #[must_use]
+            pub fn encode(self) -> bytes::Bytes {
+                let mut buf = bytes::BytesMut::new();
+                bytes::BufMut::put_i16(&mut buf, 0);
+                bytes::BufMut::put_i32(&mut buf, self.$epoch);
+                $crate::coordinator::unified::persistence::flex::put_tag0_i64(
+                    &mut buf,
+                    self.$tagged,
+                );
+                buf.freeze()
             }
-            decode(buf) {
-                Ok(Self {
-                    $field: $crate::coordinator::unified::persistence::get_i32(buf)?,
-                })
+
+            /// # Errors
+            /// Returns an error when `buf` ends before a field, when the value
+            /// version is not 0, or when the tag 0 payload is shorter than
+            /// eight bytes.
+            pub fn decode(mut buf: &[u8]) -> Result<Self, $crate::error::BrokerError> {
+                $crate::coordinator::unified::persistence::flex::get_value_version(
+                    &mut buf,
+                    0,
+                    concat!("unknown ", $record, " version"),
+                )?;
+                let $epoch = $crate::coordinator::unified::persistence::get_i32(&mut buf)?;
+                let $tagged =
+                    $crate::coordinator::unified::persistence::flex::get_tag0_i64(&mut buf)?;
+                Ok(Self { $epoch, $tagged })
             }
         }
     };
@@ -194,6 +228,18 @@ pub(crate) fn put_tagged_fields(buf: &mut BytesMut, entries: Vec<(u32, Bytes)>) 
     w.write(buf, &UnknownTaggedFields::default());
 }
 
+/// Writes a tagged-field trailer whose only field is an `int64` at tag 0 with
+/// default 0, as Kafka's generated writer does: the field only when it is not
+/// 0, so a default value ends in the empty trailer.
+pub(crate) fn put_tag0_i64(buf: &mut BytesMut, value: i64) {
+    let tags = if value == 0 {
+        Vec::new()
+    } else {
+        vec![(0, Bytes::copy_from_slice(&value.to_be_bytes()))]
+    };
+    put_tagged_fields(buf, tags);
+}
+
 // ───────────────────────────────────────────────────────────────── readers ──
 
 /// Reads a fixed-width `int8`.
@@ -227,6 +273,25 @@ pub(crate) fn get_value_version(
             krabka_protocol::ProtocolError::InvalidValue(record),
         ))
     }
+}
+
+/// Reads the trailer that [`put_tag0_i64`] writes and returns the tag 0
+/// `int64`, 0 when it is absent. Every other tag is skipped.
+///
+/// # Errors
+///
+/// Returns an error when the trailer does not decode, or when the tag 0
+/// payload is shorter than eight bytes.
+pub(crate) fn get_tag0_i64(buf: &mut &[u8]) -> Result<i64, BrokerError> {
+    let mut value = 0;
+    read_tagged(buf, |tag, payload| {
+        if tag != 0 {
+            return Ok(false);
+        }
+        value = fixed::get_i64(payload)?;
+        Ok(true)
+    })?;
+    Ok(value)
 }
 
 pub(crate) fn get_compact_string(buf: &mut &[u8]) -> Result<String, BrokerError> {

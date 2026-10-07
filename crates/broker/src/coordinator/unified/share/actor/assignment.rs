@@ -5,7 +5,7 @@
 
 use std::{
     collections::{HashMap, HashSet},
-    time::{Duration, Instant},
+    time::Duration,
 };
 
 use krabka_protocol::primitives::uuid::Uuid;
@@ -47,7 +47,10 @@ pub(super) fn reconcile(
     state.metadata_hash = metadata_hash;
     state.dirty = false;
     if state.target.epoch >= state.group_epoch
-        || state.assignment_delayed(assignment_interval, Instant::now())
+        || state.assignment_delayed(
+            assignment_interval,
+            crate::coordinator::unified::wall_clock_ms(),
+        )
     {
         return true;
     }
@@ -88,7 +91,7 @@ pub(super) fn reconcile(
         assignable.entry(*topic_id).or_default().insert(*partition);
     }
     let assignment = ShareGroupAssignor.assign(&group, &topics, Some(&assignable));
-    state.install_target(assignment);
+    state.install_target(assignment, crate::coordinator::unified::wall_clock_ms());
     true
 }
 
@@ -263,6 +266,7 @@ mod tests {
                     group_epoch: 3,
                     metadata_hash: stored,
                     target_epoch: 3,
+                    assignment_timestamp_ms: 0,
                     members: [(
                         "m".to_owned(),
                         ShareGroupMemberMetadataValue {

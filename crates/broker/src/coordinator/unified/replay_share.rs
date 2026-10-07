@@ -65,6 +65,7 @@ impl GroupCoordinator {
             )
             && replay_epoch_is_admissible(seed.target_epoch, v.assignment_epoch) => |value| {
                 seed.target_epoch = value.assignment_epoch;
+                seed.assignment_timestamp_ms = value.assignment_timestamp_ms;
             }
         );
     }
@@ -211,6 +212,7 @@ mod tests {
             "sg",
             share::persistence::ShareGroupTargetAssignmentMetadataValue {
                 assignment_epoch: 22,
+                assignment_timestamp_ms: 1_791_331_200_000,
             },
         );
         coord.replay_share_target_assignment_member("sg", "share-member", target.clone());
@@ -220,6 +222,7 @@ mod tests {
             group_epoch: 21,
             metadata_hash: -1_770_207_100_006_454_364,
             target_epoch: 22,
+            assignment_timestamp_ms: 1_791_331_200_000,
             members: maplit::hashmap! {"share-member".to_string() => member},
             target_per_member: maplit::hashmap! {"share-member".to_string() => target},
             current_per_member: maplit::hashmap! {"share-member".to_string() => current},

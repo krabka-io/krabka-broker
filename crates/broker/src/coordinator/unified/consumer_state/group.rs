@@ -52,10 +52,12 @@ pub struct GroupState {
     /// `DeadlineAndEpoch.EMPTY`: a subscribed topic changed, so the next
     /// heartbeat computes the metadata hash again.
     metadata_refresh_requested: bool,
-    /// Kafka's `ConsumerGroup.assignmentTimestamp`: when the last target
-    /// assignment calculation finished, or `None` when there is no previous
-    /// assignment or its time is unknown, as after a replay.
-    assignment_timestamp: Option<Instant>,
+    /// Kafka's `ConsumerGroup.assignmentTimestamp`: the wall-clock time in
+    /// milliseconds at which the last target assignment calculation finished,
+    /// or 0 when there is no previous assignment or its time is unknown. It
+    /// is the `AssignmentTimestamp` of the group's target assignment metadata
+    /// record.
+    assignment_timestamp_ms: i64,
     /// Kafka's `ConsumerGroup.hasSubscriptionMetadataRecord`: the log holds a
     /// deprecated `ConsumerGroupPartitionMetadata` value (key v4), so the next
     /// metadata update writes its tombstone.
@@ -75,16 +77,24 @@ impl GroupState {
             resolved_regexes: HashMap::new(),
             metadata_hash: 0,
             metadata_refresh_requested: false,
-            assignment_timestamp: None,
+            assignment_timestamp_ms: 0,
             has_subscription_metadata_record: false,
         }
     }
 
     crate::coordinator::unified::member_helpers::assignment_delay_method!();
 
-    /// Records that a target assignment calculation finished at `now`.
-    pub(crate) fn record_assignment(&mut self, now: Instant) {
-        self.assignment_timestamp = Some(now);
+    /// Records that a target assignment calculation finished at `now_ms`, the
+    /// wall-clock time that Kafka's `TargetAssignmentBuilder` writes as the
+    /// record's `AssignmentTimestamp`.
+    pub(crate) fn record_assignment(&mut self, now_ms: i64) {
+        self.assignment_timestamp_ms = now_ms;
+    }
+
+    /// Kafka's `ConsumerGroup.assignmentTimestamp`.
+    #[must_use]
+    pub(crate) fn assignment_timestamp_ms(&self) -> i64 {
+        self.assignment_timestamp_ms
     }
 
     crate::coordinator::unified::member_helpers::bump_group_epoch!(self; self.dirty = true;);
@@ -884,15 +894,15 @@ mod tests {
     /// the interval has elapsed since the last one.
     #[test]
     fn the_assignment_interval_holds_the_next_assignment_back() {
-        let assigned_at = Instant::now();
+        let assigned_at = 1_000_000;
         let second = Duration::from_secs(1);
-        // (last assignment recorded, interval, time since it, delayed)
+        // (last assignment recorded, interval, milliseconds since it, delayed)
         let rows = [
-            (false, second, Duration::ZERO, false),
-            (true, Duration::ZERO, Duration::ZERO, false),
-            (true, second, Duration::from_millis(999), true),
-            (true, second, second, false),
-            (true, second, Duration::from_mins(1), false),
+            (false, second, 0, false),
+            (true, Duration::ZERO, 0, false),
+            (true, second, 999, true),
+            (true, second, 1_000, false),
+            (true, second, 60_000, false),
         ];
         for (recorded, interval, since, delayed) in rows {
             let mut g = GroupState::new("g");

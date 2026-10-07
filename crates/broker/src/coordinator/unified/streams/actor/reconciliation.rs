@@ -18,12 +18,16 @@ use tokio::time::Instant;
 
 use super::ActorState;
 use crate::{
-    coordinator::unified::streams::{
-        assignor::{self, AssignorInput, AssignorMember},
-        config::StreamsGroupConfig,
-        persistence::StreamsGroupTopologyValue,
-        state::{StreamsGroupStatePhase, StreamsTargetAssignment},
-        topology,
+    coordinator::unified::{
+        can_compute_next_target_assignment,
+        streams::{
+            assignor::{self, AssignorInput, AssignorMember},
+            config::StreamsGroupConfig,
+            persistence::StreamsGroupTopologyValue,
+            state::{StreamsGroupStatePhase, StreamsTargetAssignment},
+            topology,
+        },
+        wall_clock_ms,
     },
     metadata_source::MetadataSource,
 };
@@ -86,10 +90,11 @@ pub(super) fn assignment_delay(
     {
         return Some(INITIAL_DELAY_DETAIL);
     }
-    let interval_running = !config.assignment_interval.is_zero()
-        && actor
-            .assignment_timestamp
-            .is_some_and(|last| now < last + config.assignment_interval);
+    let interval_running = !can_compute_next_target_assignment(
+        actor.assignment_timestamp_ms,
+        config.assignment_interval,
+        wall_clock_ms(),
+    );
     (actor.assignment_pending() && interval_running).then_some(ASSIGNMENT_INTERVAL_DETAIL)
 }
 
@@ -164,7 +169,6 @@ fn update_group_epoch(actor: &mut ActorState, metadata_source: Option<&Arc<dyn M
 /// Installs the target assignment of the group epoch: the assignor's output
 /// for a ready topology, and an empty target otherwise.
 fn update_target_assignment(actor: &mut ActorState, config: &StreamsGroupConfig) {
-    actor.assignment_timestamp = Some(Instant::now());
     let ready = actor
         .ready_topology()
         .map(topology::ConfiguredTopology::number_of_tasks)
@@ -181,6 +185,10 @@ fn update_target_assignment(actor: &mut ActorState, config: &StreamsGroupConfig)
             StreamsGroupStatePhase::NotReady
         };
     }
+    // Kafka's `TargetAssignmentBuilder.build` stamps the record with the time
+    // at which the calculation finished, whether the topology was ready or
+    // not.
+    actor.assignment_timestamp_ms = wall_clock_ms();
 }
 
 /// Bumps the group epoch and installs the assignor's target at once, with no

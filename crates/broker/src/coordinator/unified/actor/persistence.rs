@@ -135,6 +135,7 @@ pub(super) fn snapshot_pending_after_change(
     if target_changed {
         pending.target_metadata = Some(TargetAssignmentMetadataValue {
             assignment_epoch: state.target.epoch,
+            assignment_timestamp_ms: state.assignment_timestamp_ms(),
         });
         for (mid, member) in &state.members {
             if !affected_members.iter().any(|affected| affected == mid) {
@@ -359,6 +360,7 @@ mod tests {
             pending.target_metadata
                 == Some(TargetAssignmentMetadataValue {
                     assignment_epoch: 4,
+                    assignment_timestamp_ms: 0,
                 })
         );
         check!(pending.member_metadata.len() == 2);

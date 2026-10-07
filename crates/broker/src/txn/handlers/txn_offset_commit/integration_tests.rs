@@ -640,6 +640,7 @@ fn kip_1251_seed(topic_id: krabka_protocol::primitives::uuid::Uuid) -> GroupSeed
     GroupSeed {
         group_epoch: 7,
         target_epoch: 7,
+        assignment_timestamp_ms: 0,
         members: [(
             "m".to_string(),
             MemberMetadataValue {

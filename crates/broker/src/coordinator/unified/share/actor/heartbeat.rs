@@ -544,4 +544,77 @@ mod tests {
             check!(log.batches().await.is_empty(), "{what}");
         }
     }
+
+    /// KIP-1263: a share group replays the `AssignmentTimestamp` of its target
+    /// assignment metadata record, and Kafka's
+    /// `canComputeNextTargetAssignment` runs the assignment interval from it.
+    /// A stored time inside the interval holds the next assignment back, and
+    /// an unknown time (0) or an elapsed interval lets it run, which writes
+    /// the time it finished.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn the_replayed_assignment_timestamp_holds_the_interval() {
+        use crate::coordinator::unified::{
+            GroupCoordinator, ShareGroupSeed, streams::config::StreamsGroupConfig, wall_clock_ms,
+        };
+
+        // (case, milliseconds before now of the stored timestamp, or `None`
+        // for 0, the expected (member epoch, whether the group wrote a new
+        // timestamp))
+        let rows = [
+            ("no stored time", None, (3, true)),
+            ("an assignment a second ago", Some(1_000), (2, false)),
+            ("an assignment two minutes ago", Some(120_000), (3, true)),
+        ];
+        let mut answers = Vec::new();
+        let mut expected = Vec::new();
+        for (case, ago, wanted) in rows {
+            let (metadata, _) = metadata_with_topic("t", 4);
+            let coordinator = Arc::new(GroupCoordinator::new(
+                NextGenConfig::assigning_at_once(),
+                ShareGroupConfig {
+                    assignment_interval: std::time::Duration::from_mins(1),
+                    ..ShareGroupConfig::default()
+                },
+                metadata,
+                Arc::new(InMemoryOffsetsLog::default()),
+                StreamsGroupConfig::default(),
+            ));
+            let handle = coordinator.get_or_create_share("g");
+            let stored = ago.map_or(0, |ago| wall_clock_ms() - ago);
+            handle
+                .tx
+                .send(super::super::ShareGroupActorMessage::Seed(ShareGroupSeed {
+                    group_epoch: 2,
+                    target_epoch: 2,
+                    assignment_timestamp_ms: stored,
+                    ..ShareGroupSeed::default()
+                }))
+                .await
+                .unwrap();
+            let before = wall_clock_ms();
+            let joined = heartbeat(
+                &handle,
+                ShareGroupHeartbeatRequest {
+                    group_id: "g".into(),
+                    member_id: "m1".into(),
+                    member_epoch: 0,
+                    subscribed_topic_names: Some(vec!["t".into()]),
+                    ..Default::default()
+                },
+            )
+            .await;
+            let after = wall_clock_ms();
+            let written = coordinator
+                .cached_share_seed("g")
+                .unwrap()
+                .assignment_timestamp_ms;
+            answers.push((
+                case,
+                joined.member_epoch,
+                (before..=after).contains(&written),
+            ));
+            expected.push((case, wanted.0, wanted.1));
+        }
+        check!(answers == expected);
+    }
 }

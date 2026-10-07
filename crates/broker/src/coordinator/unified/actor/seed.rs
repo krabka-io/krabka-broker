@@ -108,6 +108,7 @@ pub(super) fn apply_seed(state: &mut GroupState, seed: GroupSeed, image: &Reconc
     state.group_epoch = seed.group_epoch;
     state.record_metadata_hash(seed.metadata_hash);
     state.target.epoch = seed.target_epoch;
+    state.record_assignment(seed.assignment_timestamp_ms);
     state.set_has_subscription_metadata_record(seed.has_subscription_metadata_record);
     let group_generation = seed.group_epoch;
     // What each regular expression resolved to, as the group last recorded it:
@@ -260,6 +261,7 @@ mod tests {
         GroupSeed {
             group_epoch: 5,
             target_epoch: 5,
+            assignment_timestamp_ms: 0,
             members: [(
                 "m".to_string(),
                 seeded_member_metadata(
@@ -383,6 +385,7 @@ mod tests {
         GroupSeed {
             group_epoch: 5,
             target_epoch: 5,
+            assignment_timestamp_ms: 0,
             members: [(
                 "m".to_string(),
                 seeded_member_metadata(&["orders"], Some("pay.*"), None),

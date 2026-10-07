@@ -104,10 +104,12 @@ pub struct ShareGroupState {
     ///
     /// [`UNKNOWN_TOPIC_NAME`]: super::persistence::UNKNOWN_TOPIC_NAME
     pub topic_names: HashMap<Uuid, String>,
-    /// Kafka's `ShareGroup.assignmentTimestamp`: when the last target
-    /// assignment calculation finished, or `None` when there is no previous
-    /// assignment or its time is unknown, as after a replay.
-    assignment_timestamp: Option<Instant>,
+    /// Kafka's `ShareGroup.assignmentTimestamp`: the wall-clock time in
+    /// milliseconds at which the last target assignment calculation
+    /// finished, or 0 when there is no previous assignment or its time is
+    /// unknown. It is the `AssignmentTimestamp` of the group's target
+    /// assignment metadata record.
+    pub assignment_timestamp_ms: i64,
 }
 
 impl ShareGroupState {
@@ -125,7 +127,7 @@ impl ShareGroupState {
             initializing: HashMap::new(),
             metadata_hash: 0,
             topic_names: HashMap::new(),
-            assignment_timestamp: None,
+            assignment_timestamp_ms: 0,
         }
     }
 
@@ -204,13 +206,19 @@ impl ShareGroupState {
     }
 
     /// Install a freshly computed target assignment stamped with the current
-    /// group epoch, and record when the calculation finished.
-    pub fn install_target(&mut self, per_member: HashMap<String, HashMap<Uuid, Vec<i32>>>) {
+    /// group epoch, and record that the calculation finished at `now_ms`, the
+    /// wall-clock time that Kafka's `TargetAssignmentBuilder` writes as the
+    /// record's `AssignmentTimestamp`.
+    pub fn install_target(
+        &mut self,
+        per_member: HashMap<String, HashMap<Uuid, Vec<i32>>>,
+        now_ms: i64,
+    ) {
         self.target = ShareTargetAssignment {
             epoch: self.group_epoch,
             per_member,
         };
-        self.assignment_timestamp = Some(Instant::now());
+        self.assignment_timestamp_ms = now_ms;
     }
 
     /// Advance a member to the target assignment epoch and hand it the

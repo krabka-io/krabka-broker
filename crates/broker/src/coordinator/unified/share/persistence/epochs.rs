@@ -16,7 +16,7 @@
 //!   [`topic_hash`](crate::coordinator::unified::topic_hash)).
 //! - `ShareGroupTargetAssignmentMetadataValue`: `AssignmentEpoch` (int32), then
 //!   the tagged `AssignmentTimestamp` (int64, tag 0, default 0) from KIP-1263,
-//!   which the broker leaves at its default and therefore omits.
+//!   which Kafka's generated writer omits when it is 0.
 //!
 //! Both records end with the message's tagged-field count.
 
@@ -53,7 +53,10 @@ value_codec! {
 
 epoch_value!(
     ShareGroupTargetAssignmentMetadataValue("ShareGroupTargetAssignmentMetadataValue") {
-        assignment_epoch
+        assignment_epoch,
+        /// Kafka's `AssignmentTimestamp`: the wall-clock time in milliseconds at
+        /// which the assignment calculation finished, or 0 when it is unknown.
+        assignment_timestamp_ms,
     }
 );
 
@@ -120,12 +123,37 @@ mod tests {
         assert!(ShareGroupMetadataValue::decode(&v.encode()).unwrap() == v);
     }
 
+    /// i16 version | i32 `AssignmentEpoch` | tagged-field trailer, which holds
+    /// `AssignmentTimestamp` as tag 0 with an eight-byte payload unless it is
+    /// the default 0.
     #[test]
     fn target_assignment_metadata_bytes_match_kafka_schema() {
-        let v = ShareGroupTargetAssignmentMetadataValue {
-            assignment_epoch: 12,
-        };
-        assert!(&v.encode()[..] == b"\x00\x00\x00\x00\x00\x0c\x00");
+        // (case, value, Kafka's bytes)
+        let rows: [(&str, ShareGroupTargetAssignmentMetadataValue, &[u8]); 2] = [
+            (
+                "the time is unknown",
+                ShareGroupTargetAssignmentMetadataValue {
+                    assignment_epoch: 12,
+                    assignment_timestamp_ms: 0,
+                },
+                b"\x00\x00\x00\x00\x00\x0c\x00",
+            ),
+            (
+                "an assignment that finished at 2026-10-07T00:00:00Z",
+                ShareGroupTargetAssignmentMetadataValue {
+                    assignment_epoch: 12,
+                    assignment_timestamp_ms: 1_791_331_200_000,
+                },
+                b"\x00\x00\x00\x00\x00\x0c\x01\x00\x08\x00\x00\x01\xa1\x13\xa8\xec\x00",
+            ),
+        ];
+        for (case, value, bytes) in rows {
+            check!(&value.encode()[..] == bytes, "{case}");
+            check!(
+                ShareGroupTargetAssignmentMetadataValue::decode(bytes).unwrap() == value,
+                "{case}"
+            );
+        }
     }
 
     #[test]
@@ -140,6 +168,7 @@ mod tests {
 
         let v = ShareGroupTargetAssignmentMetadataValue {
             assignment_epoch: 12,
+            assignment_timestamp_ms: 7,
         };
         assert!(ShareGroupTargetAssignmentMetadataValue::decode(&v.encode()).unwrap() == v);
     }
@@ -154,6 +183,7 @@ mod tests {
         assert!(ShareGroupMetadataValue::decode(&g[..g.len() - 1]).is_err());
         let t = ShareGroupTargetAssignmentMetadataValue {
             assignment_epoch: 1,
+            assignment_timestamp_ms: 0,
         }
         .encode();
         assert!(ShareGroupTargetAssignmentMetadataValue::decode(&t[..t.len() - 1]).is_err());

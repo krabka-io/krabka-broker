@@ -54,20 +54,23 @@ macro_rules! bump_group_epoch {
 }
 pub(crate) use bump_group_epoch;
 
-/// The same assignment-delay query on each protocol's stored timestamp.
+/// The same assignment-delay query on each protocol's stored
+/// `AssignmentTimestamp`.
 macro_rules! assignment_delay_method {
     () => {
-        /// Whether the previous target assignment still holds the next one back.
+        /// Kafka's `GroupMetadataManager.canComputeNextTargetAssignment`, negated:
+        /// `true` while the assignment `interval` holds the next target
+        /// assignment back at `now_ms`.
         #[must_use]
         pub(crate) fn assignment_delayed(
             &self,
             interval: std::time::Duration,
-            now: std::time::Instant,
+            now_ms: i64,
         ) -> bool {
-            $crate::coordinator::unified::member_helpers::assignment_delayed(
-                self.assignment_timestamp,
+            !$crate::coordinator::unified::member_helpers::can_compute_next_target_assignment(
+                self.assignment_timestamp_ms,
                 interval,
-                now,
+                now_ms,
             )
         }
     };
@@ -132,15 +135,52 @@ pub(crate) fn expired_member_ids<'a>(
         .collect()
 }
 
-/// Kafka's `canComputeNextTargetAssignment`, negated. A zero interval or
-/// missing timestamp computes at once; otherwise the prior assignment holds
-/// the next one until its interval elapses, including after a backward clock step.
-pub(crate) fn assignment_delayed(
-    timestamp: Option<Instant>,
+/// Kafka's `Time.SYSTEM.milliseconds()`: the wall-clock time in milliseconds,
+/// which the group coordinator stamps the `AssignmentTimestamp` of a target
+/// assignment with and compares the assignment interval against.
+///
+/// It reads the system clock, moved by however far tokio's clock runs ahead
+/// of the real monotonic clock. Outside a paused tokio runtime the two
+/// monotonic clocks agree and this is the system clock itself, wall-clock
+/// steps included, as in Kafka. A test on a paused runtime moves it with
+/// `tokio::time::advance` or `sleep`.
+#[must_use]
+pub(crate) fn wall_clock_ms() -> i64 {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let std_now = Instant::now();
+    let tokio_now = tokio::time::Instant::now().into_std();
+    let system = SystemTime::now();
+    let wall = system
+        .checked_add(tokio_now.saturating_duration_since(std_now))
+        .and_then(|wall| wall.checked_sub(std_now.saturating_duration_since(tokio_now)))
+        .unwrap_or(system);
+    wall.duration_since(UNIX_EPOCH).map_or(0, |since| {
+        i64::try_from(since.as_millis()).unwrap_or(i64::MAX)
+    })
+}
+
+/// Kafka's `GroupMetadataManager.canComputeNextTargetAssignment`: whether a
+/// group whose last target assignment calculation finished at
+/// `assignment_timestamp_ms` may compute the next one at `now_ms`.
+///
+/// The timestamp is the `AssignmentTimestamp` (KIP-1263) of the group's
+/// target assignment metadata record, in wall-clock milliseconds, and 0 when
+/// there is no previous assignment or its time is unknown. The next assignment
+/// computes at once then, and when `interval` is zero, which is Kafka's escape
+/// hatch for a wall clock that stepped back. Otherwise it waits until the
+/// interval has elapsed since the last one.
+#[must_use]
+pub(crate) fn can_compute_next_target_assignment(
+    assignment_timestamp_ms: i64,
     interval: Duration,
-    now: Instant,
+    now_ms: i64,
 ) -> bool {
-    !interval.is_zero() && timestamp.is_some_and(|computed| now < computed + interval)
+    if assignment_timestamp_ms == 0 || interval.is_zero() {
+        return true;
+    }
+    // Java adds two `long`s, so an overflow wraps around.
+    let interval_ms = i64::try_from(interval.as_millis()).unwrap_or(i64::MAX);
+    now_ms >= assignment_timestamp_ms.wrapping_add(interval_ms)
 }
 
 #[cfg(test)]
@@ -148,6 +188,30 @@ mod helper_tests {
     use assert2::{assert, check};
 
     use super::*;
+
+    /// The cases of Kafka's `GroupMetadataManagerTest`
+    /// `testCanComputeNextTargetAssignment*`: no previous assignment, a zero
+    /// interval, before, at and after the interval, and Java's wrap-around of
+    /// a sum past `Long.MAX_VALUE`.
+    #[test]
+    fn the_next_target_assignment_waits_for_the_interval() {
+        let second = Duration::from_secs(1);
+        // (last assignment timestamp, interval, now, may compute)
+        let rows = [
+            (0, second, 1_000, true),
+            (1_000, Duration::ZERO, 1_000, true),
+            (1_000, second, 1_999, false),
+            (1_000, second, 2_000, true),
+            (1_000, second, 61_000, true),
+            (i64::MAX, second, 0, true),
+        ];
+        for (timestamp, interval, now, expected) in rows {
+            check!(
+                can_compute_next_target_assignment(timestamp, interval, now) == expected,
+                "{timestamp} {interval:?} {now}"
+            );
+        }
+    }
 
     #[test]
     fn first_join_member_id_preserves_client_supplied_id() {

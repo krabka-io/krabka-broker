@@ -86,6 +86,7 @@ pub(super) fn snapshot_pending_after_change(
     if state.target.epoch > 0 {
         pending.target_metadata = Some(ShareGroupTargetAssignmentMetadataValue {
             assignment_epoch: state.target.epoch,
+            assignment_timestamp_ms: state.assignment_timestamp_ms,
         });
     }
     crate::coordinator::unified::persistence::snapshot_members!(

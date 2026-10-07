@@ -21,7 +21,7 @@
 //!   it writes each of the two only when it is not -1.
 //! - `StreamsGroupTargetAssignmentMetadataValue`: `AssignmentEpoch` (int32),
 //!   then the tagged `AssignmentTimestamp` (int64, tag 0, default 0) from
-//!   KIP-1263, also omitted.
+//!   KIP-1263, which Kafka's generated writer omits when it is 0.
 
 use bytes::{BufMut, Bytes, BytesMut};
 
@@ -131,9 +131,13 @@ impl StreamsGroupMetadataValue {
 }
 
 epoch_value!(
-    /// Key v20 value: the target-assignment epoch.
+    /// Key v20 value: the target-assignment epoch and the KIP-1263
+    /// `AssignmentTimestamp`.
     StreamsGroupTargetAssignmentMetadataValue("StreamsGroupTargetAssignmentMetadataValue") {
-        assignment_epoch
+        assignment_epoch,
+        /// Kafka's `AssignmentTimestamp`: the wall-clock time in milliseconds at
+        /// which the assignment calculation finished, or 0 when it is unknown.
+        assignment_timestamp_ms,
     }
 );
 
@@ -218,12 +222,37 @@ mod tests {
         assert!(StreamsGroupMetadataValue::decode(&v.encode()).unwrap() == v);
     }
 
+    /// i16 version | i32 `AssignmentEpoch` | tagged-field trailer, which holds
+    /// `AssignmentTimestamp` as tag 0 with an eight-byte payload unless it is
+    /// the default 0.
     #[test]
     fn target_assignment_metadata_bytes_match_kafka_schema() {
-        let v = StreamsGroupTargetAssignmentMetadataValue {
-            assignment_epoch: 12,
-        };
-        assert!(&v.encode()[..] == b"\x00\x00\x00\x00\x00\x0c\x00");
+        // (case, value, Kafka's bytes)
+        let rows: [(&str, StreamsGroupTargetAssignmentMetadataValue, &[u8]); 2] = [
+            (
+                "the time is unknown",
+                StreamsGroupTargetAssignmentMetadataValue {
+                    assignment_epoch: 12,
+                    assignment_timestamp_ms: 0,
+                },
+                b"\x00\x00\x00\x00\x00\x0c\x00",
+            ),
+            (
+                "an assignment that finished at 2026-10-07T00:00:00Z",
+                StreamsGroupTargetAssignmentMetadataValue {
+                    assignment_epoch: 12,
+                    assignment_timestamp_ms: 1_791_331_200_000,
+                },
+                b"\x00\x00\x00\x00\x00\x0c\x01\x00\x08\x00\x00\x01\xa1\x13\xa8\xec\x00",
+            ),
+        ];
+        for (case, value, bytes) in rows {
+            assert!(&value.encode()[..] == bytes, "{case}");
+            assert!(
+                StreamsGroupTargetAssignmentMetadataValue::decode(bytes).unwrap() == value,
+                "{case}"
+            );
+        }
     }
 
     #[test]
@@ -240,6 +269,7 @@ mod tests {
 
         let v = StreamsGroupTargetAssignmentMetadataValue {
             assignment_epoch: 12,
+            assignment_timestamp_ms: 7,
         };
         assert!(StreamsGroupTargetAssignmentMetadataValue::decode(&v.encode()).unwrap() == v);
     }

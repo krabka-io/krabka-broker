@@ -79,7 +79,12 @@ impl GroupCoordinator {
             }
         );
     }
-    pub fn replay_streams_target_assignment_metadata(&self, group_id: &str, assignment_epoch: i32) {
+    pub fn replay_streams_target_assignment_metadata(
+        &self,
+        group_id: &str,
+        value: streams::persistence::StreamsGroupTargetAssignmentMetadataValue,
+    ) {
+        let assignment_epoch = value.assignment_epoch;
         if assignment_epoch < 0 {
             return;
         }
@@ -89,8 +94,9 @@ impl GroupCoordinator {
                 true,
                 false,
             )
-            && replay_epoch_is_admissible(seed.assignment_epoch, assignment_epoch) => |value| {
-                seed.assignment_epoch = value;
+            && replay_epoch_is_admissible(seed.assignment_epoch, assignment_epoch) => |epoch| {
+                seed.assignment_epoch = epoch;
+                seed.assignment_timestamp_ms = value.assignment_timestamp_ms;
             }
         );
     }
@@ -207,7 +213,13 @@ mod tests {
         );
         coord.replay_streams_member_metadata("st", "streams-member", member.clone());
         coord.replay_streams_topology("st", topology.clone());
-        coord.replay_streams_target_assignment_metadata("st", 32);
+        coord.replay_streams_target_assignment_metadata(
+            "st",
+            streams::persistence::StreamsGroupTargetAssignmentMetadataValue {
+                assignment_epoch: 32,
+                assignment_timestamp_ms: 1_791_331_200_000,
+            },
+        );
         coord.replay_streams_target_assignment_member("st", "streams-member", target.clone());
         coord.replay_streams_current_member_assignment("st", "streams-member", current.clone());
 
@@ -219,6 +231,7 @@ mod tests {
                 failed: -1,
             },
             assignment_epoch: 32,
+            assignment_timestamp_ms: 1_791_331_200_000,
             topology: Some(topology),
             members: maplit::hashmap! {"streams-member".to_string() => member},
             target_per_member: maplit::hashmap! {"streams-member".to_string() => target},
