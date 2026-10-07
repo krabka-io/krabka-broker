@@ -18,6 +18,38 @@ use crate::{broker::Broker, error::BrokerError, handlers::RequestContext};
 pub(super) type ClusterGate =
     fn(&dyn crate::authorizer::Authorizer, &MetadataImage, &RequestContext<'_>) -> bool;
 
+/// The encoded, contextual entry point of each KIP-853 voter operation.
+macro_rules! handler {
+    ($broker:ident, $version:ident, $bytes:ident, $ctx:ident, $body:block) => {
+        pub(crate) async fn handle(
+            $broker: &crate::broker::Broker,
+            $version: i16,
+            $bytes: &[u8],
+            $ctx: &crate::handlers::RequestContext<'_>,
+        ) -> Result<bytes::Bytes, crate::error::BrokerError> $body
+    };
+}
+
+pub(super) use handler;
+
+#[cfg(test)]
+macro_rules! test_dispatch {
+    ($api:expr, $request:ty, $response:ty) => {
+        crate::test_support::context_helper!(client_id = "admin-client");
+        async fn answer(
+            broker: &crate::broker::Broker,
+            version: i16,
+            request: &$request,
+            ctx: &crate::handlers::RequestContext<'_>,
+        ) -> $response {
+            crate::test_support::dispatch_wire(broker, $api, version, request, ctx).await
+        }
+    };
+}
+
+#[cfg(test)]
+pub(super) use test_dispatch;
+
 /// What a voter handler runs its own checks on once the prelude lets the
 /// request through.
 pub(super) struct Admitted<R> {

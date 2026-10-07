@@ -3,7 +3,7 @@
 //! notification.
 
 use assert2::assert;
-use krabka_log::{LogConfig, Offset};
+use krabka_log::Offset;
 use tempfile::tempdir;
 use tokio::sync::oneshot;
 
@@ -15,49 +15,21 @@ use crate::{
 
 #[tokio::test]
 async fn writer_appends_and_acks() {
-    let dir = tempdir().expect("tempdir");
-    let log = Arc::new(Mutex::new(
-        Log::open(dir.path(), LogConfig::default()).expect("open log"),
-    ));
-    let (tx, rx) = mpsc::channel(1);
-    let notify = Arc::new(Notify::new());
-    let writer = tokio::spawn(run_writer!(
-        "t".to_string(),
-        PartitionIndex(0),
-        log.clone(),
-        Arc::new(ArcSwap::from_pointee(dir.path().to_path_buf())),
-        rx,
-        notify.clone(),
-        Arc::new(tokio::sync::Mutex::new(
-            crate::replica_state::ReplicaState::new(),
-        )),
-        Arc::new(Notify::new()),
-        crate::log_dir_status::LogDirRegistry::default(),
-        Arc::new(ProducerState::new()),
-        None,
-    ));
+    let DefaultWriter {
+        dir: _dir,
+        log: _log,
+        sender: tx,
+        writer,
+        notify: _notify,
+    } = default_writer();
 
-    let (ack, ack_rx) = oneshot::channel();
-    tx.send(WriterMessage::Produce(ProduceJob {
-        data: ProduceData::Owned(sample_batch(3)),
-        ack,
-        producer_check: None,
-    }))
-    .await
-    .expect("send job");
+    let ack_rx = queue_batch(&tx, sample_batch(3)).await;
 
     let assigned = ack_rx.await.expect("ack recv").expect("append ok");
     assert!(assigned.base_offset == 0);
 
     // Second append assigns offset 3.
-    let (ack, ack_rx) = oneshot::channel();
-    tx.send(WriterMessage::Produce(ProduceJob {
-        data: ProduceData::Owned(sample_batch(2)),
-        ack,
-        producer_check: None,
-    }))
-    .await
-    .expect("send job 2");
+    let ack_rx = queue_batch(&tx, sample_batch(2)).await;
     assert!(
         ack_rx
             .await
@@ -76,48 +48,27 @@ async fn writer_groups_queued_produces_up_to_configured_cap() {
     const MAX_GROUP: usize = 2;
 
     let dir = tempdir().expect("tempdir");
-    let log = Arc::new(Mutex::new(
-        Log::open(dir.path(), LogConfig::default()).expect("open log"),
-    ));
+    let log = open_default_log(dir.path());
     let (sync_started_tx, sync_started_rx) = oneshot::channel();
     let (_release_sync_tx, release_sync_rx) = oneshot::channel();
     let wal: crate::wal::SharedWal = Arc::new(GatedWal::new(sync_started_tx, release_sync_rx));
     let (tx, rx) = mpsc::channel(3);
 
     for _ in 0..3 {
-        let (ack, _ack_rx) = oneshot::channel();
-        tx.send(WriterMessage::Produce(ProduceJob {
-            data: ProduceData::Owned(sample_batch(1)),
-            ack,
-            producer_check: None,
-        }))
-        .await
-        .expect("queue produce");
+        let _ack_rx = queue_batch(&tx, sample_batch(1)).await;
     }
 
-    let writer = tokio::spawn(run_with_sequencer(
-        ("t".to_string(), PartitionIndex(0)),
-        (
-            log.clone(),
-            Arc::new(ArcSwap::from_pointee(dir.path().to_path_buf())),
-        ),
+    let writer = spawn_writer(
+        dir.path(),
+        log.clone(),
         rx,
-        (
-            Arc::new(Notify::new()),
-            Arc::new(tokio::sync::Mutex::new(
-                crate::replica_state::ReplicaState::new(),
-            )),
-            Arc::new(Notify::new()),
-            DeliveryHandles::new(),
-        ),
-        (
-            crate::log_dir_status::LogDirRegistry::default(),
-            Arc::new(ProducerState::new()),
-            Some(wal),
-        ),
-        MAX_GROUP,
-        Some(test_sequencer()),
-    ));
+        WriterOptions {
+            wal: Some(wal),
+            max_produce_group: MAX_GROUP,
+            sequencer: Some(test_sequencer()),
+            ..Default::default()
+        },
+    );
 
     tokio::time::timeout(std::time::Duration::from_secs(10), sync_started_rx)
         .await
@@ -133,45 +84,24 @@ async fn writer_groups_queued_produces_up_to_configured_cap() {
 #[tokio::test]
 async fn durable_sync_ack_waits_for_diskless_wal() {
     let dir = tempdir().expect("tempdir");
-    let log = Arc::new(Mutex::new(
-        Log::open(dir.path(), LogConfig::default()).expect("open log"),
-    ));
+    let log = open_default_log(dir.path());
     let (sync_started_tx, sync_started_rx) = oneshot::channel();
     let (release_sync_tx, release_sync_rx) = oneshot::channel();
     let wal: crate::wal::SharedWal = Arc::new(GatedWal::new(sync_started_tx, release_sync_rx));
     let (tx, rx) = mpsc::channel(2);
-    let writer = tokio::spawn(run_with_sequencer(
-        ("t".to_string(), PartitionIndex(0)),
-        (
-            log,
-            Arc::new(ArcSwap::from_pointee(dir.path().to_path_buf())),
-        ),
+    let writer = spawn_writer(
+        dir.path(),
+        log,
         rx,
-        (
-            Arc::new(Notify::new()),
-            Arc::new(tokio::sync::Mutex::new(
-                crate::replica_state::ReplicaState::new(),
-            )),
-            Arc::new(Notify::new()),
-            DeliveryHandles::new(),
-        ),
-        (
-            crate::log_dir_status::LogDirRegistry::default(),
-            Arc::new(ProducerState::new()),
-            Some(wal),
-        ),
-        1,
-        Some(test_sequencer()),
-    ));
+        WriterOptions {
+            wal: Some(wal),
+            max_produce_group: 1,
+            sequencer: Some(test_sequencer()),
+            ..Default::default()
+        },
+    );
 
-    let (append_ack, append_ack_rx) = oneshot::channel();
-    tx.send(WriterMessage::Produce(ProduceJob {
-        data: ProduceData::Owned(sample_batch(1)),
-        ack: append_ack,
-        producer_check: None,
-    }))
-    .await
-    .expect("send produce");
+    let append_ack_rx = queue_batch(&tx, sample_batch(1)).await;
     assert!(
         append_ack_rx
             .await
@@ -207,36 +137,15 @@ async fn durable_sync_ack_waits_for_diskless_wal() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn writer_appends_and_acks_on_multi_thread_runtime() {
-    let dir = tempdir().expect("tempdir");
-    let log = Arc::new(Mutex::new(
-        Log::open(dir.path(), LogConfig::default()).expect("open log"),
-    ));
-    let (tx, rx) = mpsc::channel(1);
-    let notify = Arc::new(Notify::new());
-    let writer = tokio::spawn(run_writer!(
-        "t".to_string(),
-        PartitionIndex(0),
-        log.clone(),
-        Arc::new(ArcSwap::from_pointee(dir.path().to_path_buf())),
-        rx,
-        notify.clone(),
-        Arc::new(tokio::sync::Mutex::new(
-            crate::replica_state::ReplicaState::new(),
-        )),
-        Arc::new(Notify::new()),
-        crate::log_dir_status::LogDirRegistry::default(),
-        Arc::new(ProducerState::new()),
-        None,
-    ));
+    let DefaultWriter {
+        dir: _dir,
+        log: _log,
+        sender: tx,
+        writer,
+        notify: _notify,
+    } = default_writer();
 
-    let (ack, ack_rx) = oneshot::channel();
-    tx.send(WriterMessage::Produce(ProduceJob {
-        data: ProduceData::Owned(sample_batch(3)),
-        ack,
-        producer_check: None,
-    }))
-    .await
-    .expect("send job");
+    let ack_rx = queue_batch(&tx, sample_batch(3)).await;
 
     let assigned = ack_rx.await.expect("ack recv").expect("append ok");
     assert!(assigned.base_offset == 0);
@@ -250,27 +159,13 @@ async fn writer_appends_verbatim_byte_exact() {
     use krabka_log::VerbatimBatch;
     use krabka_protocol::records::RecordBatch as ProtoBatch;
 
-    let dir = tempdir().expect("tempdir");
-    let log = Arc::new(Mutex::new(
-        Log::open(dir.path(), LogConfig::default()).expect("open log"),
-    ));
-    let (tx, rx) = mpsc::channel(1);
-    let notify = Arc::new(Notify::new());
-    let writer = tokio::spawn(run_writer!(
-        "t".to_string(),
-        PartitionIndex(0),
-        log.clone(),
-        Arc::new(ArcSwap::from_pointee(dir.path().to_path_buf())),
-        rx,
-        notify.clone(),
-        Arc::new(tokio::sync::Mutex::new(
-            crate::replica_state::ReplicaState::new(),
-        )),
-        Arc::new(Notify::new()),
-        crate::log_dir_status::LogDirRegistry::default(),
-        Arc::new(ProducerState::new()),
-        None,
-    ));
+    let DefaultWriter {
+        dir: _dir,
+        log,
+        sender: tx,
+        writer,
+        notify: _notify,
+    } = default_writer();
 
     // "Producer" batch with a bogus base_offset + epoch the log overwrites.
     let mut producer = sample_batch(1);
@@ -321,40 +216,19 @@ async fn writer_appends_verbatim_byte_exact() {
 
 #[tokio::test]
 async fn writer_fires_notify_after_append() {
-    let dir = tempdir().expect("tempdir");
-    let log = Arc::new(Mutex::new(
-        Log::open(dir.path(), LogConfig::default()).expect("open log"),
-    ));
-    let (tx, rx) = mpsc::channel(1);
-    let notify = Arc::new(Notify::new());
-    let writer = tokio::spawn(run_writer!(
-        "t".to_string(),
-        PartitionIndex(0),
-        log.clone(),
-        Arc::new(ArcSwap::from_pointee(dir.path().to_path_buf())),
-        rx,
-        notify.clone(),
-        Arc::new(tokio::sync::Mutex::new(
-            crate::replica_state::ReplicaState::new(),
-        )),
-        Arc::new(Notify::new()),
-        crate::log_dir_status::LogDirRegistry::default(),
-        Arc::new(ProducerState::new()),
-        None,
-    ));
+    let DefaultWriter {
+        dir: _dir,
+        log: _log,
+        sender: tx,
+        writer,
+        notify,
+    } = default_writer();
 
     // Subscribe BEFORE sending so we don't miss the notification.
     let waiter = notify.notified();
     tokio::pin!(waiter);
 
-    let (ack, _ack_rx) = oneshot::channel();
-    tx.send(WriterMessage::Produce(ProduceJob {
-        data: ProduceData::Owned(sample_batch(1)),
-        ack,
-        producer_check: None,
-    }))
-    .await
-    .expect("send job");
+    let _ack_rx = queue_batch(&tx, sample_batch(1)).await;
 
     // Should wake within a short timeout.
     tokio::time::timeout(std::time::Duration::from_secs(1), waiter)

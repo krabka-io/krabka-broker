@@ -70,26 +70,14 @@ pub(super) fn request_error(
             return invalid("RebalanceTimeoutMs must be provided in first request.");
         }
         // Kafka's `throwIfNotEmptyCollection` refuses a null list too.
-        if req
-            .active_tasks
-            .as_ref()
-            .is_none_or(|tasks| !tasks.is_empty())
-        {
-            return invalid("ActiveTasks must be empty when (re-)joining.");
-        }
-        if req
-            .standby_tasks
-            .as_ref()
-            .is_none_or(|tasks| !tasks.is_empty())
-        {
-            return invalid("StandbyTasks must be empty when (re-)joining.");
-        }
-        if req
-            .warmup_tasks
-            .as_ref()
-            .is_none_or(|tasks| !tasks.is_empty())
-        {
-            return invalid("WarmupTasks must be empty when (re-)joining.");
+        for (tasks, name) in [
+            (req.active_tasks.as_deref(), "ActiveTasks"),
+            (req.standby_tasks.as_deref(), "StandbyTasks"),
+            (req.warmup_tasks.as_deref(), "WarmupTasks"),
+        ] {
+            if tasks.is_none_or(|tasks| !tasks.is_empty()) {
+                return invalid(&format!("{name} must be empty when (re-)joining."));
+            }
         }
         let Some(topology) = &req.topology else {
             return invalid("Topology must be non-null when (re-)joining.");

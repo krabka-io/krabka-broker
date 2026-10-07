@@ -31,42 +31,19 @@ use assert2::assert;
 use tokio_util::sync::CancellationToken;
 
 use crate::{
-    CLIENT_PRINCIPAL, PASSWORD, RECORDS, TOPIC, VOTERS,
-    cluster::{start_diskless_cluster, wait_for},
-    support,
-    topic::{await_wal_quorum, create_diskless_topic},
-    wire::{assert_matches_produced, fetch_log, produce_all, produce_until_stopped, value_at},
+    RECORDS, TOPIC, VOTERS,
+    cluster::wait_for,
+    wire::{assert_matches_produced, fetch_log, produce_until_stopped},
 };
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_broker_crashed_mid_flush_loses_no_acknowledged_offset() {
     // Flush on a tight cadence so the crash below lands inside a flush cycle
     // rather than between two idle ticks.
-    let mut cluster = start_diskless_cluster(|config| {
-        config.diskless_wal_flush_interval = krabka_units::millis(50);
-        config.diskless_wal_trim_safety_lag = 0;
-    })
-    .await;
+    let mut cluster = crate::cluster::start_flushing_cluster(krabka_units::millis(50)).await;
     cluster.await_ready().await;
 
-    let admin = support::sasl_client(
-        &cluster.bootstrap_for_node(cluster.node_ids()[0]),
-        CLIENT_PRINCIPAL,
-        PASSWORD,
-    )
-    .await;
-    let topic_id = create_diskless_topic(&admin).await;
-    let leader = await_wal_quorum(&cluster).await;
-
-    // The flusher runs on the leader, so the leader is the broker to crash.
-    let values: Vec<bytes::Bytes> = (0..RECORDS).map(value_at).collect();
-    let producer = support::sasl_client(
-        &cluster.bootstrap_for_node(leader),
-        CLIENT_PRINCIPAL,
-        PASSWORD,
-    )
-    .await;
-    produce_all(&producer, topic_id, &values).await;
+    let (admin, topic_id, leader, _values, producer) = crate::topic::seed_workload(&cluster).await;
 
     // Wait until the flusher has actually started moving objects, so the crash
     // interrupts a running pipeline instead of one that never began.

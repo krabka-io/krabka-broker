@@ -22,12 +22,19 @@ mod acl_gates;
 mod admin_audit;
 mod coordinator_routing;
 #[cfg(test)]
+mod delegation_token_test_support;
+#[cfg(test)]
 mod group_heartbeat_test_support;
+mod node_endpoints;
+mod partition_materialization;
 mod private_api_keys;
 mod raft_voter;
 mod record_strings;
+mod request_names;
 mod response_encoding;
 mod submit_failure;
+#[cfg(test)]
+pub(crate) mod test_support;
 mod wire_types;
 
 pub(crate) use self::{
@@ -41,6 +48,7 @@ pub(crate) use self::{
         group_coordinator_error, group_partition_loading, group_version_disabled,
         share_group_not_found_message, streams_protocol_enabled,
     },
+    node_endpoints::leader_endpoints,
     private_api_keys::{
         ALTER_BARRIER_GROUPS_API_KEY, APPROVE_BREAK_GLASS_API_KEY, DESCRIBE_BARRIER_GROUPS_API_KEY,
         DESCRIBE_BREAK_GLASS_API_KEY, DESCRIBE_TOPIC_FREEZES_API_KEY, KRABKA_PRIVATE_API_KEY_FLOOR,

@@ -31,6 +31,8 @@
 // This binary uses one archive and one partition of it, so most of what they
 // offer is unused here, the same way `crates/broker/tests/support` is unused in
 // part by every binary that includes it.
+#[path = "support/archive_fixture.rs"]
+mod archive_fixture;
 #[path = "roundtrip/args.rs"]
 mod args;
 #[allow(dead_code)]

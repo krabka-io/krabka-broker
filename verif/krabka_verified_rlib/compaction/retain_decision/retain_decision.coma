@@ -1,19 +1,19 @@
-(* #"/workspace/crates/verified/src/compaction/retain_decision.rs" 86 0 93 19 *)
+(* #"/workspace/crates/verified/src/compaction/retain_decision.rs" 87 0 94 19 *)
 
-let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
-let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
-let%span sretain_decision = "/workspace/crates/verified/src/compaction/retain_decision.rs" 100 51 100 95
-let%span sretain_decision'0 = "/workspace/crates/verified/src/compaction/retain_decision.rs" 117 43 117 87
-let%span sretain_decision'1 = "/workspace/crates/verified/src/compaction/retain_decision.rs" 66 10 67 38
-let%span sretain_decision'2 = "/workspace/crates/verified/src/compaction/retain_decision.rs" 68 10 70 67
-let%span sretain_decision'3 = "/workspace/crates/verified/src/compaction/retain_decision.rs" 71 10 73 93
-let%span sretain_decision'4 = "/workspace/crates/verified/src/compaction/retain_decision.rs" 74 10 74 80
-let%span sretain_decision'5 = "/workspace/crates/verified/src/compaction/retain_decision.rs" 75 10 75 101
-let%span sretain_decision'6 = "/workspace/crates/verified/src/compaction/retain_decision.rs" 76 10 77 38
-let%span sretain_decision'7 = "/workspace/crates/verified/src/compaction/retain_decision.rs" 78 10 81 67
-let%span sretain_decision'8 = "/workspace/crates/verified/src/compaction/retain_decision.rs" 82 10 84 93
-let%span sretain_decision'9 = "/workspace/crates/verified/src/compaction/retain_decision.rs" 53 10 53 71
-let%span sretain_decision'10 = "/workspace/crates/verified/src/compaction/retain_decision.rs" 38 8 44 9
+let%span sord = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sord'0 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span sretain_decision = "/workspace/crates/verified/src/compaction/retain_decision.rs" 101 51 101 95
+let%span sretain_decision'0 = "/workspace/crates/verified/src/compaction/retain_decision.rs" 118 43 118 87
+let%span sretain_decision'1 = "/workspace/crates/verified/src/compaction/retain_decision.rs" 67 10 68 38
+let%span sretain_decision'2 = "/workspace/crates/verified/src/compaction/retain_decision.rs" 69 10 71 67
+let%span sretain_decision'3 = "/workspace/crates/verified/src/compaction/retain_decision.rs" 72 10 74 93
+let%span sretain_decision'4 = "/workspace/crates/verified/src/compaction/retain_decision.rs" 75 10 75 80
+let%span sretain_decision'5 = "/workspace/crates/verified/src/compaction/retain_decision.rs" 76 10 76 101
+let%span sretain_decision'6 = "/workspace/crates/verified/src/compaction/retain_decision.rs" 77 10 78 38
+let%span sretain_decision'7 = "/workspace/crates/verified/src/compaction/retain_decision.rs" 79 10 82 67
+let%span sretain_decision'8 = "/workspace/crates/verified/src/compaction/retain_decision.rs" 83 10 85 93
+let%span sretain_decision'9 = "/workspace/crates/verified/src/compaction/retain_decision.rs" 54 10 54 71
+let%span sretain_decision'10 = "/workspace/crates/verified/src/compaction/retain_decision.rs" 39 8 45 9
 
 use creusot.int.Int64
 use creusot.prelude.Any
@@ -39,7 +39,7 @@ predicate gt_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord'0] oth
 
 meta "rewrite_def" predicate gt_log_Int
 
-function compute_horizon_model [#"/workspace/crates/verified/src/compaction/retain_decision.rs" 36 0 36 74] (now_ms: Int64.t) (delete_retention_ms: Int64.t) : int
+function compute_horizon_model [#"/workspace/crates/verified/src/compaction/retain_decision.rs" 37 0 37 74] (now_ms: Int64.t) (delete_retention_ms: Int64.t) : int
  = [%#sretain_decision'10] if gt_log_Int (Int64.to_int now_ms
   + Int64.to_int delete_retention_ms) 9223372036854775807 then
     9223372036854775807
@@ -67,9 +67,9 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let retain_decision [#"/workspace/crates/verified/src/compaction/retain_decision.rs" 86 0 93 19]
-  (rec': t_RecordMeta) (batch: t_BatchMeta) (is_newest_for_key: bool) (txn: t_TxnDataState) (now_ms: Int64.t)
-  (delete_retention_ms: Int64.t) (return (x: t_RetainDecision)) = (! bb0
+let retain_decision [#"/workspace/crates/verified/src/compaction/retain_decision.rs" 87 0 94 19] (rec': t_RecordMeta)
+  (batch: t_BatchMeta) (is_newest_for_key: bool) (txn: t_TxnDataState) (now_ms: Int64.t) (delete_retention_ms: Int64.t)
+  (return (x: t_RetainDecision)) = (! bb0
   [ bb0 = any [ br0 -> {batch.is_control = false} (! bb15) | br1 -> {batch.is_control} (! bb1) ]
   | bb1 = any
     [ br0 -> {txn = NotTransactional} (! bb5)

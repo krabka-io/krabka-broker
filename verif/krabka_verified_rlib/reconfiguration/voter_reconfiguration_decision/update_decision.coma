@@ -1,12 +1,12 @@
-(* #"/workspace/crates/verified/src/reconfiguration/voter_reconfiguration_decision.rs" 163 0 163 96 *)
+(* #"/workspace/crates/verified/src/reconfiguration/voter_reconfiguration_decision.rs" 164 0 164 96 *)
 
-let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
-let%span svoter_reconfiguration_decision = "/workspace/crates/verified/src/reconfiguration/voter_reconfiguration_decision.rs" 174 49 174 50
-let%span svoter_reconfiguration_decision'0 = "/workspace/crates/verified/src/reconfiguration/voter_reconfiguration_decision.rs" 179 29 179 34
-let%span svoter_reconfiguration_decision'1 = "/workspace/crates/verified/src/reconfiguration/voter_reconfiguration_decision.rs" 149 29 149 82
-let%span svoter_reconfiguration_decision'2 = "/workspace/crates/verified/src/reconfiguration/voter_reconfiguration_decision.rs" 150 28 162 1
-let%span sadmitted_plan = "/workspace/crates/verified/src/reconfiguration/admitted_plan.rs" 69 8 70 67
-let%span sadmitted_plan'0 = "/workspace/crates/verified/src/reconfiguration/admitted_plan.rs" 176 8 191 9
+let%span sord = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span sadmitted_plan = "/workspace/crates/verified/src/reconfiguration/admitted_plan.rs" 70 8 71 67
+let%span sadmitted_plan'0 = "/workspace/crates/verified/src/reconfiguration/admitted_plan.rs" 177 8 192 9
+let%span svoter_reconfiguration_decision = "/workspace/crates/verified/src/reconfiguration/voter_reconfiguration_decision.rs" 175 49 175 50
+let%span svoter_reconfiguration_decision'0 = "/workspace/crates/verified/src/reconfiguration/voter_reconfiguration_decision.rs" 180 29 180 34
+let%span svoter_reconfiguration_decision'1 = "/workspace/crates/verified/src/reconfiguration/voter_reconfiguration_decision.rs" 150 29 150 82
+let%span svoter_reconfiguration_decision'2 = "/workspace/crates/verified/src/reconfiguration/voter_reconfiguration_decision.rs" 151 28 163 1
 
 use creusot.int.UInt64
 use creusot.int.UInt16
@@ -48,12 +48,12 @@ predicate gt_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other
 
 meta "rewrite_def" predicate gt_log_Int
 
-predicate update_key_matches [#"/workspace/crates/verified/src/reconfiguration/admitted_plan.rs" 67 0 67 63] (membership'0: t_TargetMembership) =
+predicate update_key_matches [#"/workspace/crates/verified/src/reconfiguration/admitted_plan.rs" 68 0 68 63] (membership'0: t_TargetMembership) =
   [%#sadmitted_plan] membership'0 = PresentUnknownDirectory \/ membership'0 = PresentSameDirectory
 
 type t_VoterChangeKind = Add | Remove | Update | FinalizeKraftVersion
 
-predicate admitted_plan [#"/workspace/crates/verified/src/reconfiguration/admitted_plan.rs" 170 0 174 9] (voters: t_CurrentVoterSet) (kind: t_VoterChangeKind) (plan: t_VoterReconfigurationPlan) =
+predicate admitted_plan [#"/workspace/crates/verified/src/reconfiguration/admitted_plan.rs" 171 0 175 9] (voters: t_CurrentVoterSet) (kind: t_VoterChangeKind) (plan: t_VoterReconfigurationPlan) =
   [%#sadmitted_plan'0] match kind with
     | Add -> UInt64.t'int plan.next_voter_count = UInt64.t'int voters.voter_count + 1
     /\ plan.next_kraft_version = voters.kraft_version
@@ -74,7 +74,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let update_decision [#"/workspace/crates/verified/src/reconfiguration/voter_reconfiguration_decision.rs" 163 0 163 96]
+let update_decision [#"/workspace/crates/verified/src/reconfiguration/voter_reconfiguration_decision.rs" 164 0 164 96]
   (voters: t_CurrentVoterSet) (target: t_TargetVoter) (return (x: t_VoterReconfigurationDecision)) =
 {[@stop_split] [@expl:update_decision requires] [%#svoter_reconfiguration_decision'1] gt_log_Int (UInt64.t'int voters.voter_count) 0
   /\ UInt16.t'int voters.kraft_version <= 1}

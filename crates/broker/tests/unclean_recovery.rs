@@ -56,24 +56,14 @@
 use std::{net::SocketAddr, time::Duration};
 
 use assert2::assert;
-use bytes::BytesMut;
 use krabka_broker::BrokerHandle;
 use krabka_metadata::{
     BrokerConfigRecord, MetadataRecord, PartitionElrRecord, PartitionRecord, TopicConfigRecord,
-};
-use krabka_protocol::{
-    Decode, Encode,
-    owned::{
-        elect_leaders_request::{ElectLeadersRequest, TopicPartitions},
-        elect_leaders_response::ElectLeadersResponse,
-    },
 };
 use tokio::net::TcpStream;
 
 mod kafka_wire;
 mod support;
-
-const ELECT_LEADERS_VERSION: i16 = 2;
 
 /// The controller-managed broker config that carries the witness role. It is
 /// `crate::config_keys::BROKER_WITNESS`, which a test crate cannot name, and a
@@ -82,8 +72,7 @@ const WITNESS_CONFIG_KEY: &str = "broker.witness";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Minimal wire helpers — bare TCP on PLAINTEXT, no SASL.
-// (Copied from tests/elect_leaders.rs; the two test crates compile
-// independently so a small duplicate keeps the helper local + simple.)
+// Named election requests use the shared wire driver.
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// The client id every request header in this suite carries.
@@ -96,29 +85,13 @@ const CLIENT_ID: &str = "krabka-unclean-test";
 /// know which broker leads it: an automatic placement starts at a random
 /// broker.
 async fn create_topic_plaintext(addr: SocketAddr, name: &str, replicas: &[i32]) {
-    use krabka_protocol::owned::{
-        create_topics_request::CreateTopicsRequest, create_topics_response::CreateTopicsResponse,
-    };
-
-    let req = CreateTopicsRequest {
-        topics: vec![support::topic_on(name, &[replicas])],
-        timeout_ms: 5_000,
-        ..Default::default()
-    };
     let mut stream = TcpStream::connect(addr).await.expect("connect");
-    let mut body = BytesMut::new();
-    req.encode(&mut body, 7).expect("encode CreateTopics");
-    let resp_bytes = kafka_wire::round_trip(&mut stream, 19, 7, 1, CLIENT_ID, true, &body)
-        .await
-        .expect("CreateTopics round-trip");
-    let mut cur: &[u8] = &resp_bytes;
-    let resp = CreateTopicsResponse::decode(&mut cur, 7).expect("decode CreateTopicsResponse");
-    assert!(resp.topics.len() == 1);
-    assert!(
-        resp.topics[0].error_code == 0,
-        "CreateTopics({name}) must succeed: {:?}",
-        resp.topics[0].error_message
-    );
+    kafka_wire::create_topic_on(
+        &mut stream,
+        CLIENT_ID,
+        crate::support::topic_on(name, &[replicas]),
+    )
+    .await;
 }
 
 /// Drives `ElectLeaders` over a fresh PLAINTEXT connection. It asserts that
@@ -131,50 +104,7 @@ async fn drive_elect_leaders(
     election_type: i8,
 ) -> Vec<(i32, i16)> {
     let mut stream = TcpStream::connect(addr).await.expect("connect");
-    let req = ElectLeadersRequest {
-        election_type,
-        topic_partitions: Some(vec![TopicPartitions {
-            topic: topic.to_string(),
-            partitions,
-            ..Default::default()
-        }]),
-        timeout_ms: 30_000,
-        ..Default::default()
-    };
-    let mut body = BytesMut::new();
-    req.encode(&mut body, ELECT_LEADERS_VERSION)
-        .expect("encode ElectLeaders");
-    let resp_bytes = kafka_wire::round_trip(
-        &mut stream,
-        43,
-        ELECT_LEADERS_VERSION,
-        1,
-        CLIENT_ID,
-        true,
-        &body,
-    )
-    .await
-    .expect("ElectLeaders round-trip");
-    let mut cur: &[u8] = &resp_bytes;
-    let resp = ElectLeadersResponse::decode(&mut cur, ELECT_LEADERS_VERSION)
-        .expect("decode ElectLeadersResponse");
-
-    assert!(
-        resp.error_code == 0,
-        "top-level error_code must be 0, got {}",
-        resp.error_code
-    );
-
-    resp.replica_election_results
-        .into_iter()
-        .find(|r| r.topic == topic)
-        .map(|r| {
-            r.partition_result
-                .into_iter()
-                .map(|p| (p.partition_id, p.error_code))
-                .collect()
-        })
-        .unwrap_or_default()
+    kafka_wire::elect_leaders(&mut stream, CLIENT_ID, topic, partitions, election_type).await
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

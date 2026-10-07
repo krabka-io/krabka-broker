@@ -403,40 +403,54 @@ mod tests {
     use super::{test_support::test_partition, *};
     use crate::diskless::index_log::test_support::{PacedReplayLog, ReplayPace};
 
-    #[tokio::test]
-    async fn tick_rotates_size_limited_flush_start() {
-        let dir = tempdir().unwrap();
-        let first = test_partition(dir.path(), "orders", 0, true, NodeId(1));
-        let second = test_partition(dir.path(), "orders", 1, true, NodeId(1));
-        let partitions = Arc::new(PartitionRegistry::new());
-        partitions.insert("orders".into(), krabka_ids::PartitionIndex(0), first);
-        partitions.insert("orders".into(), krabka_ids::PartitionIndex(1), second);
-
+    fn orders_image(partitions: i32) -> (Uuid, MetadataImage) {
         let topic_id = Uuid::from_u128(11);
         let mut image = MetadataImage::new(Uuid::nil());
         image.apply(&MetadataRecord::V1Topic(TopicRecord {
             name: "orders".into(),
             topic_id,
-            partitions: 2,
+            partitions,
             replication_factor: 1,
         }));
+        (topic_id, image)
+    }
+
+    async fn rotation_context(root: &std::path::Path) -> (Uuid, FlusherContext) {
+        let partitions = Arc::new(PartitionRegistry::new());
+        for partition in 0..2 {
+            partitions.insert(
+                "orders".into(),
+                krabka_ids::PartitionIndex(partition),
+                test_partition(root, "orders", partition, true, NodeId(1)),
+            );
+        }
+        let (topic_id, image) = orders_image(2);
         let (_, image_rx) = tokio::sync::watch::channel(Arc::new(image));
-        let index = DisklessIndexLog::start(
+        let index_log = DisklessIndexLog::start(
             krabka_remote_storage_topic::InProcessMetadataEventLog::new(1),
         )
         .await
         .unwrap();
-        let cache = index.cache();
-        let context = FlusherContext {
-            partitions,
-            image_rx,
-            object_store: Arc::new(InMemory::new()),
-            index_log: index,
-            node_id: NodeId(1),
-            broker_id: 7,
-            metrics: crate::metrics::BrokerMetrics::new(),
-            ready: Arc::new(AtomicBool::new(false)),
-        };
+        (
+            topic_id,
+            FlusherContext {
+                partitions,
+                image_rx,
+                object_store: Arc::new(InMemory::new()),
+                index_log,
+                node_id: NodeId(1),
+                broker_id: 7,
+                metrics: crate::metrics::BrokerMetrics::new(),
+                ready: Arc::new(AtomicBool::new(false)),
+            },
+        )
+    }
+
+    #[tokio::test]
+    async fn tick_rotates_size_limited_flush_start() {
+        let dir = tempdir().unwrap();
+        let (topic_id, context) = rotation_context(dir.path()).await;
+        let cache = context.index_log.cache();
 
         flush_tick(
             &context,
@@ -458,39 +472,11 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn worker_rotates_size_limited_flushes_without_starvation() {
         let dir = tempdir().unwrap();
-        let first = test_partition(dir.path(), "orders", 0, true, NodeId(1));
-        let second = test_partition(dir.path(), "orders", 1, true, NodeId(1));
-        let partitions = Arc::new(PartitionRegistry::new());
-        partitions.insert("orders".into(), krabka_ids::PartitionIndex(0), first);
-        partitions.insert("orders".into(), krabka_ids::PartitionIndex(1), second);
-
-        let topic_id = Uuid::from_u128(11);
-        let mut image = MetadataImage::new(Uuid::nil());
-        image.apply(&MetadataRecord::V1Topic(TopicRecord {
-            name: "orders".into(),
-            topic_id,
-            partitions: 2,
-            replication_factor: 1,
-        }));
-        let (_, image_rx) = tokio::sync::watch::channel(Arc::new(image));
-        let index = DisklessIndexLog::start(
-            krabka_remote_storage_topic::InProcessMetadataEventLog::new(1),
-        )
-        .await
-        .unwrap();
-        let cache = index.cache();
+        let (topic_id, context) = rotation_context(dir.path()).await;
+        let cache = context.index_log.cache();
         let shutdown = CancellationToken::new();
         let task = tokio::spawn(run(
-            FlusherContext {
-                partitions,
-                image_rx,
-                object_store: Arc::new(InMemory::new()),
-                index_log: index,
-                node_id: NodeId(1),
-                broker_id: 7,
-                metrics: crate::metrics::BrokerMetrics::new(),
-                ready: Arc::new(AtomicBool::new(false)),
-            },
+            context,
             FlushConfig {
                 interval: Duration::from_millis(1),
                 max_size: ByteSize::from_bytes(1),
@@ -972,14 +958,7 @@ mod tests {
             test_partition(dir.path(), "orders", 0, true, NodeId(1)),
         );
 
-        let topic_id = Uuid::from_u128(11);
-        let mut image = MetadataImage::new(Uuid::nil());
-        image.apply(&MetadataRecord::V1Topic(TopicRecord {
-            name: "orders".into(),
-            topic_id,
-            partitions: 1,
-            replication_factor: 1,
-        }));
+        let (topic_id, image) = orders_image(1);
         let (_, image_rx) = tokio::sync::watch::channel(Arc::new(image));
         let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
         let event_log: Arc<dyn krabka_remote_storage_topic::MetadataEventLog> =
@@ -1087,14 +1066,7 @@ mod tests {
             test_partition(dir, "orders", 0, true, NodeId(1)),
         );
 
-        let topic_id = Uuid::from_u128(11);
-        let mut image = MetadataImage::new(Uuid::nil());
-        image.apply(&MetadataRecord::V1Topic(TopicRecord {
-            name: "orders".into(),
-            topic_id,
-            partitions: 1,
-            replication_factor: 1,
-        }));
+        let (topic_id, image) = orders_image(1);
         let (_, image_rx) = tokio::sync::watch::channel(Arc::new(image));
         let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
         let event_log: Arc<dyn krabka_remote_storage_topic::MetadataEventLog> =
@@ -1339,14 +1311,7 @@ mod tests {
         partitions.insert("orders".into(), krabka_ids::PartitionIndex(1), follower);
         partitions.insert("orders".into(), krabka_ids::PartitionIndex(2), local);
 
-        let topic_id = Uuid::from_u128(11);
-        let mut image = MetadataImage::new(Uuid::nil());
-        image.apply(&MetadataRecord::V1Topic(TopicRecord {
-            name: "orders".into(),
-            topic_id,
-            partitions: 3,
-            replication_factor: 1,
-        }));
+        let (topic_id, image) = orders_image(3);
         let (_, image_rx) = tokio::sync::watch::channel(Arc::new(image));
         let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
         let index = DisklessIndexLog::start(

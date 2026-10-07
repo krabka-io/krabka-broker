@@ -85,46 +85,33 @@ impl TxnIndex {
     /// Panics if synchronized log state is poisoned or a segment previously validated as nonempty is unexpectedly missing its required batch or index entry.
     pub fn open(path: PathBuf) -> Result<Self, LogError> {
         let mut entries = Vec::new();
-        match std::fs::read(&path) {
-            Ok(bytes) => {
-                if !bytes.len().is_multiple_of(ENTRY_BYTES) {
-                    return Err(LogError::Corrupt(format!(
-                        "txnindex {} has length {} not divisible by {}",
-                        path.display(),
-                        bytes.len(),
-                        ENTRY_BYTES,
-                    )));
-                }
-                let raws = <[AbortedTxnRaw]>::ref_from_bytes(&bytes)
-                    .expect("length is a multiple of ENTRY_BYTES and AbortedTxnRaw is Unaligned");
-                entries.reserve(raws.len());
-                for raw in raws {
-                    if raw.version.get() != SUPPORTED_VERSION {
-                        return Err(LogError::Corrupt(format!(
-                            "txnindex {} contains an unsupported record version {}",
-                            path.display(),
-                            raw.version.get(),
-                        )));
-                    }
-                    let entry = AbortedTxn {
-                        start_offset: Offset(raw.first_offset.get()),
-                        last_offset: Offset(raw.last_offset.get()),
-                        producer_id: ProducerId(raw.producer_id.get()),
-                        last_stable_offset: Offset(raw.last_stable_offset.get()),
-                    };
-                    if !Self::entry_valid(entry) {
-                        return Err(LogError::Corrupt(format!(
-                            "txnindex {} contains an invalid aborted interval",
-                            path.display()
-                        )));
-                    }
-                    if !entries.contains(&entry) {
-                        entries.push(entry);
-                    }
-                }
+        let bytes = crate::index::read_sidecar(&path, ENTRY_BYTES, "txnindex")?;
+        let raws = <[AbortedTxnRaw]>::ref_from_bytes(&bytes)
+            .expect("length is a multiple of ENTRY_BYTES and AbortedTxnRaw is Unaligned");
+        entries.reserve(raws.len());
+        for raw in raws {
+            if raw.version.get() != SUPPORTED_VERSION {
+                return Err(LogError::Corrupt(format!(
+                    "txnindex {} contains an unsupported record version {}",
+                    path.display(),
+                    raw.version.get(),
+                )));
             }
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-            Err(e) => return Err(LogError::Io(e)),
+            let entry = AbortedTxn {
+                start_offset: Offset(raw.first_offset.get()),
+                last_offset: Offset(raw.last_offset.get()),
+                producer_id: ProducerId(raw.producer_id.get()),
+                last_stable_offset: Offset(raw.last_stable_offset.get()),
+            };
+            if !Self::entry_valid(entry) {
+                return Err(LogError::Corrupt(format!(
+                    "txnindex {} contains an invalid aborted interval",
+                    path.display()
+                )));
+            }
+            if !entries.contains(&entry) {
+                entries.push(entry);
+            }
         }
         tracing::Span::current().record("entries", entries.len());
         Ok(Self { path, entries })

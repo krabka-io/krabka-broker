@@ -9,13 +9,11 @@
 use assert2::check;
 use krabka_log::{LogConfig, Offset};
 use tempfile::tempdir;
-use tokio::sync::oneshot;
 
 use super::*;
 use crate::{
     codes,
     delivery::test_support::{NOW_MS, batch_at},
-    partition::{ProduceData, ProduceJob},
 };
 
 /// A scheduled, monotonic log.
@@ -36,22 +34,15 @@ fn spawn_writer(
     log: &Arc<Mutex<Log>>,
     rx: mpsc::Receiver<WriterMessage>,
 ) -> tokio::task::JoinHandle<()> {
-    tokio::spawn(run_writer!(
-        "scheduled".to_string(),
-        PartitionIndex(0),
+    crate::partition_writer::test_support::spawn_writer(
+        dir,
         log.clone(),
-        Arc::new(ArcSwap::from_pointee(dir.to_path_buf())),
         rx,
-        Arc::new(Notify::new()),
-        Arc::new(tokio::sync::Mutex::new(
-            crate::replica_state::ReplicaState::new(),
-        )),
-        Arc::new(Notify::new()),
-        DeliveryHandles::new(),
-        crate::log_dir_status::LogDirRegistry::default(),
-        Arc::new(ProducerState::new()),
-        None,
-    ))
+        WriterOptions {
+            topic: "scheduled".to_string(),
+            ..Default::default()
+        },
+    )
 }
 
 /// Two produces whose delivery times descend, queued before the writer runs so
@@ -70,22 +61,8 @@ async fn a_backwards_delivery_time_in_one_writer_group_is_refused() {
     // Both jobs are on the queue before the writer starts, so its first
     // `recv` and the `try_recv` behind it drain them into one group.
     let (tx, rx) = mpsc::channel(2);
-    let (later_ack, later) = oneshot::channel();
-    tx.send(WriterMessage::Produce(ProduceJob {
-        data: ProduceData::Owned(batch_at(NOW_MS + 60_000)),
-        ack: later_ack,
-        producer_check: None,
-    }))
-    .await
-    .expect("queue the later batch");
-    let (earlier_ack, earlier) = oneshot::channel();
-    tx.send(WriterMessage::Produce(ProduceJob {
-        data: ProduceData::Owned(batch_at(NOW_MS)),
-        ack: earlier_ack,
-        producer_check: None,
-    }))
-    .await
-    .expect("queue the earlier batch");
+    let later = queue_batch(&tx, batch_at(NOW_MS + 60_000)).await;
+    let earlier = queue_batch(&tx, batch_at(NOW_MS)).await;
 
     let writer = spawn_writer(dir.path(), &log, rx);
 
@@ -129,22 +106,8 @@ async fn a_backwards_delivery_time_is_admitted_without_the_setting() {
     ));
 
     let (tx, rx) = mpsc::channel(2);
-    let (later_ack, later) = oneshot::channel();
-    tx.send(WriterMessage::Produce(ProduceJob {
-        data: ProduceData::Owned(batch_at(NOW_MS + 60_000)),
-        ack: later_ack,
-        producer_check: None,
-    }))
-    .await
-    .expect("queue the later batch");
-    let (earlier_ack, earlier) = oneshot::channel();
-    tx.send(WriterMessage::Produce(ProduceJob {
-        data: ProduceData::Owned(batch_at(NOW_MS)),
-        ack: earlier_ack,
-        producer_check: None,
-    }))
-    .await
-    .expect("queue the earlier batch");
+    let later = queue_batch(&tx, batch_at(NOW_MS + 60_000)).await;
+    let earlier = queue_batch(&tx, batch_at(NOW_MS)).await;
 
     let writer = spawn_writer(dir.path(), &log, rx);
 

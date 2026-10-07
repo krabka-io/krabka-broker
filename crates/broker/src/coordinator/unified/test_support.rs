@@ -194,3 +194,37 @@ pub(super) fn streams_member(
         topology_epoch: 4,
     }
 }
+
+/// A metadata image with the requested per-group config records.
+pub(crate) fn group_config_image(
+    overrides: &[(&str, &[(&str, &str)])],
+) -> krabka_metadata::MetadataImage {
+    let mut image = krabka_metadata::MetadataImage::new(uuid::Uuid::nil());
+    for (group_id, entries) in overrides {
+        image.apply(&krabka_metadata::MetadataRecord::V1GroupConfig(
+            krabka_metadata::GroupConfigRecord {
+                group_id: (*group_id).to_owned(),
+                configs: entries
+                    .iter()
+                    .map(|(key, value)| ((*key).to_owned(), (*value).to_owned()))
+                    .collect(),
+            },
+        ));
+    }
+    image
+}
+
+/// Exercise one-member capacity through each protocol's heartbeat RPC.
+pub(crate) async fn assert_single_member_limit<F, Fut>(mut heartbeat: F)
+where
+    F: FnMut(&'static str, i32) -> Fut,
+    Fut: std::future::Future<Output = (i16, i32)>,
+{
+    let (code, epoch) = heartbeat("m1", 0).await;
+    assert2::check!(code == crate::codes::NONE);
+    let (code, _) = heartbeat("m2", 0).await;
+    assert2::check!(code == crate::codes::GROUP_MAX_SIZE_REACHED);
+    let (code, existing_epoch) = heartbeat("m1", epoch).await;
+    assert2::check!(code == crate::codes::NONE);
+    assert2::check!(existing_epoch == epoch);
+}

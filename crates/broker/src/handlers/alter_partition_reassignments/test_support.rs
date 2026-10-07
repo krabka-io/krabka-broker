@@ -12,7 +12,6 @@ use krabka_metadata::{
 use krabka_protocol::owned::alter_partition_reassignments_request::{
     AlterPartitionReassignmentsRequest, ReassignablePartition, ReassignableTopic,
 };
-use krabka_raft::NodeId;
 
 pub(super) fn request(
     allow_replication_factor_change: bool,
@@ -77,16 +76,8 @@ pub(super) fn img_with_epoch(
         replication_factor: i16::try_from(replicas.len()).expect("replication factor fits i16"),
     }));
     img.apply(&MetadataRecord::V1Partition(PartitionRecord {
-        topic: "foo".into(),
-        partition: 0,
-        leader: NodeId(leader),
-        replicas: replicas.iter().copied().map(NodeId).collect(),
-        isr: isr.iter().copied().map(NodeId).collect(),
-        leader_epoch: krabka_metadata::LeaderEpoch(5),
-        adding_replicas: adding.iter().copied().map(NodeId).collect(),
-        removing_replicas: removing.iter().copied().map(NodeId).collect(),
-        directories: vec![],
         partition_epoch,
+        ..crate::test_support::reassignment_partition(replicas, isr, (adding, removing), leader)
     }));
     img
 }

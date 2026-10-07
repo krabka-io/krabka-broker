@@ -438,17 +438,7 @@ async fn push_telemetry_stale_subscription_id_rejected() {
     let (_, cfg, _dir) = &cluster[0];
     let client = build_client(cfg.listen_addr).await;
 
-    configure_match_all_subscription(&client, "all", "100").await;
-
-    let get_resp: GetTelemetrySubscriptionsResponse = client
-        .send(GetTelemetrySubscriptionsRequest {
-            client_instance_id: WireUuid::ZERO,
-            ..Default::default()
-        })
-        .await
-        .expect("GetTelemetrySubscriptions");
-
-    assert!(get_resp.error_code == 0);
+    let get_resp = enroll_telemetry(&client).await;
     let assigned_id = get_resp.client_instance_id;
     let real_sub_id = get_resp.subscription_id;
     // XOR with a constant to produce a definitely-wrong subscription id.
@@ -483,17 +473,7 @@ async fn push_telemetry_unsupported_compression_rejected() {
     let (_, cfg, _dir) = &cluster[0];
     let client = build_client(cfg.listen_addr).await;
 
-    configure_match_all_subscription(&client, "all", "100").await;
-
-    let get_resp: GetTelemetrySubscriptionsResponse = client
-        .send(GetTelemetrySubscriptionsRequest {
-            client_instance_id: WireUuid::ZERO,
-            ..Default::default()
-        })
-        .await
-        .expect("GetTelemetrySubscriptions");
-
-    assert!(get_resp.error_code == 0);
+    let get_resp = enroll_telemetry(&client).await;
     let assigned_id = get_resp.client_instance_id;
     let subscription_id = get_resp.subscription_id;
 
@@ -567,4 +547,19 @@ async fn closing_the_connection_drops_the_client_instance() {
     }
 
     p.broker.shutdown().await;
+}
+
+async fn enroll_telemetry(
+    client: &krabka_client_core::Client,
+) -> GetTelemetrySubscriptionsResponse {
+    configure_match_all_subscription(client, "all", "100").await;
+    let response: GetTelemetrySubscriptionsResponse = client
+        .send(GetTelemetrySubscriptionsRequest {
+            client_instance_id: WireUuid::ZERO,
+            ..Default::default()
+        })
+        .await
+        .expect("GetTelemetrySubscriptions");
+    assert!(response.error_code == 0);
+    response
 }

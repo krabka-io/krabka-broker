@@ -1,7 +1,7 @@
-(* #"/workspace/crates/verified/src/recovery/replay_cursor_decision.rs" 210 0 210 85 *)
+(* #"/workspace/crates/verified/src/recovery/replay_cursor_decision.rs" 211 0 211 85 *)
 
-let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
-let%span sreplay_cursor_decision = "/workspace/crates/verified/src/recovery/replay_cursor_decision.rs" 201 10 208 1
+let%span sord = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span sreplay_cursor_decision = "/workspace/crates/verified/src/recovery/replay_cursor_decision.rs" 202 10 209 1
 
 use creusot.int.Int64
 use creusot.prelude.Any
@@ -27,7 +27,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let replay_cursor_decision [#"/workspace/crates/verified/src/recovery/replay_cursor_decision.rs" 210 0 210 85]
+let replay_cursor_decision [#"/workspace/crates/verified/src/recovery/replay_cursor_decision.rs" 211 0 211 85]
   (cursor: Int64.t) (next: t_Option_i64) (return (x: t_ReplayCursorDecision)) = (! bb0
   [ bb0 = any [ br0 -> {next = None} (! bb3) | br1 (x0: Int64.t) -> {next = Some x0} (! bb4) ]
   | bb4 = s0

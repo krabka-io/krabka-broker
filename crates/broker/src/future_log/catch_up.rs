@@ -117,15 +117,11 @@ pub(super) fn catch_up(
 mod tests {
     use assert2::assert;
     use krabka_ids::PartitionIndex;
-    use krabka_log::LogConfig;
     use krabka_units::mebibytes;
     use tempfile::tempdir;
 
     use super::*;
-    use crate::{
-        future_log::test_support::{append_records, fixture_partition},
-        log_dir,
-    };
+    use crate::future_log::test_support::{append_records, fixture_partition};
 
     #[tokio::test]
     async fn catch_up_resets_after_source_retention_without_dropping_batch_data() {
@@ -138,11 +134,8 @@ mod tests {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .set_log_start_offset(Offset(2))
             .expect("advance source start");
-        let future_path = log_dir::future_partition_dir(target.path(), "t", 0);
-        std::fs::create_dir_all(&future_path).unwrap();
-        let future = Arc::new(Mutex::new(
-            Log::open(&future_path, LogConfig::default()).unwrap(),
-        ));
+        let (_future_path, future) =
+            crate::future_log::test_support::open_future_log(target.path());
 
         let progress = catch_up(
             &part,
@@ -172,11 +165,8 @@ mod tests {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .reset_to(Offset(5))
             .expect("reset source");
-        let future_path = log_dir::future_partition_dir(target.path(), "t", 0);
-        std::fs::create_dir_all(&future_path).unwrap();
-        let future = Arc::new(Mutex::new(
-            Log::open(&future_path, LogConfig::default()).unwrap(),
-        ));
+        let (_future_path, future) =
+            crate::future_log::test_support::open_future_log(target.path());
 
         let progress = catch_up(
             &part,
@@ -199,11 +189,8 @@ mod tests {
         let target = tempdir().unwrap();
         let part = fixture_partition(primary.path(), "t", PartitionIndex(0));
         append_records(&part, 1);
-        let future_path = log_dir::future_partition_dir(target.path(), "t", 0);
-        std::fs::create_dir_all(&future_path).unwrap();
-        let future = Arc::new(Mutex::new(
-            Log::open(&future_path, LogConfig::default()).unwrap(),
-        ));
+        let (_future_path, future) =
+            crate::future_log::test_support::open_future_log(target.path());
         let throttle = crate::throttle::TokenBucket::new();
         throttle
             .set_byte_rate_with_burst(krabka_units::bytes_per_sec(1024), krabka_units::bytes(0));

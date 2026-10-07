@@ -322,3 +322,12 @@ where
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
 }
+
+/// Flush the WAL at a chosen cadence and trim directly to its committed frontier.
+pub(crate) async fn start_flushing_cluster(interval: krabka_units::Time) -> DisklessCluster {
+    start_diskless_cluster(|config| {
+        config.diskless_wal_flush_interval = interval;
+        config.diskless_wal_trim_safety_lag = 0;
+    })
+    .await
+}

@@ -4,50 +4,60 @@
     "Coma": {
       "vc_constructed_wal_placement_is_installable": {
         "prover": "alt-ergo",
-        "time": 0.008
+        "time": 0.01
       },
-      "vc_election_has_quorum": { "prover": "alt-ergo", "time": 0.004 },
+      "vc_election_has_quorum": { "prover": "alt-ergo", "time": 0.013 },
       "vc_index_Vec_tup2_u64_u64_Global": {
         "prover": "alt-ergo",
-        "time": 0.003
+        "time": 0.009
       },
-      "vc_index_Vec_u64_Global": { "prover": "alt-ergo", "time": 0.006 },
-      "vc_len_tup2_u64_u64": { "prover": "alt-ergo", "time": 0.003 },
-      "vc_len_u64": { "prover": "alt-ergo", "time": 0.007 },
-      "vc_new_u64": { "prover": "alt-ergo", "time": 0.008 },
-      "vc_push_u64": { "prover": "alt-ergo", "time": 0.007 },
+      "vc_index_Vec_u64_Global": { "prover": "alt-ergo", "time": 0.01 },
+      "vc_len_tup2_u64_u64": { "prover": "alt-ergo", "time": 0.008 },
+      "vc_len_u64": { "prover": "alt-ergo", "time": 0.011 },
+      "vc_new_u64": { "prover": "alt-ergo", "time": 0.009 },
+      "vc_push_u64": { "prover": "alt-ergo", "time": 0.013 },
       "vc_wal_placement_survives_one_rack_loss": {
         "tactic": "compute_specified",
         "children": [
           {
             "tactic": "split_vc",
             "children": [
-              { "prover": "alt-ergo", "time": 0.01 },
-              { "prover": "alt-ergo", "time": 0.011 },
-              { "prover": "alt-ergo", "time": 0.01 },
-              { "prover": "alt-ergo", "time": 0.01 },
-              { "prover": "alt-ergo", "time": 0.009 },
-              { "prover": "alt-ergo", "time": 0.01 },
+              { "prover": "alt-ergo", "time": 0.024 },
+              { "prover": "alt-ergo", "time": 0.018 },
+              { "prover": "alt-ergo", "time": 0.018 },
+              { "prover": "alt-ergo", "time": 0.018 },
+              { "prover": "alt-ergo", "time": 0.022 },
               { "prover": "alt-ergo", "time": 0.013 },
-              { "prover": "alt-ergo", "time": 0.011 },
-              { "prover": "z3", "time": 0.007 },
-              { "prover": "alt-ergo", "time": 0.015 },
-              { "prover": "alt-ergo", "time": 0.014 },
-              { "prover": "alt-ergo", "time": 0.009 },
-              { "prover": "alt-ergo", "time": 0.026 },
+              { "prover": "alt-ergo", "time": 0.018 },
+              { "prover": "alt-ergo", "time": 0.013 },
+              { "prover": "z3", "time": 0.01 },
+              { "prover": "z3", "time": 0.008 },
+              { "prover": "alt-ergo", "time": 0.019 },
               { "prover": "alt-ergo", "time": 0.02 },
-              { "prover": "alt-ergo", "time": 0.077 },
-              { "prover": "z3", "time": 0.875 },
-              { "prover": "alt-ergo", "time": 0.293 },
+              { "prover": "alt-ergo", "time": 0.015 },
+              { "prover": "alt-ergo", "time": 0.035 },
+              { "prover": "alt-ergo", "time": 0.028 },
               {
                 "tactic": "split_vc",
                 "children": [
-                  { "prover": "alt-ergo", "time": 0.098 },
-                  { "prover": "alt-ergo", "time": 0.015 }
+                  { "prover": "alt-ergo", "time": 0.097 },
+                  { "prover": "alt-ergo", "time": 0.087 }
                 ]
               },
-              { "prover": "alt-ergo", "time": 0.098 },
-              { "prover": "alt-ergo", "time": 0.064 }
+              { "prover": "z3", "time": 0.335 },
+              {
+                "tactic": "split_vc",
+                "children": [
+                  {
+                    "tactic": "split_vc",
+                    "children": [ { "prover": "alt-ergo", "time": 0.111 } ]
+                  },
+                  { "prover": "alt-ergo", "time": 0.025 }
+                ]
+              },
+              { "prover": "alt-ergo", "time": 0.239 },
+              { "prover": "alt-ergo", "time": 0.081 },
+              { "prover": "alt-ergo", "time": 0.075 }
             ]
           }
         ]

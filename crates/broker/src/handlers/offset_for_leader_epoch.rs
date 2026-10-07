@@ -440,40 +440,10 @@ mod tests {
     /// role locally yet, so the request must still be refused.
     #[tokio::test]
     async fn leader_check_needs_the_installed_role_and_the_image_to_name_this_node() {
-        use krabka_ids::PartitionIndex;
-        use krabka_log::{Log, LogConfig};
-        use krabka_metadata::{MetadataImage, MetadataRecord, PartitionRecord, TopicRecord};
-
-        let mut image = MetadataImage::new(uuid::Uuid::nil());
-        image.apply(&MetadataRecord::V1Topic(TopicRecord {
-            name: "orders".into(),
-            topic_id: uuid::Uuid::nil(),
-            partitions: 1,
-            replication_factor: 2,
-        }));
-        image.apply(&MetadataRecord::V1Partition(PartitionRecord {
-            topic: "orders".into(),
-            partition: 0,
-            leader: krabka_audit::NodeId(1),
-            replicas: vec![krabka_audit::NodeId(1), krabka_audit::NodeId(2)],
-            isr: vec![krabka_audit::NodeId(1), krabka_audit::NodeId(2)],
-            leader_epoch: krabka_metadata::LeaderEpoch(0),
-            adding_replicas: vec![],
-            removing_replicas: vec![],
-            directories: vec![],
-            partition_epoch: 0,
-        }));
+        let image = crate::handlers::produce::test_support::image_with_topic("orders", &[1, 2]);
 
         let dir = tempfile::tempdir().expect("tempdir");
-        let partition = crate::broker::spawn_partition(
-            "orders".to_string(),
-            PartitionIndex(0),
-            dir.path().to_path_buf(),
-            Log::open(dir.path(), LogConfig::default()).expect("open partition log"),
-            crate::log_dir_status::LogDirRegistry::default(),
-            std::sync::Arc::new(crate::producer_state::ProducerState::new()),
-            false,
-        );
+        let partition = crate::test_support::open_partition(dir.path(), "orders", 0);
 
         // (this node, installed leader, refused)
         let cases = [
@@ -516,32 +486,13 @@ mod tests {
         leader: u64,
         leader_epoch: i32,
     ) -> std::sync::Arc<Partition> {
-        use krabka_metadata::{MetadataRecord, PartitionRecord, TopicRecord};
-
-        broker_handle
-            .submit_metadata_record_for_test(MetadataRecord::V1Topic(TopicRecord {
-                name: topic.to_owned(),
-                topic_id: uuid::Uuid::from_u128(topic_id),
-                partitions: 1,
-                replication_factor: 2,
-            }))
-            .await
-            .expect("submit topic record");
-        broker_handle
-            .submit_metadata_record_for_test(MetadataRecord::V1Partition(PartitionRecord {
-                topic: topic.to_owned(),
-                partition: 0,
-                leader: krabka_audit::NodeId(leader),
-                replicas: vec![krabka_audit::NodeId(1), krabka_audit::NodeId(2)],
-                isr: vec![krabka_audit::NodeId(1), krabka_audit::NodeId(2)],
-                leader_epoch: krabka_metadata::LeaderEpoch(0),
-                adding_replicas: Vec::new(),
-                removing_replicas: Vec::new(),
-                directories: vec![uuid::Uuid::nil(); 2],
-                partition_epoch: 0,
-            }))
-            .await
-            .expect("submit partition record");
+        crate::handlers::test_support::seed_replicated_topic(
+            broker_handle,
+            topic,
+            topic_id,
+            leader,
+        )
+        .await;
 
         let shared = broker_handle.broker_arc_for_test();
         let partition = tokio::time::timeout(std::time::Duration::from_secs(10), async {

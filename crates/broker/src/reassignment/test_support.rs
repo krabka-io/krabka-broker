@@ -8,7 +8,6 @@ use std::sync::Arc;
 use krabka_metadata::{
     BrokerRegistrationRecord, MetadataImage, MetadataRecord, PartitionRecord, TopicRecord,
 };
-use krabka_raft::NodeId;
 use uuid::Uuid;
 
 use crate::heartbeat::controller_state::ControllerLivenessState;
@@ -20,35 +19,7 @@ pub(super) fn img(
     removing: &[u64],
     leader: u64,
 ) -> Arc<MetadataImage> {
-    let mut img = MetadataImage::new(Uuid::nil());
-    for n in 1..=6u64 {
-        img.apply(&MetadataRecord::V1BrokerRegistration(
-            BrokerRegistrationRecord {
-                host: String::new(),
-                port: 0,
-                ..crate::test_support::broker_registration(n)
-            },
-        ));
-    }
-    img.apply(&MetadataRecord::V1Topic(TopicRecord {
-        name: "foo".into(),
-        topic_id: Uuid::nil(),
-        partitions: 1,
-        replication_factor: i16::try_from(replicas.len()).expect("replication factor fits i16"),
-    }));
-    img.apply(&MetadataRecord::V1Partition(PartitionRecord {
-        topic: "foo".into(),
-        partition: 0,
-        leader: NodeId(leader),
-        replicas: replicas.iter().copied().map(NodeId).collect(),
-        isr: isr.iter().copied().map(NodeId).collect(),
-        leader_epoch: krabka_metadata::LeaderEpoch(5),
-        adding_replicas: adding.iter().copied().map(NodeId).collect(),
-        removing_replicas: removing.iter().copied().map(NodeId).collect(),
-        directories: vec![],
-        partition_epoch: 0,
-    }));
-    Arc::new(img)
+    img_with_dirs(replicas, isr, adding, removing, leader, &[])
 }
 
 pub(super) async fn liveness(alive: &[u64]) -> ControllerLivenessState {
@@ -94,16 +65,8 @@ pub(super) fn img_with_dirs(
         replication_factor: i16::try_from(replicas.len()).expect("replication factor fits i16"),
     }));
     image.apply(&MetadataRecord::V1Partition(PartitionRecord {
-        topic: "foo".into(),
-        partition: 0,
-        leader: NodeId(leader),
-        replicas: replicas.iter().copied().map(NodeId).collect(),
-        isr: isr.iter().copied().map(NodeId).collect(),
-        leader_epoch: krabka_metadata::LeaderEpoch(5),
-        adding_replicas: adding.iter().copied().map(NodeId).collect(),
-        removing_replicas: removing.iter().copied().map(NodeId).collect(),
         directories: directories.to_vec(),
-        partition_epoch: 0,
+        ..crate::test_support::reassignment_partition(replicas, isr, (adding, removing), leader)
     }));
     Arc::new(image)
 }

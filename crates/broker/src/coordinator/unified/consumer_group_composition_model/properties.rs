@@ -5,27 +5,20 @@
 //! The transitions themselves live in the sibling modules. This file only
 //! dispatches to them and states what must hold.
 
-use std::{
-    collections::{BTreeSet, HashSet},
-    time::Instant,
-};
+use std::collections::BTreeMap;
 
 use stateright::{Model, Property};
 
 use super::{
     MAX_OFFSET,
     commit::do_commit,
-    config::{CgcModel, config},
-    heartbeat::{advertised_of, hb_request, keepalive_request},
+    config::CgcModel,
     projection::{assert_epoch_monotonic, project, rebuild_group},
-    state::{
-        CgcAction, CgcState, EpochKind, advertised_for, advertised_map, committed_map,
-        committed_of, member, owned_map, owned_to_vec,
-    },
+    state::{CgcAction, CgcState, EpochKind, committed_map, committed_of, member},
 };
-use crate::coordinator::unified::{
-    ClientIdentity,
-    actor::{RegexResolution, step_heartbeat},
+use crate::coordinator::unified::actor::reconciliation_model_support::{
+    MemberHeartbeat, apply_client_move, apply_member_heartbeat, client_moves, exclusive_ownership,
+    overlaps_others, owned_map,
 };
 
 impl Model for CgcModel {
@@ -59,22 +52,12 @@ impl Model for CgcModel {
                 actions.push(CgcAction::Heartbeat(m.id.clone()));
                 actions.push(CgcAction::Keepalive(m.id.clone()));
             }
-            let advertised = advertised_for(state, &m.id);
-            let owned: BTreeSet<i32> = state
-                .client_owned
-                .iter()
-                .find(|(k, _)| k == &m.id)
-                .map(|(_, v)| v.iter().copied().collect())
-                .unwrap_or_default();
-            for &tp in &advertised {
-                if !owned.contains(&tp) {
-                    actions.push(CgcAction::ClientAdd(m.id.clone(), tp));
-                }
-            }
-            for &tp in &owned {
-                if !advertised.contains(&tp) {
-                    actions.push(CgcAction::ClientRevoke(m.id.clone(), tp));
-                }
+            for (add, partition) in client_moves(&state.advertised, &state.client_owned, &m.id) {
+                actions.push(if add {
+                    CgcAction::ClientAdd(m.id.clone(), partition)
+                } else {
+                    CgcAction::ClientRevoke(m.id.clone(), partition)
+                });
             }
             // Offset commit: offered with EACH epoch kind (current / stale /
             // forward) so the real epoch fence — not a precondition — is what's
@@ -90,111 +73,41 @@ impl Model for CgcModel {
     }
 
     fn next_state(&self, last: &Self::State, action: Self::Action) -> Option<Self::State> {
-        let mut owned = owned_map(last);
-        let mut adv = advertised_map(last);
+        let mut owned = owned_map(&last.client_owned);
+        let mut adv: BTreeMap<_, _> = last.advertised.iter().cloned().collect();
         let committed = committed_map(last);
-        match action {
-            CgcAction::ClientAdd(id, tp) => {
-                let advertised_has = advertised_for(last, &id).contains(&tp);
-                let entry = owned.entry(id).or_default();
-                if !advertised_has || entry.contains(&tp) {
-                    return None;
-                }
-                entry.insert(tp);
+        let add = matches!(action, CgcAction::ClientAdd(..));
+        let event = match action {
+            CgcAction::ClientAdd(id, partition) | CgcAction::ClientRevoke(id, partition) => {
                 let mut next = last.clone();
-                next.client_owned = owned_to_vec(&owned);
-                Some(next)
-            }
-            CgcAction::ClientRevoke(id, tp) => {
-                let advertised_has = advertised_for(last, &id).contains(&tp);
-                let entry = owned.entry(id).or_default();
-                if advertised_has || !entry.contains(&tp) {
-                    return None;
-                }
-                entry.remove(&tp);
-                let mut next = last.clone();
-                next.client_owned = owned_to_vec(&owned);
-                Some(next)
+                next.client_owned =
+                    apply_client_move(&last.advertised, &mut owned, id, partition, add)?;
+                return Some(next);
             }
             CgcAction::Join(id) => {
                 if member(last, &id).is_some() {
                     return None;
                 }
-                let mut g = rebuild_group(last);
-                let req = hb_request(&id, 0, &BTreeSet::new());
-                let step = step_heartbeat(
-                    &mut g,
-                    &config(),
-                    &self.metadata(),
-                    &req,
-                    ClientIdentity { id: "", host: "" },
-                    Instant::now(),
-                    &RegexResolution::none(),
-                );
-                assert_epoch_monotonic(last, &g);
-                owned.entry(id.clone()).or_default();
-                adv.insert(id, advertised_of(&step).unwrap_or_default());
-                Some(project(&g, &owned, &adv, &committed))
+                MemberHeartbeat::Join(id)
             }
             CgcAction::Leave(id) => {
                 member(last, &id)?;
-                let mut g = rebuild_group(last);
-                let req = hb_request(&id, -1, &BTreeSet::new());
-                let _ = step_heartbeat(
-                    &mut g,
-                    &config(),
-                    &self.metadata(),
-                    &req,
-                    ClientIdentity { id: "", host: "" },
-                    Instant::now(),
-                    &RegexResolution::none(),
-                );
-                assert_epoch_monotonic(last, &g);
-                owned.remove(&id);
-                adv.remove(&id);
-                Some(project(&g, &owned, &adv, &committed))
+                MemberHeartbeat::Leave(id)
             }
             CgcAction::Heartbeat(id) => {
                 let epoch = member(last, &id)?.member_epoch;
-                let cur_owned: BTreeSet<i32> = owned.get(&id).cloned().unwrap_or_default();
-                let mut g = rebuild_group(last);
-                let req = hb_request(&id, epoch, &cur_owned);
-                let step = step_heartbeat(
-                    &mut g,
-                    &config(),
-                    &self.metadata(),
-                    &req,
-                    ClientIdentity { id: "", host: "" },
-                    Instant::now(),
-                    &RegexResolution::none(),
-                );
-                assert_epoch_monotonic(last, &g);
-                adv.insert(id, advertised_of(&step).unwrap_or_default());
-                Some(project(&g, &owned, &adv, &committed))
+                MemberHeartbeat::Heartbeat(id, epoch)
             }
             CgcAction::Keepalive(id) => {
                 let epoch = member(last, &id)?.member_epoch;
-                let mut g = rebuild_group(last);
-                let req = keepalive_request(&id, epoch);
-                let step = step_heartbeat(
-                    &mut g,
-                    &config(),
-                    &self.metadata(),
-                    &req,
-                    ClientIdentity { id: "", host: "" },
-                    Instant::now(),
-                    &RegexResolution::none(),
-                );
-                assert_epoch_monotonic(last, &g);
-                // Without an assignment in the answer, the member keeps the one
-                // it was last told.
-                if let Some(assignment) = advertised_of(&step) {
-                    adv.insert(id, assignment);
-                }
-                Some(project(&g, &owned, &adv, &committed))
+                MemberHeartbeat::Keepalive(id, epoch)
             }
-            CgcAction::Commit(id, part, kind) => do_commit(last, &id, part, kind),
-        }
+            CgcAction::Commit(id, part, kind) => return do_commit(last, &id, part, kind),
+        };
+        let mut group = rebuild_group(last);
+        apply_member_heartbeat(&mut group, &self.metadata(), event, &mut owned, &mut adv);
+        assert_epoch_monotonic(last, &group);
+        Some(project(&group, &owned, &adv, &committed))
     }
 
     fn properties(&self) -> Vec<Property<Self>> {
@@ -203,32 +116,17 @@ impl Model for CgcModel {
             // (the real reconciliation's withholding — re-verified in the composed
             // context, with offset traffic interleaved).
             Property::always("exclusive_ownership", |_, s: &CgcState| {
-                let mut seen: HashSet<i32> = HashSet::new();
-                for (_, parts) in &s.client_owned {
-                    for &p in parts {
-                        if !seen.insert(p) {
-                            return false;
-                        }
-                    }
-                }
-                true
+                exclusive_ownership(&s.client_owned)
             }),
             // A member is never advertised a partition another member currently
             // owns — the coordinator-side withholding invariant.
             Property::always(
                 "advertised_disjoint_from_others_owned",
                 |_, s: &CgcState| {
-                    for (mid, adv) in &s.advertised {
-                        for &p in adv {
-                            if s.client_owned
-                                .iter()
-                                .any(|(k, v)| k != mid && v.contains(&p))
-                            {
-                                return false;
-                            }
-                        }
-                    }
-                    true
+                    !overlaps_others(
+                        s.advertised.iter().map(|(id, parts)| (id, parts)),
+                        &s.client_owned,
+                    )
                 },
             ),
             // The real OffsetCommit epoch fence agrees with the independent oracle
@@ -263,17 +161,10 @@ impl Model for CgcModel {
             // A handoff state: a partition is in one member's target while another
             // member currently owns it (the baton is mid-pass).
             Property::sometimes("handoff_witness", |_, s: &CgcState| {
-                for m in &s.members {
-                    for &tp in &m.target {
-                        if s.client_owned
-                            .iter()
-                            .any(|(k, v)| k != &m.id && v.contains(&tp))
-                        {
-                            return true;
-                        }
-                    }
-                }
-                false
+                overlaps_others(
+                    s.members.iter().map(|m| (&m.id, &m.target)),
+                    &s.client_owned,
+                )
             }),
         ]
     }

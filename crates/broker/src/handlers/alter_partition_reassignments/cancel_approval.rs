@@ -285,28 +285,7 @@ mod tests {
         let broker = handle.broker_arc_for_test();
         let proposal = approved_proposal(BreakGlassAction::CancelReassignment, "foo-0");
         let image = img_reassigning(std::slice::from_ref(&proposal));
-        let principal = crate::test_support::principal("admin");
-        let peer = crate::test_support::peer();
-        let ctx = crate::test_support::request_context(&principal, &peer, "reassign-client");
-        let env = ReassignEnv {
-            broker: &broker,
-            image: &image,
-            ctx: &ctx,
-            allow_rf_change: true,
-        };
-        let mut batch = ReassignBatch::default();
-
-        let row = alter_one(
-            &env,
-            &mut batch,
-            "foo",
-            &ReassignablePartition {
-                partition_index: 0,
-                replicas: None,
-                ..Default::default()
-            },
-            FreezeMutationResolution::Admit,
-        );
+        let (row, batch) = cancel(&broker, &image);
 
         check!(row.error_code == 0);
         // The consume and the cancel it authorized are one raft append.
@@ -330,28 +309,7 @@ mod tests {
         .await;
         let broker = handle.broker_arc_for_test();
         let image = img_reassigning(&[]);
-        let principal = crate::test_support::principal("admin");
-        let peer = crate::test_support::peer();
-        let ctx = crate::test_support::request_context(&principal, &peer, "reassign-client");
-        let env = ReassignEnv {
-            broker: &broker,
-            image: &image,
-            ctx: &ctx,
-            allow_rf_change: true,
-        };
-        let mut batch = ReassignBatch::default();
-
-        let row = alter_one(
-            &env,
-            &mut batch,
-            "foo",
-            &ReassignablePartition {
-                partition_index: 0,
-                replicas: None,
-                ..Default::default()
-            },
-            FreezeMutationResolution::Admit,
-        );
+        let (row, batch) = cancel(&broker, &image);
 
         check!(row.error_code == POLICY_VIOLATION);
         check!(
@@ -495,5 +453,33 @@ mod tests {
         check!(first == Some(APPROVED_PROPOSAL_ID));
         check!(second == Some(APPROVED_PROPOSAL_ID));
         assert!(batch.records == vec![consumed]);
+    }
+    fn cancel(
+        broker: &Broker,
+        image: &MetadataImage,
+    ) -> (ReassignablePartitionResponse, ReassignBatch) {
+        let principal = crate::test_support::principal("admin");
+        let peer = crate::test_support::peer();
+        let ctx = crate::test_support::request_context(&principal, &peer, "reassign-client");
+        let env = ReassignEnv {
+            broker,
+            image,
+            ctx: &ctx,
+            allow_rf_change: true,
+        };
+        let mut batch = ReassignBatch::default();
+
+        let row = alter_one(
+            &env,
+            &mut batch,
+            "foo",
+            &ReassignablePartition {
+                partition_index: 0,
+                replicas: None,
+                ..Default::default()
+            },
+            FreezeMutationResolution::Admit,
+        );
+        (row, batch)
     }
 }

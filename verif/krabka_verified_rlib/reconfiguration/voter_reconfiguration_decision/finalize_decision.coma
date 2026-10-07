@@ -1,15 +1,15 @@
-(* #"/workspace/crates/verified/src/reconfiguration/voter_reconfiguration_decision.rs" 200 0 203 33 *)
+(* #"/workspace/crates/verified/src/reconfiguration/voter_reconfiguration_decision.rs" 201 0 204 33 *)
 
-let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
-let%span svoter_reconfiguration_decision = "/workspace/crates/verified/src/reconfiguration/voter_reconfiguration_decision.rs" 204 31 204 32
-let%span svoter_reconfiguration_decision'0 = "/workspace/crates/verified/src/reconfiguration/voter_reconfiguration_decision.rs" 204 71 204 72
-let%span svoter_reconfiguration_decision'1 = "/workspace/crates/verified/src/reconfiguration/voter_reconfiguration_decision.rs" 212 28 212 29
-let%span svoter_reconfiguration_decision'2 = "/workspace/crates/verified/src/reconfiguration/voter_reconfiguration_decision.rs" 213 22 213 26
-let%span svoter_reconfiguration_decision'3 = "/workspace/crates/verified/src/reconfiguration/voter_reconfiguration_decision.rs" 214 29 214 33
-let%span svoter_reconfiguration_decision'4 = "/workspace/crates/verified/src/reconfiguration/voter_reconfiguration_decision.rs" 215 24 215 29
-let%span svoter_reconfiguration_decision'5 = "/workspace/crates/verified/src/reconfiguration/voter_reconfiguration_decision.rs" 186 29 186 52
-let%span svoter_reconfiguration_decision'6 = "/workspace/crates/verified/src/reconfiguration/voter_reconfiguration_decision.rs" 187 28 199 1
-let%span sadmitted_plan = "/workspace/crates/verified/src/reconfiguration/admitted_plan.rs" 176 8 191 9
+let%span sord = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span sadmitted_plan = "/workspace/crates/verified/src/reconfiguration/admitted_plan.rs" 177 8 192 9
+let%span svoter_reconfiguration_decision = "/workspace/crates/verified/src/reconfiguration/voter_reconfiguration_decision.rs" 205 31 205 32
+let%span svoter_reconfiguration_decision'0 = "/workspace/crates/verified/src/reconfiguration/voter_reconfiguration_decision.rs" 205 71 205 72
+let%span svoter_reconfiguration_decision'1 = "/workspace/crates/verified/src/reconfiguration/voter_reconfiguration_decision.rs" 213 28 213 29
+let%span svoter_reconfiguration_decision'2 = "/workspace/crates/verified/src/reconfiguration/voter_reconfiguration_decision.rs" 214 22 214 26
+let%span svoter_reconfiguration_decision'3 = "/workspace/crates/verified/src/reconfiguration/voter_reconfiguration_decision.rs" 215 29 215 33
+let%span svoter_reconfiguration_decision'4 = "/workspace/crates/verified/src/reconfiguration/voter_reconfiguration_decision.rs" 216 24 216 29
+let%span svoter_reconfiguration_decision'5 = "/workspace/crates/verified/src/reconfiguration/voter_reconfiguration_decision.rs" 187 29 187 52
+let%span svoter_reconfiguration_decision'6 = "/workspace/crates/verified/src/reconfiguration/voter_reconfiguration_decision.rs" 188 28 200 1
 
 use creusot.int.UInt64
 use creusot.int.UInt16
@@ -51,7 +51,7 @@ predicate gt_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other
 
 meta "rewrite_def" predicate gt_log_Int
 
-predicate admitted_plan [#"/workspace/crates/verified/src/reconfiguration/admitted_plan.rs" 170 0 174 9] (voters: t_CurrentVoterSet) (kind'0: t_VoterChangeKind) (plan: t_VoterReconfigurationPlan) =
+predicate admitted_plan [#"/workspace/crates/verified/src/reconfiguration/admitted_plan.rs" 171 0 175 9] (voters: t_CurrentVoterSet) (kind'0: t_VoterChangeKind) (plan: t_VoterReconfigurationPlan) =
   [%#sadmitted_plan] match kind'0 with
     | Add -> UInt64.t'int plan.next_voter_count = UInt64.t'int voters.voter_count + 1
     /\ plan.next_kraft_version = voters.kraft_version
@@ -72,7 +72,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let finalize_decision [#"/workspace/crates/verified/src/reconfiguration/voter_reconfiguration_decision.rs" 200 0 203 33]
+let finalize_decision [#"/workspace/crates/verified/src/reconfiguration/voter_reconfiguration_decision.rs" 201 0 204 33]
   (voters: t_CurrentVoterSet) (request: t_VoterChangeRequest) (return (x: t_VoterReconfigurationDecision)) =
 {[@stop_split] [@expl:finalize_decision requires] [%#svoter_reconfiguration_decision'5] gt_log_Int (UInt64.t'int voters.voter_count) 0}
   (! bb0

@@ -36,31 +36,8 @@ async fn process_partition_non_leader_skips_schema_registry_and_preserves_hint()
         )
         .expect("validator"),
     );
-    let mut img = image_with_topic("orders", &[2, 3]);
-    img.apply(&MetadataRecord::V1Partition(PartitionRecord {
-        topic: "orders".into(),
-        partition: 0,
-        leader: krabka_audit::NodeId(2),
-        replicas: vec![krabka_audit::NodeId(2), krabka_audit::NodeId(3)],
-        isr: vec![krabka_audit::NodeId(2), krabka_audit::NodeId(3)],
-        leader_epoch: krabka_metadata::LeaderEpoch(17),
-        adding_replicas: vec![],
-        removing_replicas: vec![],
-        directories: vec![],
-        partition_epoch: 1,
-    }));
-    let image = Arc::new(img);
-    let partitions = Arc::new(crate::partition_registry::PartitionRegistry::new());
-    let txn_coordinator = Arc::new(crate::txn::coordinator::TxnCoordinator::new(
-        krabka_audit::NodeId(1),
-        Arc::clone(&partitions),
-        Arc::new(crate::producer_id_manager::ProducerIdManager::new()),
-        50,
-        krabka_units::mebibytes(1),
-    ));
-    let producer_state = Arc::new(crate::producer_state::ProducerState::new());
-    let log_dir_status = crate::log_dir_status::LogDirRegistry::default();
-    let metrics = crate::metrics::BrokerMetrics::new();
+    let image = non_leader_image();
+    let fixture = crate::handlers::produce::test_support::PipelineFixture::new(1);
     let payload = encode_batch(&RecordBatch {
         records: vec![Record {
             value: Some(Bytes::from_static(&[0, 0, 0, 0, 42, b'a'])),
@@ -76,63 +53,21 @@ async fn process_partition_non_leader_skips_schema_registry_and_preserves_hint()
                 value: true,
                 mode: crate::schema_validation::ValidationMode::Full,
             }),
-            part_data: FramedPartition {
-                index: 0,
-                payload: PartitionPayload::Slice(payload),
-            },
-            topic_compression: None,
-            timestamps: TimestampPolicy::default(),
-            compacted_topic: false,
-            max_message_bytes: krabka_log::DEFAULT_MAX_MESSAGE_SIZE,
-            delivery: None,
-            topic_name: "orders".into(),
-            freeze: crate::freeze::resolve::FreezeMutationResolution::Admit,
-            internal_topic_denied: false,
-            transaction: crate::handlers::produce::producer_checks::TransactionRequest {
-                transactional_id: None,
-                version: 9,
-                producer_id_expiration_ms: 86_400_000,
-                verification_enabled: true,
-            },
-            acks: 1,
+            ..crate::handlers::produce::test_support::pipeline_input(
+                "orders",
+                PartitionPayload::Slice(payload),
+            )
         },
         PartitionServices {
             schema_validator: Some(&schema_validator),
-            partitions: &partitions,
-            txn_coordinator: &txn_coordinator,
-            producer_state: &producer_state,
-            log_dir_status: &log_dir_status,
-            image: &image,
-            broker_policy: BrokerProducePolicy {
-                node_id: krabka_audit::NodeId(1),
-                default_min_insync_replicas: 1,
-                is_witness: false,
-            },
-            record_decompression_policy: RecordDecompressionPolicy::default(),
-            metrics: &metrics,
-            phases: &crate::metrics::RequestPhases::default(),
-            unstable_api_versions: crate::api_catalog::UnstableApiVersions::Disabled,
+            ..fixture.services(&image)
         },
     )
     .await
     .expect("process partition")
     .expect_done();
 
-    let expected = PartitionProduceResponse {
-        index: 0,
-        error_code: crate::codes::NOT_LEADER_OR_FOLLOWER,
-        base_offset: -1,
-        log_append_time_ms: -1,
-        log_start_offset: -1,
-        record_errors: vec![],
-        error_message: None,
-        current_leader: LeaderIdAndEpoch {
-            leader_id: 2,
-            leader_epoch: 17,
-            unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(Vec::new()),
-        },
-        unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(Vec::new()),
-    };
+    let expected = non_leader_row();
     assert!(resp == expected);
 }
 
@@ -143,32 +78,9 @@ async fn process_partition_leader_without_local_replica_hints_leader() {
     // the "transient not-leader" branch, whose `current_leader` hint must
     // still carry the real leader id + epoch from the image — not the 0
     // defaults a struct-field-deletion mutant would leave.
-    let mut img = image_with_topic("orders", &[2, 3]);
-    img.apply(&MetadataRecord::V1Partition(PartitionRecord {
-        topic: "orders".into(),
-        partition: 0,
-        leader: krabka_audit::NodeId(2),
-        replicas: vec![krabka_audit::NodeId(2), krabka_audit::NodeId(3)],
-        isr: vec![krabka_audit::NodeId(2), krabka_audit::NodeId(3)],
-        leader_epoch: krabka_metadata::LeaderEpoch(17),
-        adding_replicas: vec![],
-        removing_replicas: vec![],
-        directories: vec![],
-        partition_epoch: 1,
-    }));
-    let image = Arc::new(img);
-    // Empty registry → `partitions.get(..)` returns None.
-    let partitions = Arc::new(crate::partition_registry::PartitionRegistry::new());
-    let txn_coordinator = Arc::new(crate::txn::coordinator::TxnCoordinator::new(
-        krabka_audit::NodeId(2),
-        Arc::clone(&partitions),
-        Arc::new(crate::producer_id_manager::ProducerIdManager::new()),
-        50,
-        krabka_units::mebibytes(1),
-    ));
-    let producer_state = Arc::new(crate::producer_state::ProducerState::new());
-    let log_dir_status = crate::log_dir_status::LogDirRegistry::default();
-    let metrics = crate::metrics::BrokerMetrics::new();
+    let image = non_leader_image();
+    // Empty registry → `fixture.partitions.get(..)` returns None.
+    let fixture = crate::handlers::produce::test_support::PipelineFixture::new(2);
     let payload = encode_batch(&RecordBatch {
         records: vec![Record {
             value: Some(Bytes::from_static(b"hello")),
@@ -178,66 +90,24 @@ async fn process_partition_leader_without_local_replica_hints_leader() {
     });
 
     let resp = process_partition(
-        PartitionInput {
-            schema: None,
-            part_data: FramedPartition {
-                index: 0,
-                payload: PartitionPayload::Slice(payload),
-            },
-            topic_compression: None,
-            timestamps: TimestampPolicy::default(),
-            compacted_topic: false,
-            max_message_bytes: krabka_log::DEFAULT_MAX_MESSAGE_SIZE,
-            delivery: None,
-            topic_name: "orders".into(),
-            freeze: crate::freeze::resolve::FreezeMutationResolution::Admit,
-            internal_topic_denied: false,
-            transaction: crate::handlers::produce::producer_checks::TransactionRequest {
-                transactional_id: None,
-                version: 9,
-                producer_id_expiration_ms: 86_400_000,
-                verification_enabled: true,
-            },
-            acks: 1,
-        },
+        crate::handlers::produce::test_support::pipeline_input(
+            "orders",
+            PartitionPayload::Slice(payload),
+        ),
         PartitionServices {
-            schema_validator: None,
-            partitions: &partitions,
-            txn_coordinator: &txn_coordinator,
-            producer_state: &producer_state,
-            log_dir_status: &log_dir_status,
-            image: &image,
-            // We are the leader (node 2), but hold no local replica.
             broker_policy: BrokerProducePolicy {
                 node_id: krabka_audit::NodeId(2),
                 default_min_insync_replicas: 1,
                 is_witness: false,
             },
-            record_decompression_policy: RecordDecompressionPolicy::default(),
-            metrics: &metrics,
-            phases: &crate::metrics::RequestPhases::default(),
-            unstable_api_versions: crate::api_catalog::UnstableApiVersions::Disabled,
+            ..fixture.services(&image)
         },
     )
     .await
     .expect("process partition")
     .expect_done();
 
-    let expected = PartitionProduceResponse {
-        index: 0,
-        error_code: crate::codes::NOT_LEADER_OR_FOLLOWER,
-        base_offset: -1,
-        log_append_time_ms: -1,
-        log_start_offset: -1,
-        record_errors: vec![],
-        error_message: None,
-        current_leader: LeaderIdAndEpoch {
-            leader_id: 2,
-            leader_epoch: 17,
-            unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(Vec::new()),
-        },
-        unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(Vec::new()),
-    };
+    let expected = non_leader_row();
     assert!(resp == expected);
 }
 
@@ -253,3 +123,38 @@ mod freeze;
 // `__consumer_offsets`, unless the request's `client_id` is Kafka's own
 // admin-tooling exception.
 mod internal_topic;
+
+fn non_leader_image() -> Arc<krabka_metadata::MetadataImage> {
+    let mut img = image_with_topic("orders", &[2, 3]);
+    img.apply(&MetadataRecord::V1Partition(PartitionRecord {
+        topic: "orders".into(),
+        partition: 0,
+        leader: krabka_audit::NodeId(2),
+        replicas: vec![krabka_audit::NodeId(2), krabka_audit::NodeId(3)],
+        isr: vec![krabka_audit::NodeId(2), krabka_audit::NodeId(3)],
+        leader_epoch: krabka_metadata::LeaderEpoch(17),
+        adding_replicas: vec![],
+        removing_replicas: vec![],
+        directories: vec![],
+        partition_epoch: 1,
+    }));
+    Arc::new(img)
+}
+
+fn non_leader_row() -> PartitionProduceResponse {
+    PartitionProduceResponse {
+        index: 0,
+        error_code: crate::codes::NOT_LEADER_OR_FOLLOWER,
+        base_offset: -1,
+        log_append_time_ms: -1,
+        log_start_offset: -1,
+        record_errors: vec![],
+        error_message: None,
+        current_leader: LeaderIdAndEpoch {
+            leader_id: 2,
+            leader_epoch: 17,
+            unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(Vec::new()),
+        },
+        unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(Vec::new()),
+    }
+}

@@ -17,15 +17,10 @@ pub struct ModelLog {
 
 impl ModelLog {
     pub(super) fn append_in_epoch(&mut self, epoch: Epoch, count: usize) {
-        for _ in 0..count {
-            self.epochs.push(epoch);
-        }
+        krabka_kraft_core::simulation_support::append_epochs(&mut self.epochs, epoch, count);
     }
     pub(super) fn truncate_to(&mut self, offset: i64) {
-        let offset = usize::try_from(offset.max(0)).unwrap_or(usize::MAX);
-        if offset < self.epochs.len() {
-            self.epochs.truncate(offset);
-        }
+        krabka_kraft_core::simulation_support::truncate_epochs(&mut self.epochs, offset);
     }
     /// Whether every entry of this log is the leader's entry at the same
     /// offset, so that the leader's log extends this one.

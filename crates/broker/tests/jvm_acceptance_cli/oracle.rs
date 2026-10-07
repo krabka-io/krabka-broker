@@ -33,6 +33,8 @@
 // cases need, the same arrangement as `tests/jvm_acceptance/mod.rs`.
 #![allow(dead_code)]
 
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt as _;
 use std::{
     io::Write as _,
     process::{Command, ExitStatus, Output, Stdio},
@@ -284,7 +286,6 @@ fn host_tempfile(contents: &str) -> tempfile::NamedTempFile {
     std::fs::write(tmp.path(), contents).expect("write tool file");
     #[cfg(unix)]
     {
-        use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(tmp.path(), std::fs::Permissions::from_mode(0o644))
             .expect("chmod tool file");
     }

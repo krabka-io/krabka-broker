@@ -18,28 +18,19 @@ use krabka_protocol::{
         fetch_request::{FetchPartition, FetchRequest, FetchTopic},
         produce_request::{PartitionProduceData, ProduceRequest, TopicProduceData},
     },
-    records::{Record, RecordBatch},
+    records::RecordBatch,
 };
-use support::topic_id_for;
+use support::{
+    client::metric_value,
+    durability::{
+        create_topic_on_replicas as create_topic, produce_acks, produce_batch,
+        record_batch_with_values,
+    },
+    topic_id_for,
+};
 use tempfile::TempDir;
 
 mod support;
-
-fn record_batch_with_values(values: &[&str]) -> RecordBatch {
-    let mut batch = RecordBatch {
-        last_offset_delta: (i32::try_from(values.len()).unwrap() - 1).max(0),
-        max_timestamp: i64::try_from(values.len()).unwrap(),
-        ..RecordBatch::default()
-    };
-    for (i, v) in values.iter().enumerate() {
-        batch.records.push(Record {
-            offset_delta: i32::try_from(i).unwrap(),
-            value: Some(Bytes::from(v.to_string())),
-            ..Default::default()
-        });
-    }
-    batch
-}
 
 async fn boot_single() -> (BrokerHandle, String, TempDir) {
     let dir = TempDir::new().unwrap();
@@ -48,74 +39,6 @@ async fn boot_single() -> (BrokerHandle, String, TempDir) {
         .unwrap();
     let bootstrap = broker.listen_addr().to_string();
     (broker, bootstrap, dir)
-}
-
-/// Creates `name` with one partition on nodes `1..=rf`, node 1 leading. The
-/// cluster tests produce to node 1 and stop node 3, so they need to know who
-/// leads: an automatic placement starts at a random broker.
-async fn create_topic(broker: &BrokerHandle, bootstrap: &str, name: &str, rf: i16) {
-    let client = Client::builder()
-        .bootstrap(bootstrap.to_string())
-        .build()
-        .await
-        .unwrap();
-    let replicas: Vec<i32> = (1..=i32::from(rf)).collect();
-    let resp = client
-        .send(CreateTopicsRequest {
-            topics: vec![support::topic_on(name, &[&replicas])],
-            timeout_ms: 5_000,
-            ..Default::default()
-        })
-        .await
-        .expect("CreateTopics");
-    assert!(
-        resp.topics[0].error_code == 0,
-        "CreateTopics failed: {resp:?}"
-    );
-    // CreateTopics ack means the controller's quorum committed the
-    // metadata record, but the supervisor's reconcile loop materializes
-    // the partition locally asynchronously. Wait until it appears so
-    // subsequent Produce/Fetch don't race the materialization.
-    broker.wait_until_partition_present(name, 0).await;
-}
-
-async fn produce_acks(
-    bootstrap: &str,
-    topic: &str,
-    values: &[&str],
-    acks: i16,
-    timeout_ms: i32,
-) -> Result<i64, i16> {
-    let client = Client::builder()
-        .bootstrap(bootstrap.to_string())
-        .build()
-        .await
-        .unwrap();
-    let topic_id = topic_id_for(&client, topic).await;
-    let resp = client
-        .send(ProduceRequest {
-            acks,
-            timeout_ms,
-            topic_data: vec![TopicProduceData {
-                name: topic.into(),
-                topic_id,
-                partition_data: vec![PartitionProduceData {
-                    index: 0,
-                    records: Some(record_batch_with_values(values).into()),
-                    ..Default::default()
-                }],
-                ..Default::default()
-            }],
-            ..Default::default()
-        })
-        .await
-        .expect("Produce");
-    let pr = &resp.responses[0].partition_responses[0];
-    if pr.error_code == 0 {
-        Ok(pr.base_offset)
-    } else {
-        Err(pr.error_code)
-    }
 }
 
 /// An idempotent batch with an explicit `(producer_id, base_sequence)`, so
@@ -127,47 +50,6 @@ fn idempotent_batch(pid: i64, base_seq: i32, values: &[&str]) -> RecordBatch {
     b.producer_epoch = 0;
     b.base_sequence = base_seq;
     b
-}
-
-/// Sends one explicit `RecordBatch` as a single-partition Produce and returns
-/// `Ok(base_offset)` or `Err(error_code)`.
-async fn produce_batch(
-    bootstrap: &str,
-    topic: &str,
-    batch: RecordBatch,
-    acks: i16,
-    timeout_ms: i32,
-) -> Result<i64, i16> {
-    let client = Client::builder()
-        .bootstrap(bootstrap.to_string())
-        .build()
-        .await
-        .unwrap();
-    let topic_id = topic_id_for(&client, topic).await;
-    let resp = client
-        .send(ProduceRequest {
-            acks,
-            timeout_ms,
-            topic_data: vec![TopicProduceData {
-                name: topic.into(),
-                topic_id,
-                partition_data: vec![PartitionProduceData {
-                    index: 0,
-                    records: Some(batch.into()),
-                    ..Default::default()
-                }],
-                ..Default::default()
-            }],
-            ..Default::default()
-        })
-        .await
-        .expect("Produce");
-    let pr = &resp.responses[0].partition_responses[0];
-    if pr.error_code == 0 {
-        Ok(pr.base_offset)
-    } else {
-        Err(pr.error_code)
-    }
 }
 
 /// Bug D regression. A failover-rejoin divergence can TRUNCATE an idempotent
@@ -455,29 +337,6 @@ async fn acks_all_completes_via_isr_shrink_when_follower_dead() {
     for (h, _, _) in cluster {
         h.shutdown().await;
     }
-}
-
-/// Renders the broker's registry as the exposition text an operator scrapes,
-/// and reads one series' value out of it.
-///
-/// `Histogram::sum` and `Histogram::count` are behind prometheus-client's
-/// `test-util` feature, which this workspace does not enable, so a test reads
-/// a histogram the way Prometheus does. Missing series read as `0.0`: a
-/// `Family` emits nothing until it has an entry, and "never observed" and
-/// "observed only zeroes" mean the same thing to every assertion below.
-async fn metric_value(handle: &BrokerHandle, series: &str) -> f64 {
-    let mut rendered = String::new();
-    {
-        let registry = handle.metrics().registry.lock().await;
-        prometheus_client::encoding::text::encode(&mut rendered, &registry)
-            .expect("encode registry");
-    }
-    rendered
-        .lines()
-        .find(|line| line.starts_with(series))
-        .and_then(|line| line.rsplit(' ').next())
-        .and_then(|value| value.parse().ok())
-        .unwrap_or(0.0)
 }
 
 /// A produce that waits on a stalled follower must land in the remote-time

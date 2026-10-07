@@ -10,16 +10,10 @@
 
 use std::{io, net::SocketAddr};
 
-use bytes::BytesMut;
-use krabka_protocol::{
-    Decode, Encode,
-    owned::{
-        api_versions_request::ApiVersionsRequest, api_versions_response::ApiVersionsResponse,
-        sasl_authenticate_request::SaslAuthenticateRequest,
-        sasl_authenticate_response::SaslAuthenticateResponse,
-        sasl_handshake_request::SaslHandshakeRequest,
-        sasl_handshake_response::SaslHandshakeResponse,
-    },
+use base64::Engine;
+use krabka_protocol::owned::{
+    api_versions_request::ApiVersionsRequest, api_versions_response::ApiVersionsResponse,
+    sasl_handshake_request::SaslHandshakeRequest, sasl_handshake_response::SaslHandshakeResponse,
 };
 use krabka_security::SaslMechanism;
 use tokio::{
@@ -87,27 +81,30 @@ pub(crate) async fn sasl_scram_sha256_authenticate(
 ) -> Result<TcpStream, io::Error> {
     let mut stream = TcpStream::connect(addr).await?;
 
-    let av_req = ApiVersionsRequest::default();
-    let mut av_body = BytesMut::new();
-    av_req
-        .encode(&mut av_body, 0)
-        .map_err(|e| io::Error::other(format!("ApiVersions encode: {e}")))?;
-    let av_resp_bytes = round_trip(&mut stream, 18, 0, 1, false, &av_body).await?;
-    let mut cur: &[u8] = &av_resp_bytes;
-    ApiVersionsResponse::decode(&mut cur, 0)
-        .map_err(|e| io::Error::other(format!("ApiVersions decode: {e}")))?;
+    let _av_resp: ApiVersionsResponse = crate::kafka_wire::exchange(
+        &mut stream,
+        &ApiVersionsRequest::default(),
+        18,
+        0,
+        1,
+        CLIENT_ID,
+        false,
+    )
+    .await?;
 
-    let mut sh_body = BytesMut::new();
-    SaslHandshakeRequest {
-        mechanism: "SCRAM-SHA-256".to_string(),
-        ..Default::default()
-    }
-    .encode(&mut sh_body, 1)
-    .map_err(|e| io::Error::other(format!("SaslHandshake encode: {e}")))?;
-    let sh_resp_bytes = round_trip(&mut stream, 17, 1, 2, false, &sh_body).await?;
-    let mut cur: &[u8] = &sh_resp_bytes;
-    let sh_resp = SaslHandshakeResponse::decode(&mut cur, 1)
-        .map_err(|e| io::Error::other(format!("SaslHandshake decode: {e}")))?;
+    let sh_resp: SaslHandshakeResponse = crate::kafka_wire::exchange(
+        &mut stream,
+        &SaslHandshakeRequest {
+            mechanism: "SCRAM-SHA-256".to_string(),
+            ..Default::default()
+        },
+        17,
+        1,
+        2,
+        CLIENT_ID,
+        false,
+    )
+    .await?;
     if sh_resp.error_code != 0 {
         return Err(io::Error::other(format!(
             "SaslHandshake(SCRAM-SHA-256) failed: error_code={}",
@@ -118,17 +115,13 @@ pub(crate) async fn sasl_scram_sha256_authenticate(
     let client = TokenScramClient::new(username, password);
     let client_first = client.client_first();
 
-    let mut body = BytesMut::new();
-    SaslAuthenticateRequest {
-        auth_bytes: bytes::Bytes::from(client_first),
-        ..Default::default()
-    }
-    .encode(&mut body, 2)
-    .map_err(|e| io::Error::other(format!("SaslAuthenticate(1) encode: {e}")))?;
-    let r1 = round_trip(&mut stream, 36, 2, 3, true, &body).await?;
-    let mut cur: &[u8] = &r1;
-    let r1_resp = SaslAuthenticateResponse::decode(&mut cur, 2)
-        .map_err(|e| io::Error::other(format!("SaslAuthenticate(1) decode: {e}")))?;
+    let r1_resp = kafka_wire::sasl_authenticate_on(
+        &mut stream,
+        CLIENT_ID,
+        3,
+        bytes::Bytes::from(client_first),
+    )
+    .await?;
     if r1_resp.error_code != 0 {
         return Err(io::Error::other(format!(
             "SCRAM round 1 failed: code={} msg={:?}",
@@ -137,17 +130,13 @@ pub(crate) async fn sasl_scram_sha256_authenticate(
     }
 
     let client_final = client.client_final(&r1_resp.auth_bytes)?;
-    let mut body = BytesMut::new();
-    SaslAuthenticateRequest {
-        auth_bytes: bytes::Bytes::from(client_final),
-        ..Default::default()
-    }
-    .encode(&mut body, 2)
-    .map_err(|e| io::Error::other(format!("SaslAuthenticate(2) encode: {e}")))?;
-    let r2 = round_trip(&mut stream, 36, 2, 4, true, &body).await?;
-    let mut cur: &[u8] = &r2;
-    let r2_resp = SaslAuthenticateResponse::decode(&mut cur, 2)
-        .map_err(|e| io::Error::other(format!("SaslAuthenticate(2) decode: {e}")))?;
+    let r2_resp = kafka_wire::sasl_authenticate_on(
+        &mut stream,
+        CLIENT_ID,
+        4,
+        bytes::Bytes::from(client_final),
+    )
+    .await?;
     if r2_resp.error_code != 0 {
         return Err(io::Error::other(format!(
             "SCRAM round 2 failed: code={} msg={:?}",
@@ -223,4 +212,31 @@ impl TokenScramClient {
             .collect();
         Ok(format!("{without_proof},p={}", B64.encode(proof)).into_bytes())
     }
+}
+
+pub(crate) async fn token_session(
+    addr: SocketAddr,
+    token_id: &str,
+    hmac: &[u8],
+) -> Result<TcpStream, String> {
+    let password = base64::engine::general_purpose::STANDARD.encode(hmac);
+    let mut session = sasl_scram_sha256_authenticate(addr, token_id, &password)
+        .await
+        .map_err(|e| format!("token SCRAM auth: {e}"))?;
+    let create = crate::rpc::send_create_delegation_token(
+        &mut session,
+        200,
+        &krabka_protocol::owned::create_delegation_token_request::CreateDelegationTokenRequest {
+            max_lifetime_ms: -1,
+            ..Default::default()
+        },
+    )
+    .await
+    .map_err(|e| format!("CreateDelegationToken(token-auth): {e}"))?;
+    assert2::assert!(
+        create.error_code == crate::DELEGATION_TOKEN_REQUEST_NOT_ALLOWED,
+        "token-authed Create must return DELEGATION_TOKEN_REQUEST_NOT_ALLOWED (64); got {} — principal override may have regressed",
+        create.error_code
+    );
+    Ok(session)
 }

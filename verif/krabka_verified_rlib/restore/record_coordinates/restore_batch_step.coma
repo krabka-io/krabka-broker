@@ -1,18 +1,18 @@
-(* #"/workspace/crates/verified/src/restore/record_coordinates.rs" 136 0 136 87 *)
+(* #"/workspace/crates/verified/src/restore/record_coordinates.rs" 137 0 137 87 *)
 
-let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
-let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
-let%span sconvert = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/convert.rs" 274 26 274 51
-let%span srecord_coordinates = "/workspace/crates/verified/src/restore/record_coordinates.rs" 137 20 137 21
-let%span srecord_coordinates'0 = "/workspace/crates/verified/src/restore/record_coordinates.rs" 141 16 141 37
-let%span srecord_coordinates'1 = "/workspace/crates/verified/src/restore/record_coordinates.rs" 142 14 142 22
-let%span srecord_coordinates'2 = "/workspace/crates/verified/src/restore/record_coordinates.rs" 142 14 142 30
-let%span srecord_coordinates'3 = "/workspace/crates/verified/src/restore/record_coordinates.rs" 142 33 142 34
-let%span srecord_coordinates'4 = "/workspace/crates/verified/src/restore/record_coordinates.rs" 142 14 142 34
-let%span srecord_coordinates'5 = "/workspace/crates/verified/src/restore/record_coordinates.rs" 145 13 145 25
-let%span srecord_coordinates'6 = "/workspace/crates/verified/src/restore/record_coordinates.rs" 145 28 145 29
-let%span srecord_coordinates'7 = "/workspace/crates/verified/src/restore/record_coordinates.rs" 145 13 145 29
-let%span srecord_coordinates'8 = "/workspace/crates/verified/src/restore/record_coordinates.rs" 125 10 134 1
+let%span sord = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sord'0 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span sconvert = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/convert.rs" 274 26 274 51
+let%span srecord_coordinates = "/workspace/crates/verified/src/restore/record_coordinates.rs" 138 20 138 21
+let%span srecord_coordinates'0 = "/workspace/crates/verified/src/restore/record_coordinates.rs" 142 16 142 37
+let%span srecord_coordinates'1 = "/workspace/crates/verified/src/restore/record_coordinates.rs" 143 14 143 22
+let%span srecord_coordinates'2 = "/workspace/crates/verified/src/restore/record_coordinates.rs" 143 14 143 30
+let%span srecord_coordinates'3 = "/workspace/crates/verified/src/restore/record_coordinates.rs" 143 33 143 34
+let%span srecord_coordinates'4 = "/workspace/crates/verified/src/restore/record_coordinates.rs" 143 14 143 34
+let%span srecord_coordinates'5 = "/workspace/crates/verified/src/restore/record_coordinates.rs" 146 13 146 25
+let%span srecord_coordinates'6 = "/workspace/crates/verified/src/restore/record_coordinates.rs" 146 28 146 29
+let%span srecord_coordinates'7 = "/workspace/crates/verified/src/restore/record_coordinates.rs" 146 13 146 29
+let%span srecord_coordinates'8 = "/workspace/crates/verified/src/restore/record_coordinates.rs" 126 10 135 1
 
 use creusot.int.Int32
 use creusot.int.Int64
@@ -40,7 +40,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let restore_batch_step [#"/workspace/crates/verified/src/restore/record_coordinates.rs" 136 0 136 87]
+let restore_batch_step [#"/workspace/crates/verified/src/restore/record_coordinates.rs" 137 0 137 87]
   (minimum_base: Int64.t) (base: Int64.t) (last_delta: Int32.t) (return (x: t_Option_i64)) = (! bb0
   [ bb0 = s0
     [ s0 = [ &_9 <- Int32.lt last_delta ([%#srecord_coordinates] (0: Int32.t)) ] s1

@@ -4,7 +4,6 @@
 //! else from doing the same.
 
 use assert2::{assert, check};
-use base64::Engine;
 use krabka_protocol::owned::{
     create_delegation_token_request::CreateDelegationTokenRequest,
     describe_delegation_token_request::{
@@ -13,10 +12,10 @@ use krabka_protocol::owned::{
 };
 
 use crate::{
-    DELEGATION_TOKEN_AUTHORIZATION_FAILED, DELEGATION_TOKEN_REQUEST_NOT_ALLOWED,
+    DELEGATION_TOKEN_AUTHORIZATION_FAILED,
     cluster::{start_broker_with_super_users, wait_for_token},
     rpc::{send_create_delegation_token, send_describe_delegation_token},
-    wire::{sasl_plain_authenticate, sasl_scram_sha256_authenticate},
+    wire::sasl_plain_authenticate,
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -124,33 +123,7 @@ async fn act_as_super_user_mints_token_owned_by_target() {
         // (3) Open a second connection; SASL/SCRAM-SHA-256 with username =
         // token_id, password = base64(hmac). The token-fallback path
         // authenticates this session as the token's OWNER — alice.
-        let token_password = base64::engine::general_purpose::STANDARD.encode(&hmac_bytes);
-        let mut tokenuser = sasl_scram_sha256_authenticate(addr, &token_id, &token_password)
-            .await
-            .map_err(|e| format!("token SCRAM auth: {e}"))?;
-
-        // (4) Re-Create from the token-authed connection MUST return 64
-        // (DELEGATION_TOKEN_REQUEST_NOT_ALLOWED). This is the unambiguous
-        // oracle that the broker tagged this session as
-        // `authenticated_via_token = true` AND set the principal back to the
-        // token's owner. If either flag/override regressed, the request
-        // would either succeed (wrong) or fail with a different error.
-        let create_via_token = send_create_delegation_token(
-            &mut tokenuser,
-            200,
-            &CreateDelegationTokenRequest {
-                max_lifetime_ms: -1,
-                ..Default::default()
-            },
-        )
-        .await
-        .map_err(|e| format!("CreateDelegationToken(token-auth): {e}"))?;
-        assert!(
-            create_via_token.error_code == DELEGATION_TOKEN_REQUEST_NOT_ALLOWED,
-            "token-authed Create must return DELEGATION_TOKEN_REQUEST_NOT_ALLOWED (64); \
-             got {}",
-            create_via_token.error_code
-        );
+        let tokenuser = crate::wire::token_session(addr, &token_id, &hmac_bytes).await?;
 
         drop(admin);
         drop(tokenuser);

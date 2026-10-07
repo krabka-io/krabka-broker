@@ -8,19 +8,14 @@
 use std::time::{Duration, Instant};
 
 use assert2::assert;
-use bytes::Bytes;
 use krabka_broker::{BrokerConfig, BrokerHandle};
 use krabka_client_core::Client;
 use krabka_metadata::{LeaderRecoveryState, MetadataRecord, TopicConfigRecord};
-use krabka_protocol::{
-    owned::{
-        create_topics_request::CreateTopicsRequest,
-        metadata_request::{MetadataRequest, MetadataRequestTopic},
-        produce_request::{PartitionProduceData, ProduceRequest, TopicProduceData},
-    },
-    records::{Record, RecordBatch},
+use krabka_protocol::owned::metadata_request::{MetadataRequest, MetadataRequestTopic};
+use support::{
+    cluster_lock,
+    durability::{create_topic_on_replicas as create_topic, produce_acks},
 };
-use support::{cluster_lock, topic_id_for};
 use tempfile::TempDir;
 
 mod support;
@@ -37,83 +32,6 @@ async fn find_controller_leader(cluster: &[(BrokerHandle, BrokerConfig, TempDir)
         }
     }
     panic!("a leader was elected but no handle self-identifies as leader");
-}
-
-/// Creates `name` with one partition on nodes `1..=rf`, node 1 leading. The
-/// tests kill or truncate nodes by id, so they need to know who leads: an
-/// automatic placement starts at a random broker.
-async fn create_topic(broker: &BrokerHandle, bootstrap: &str, name: &str, rf: i16) {
-    let client = Client::builder()
-        .bootstrap(bootstrap.to_string())
-        .build()
-        .await
-        .unwrap();
-    let replicas: Vec<i32> = (1..=i32::from(rf)).collect();
-    let resp = client
-        .send(CreateTopicsRequest {
-            topics: vec![support::topic_on(name, &[&replicas])],
-            timeout_ms: 5_000,
-            ..Default::default()
-        })
-        .await
-        .expect("CreateTopics");
-    assert!(resp.topics[0].error_code == 0, "CreateTopics: {resp:?}");
-    broker.wait_until_partition_present(name, 0).await;
-}
-
-fn record_batch_with_values(values: &[&str]) -> RecordBatch {
-    let mut batch = RecordBatch {
-        last_offset_delta: (i32::try_from(values.len()).unwrap() - 1).max(0),
-        max_timestamp: i64::try_from(values.len()).unwrap(),
-        ..RecordBatch::default()
-    };
-    for (i, v) in values.iter().enumerate() {
-        batch.records.push(Record {
-            offset_delta: i32::try_from(i).unwrap(),
-            value: Some(Bytes::from(v.to_string())),
-            ..Default::default()
-        });
-    }
-    batch
-}
-
-async fn produce_acks(
-    bootstrap: &str,
-    topic: &str,
-    values: &[&str],
-    acks: i16,
-    timeout_ms: i32,
-) -> Result<i64, i16> {
-    let client = Client::builder()
-        .bootstrap(bootstrap.to_string())
-        .build()
-        .await
-        .unwrap();
-    let topic_id = topic_id_for(&client, topic).await;
-    let resp = client
-        .send(ProduceRequest {
-            acks,
-            timeout_ms,
-            topic_data: vec![TopicProduceData {
-                name: topic.into(),
-                topic_id,
-                partition_data: vec![PartitionProduceData {
-                    index: 0,
-                    records: Some(record_batch_with_values(values).into()),
-                    ..Default::default()
-                }],
-                ..Default::default()
-            }],
-            ..Default::default()
-        })
-        .await
-        .expect("Produce");
-    let pr = &resp.responses[0].partition_responses[0];
-    if pr.error_code == 0 {
-        Ok(pr.base_offset)
-    } else {
-        Err(pr.error_code)
-    }
 }
 
 /// Waits until every survivor sees a controller leader that is not `victim`.

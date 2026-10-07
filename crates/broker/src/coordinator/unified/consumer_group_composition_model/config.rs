@@ -6,25 +6,12 @@
 //! state stays the part the checker enumerates and the bounds stay the part a
 //! test picks.
 
-use super::{TOPIC, TOPIC_NAME};
-use crate::coordinator::unified::{
-    actor::MetadataProvider, config::NextGenConfig, reconciler::ReconcileInput,
-};
+use crate::coordinator::unified::actor::reconciliation_model_support::{ModelMetadata, metadata};
 
 pub(super) struct CgcModel {
     pub(super) pool: Vec<&'static str>,
     pub(super) partitions: i32,
     pub(super) max_epoch: i32,
-}
-
-#[derive(Debug)]
-pub(super) struct ModelMetadata {
-    input: ReconcileInput,
-}
-impl MetadataProvider for ModelMetadata {
-    fn snapshot(&self) -> ReconcileInput {
-        self.input.clone()
-    }
 }
 
 impl CgcModel {
@@ -43,16 +30,6 @@ impl CgcModel {
         }
     }
     pub(super) fn metadata(&self) -> ModelMetadata {
-        ModelMetadata {
-            input: ReconcileInput {
-                topic_id_by_name: [(TOPIC_NAME.to_string(), TOPIC)].into(),
-                partitions_per_topic: [(TOPIC, self.partitions)].into(),
-                ..Default::default()
-            },
-        }
+        metadata(self.partitions)
     }
-}
-
-pub(super) fn config() -> NextGenConfig {
-    NextGenConfig::default()
 }

@@ -8,7 +8,7 @@
 use std::{io, net::SocketAddr};
 
 use bytes::{Buf, BufMut, BytesMut};
-use krabka_broker::{Broker, BrokerConfig, config::ListenerSpec};
+use krabka_broker::Broker;
 use krabka_protocol::{
     Decode, Encode,
     owned::{api_versions_request::ApiVersionsRequest, api_versions_response::ApiVersionsResponse},
@@ -28,17 +28,7 @@ use crate::harness::admin_plain_password;
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn inter_broker_client_authenticates_via_plain() {
     let log_dir = tempfile::tempdir().unwrap();
-    let mut cfg = BrokerConfig::for_tests(log_dir.path().to_path_buf());
-    cfg.listeners = vec![ListenerSpec {
-        name: "SASL_PLAINTEXT".to_string(),
-        bind_addr: "127.0.0.1:0".parse().unwrap(),
-        advertised: "127.0.0.1:0".to_string(),
-        protocol: ListenerProtocol::SaslPlaintext,
-        tls_config: None,
-        sasl_mechanisms: None,
-        principal_mapper: krabka_broker::SslPrincipalMapper::default(),
-    }];
-    cfg.inter_broker_listener_name = "SASL_PLAINTEXT".to_string();
+    let mut cfg = crate::support::sasl_plaintext_config(log_dir.path().to_path_buf());
     cfg.enabled_sasl_mechanisms = vec![SaslMechanism::Plain];
     cfg.plain_credentials
         .insert("broker".to_string(), admin_plain_password());

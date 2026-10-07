@@ -5,20 +5,17 @@ use std::sync::Arc;
 
 use assert2::check;
 use bytes::Bytes;
-use krabka_compression::RecordDecompressionPolicy;
 use krabka_ids::Offset;
 use krabka_metadata::{MetadataImage, MetadataRecord, TopicConfigRecord};
 use krabka_protocol::records::{Record, RecordBatch};
 use krabka_units::{bytes, millis};
-use uuid::Uuid;
 
 use super::*;
 use crate::{
     config_keys::{DELIVERY_MAX_DELAY_MS, DELIVERY_MODE_IMMEDIATE, DELIVERY_SCHEDULE_MONOTONIC},
     handlers::produce::{
-        framing::{FramedPartition, PartitionPayload},
-        leadership::BrokerProducePolicy,
-        pipeline::{PartitionInput, PartitionServices, process_partition},
+        framing::PartitionPayload,
+        pipeline::{PartitionInput, process_partition},
         test_support::{encode_batch, image_with_topic},
     },
 };
@@ -195,45 +192,21 @@ async fn a_scheduled_partition_rejects_and_appends_by_delivery_time() {
         ],
     ));
     let delivery = resolve_delivery_gate(&image, "sched");
-    let partitions = Arc::new(crate::partition_registry::PartitionRegistry::new());
-    let txn_coordinator = Arc::new(crate::txn::coordinator::TxnCoordinator::new(
-        krabka_audit::NodeId(1),
-        Arc::clone(&partitions),
-        Arc::new(crate::producer_id_manager::ProducerIdManager::new()),
-        50,
-        krabka_units::mebibytes(1),
-    ));
-    let producer_state = Arc::new(crate::producer_state::ProducerState::new());
-    let log_dir_status = crate::log_dir_status::LogDirRegistry::default();
-    let metrics = crate::metrics::BrokerMetrics::new();
+    let fixture = crate::handlers::produce::test_support::PipelineFixture::new(1);
 
-    let part_dir = crate::log_dir::partition_dir(dir.path(), "sched", 0);
-    std::fs::create_dir_all(&part_dir).unwrap();
-    let log = krabka_log::Log::open(
-        &part_dir,
-        krabka_log::LogConfig {
-            delivery_policy: krabka_log::DeliveryPolicy::Scheduled,
-            // The topic config below asks for `delivery.schedule.monotonic`,
-            // and the log is what enforces it, so the applier's answer for
-            // that key is what the partition's log has to be opened with.
-            schedule_order: krabka_log::ScheduleOrder::Monotonic,
-            ..krabka_log::LogConfig::default()
-        },
-    )
-    .unwrap();
-    let part = crate::broker::spawn_partition(
-        "sched".to_string(),
-        krabka_ids::PartitionIndex(0),
-        dir.path().to_path_buf(),
-        log,
-        log_dir_status.clone(),
-        Arc::clone(&producer_state),
-        false,
-    );
-    let record = image.partition("sched", 0).expect("partition");
-    part.install_replication_target(Some(Uuid::nil()), record.leader.0, record.leader_epoch.0)
-        .await;
-    part.install_isr(&record.isr, &record.replicas, record.leader)
+    let part = fixture
+        .partition_with_config(
+            dir.path(),
+            "sched",
+            &image,
+            krabka_log::LogConfig {
+                delivery_policy: krabka_log::DeliveryPolicy::Scheduled,
+                // The log enforces `delivery.schedule.monotonic`, so its
+                // configuration must match the topic's delivery settings.
+                schedule_order: krabka_log::ScheduleOrder::Monotonic,
+                ..krabka_log::LogConfig::default()
+            },
+        )
         .await;
 
     // Seed offset 0 with a batch that comes due in ten minutes, so the
@@ -244,7 +217,9 @@ async fn a_scheduled_partition_rejects_and_appends_by_delivery_time() {
         .unwrap_or_else(std::sync::PoisonError::into_inner)
         .append(&mut batch_delivered_at(now_ms + 600_000))
         .expect("seed the partition schedule");
-    partitions.insert("sched".into(), krabka_ids::PartitionIndex(0), part);
+    fixture
+        .partitions
+        .insert("sched".into(), krabka_ids::PartitionIndex(0), part);
 
     // The accepted case appends, so it comes last.
     let accepted_delivery_ms = now_ms + 900_000;
@@ -288,46 +263,14 @@ async fn a_scheduled_partition_rejects_and_appends_by_delivery_time() {
     for (delivery_ms, want, label) in cases {
         let resp = process_partition(
             PartitionInput {
-                schema: None,
                 timestamps: crate::handlers::produce::topic_settings::TimestampPolicy::default(),
-                compacted_topic: false,
-                part_data: FramedPartition {
-                    index: 0,
-                    payload: PartitionPayload::Slice(encode_batch(&batch_delivered_at(
-                        delivery_ms,
-                    ))),
-                },
-                topic_compression: None,
-                max_message_bytes: krabka_log::DEFAULT_MAX_MESSAGE_SIZE,
                 delivery,
-                topic_name: "sched".into(),
-                freeze: crate::freeze::resolve::FreezeMutationResolution::Admit,
-                internal_topic_denied: false,
-                transaction: crate::handlers::produce::producer_checks::TransactionRequest {
-                    transactional_id: None,
-                    version: 9,
-                    producer_id_expiration_ms: 86_400_000,
-                    verification_enabled: true,
-                },
-                acks: 1,
+                ..crate::handlers::produce::test_support::pipeline_input(
+                    "sched",
+                    PartitionPayload::Slice(encode_batch(&batch_delivered_at(delivery_ms))),
+                )
             },
-            PartitionServices {
-                schema_validator: None,
-                partitions: &partitions,
-                txn_coordinator: &txn_coordinator,
-                producer_state: &producer_state,
-                log_dir_status: &log_dir_status,
-                image: &image,
-                broker_policy: BrokerProducePolicy {
-                    node_id: krabka_audit::NodeId(1),
-                    default_min_insync_replicas: 1,
-                    is_witness: false,
-                },
-                record_decompression_policy: RecordDecompressionPolicy::default(),
-                metrics: &metrics,
-                phases: &crate::metrics::RequestPhases::default(),
-                unstable_api_versions: crate::api_catalog::UnstableApiVersions::Disabled,
-            },
+            fixture.services(&image),
         )
         .await
         .expect("process partition")
@@ -344,7 +287,8 @@ async fn a_scheduled_partition_rejects_and_appends_by_delivery_time() {
     let mut want_bytes = accepted_wire.to_vec();
     want_bytes[0..8].copy_from_slice(&1_i64.to_be_bytes());
     want_bytes[12..16].copy_from_slice(&0_i32.to_be_bytes());
-    let part = partitions
+    let part = fixture
+        .partitions
         .get("sched", krabka_ids::PartitionIndex(0))
         .expect("the partition is registered");
     let stored = part

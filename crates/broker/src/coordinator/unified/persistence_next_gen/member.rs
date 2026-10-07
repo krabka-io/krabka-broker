@@ -33,10 +33,10 @@ use krabka_protocol::ProtocolError;
 use crate::{
     coordinator::unified::persistence::{
         flex::{
-            get_compact_array_len, get_compact_bytes, get_compact_nullable_string,
-            get_compact_string, get_string_array, put_compact_array_len, put_compact_bytes,
-            put_compact_nullable_string, put_compact_string, put_empty_tagged_fields,
-            put_string_array, put_tagged_fields, read_tagged, skip_tagged_fields,
+            get_compact_array, get_compact_bytes, get_compact_nullable_string, get_compact_string,
+            get_string_array, put_compact_array, put_compact_bytes, put_compact_nullable_string,
+            put_compact_string, put_empty_tagged_fields, put_string_array, put_tagged_fields,
+            read_tagged, skip_tagged_fields,
         },
         get_i16, get_i32,
     },
@@ -64,26 +64,27 @@ impl ClassicMemberMetadata {
     fn encode_tag_payload(&self) -> Bytes {
         let mut buf = BytesMut::new();
         buf.put_i32(self.session_timeout_ms);
-        put_compact_array_len(&mut buf, self.supported_protocols.len());
-        for (name, meta) in &self.supported_protocols {
-            put_compact_string(&mut buf, name);
-            put_compact_bytes(&mut buf, meta);
-            put_empty_tagged_fields(&mut buf);
-        }
+        put_compact_array(
+            &mut buf,
+            self.supported_protocols.iter(),
+            |buf, (name, meta)| {
+                put_compact_string(buf, name);
+                put_compact_bytes(buf, meta);
+                put_empty_tagged_fields(buf);
+            },
+        );
         put_empty_tagged_fields(&mut buf);
         buf.freeze()
     }
 
     fn decode_tag_payload(buf: &mut &[u8]) -> Result<Self, BrokerError> {
         let session_timeout_ms = get_i32(buf)?;
-        let n = get_compact_array_len(buf)?;
-        let mut supported_protocols = Vec::with_capacity(n);
-        for _ in 0..n {
+        let supported_protocols = get_compact_array(buf, |buf| {
             let name = get_compact_string(buf)?;
             let meta = get_compact_bytes(buf)?;
             skip_tagged_fields(buf)?;
-            supported_protocols.push((name, meta));
-        }
+            Ok((name, meta))
+        })?;
         skip_tagged_fields(buf)?;
         Ok(Self {
             session_timeout_ms,

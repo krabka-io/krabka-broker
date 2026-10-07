@@ -24,8 +24,7 @@ mod support;
 use std::process::Command;
 
 use assert2::assert;
-use krabka_broker::{Broker, BrokerConfig, BrokerHandle};
-use krabka_log::LogConfig;
+use krabka_broker::BrokerHandle;
 
 /// Ports for this test process, allocated once rather than fixed at 9092.
 ///
@@ -35,28 +34,12 @@ use krabka_log::LogConfig;
 /// time. A port per process lets them overlap.
 ///
 /// `&'static str`, so these read as the constants they replaced.
-fn ports() -> &'static (String, String, String) {
-    static PORTS: std::sync::OnceLock<(String, String, String)> = std::sync::OnceLock::new();
-    PORTS.get_or_init(|| {
-        let (client, controller) = (support::free_port(), support::free_port());
-        (
-            format!("host.docker.internal:{client}"),
-            format!("0.0.0.0:{client}"),
-            format!("0.0.0.0:{controller}"),
-        )
-    })
-}
-
 fn bootstrap_addr() -> &'static str {
-    &ports().0
-}
-
-fn listen_addr() -> &'static str {
-    &ports().1
+    &support::jvm_listeners().advertised
 }
 
 fn controller_listen() -> &'static str {
-    &ports().2
+    &support::jvm_listeners().controller
 }
 
 /// The controller as the containers address it.
@@ -93,45 +76,13 @@ const JOINER_DIRECTORY_ID_BASE64: &str = "AAAAAAAAAAAAAAAAAAAAAg";
 /// latest-release feature defaults (metadata.version=25, group.version=1,
 /// transaction.version=2).
 async fn start_host_broker() -> (BrokerHandle, tempfile::TempDir) {
-    let bootstrap = bootstrap_addr();
-    let listen = listen_addr();
-    let _ = tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("krabka_broker=info,warn")),
-        )
-        .with_test_writer()
-        .try_init();
-    let dir = tempfile::tempdir().expect("tempdir");
-    let listen_addr: std::net::SocketAddr = listen_addr().parse().expect("static addr");
-    let controller_addr: std::net::SocketAddr =
-        controller_listen().parse().expect("allocated addr");
-    let config = BrokerConfig {
-        broker_id: 1,
-        listen_addr,
-        advertised_listener: bootstrap_addr().into(),
-        log_dir: dir.path().to_path_buf(),
-        log_config: LogConfig::default(),
-        node_id: krabka_broker::NodeId(1),
-        directory_id: DIRECTORY_ID,
-        controller_listen_addr: controller_addr,
-        controller_quorum_voters: vec![(
-            krabka_broker::NodeId(1),
-            controller_bootstrap().to_string(),
-        )],
-        heartbeat_interval: krabka_units::millis(3_000),
-        heartbeat_timeout: krabka_units::millis(9_000),
-        replica_lag_time_max: krabka_units::millis(30_000),
-        controller_election_timeout: krabka_units::secs(5),
-        controller_heartbeat_interval: krabka_units::millis(500),
-        bootstrap_mode: krabka_broker::BootstrapMode::Bootstrap,
-        ..BrokerConfig::default().with_internal_topics_for(1)
-    };
-    let handle = Broker::start(config).await.expect("start broker");
-    eprintln!("KRABKA[test] broker started listen={listen} advertised={bootstrap}");
-    (handle, dir)
+    support::start_jvm_single("krabka_broker=info,warn", |config| {
+        config.directory_id = DIRECTORY_ID;
+        config.controller_quorum_voters =
+            vec![(krabka_broker::NodeId(1), controller_bootstrap().to_string())];
+    })
+    .await
 }
-
 /// Start a caught-up controller observer without auto-join. The official JVM
 /// `add-controller` command promotes this exact live identity.
 async fn start_host_observer() -> (krabka_raft::ControllerHandle, tempfile::TempDir) {
@@ -243,7 +194,7 @@ fn kafka_add_controller() -> std::process::Output {
         properties_path.display()
     );
     let metadata_mount = format!("{}:/tmp/kraft-controller-2", metadata_dir.display());
-    let output = Command::new("docker")
+    let output = std::process::Command::new("docker")
         .args([
             "run",
             "--rm",
@@ -273,16 +224,6 @@ fn kafka_add_controller() -> std::process::Output {
 
 /// Extract `FinalizedVersionLevel` for `feature` from `kafka-features describe`
 /// output. Returns `None` if the feature is absent or shows no finalized level.
-fn finalized_level(describe_stdout: &str, feature: &str) -> Option<i64> {
-    for line in describe_stdout.lines() {
-        if line.contains(&format!("Feature: {feature}")) {
-            let idx = line.find("FinalizedVersionLevel:")?;
-            let rest = &line[idx + "FinalizedVersionLevel:".len()..];
-            return rest.split_whitespace().next()?.parse().ok();
-        }
-    }
-    None
-}
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "requires Docker"]
@@ -306,7 +247,7 @@ async fn kafka_features_describe_and_round_trip() {
         );
         if let Some(want) = want_level {
             assert!(
-                finalized_level(&out, feature) == Some(want),
+                support::jvm_finalized_level(&out, feature) == Some(want),
                 "{feature} must start finalized at {want}:\n{out}"
             );
         }
@@ -328,7 +269,7 @@ async fn kafka_features_describe_and_round_trip() {
         let desc = kafka_features(&["describe"]);
         let text = String::from_utf8_lossy(&desc.stdout);
         assert!(
-            finalized_level(&text, "transaction.version") == Some(want),
+            support::jvm_finalized_level(&text, "transaction.version") == Some(want),
             "transaction.version should be {want} after {verb}:\n{text}"
         );
     }
@@ -345,7 +286,7 @@ async fn kafka_features_describe_and_round_trip() {
     let desc = kafka_features(&["describe"]);
     let text = String::from_utf8_lossy(&desc.stdout);
     assert!(
-        finalized_level(&text, "kraft.version") == Some(1),
+        support::jvm_finalized_level(&text, "kraft.version") == Some(1),
         "kraft.version should be finalized at 1:\n{text}"
     );
     let downgrade = kafka_features(&["downgrade", "--feature", "kraft.version=0"]);
@@ -476,7 +417,7 @@ async fn kafka_features_describes_and_round_trips_elr() {
     let out = String::from_utf8_lossy(&desc.stdout);
     assert!(out.contains(ELR), "describe must list {ELR}:\n{out}");
     assert!(
-        finalized_level(&out, ELR) == Some(1),
+        support::jvm_finalized_level(&out, ELR) == Some(1),
         "{ELR} must start enabled:\n{out}"
     );
 
@@ -493,7 +434,7 @@ async fn kafka_features_describes_and_round_trips_elr() {
         // A level-0 finalize is KIP-584's delete, so the finalized level is
         // either absent or 0 after the downgrade; both read as disabled.
         assert!(
-            finalized_level(&text, ELR).unwrap_or(0) == i64::from(want),
+            support::jvm_finalized_level(&text, ELR).unwrap_or(0) == i64::from(want),
             "{ELR} should read {want} after {verb}:\n{text}"
         );
     }

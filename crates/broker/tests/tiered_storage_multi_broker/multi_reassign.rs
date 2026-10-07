@@ -34,10 +34,7 @@ use krabka_protocol::{
         alter_partition_reassignments_request::{
             AlterPartitionReassignmentsRequest, ReassignablePartition, ReassignableTopic,
         },
-        create_topics_request::{
-            CreatableReplicaAssignment, CreatableTopic, CreatableTopicConfig, CreateTopicsRequest,
-        },
-        produce_request::{PartitionProduceData, ProduceRequest, TopicProduceData},
+        create_topics_request::{CreatableTopic, CreateTopicsRequest},
     },
     primitives::uuid::Uuid as WireUuid,
     records::{Record, RecordBatch},
@@ -49,6 +46,7 @@ use crate::{
         await_all_brokers_registered, await_all_rlmm_active,
         start_three_tiered_brokers_with_segment_sizes,
     },
+    multi_workload::local_segment_bases,
 };
 
 /// The topic this suite produces into.
@@ -102,32 +100,6 @@ fn archive_bytes(root: &Path) -> u64 {
         .sum()
 }
 
-/// The base offsets of the `*.log` files in one replica's partition
-/// directory, ascending. The highest is the active segment's; everything below
-/// it is sealed. A first entry above zero is local retention having evicted an
-/// archived segment, which is the only signal a tiered partition gives on
-/// disk: the *global* log start does not move when a segment is merely
-/// evicted, only when it is deleted from the tier as well.
-fn local_segment_bases(partition_dir: &Path) -> Vec<i64> {
-    let Ok(entries) = std::fs::read_dir(partition_dir) else {
-        return Vec::new();
-    };
-    let mut bases: Vec<i64> = entries
-        .flatten()
-        .filter_map(|entry| {
-            let path = entry.path();
-            if path.extension().and_then(|e| e.to_str()) != Some("log") {
-                return None;
-            }
-            path.file_stem()
-                .and_then(|stem| stem.to_str())
-                .and_then(|stem| stem.parse::<i64>().ok())
-        })
-        .collect();
-    bases.sort_unstable();
-    bases
-}
-
 /// The total size of the `*.log` files in one replica's partition directory.
 fn local_log_bytes(partition_dir: &Path) -> u64 {
     let Ok(entries) = std::fs::read_dir(partition_dir) else {
@@ -153,28 +125,9 @@ async fn produce_records(client: &Client, topic_id: WireUuid, count: usize) {
             }],
             ..Default::default()
         };
-        let response = client
-            .send(ProduceRequest {
-                acks: 1,
-                timeout_ms: 10_000,
-                topic_data: vec![TopicProduceData {
-                    name: TOPIC.into(),
-                    topic_id,
-                    partition_data: vec![PartitionProduceData {
-                        index: 0,
-                        records: Some(batch.into()),
-                        ..Default::default()
-                    }],
-                    ..Default::default()
-                }],
-                ..Default::default()
-            })
-            .await
-            .expect("Produce");
-        assert!(
-            response.responses[0].partition_responses[0].error_code == 0,
-            "Produce failed: {response:?}"
-        );
+        let response =
+            crate::support::client::produce_batch(client, TOPIC, topic_id, batch, 1, 10_000).await;
+        assert!(response.error_code == 0, "Produce failed: {response:?}");
     }
 }
 
@@ -184,39 +137,8 @@ async fn create_single_replica_tiered_topic(admin: &Client, leader: &BrokerHandl
     let response = admin
         .send(CreateTopicsRequest {
             topics: vec![CreatableTopic {
-                name: TOPIC.into(),
-                // Kafka reads a manual assignment as `num_partitions = -1,
-                // replication_factor = -1`.
-                num_partitions: -1,
-                replication_factor: -1,
-                assignments: vec![CreatableReplicaAssignment {
-                    partition_index: 0,
-                    broker_ids: vec![1],
-                    ..Default::default()
-                }],
-                configs: vec![
-                    CreatableTopicConfig {
-                        name: "remote.storage.enable".into(),
-                        value: Some("true".into()),
-                        ..Default::default()
-                    },
-                    CreatableTopicConfig {
-                        name: "local.retention.bytes".into(),
-                        value: Some("1".into()),
-                        ..Default::default()
-                    },
-                    CreatableTopicConfig {
-                        name: "retention.bytes".into(),
-                        value: Some("-1".into()),
-                        ..Default::default()
-                    },
-                    CreatableTopicConfig {
-                        name: "retention.ms".into(),
-                        value: Some("-1".into()),
-                        ..Default::default()
-                    },
-                ],
-                ..Default::default()
+                configs: crate::topic_fixture::tiered_configs(None),
+                ..crate::support::topic_on(TOPIC, &[&[1]])
             }],
             timeout_ms: 10_000,
             ..Default::default()

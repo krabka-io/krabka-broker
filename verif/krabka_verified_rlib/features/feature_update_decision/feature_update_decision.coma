@@ -1,11 +1,11 @@
-(* #"/workspace/crates/verified/src/features/feature_update_decision.rs" 76 0 76 82 *)
+(* #"/workspace/crates/verified/src/features/feature_update_decision.rs" 77 0 77 82 *)
 
-let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
-let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
-let%span sfeature_update_decision = "/workspace/crates/verified/src/features/feature_update_decision.rs" 81 19 81 20
-let%span sfeature_update_decision'0 = "/workspace/crates/verified/src/features/feature_update_decision.rs" 68 28 68 65
-let%span sfeature_update_decision'1 = "/workspace/crates/verified/src/features/feature_update_decision.rs" 69 28 74 1
-let%span sfeature_update_decision'2 = "/workspace/crates/verified/src/features/feature_update_decision.rs" 15 8 57 9
+let%span sord = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sord'0 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span sfeature_update_decision = "/workspace/crates/verified/src/features/feature_update_decision.rs" 82 19 82 20
+let%span sfeature_update_decision'0 = "/workspace/crates/verified/src/features/feature_update_decision.rs" 69 28 69 65
+let%span sfeature_update_decision'1 = "/workspace/crates/verified/src/features/feature_update_decision.rs" 70 28 75 1
+let%span sfeature_update_decision'2 = "/workspace/crates/verified/src/features/feature_update_decision.rs" 16 8 58 9
 
 use creusot.int.Int16
 use creusot.prelude.Any
@@ -67,7 +67,7 @@ predicate gt_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord'0] oth
 
 meta "rewrite_def" predicate gt_log_Int
 
-function feature_update_model [#"/workspace/crates/verified/src/features/feature_update_decision.rs" 13 0 13 79] (facts: t_FeatureUpdateFacts) : t_FeatureUpdateDecision
+function feature_update_model [#"/workspace/crates/verified/src/features/feature_update_decision.rs" 14 0 14 79] (facts: t_FeatureUpdateFacts) : t_FeatureUpdateDecision
  = [%#sfeature_update_decision'2] match facts.update_type with
     | None -> UnknownUpdateType
     | Some update_type'0 -> let requested'0 = Int16.to_int facts.levels.requested in let current''0 = Int16.to_int facts.levels.current' in if requested'0
@@ -110,7 +110,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let feature_update_decision [#"/workspace/crates/verified/src/features/feature_update_decision.rs" 76 0 76 82]
+let feature_update_decision [#"/workspace/crates/verified/src/features/feature_update_decision.rs" 77 0 77 82]
   (facts: t_FeatureUpdateFacts) (return (x: t_FeatureUpdateDecision)) = (! bb0
   [ bb0 = any
     [ br0 -> {facts.update_type = None} (! bb1)

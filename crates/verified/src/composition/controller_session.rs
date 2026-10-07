@@ -1,11 +1,10 @@
 use creusot_std::prelude::*;
 
+#[cfg(creusot)]
+use super::jwks_publication::initial_session_input_valid;
 use super::published_keys_bound_oauth_session;
 #[cfg(creusot)]
-use crate::{
-    authz::AclDefault,
-    oauth::{OAuthAuthenticationKind, OAuthExpiryPresence, OAuthSessionCap},
-};
+use crate::authz::AclDefault;
 use crate::{
     authz::{AclDecision, AclFacts, acl_decision, controller_request_admission},
     jwks::JwksCacheFacts,
@@ -23,12 +22,7 @@ type ControllerSessionTrace = (Option<i64>, Vec<bool>, (u64, u64));
 /// clock and ACL projection, frame decoding and actual network closure remain
 /// host obligations; this does not promise that an admitted operation finishes
 /// before credential expiry or that idle connections close at the deadline.
-#[requires(cache.now_ms@ == facts.now_ms@ && facts.now_ms@ >= 0 && completed_ms@ >= facts.now_ms@)]
-#[requires(cache.generation_before@ % 2 == 0 && cache.generation_after == cache.generation_before)]
-#[requires(!cache.expiry_enabled || (cache.expiry_ms@ >= 0
-    && cache.last_successful_fetch_ms@ > 0 && cache.last_successful_fetch_ms@ <= facts.now_ms@))]
-#[requires(facts.expiry == OAuthExpiryPresence::Present && facts.token_expires_at_ms@ > completed_ms@
-    && facts.authentication == OAuthAuthenticationKind::Initial && facts.cap == OAuthSessionCap::Disabled)]
+#[requires(initial_session_input_valid(facts, cache, completed_ms@))]
 #[ensures((result.0 == None) == (result.2.1@ > 0
     || (begin_unfinished_writer && cache.generation_before@ < u64::MAX@ - 1)
     || (cache.expiry_enabled && completed_ms@ - cache.last_successful_fetch_ms@ > cache.expiry_ms@)))]

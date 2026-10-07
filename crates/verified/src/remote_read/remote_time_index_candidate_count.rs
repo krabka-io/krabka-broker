@@ -1,53 +1,57 @@
 use creusot_std::prelude::*;
 
-/// Select the earliest valid finished remote segment.
-///
-/// The three slices are parallel arrays supplied from one metadata listing.
-/// Negative or inverted ranges are not candidates, even when their lifecycle
-/// state says the copy finished.
-#[requires(starts@.len() == ends@.len())]
-#[requires(starts@.len() == finished@.len())]
-#[ensures(match result {
-    Some(best) => best@ < starts@.len()
-        && finished@[best@]
-        && 0 <= starts@[best@]@
-        && starts@[best@]@ <= ends@[best@]@
-        && forall<i: Int> 0 <= i && i < starts@.len()
-            && finished@[i]
-            && 0 <= starts@[i]@
-            && starts@[i]@ <= ends@[i]@
-            ==> starts@[best@]@ <= starts@[i]@,
-    None => forall<i: Int> 0 <= i && i < starts@.len()
-        ==> !finished@[i] || starts@[i]@ < 0 || ends@[i]@ < starts@[i]@,
-})]
-#[must_use]
-pub fn tiered_earliest_finished_index(
+// cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
+#[cfg(creusot)]
+#[cfg_attr(test, mutants::skip)]
+#[logic(open)]
+fn finished_selection(
+    starts: Seq<i64>,
+    ends: Seq<i64>,
+    finished: Seq<bool>,
+    best: Option<usize>,
+    count: Int,
+    latest: bool,
+) -> bool {
+    pearlite! {
+        match best {
+            Some(best) => best@ < count && finished[best@]
+                && 0 <= starts[best@]@ && starts[best@]@ <= ends[best@]@
+                && forall<i: Int> 0 <= i && i < count && finished[i]
+                    && 0 <= starts[i]@ && starts[i]@ <= ends[i]@
+                    ==> if latest { ends[i]@ <= ends[best@]@ } else { starts[best@]@ <= starts[i]@ },
+            None => forall<i: Int> 0 <= i && i < count
+                ==> !finished[i] || starts[i]@ < 0 || ends[i]@ < starts[i]@,
+        }
+    }
+}
+
+#[requires(starts@.len() == ends@.len() && starts@.len() == finished@.len())]
+#[ensures(finished_selection(starts@, ends@, finished@, result, starts@.len(), latest))]
+fn select_finished_index(
     starts: &[i64],
     ends: &[i64],
     finished: &[bool],
+    latest: bool,
 ) -> Option<usize> {
     let mut best: Option<usize> = None;
     let mut index = 0usize;
     #[invariant(index@ <= starts@.len())]
-    #[invariant(match best {
-        Some(best) => best@ < index@
-            && finished@[best@]
-            && 0 <= starts@[best@]@
-            && starts@[best@]@ <= ends@[best@]@
-            && forall<i: Int> 0 <= i && i < index@
-                && finished@[i]
-                && 0 <= starts@[i]@
-                && starts@[i]@ <= ends@[i]@
-                ==> starts@[best@]@ <= starts@[i]@,
-        None => forall<i: Int> 0 <= i && i < index@
-            ==> !finished@[i] || starts@[i]@ < 0 || ends@[i]@ < starts@[i]@,
-    })]
+    #[invariant(finished_selection(starts@, ends@, finished@, best, index@, latest))]
     #[variant(starts@.len() - index@)]
     while index < starts.len() {
         if finished[index] && starts[index] >= 0 && starts[index] <= ends[index] {
-            match best {
-                Some(current) if starts[current] <= starts[index] => {}
-                _ => best = Some(index),
+            let keep = match best {
+                Some(current) => {
+                    if latest {
+                        ends[current] >= ends[index]
+                    } else {
+                        starts[current] <= starts[index]
+                    }
+                }
+                None => false,
+            };
+            if !keep {
+                best = Some(index);
             }
         }
         index += 1;
@@ -55,55 +59,32 @@ pub fn tiered_earliest_finished_index(
     best
 }
 
+/// Select the earliest valid finished remote segment.
+///
+/// The three slices are parallel arrays supplied from one metadata listing.
+/// Negative or inverted ranges are not candidates, even when their lifecycle
+/// state says the copy finished.
+#[requires(starts@.len() == ends@.len() && starts@.len() == finished@.len())]
+#[ensures(finished_selection(starts@, ends@, finished@, result, starts@.len(), false))]
+#[must_use]
+pub fn tiered_earliest_finished_index(
+    starts: &[i64],
+    ends: &[i64],
+    finished: &[bool],
+) -> Option<usize> {
+    select_finished_index(starts, ends, finished, false)
+}
+
 /// Select the finished remote segment with the greatest valid inclusive end.
-#[requires(starts@.len() == ends@.len())]
-#[requires(starts@.len() == finished@.len())]
-#[ensures(match result {
-    Some(best) => best@ < starts@.len()
-        && finished@[best@]
-        && 0 <= starts@[best@]@
-        && starts@[best@]@ <= ends@[best@]@
-        && forall<i: Int> 0 <= i && i < starts@.len()
-            && finished@[i]
-            && 0 <= starts@[i]@
-            && starts@[i]@ <= ends@[i]@
-            ==> ends@[i]@ <= ends@[best@]@,
-    None => forall<i: Int> 0 <= i && i < starts@.len()
-        ==> !finished@[i] || starts@[i]@ < 0 || ends@[i]@ < starts@[i]@,
-})]
+#[requires(starts@.len() == ends@.len() && starts@.len() == finished@.len())]
+#[ensures(finished_selection(starts@, ends@, finished@, result, starts@.len(), true))]
 #[must_use]
 pub fn tiered_latest_finished_index(
     starts: &[i64],
     ends: &[i64],
     finished: &[bool],
 ) -> Option<usize> {
-    let mut best: Option<usize> = None;
-    let mut index = 0usize;
-    #[invariant(index@ <= starts@.len())]
-    #[invariant(match best {
-        Some(best) => best@ < index@
-            && finished@[best@]
-            && 0 <= starts@[best@]@
-            && starts@[best@]@ <= ends@[best@]@
-            && forall<i: Int> 0 <= i && i < index@
-                && finished@[i]
-                && 0 <= starts@[i]@
-                && starts@[i]@ <= ends@[i]@
-                ==> ends@[i]@ <= ends@[best@]@,
-        None => forall<i: Int> 0 <= i && i < index@
-            ==> !finished@[i] || starts@[i]@ < 0 || ends@[i]@ < starts@[i]@,
-    })]
-    #[variant(starts@.len() - index@)]
-    while index < starts.len() {
-        if finished[index] && starts[index] >= 0 && starts[index] <= ends[index] {
-            match best {
-                Some(current) if ends[current] >= ends[index] => {}
-                _ => best = Some(index),
-            }
-        }
-        index += 1;
-    }
-    best
+    select_finished_index(starts, ends, finished, true)
 }
 
 /// Select the valid leader epoch whose start is greatest at or below a

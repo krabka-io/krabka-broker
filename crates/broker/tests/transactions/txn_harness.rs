@@ -14,7 +14,7 @@ use std::time::Duration;
 
 use assert2::assert;
 use bytes::Bytes;
-use krabka_broker::{Broker, BrokerConfig, BrokerHandle, config::ListenerSpec};
+use krabka_broker::{Broker, BrokerConfig, BrokerHandle};
 use krabka_client_core::security::{ClientSecurity, SaslCredentials};
 use krabka_client_producer::{Producer, ProducerRecord};
 use krabka_protocol::owned::{
@@ -145,17 +145,7 @@ pub fn boot_single_sasl(
     users: &[(&str, &str)],
 ) -> impl std::future::Future<Output = (BrokerHandle, String, TempDir)> {
     let dir = TempDir::new().unwrap();
-    let mut cfg = BrokerConfig::for_tests(dir.path().to_path_buf());
-    cfg.listeners = vec![ListenerSpec {
-        name: "SASL_PLAINTEXT".to_string(),
-        bind_addr: "127.0.0.1:0".parse().unwrap(),
-        advertised: "127.0.0.1:0".to_string(),
-        protocol: ListenerProtocol::SaslPlaintext,
-        tls_config: None,
-        sasl_mechanisms: None,
-        principal_mapper: krabka_broker::SslPrincipalMapper::default(),
-    }];
-    cfg.inter_broker_listener_name = "SASL_PLAINTEXT".to_string();
+    let mut cfg = crate::support::sasl_plaintext_config(dir.path().to_path_buf());
     cfg.enabled_sasl_mechanisms = vec![SaslMechanism::Plain];
     for (name, pass) in users {
         cfg.plain_credentials

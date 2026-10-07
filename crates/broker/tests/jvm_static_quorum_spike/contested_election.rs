@@ -5,17 +5,13 @@
 //! It is the counterpart to the follower-join spike, and it is what the old
 //! pre-vote echo shortcut broke.
 
-use std::{net::SocketAddr, process::Command, time::Duration};
+use std::{process::Command, time::Duration};
 
-use krabka_broker::{Broker, BrokerHandle};
 use tempfile::TempDir;
 use uuid::Uuid;
 
 use crate::{
-    static_quorum_harness::{
-        KAFKA_IMAGE, docker_rm, format_at_kafka_4_0, kafka_cluster_id_string,
-        krabka_controller_config,
-    },
+    static_quorum_harness::{KAFKA_IMAGE, docker_rm, kafka_cluster_id_string},
     support,
 };
 
@@ -50,52 +46,11 @@ async fn contested_election_krabka_counts_jvm_prevote() {
     let cluster_id = Uuid::from_u128(0x4b69_7039_3936_4350_7245_566f_7445_7374);
     let cid_str = kafka_cluster_id_string(cluster_id);
 
-    let (client_addrs, controller_addrs) = support::bind_and_drop_ports(3).await;
-    let p1 = controller_addrs[0].port();
-    let p2 = controller_addrs[1].port();
-    let p3 = controller_addrs[2].port();
-    let krabka_ctrl_1: SocketAddr = format!("0.0.0.0:{p1}").parse().unwrap();
-    let krabka_ctrl_2: SocketAddr = format!("0.0.0.0:{p2}").parse().unwrap();
-    let krabka_voters: Vec<(u64, SocketAddr)> = vec![
-        (1, format!("127.0.0.1:{p1}").parse().unwrap()),
-        (2, format!("127.0.0.1:{p2}").parse().unwrap()),
-        (3, format!("127.0.0.1:{p3}").parse().unwrap()),
-    ];
-
-    // Slow Krabka pre-vote retries (2s) so they sit well above the JVM's 300ms
-    // fetch-timeout — giving the JVM a quiet window between pre-votes to time out
-    // the dead leader and promote itself to Prospective (then grant the survivor).
-    let dir1 = TempDir::new().unwrap();
-    let dir2 = TempDir::new().unwrap();
-    let mut cfg1 = krabka_controller_config(
-        0,
-        client_addrs[0],
-        krabka_ctrl_1,
-        &krabka_voters,
-        cluster_id,
-        dir1.path(),
-    );
-    let mut cfg2 = krabka_controller_config(
-        1,
-        client_addrs[1],
-        krabka_ctrl_2,
-        &krabka_voters,
-        cluster_id,
-        dir2.path(),
-    );
-    cfg1.controller_election_timeout = krabka_units::secs(2);
-    cfg2.controller_election_timeout = krabka_units::secs(2);
-
-    format_at_kafka_4_0(dir1.path(), &cfg1).await;
-    format_at_kafka_4_0(dir2.path(), &cfg2).await;
-    let (c1, c2): (BrokerHandle, BrokerHandle) = {
-        let s1 = tokio::spawn(Broker::start(cfg1));
-        let s2 = tokio::spawn(Broker::start(cfg2));
-        (
-            s1.await.unwrap().expect("krabka voter 1 start"),
-            s2.await.unwrap().expect("krabka voter 2 start"),
-        )
-    };
+    let endpoints = crate::static_quorum_harness::MixedQuorum::allocate().await;
+    let [p1, p2, p3] = endpoints.ports;
+    let ([c1, c2], [_dir1, _dir2]) = endpoints
+        .start_pair(cluster_id, Some(krabka_units::secs(2)))
+        .await;
 
     // JVM voter id 3: release the dead leader fast, self-nominate slowly.
     let props = format!(

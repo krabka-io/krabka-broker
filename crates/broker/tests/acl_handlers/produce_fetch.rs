@@ -12,7 +12,6 @@
 //! `BrokerHandle::local_log_end_offset` helper.
 
 use assert2::assert;
-use krabka_broker::Broker;
 use krabka_protocol::owned::fetch_request::{FetchPartition, FetchRequest, FetchTopic};
 
 use crate::{
@@ -20,19 +19,11 @@ use crate::{
     acl_admin::create_topic_as_admin,
     client_api::{drive_fetch_as_plain, drive_produce_as_plain, single_record_produce_request},
     polling::retry_produce_until_allowed,
-    sasl_cluster::sasl_plain_broker_config,
 };
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn produce_denied_without_topic_acl() {
-    let log_dir = tempfile::tempdir().unwrap();
-    let cfg = sasl_plain_broker_config(
-        log_dir.path(),
-        &[("admin", "admin-secret"), ("alice", "wonderland")],
-        Some("admin"),
-    );
-
-    let handle = Broker::start(cfg).await.expect("broker must start");
+    let (handle, _dir, _) = crate::sasl_cluster::start_admin_alice().await;
     let addr = handle.listen_addr();
 
     // Admin creates topic "foo" with one partition (rf=1, single-node).
@@ -43,16 +34,10 @@ async fn produce_denied_without_topic_acl() {
     // at least one ACL makes the test read closer to a "real" cluster
     // post-bootstrap.
     handle
-        .submit_metadata_record_for_test(krabka_metadata::MetadataRecord::V1AccessControlEntry(
-            krabka_metadata::AclEntry {
-                resource_type: krabka_metadata::ResourceType::Topic,
-                resource_name: "_nothing".into(),
-                pattern_type: krabka_metadata::PatternType::Literal,
-                principal: "User:admin".into(),
-                host: "*".into(),
-                operation: krabka_metadata::AclOperation::Read,
-                permission_type: krabka_metadata::PermissionType::Allow,
-            },
+        .submit_metadata_record_for_test(crate::support::acl::topic_acl_record(
+            "_nothing",
+            "User:admin",
+            krabka_metadata::AclOperation::Read,
         ))
         .await
         .expect("seed dummy ACL");
@@ -82,14 +67,7 @@ async fn produce_denied_without_topic_acl() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn produce_allowed_with_topic_write_acl() {
-    let log_dir = tempfile::tempdir().unwrap();
-    let cfg = sasl_plain_broker_config(
-        log_dir.path(),
-        &[("admin", "admin-secret"), ("alice", "wonderland")],
-        Some("admin"),
-    );
-
-    let handle = Broker::start(cfg).await.expect("broker must start");
+    let (handle, _dir, _) = crate::sasl_cluster::start_admin_alice().await;
     let addr = handle.listen_addr();
 
     create_topic_as_admin(addr, "foo", 1).await;
@@ -99,16 +77,10 @@ async fn produce_allowed_with_topic_write_acl() {
     // but `submit_metadata_record_for_test` is one fewer round-trip and
     // exercises the same authorizer state.)
     handle
-        .submit_metadata_record_for_test(krabka_metadata::MetadataRecord::V1AccessControlEntry(
-            krabka_metadata::AclEntry {
-                resource_type: krabka_metadata::ResourceType::Topic,
-                resource_name: "foo".into(),
-                pattern_type: krabka_metadata::PatternType::Literal,
-                principal: "User:alice".into(),
-                host: "*".into(),
-                operation: krabka_metadata::AclOperation::Write,
-                permission_type: krabka_metadata::PermissionType::Allow,
-            },
+        .submit_metadata_record_for_test(crate::support::acl::topic_acl_record(
+            "foo",
+            "User:alice",
+            krabka_metadata::AclOperation::Write,
         ))
         .await
         .expect("seed Write-on-foo ACL for alice");
@@ -142,14 +114,7 @@ async fn produce_allowed_with_topic_write_acl() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn fetch_denied_without_topic_read_acl() {
-    let log_dir = tempfile::tempdir().unwrap();
-    let cfg = sasl_plain_broker_config(
-        log_dir.path(),
-        &[("admin", "admin-secret"), ("alice", "wonderland")],
-        Some("admin"),
-    );
-
-    let handle = Broker::start(cfg).await.expect("broker must start");
+    let (handle, _dir, _) = crate::sasl_cluster::start_admin_alice().await;
     let addr = handle.listen_addr();
 
     create_topic_as_admin(addr, "foo", 1).await;
@@ -157,16 +122,10 @@ async fn fetch_denied_without_topic_read_acl() {
     // Seed a dummy ACL via direct controller write. Same rationale as in
     // produce_denied_without_topic_acl.
     handle
-        .submit_metadata_record_for_test(krabka_metadata::MetadataRecord::V1AccessControlEntry(
-            krabka_metadata::AclEntry {
-                resource_type: krabka_metadata::ResourceType::Topic,
-                resource_name: "_nothing".into(),
-                pattern_type: krabka_metadata::PatternType::Literal,
-                principal: "User:admin".into(),
-                host: "*".into(),
-                operation: krabka_metadata::AclOperation::Read,
-                permission_type: krabka_metadata::PermissionType::Allow,
-            },
+        .submit_metadata_record_for_test(crate::support::acl::topic_acl_record(
+            "_nothing",
+            "User:admin",
+            krabka_metadata::AclOperation::Read,
         ))
         .await
         .expect("seed dummy ACL");

@@ -69,24 +69,18 @@ mod tests {
     use std::{
         io::{Read, Write},
         net::TcpListener,
-        path::{Path, PathBuf},
         sync::Arc,
         thread,
     };
 
     use assert2::assert;
-    use bytes::Bytes;
-    use krabka_ids::LeaderEpoch;
     use object_store::memory::InMemory;
     use tempfile::TempDir;
-    use uuid::Uuid;
 
     use super::*;
     use crate::{
-        metadata::{
-            RemoteLogSegmentId, RemoteLogSegmentMetadata, RemoteLogSegmentState, TopicIdPartition,
-        },
-        storage_manager::{IndexType, LogSegmentData, RemoteStorageManager},
+        storage_manager::{IndexType, RemoteStorageManager},
+        test_support::{sample_data, sample_metadata},
         worm::WormConfig,
     };
 
@@ -94,46 +88,6 @@ mod tests {
     // copy / fetch / delete round-trip behaviour is already covered by the
     // `InMemory`-backed suite in `s3.rs`. This test pins that the engine shape
     // used for GCS still applies prefixes correctly.
-
-    fn sample_metadata(id: u128) -> RemoteLogSegmentMetadata {
-        RemoteLogSegmentMetadata::new(
-            RemoteLogSegmentId::new(
-                TopicIdPartition::new(Uuid::from_u128(1), "orders", 0),
-                Uuid::from_u128(id),
-            ),
-            0,
-            99,
-            123,
-            1,
-            456,
-            crate::metadata::RemoteLogSegmentDetails::new(
-                8,
-                RemoteLogSegmentState::CopySegmentStarted,
-                maplit::btreemap! {LeaderEpoch(0) => 0},
-            ),
-        )
-        .unwrap()
-    }
-
-    fn write_file(dir: &Path, name: &str, contents: &[u8]) -> PathBuf {
-        let p = dir.join(name);
-        std::fs::File::create(&p)
-            .unwrap()
-            .write_all(contents)
-            .unwrap();
-        p
-    }
-
-    fn sample_data(src: &Path) -> LogSegmentData {
-        LogSegmentData {
-            log_segment: write_file(src, "00.log", b"0123456789"),
-            offset_index: write_file(src, "00.index", b"OFFSET-IDX"),
-            time_index: write_file(src, "00.timeindex", b"TIME-IDX"),
-            transaction_index: None,
-            producer_snapshot_index: Some(write_file(src, "00.snapshot", b"SNAP")),
-            leader_epoch_index: Bytes::from_static(b"EPOCH-BYTES"),
-        }
-    }
 
     /// End-to-end round-trip against the generic engine through the GCS
     /// construction path. The test asserts that the engine applies the
@@ -147,7 +101,7 @@ mod tests {
         let md = sample_metadata(10);
         tokio::task::spawn_blocking(move || {
             store
-                .copy_log_segment_data(&md, &sample_data(src.path()))
+                .copy_log_segment_data(&md, &sample_data(src.path(), false))
                 .unwrap();
             assert!(store.fetch_log_segment(&md, 0, None).unwrap() == b"0123456789");
             assert!(store.fetch_index(&md, IndexType::Offset).unwrap() == b"OFFSET-IDX");

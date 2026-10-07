@@ -16,11 +16,13 @@
 //! `IncrementalAlterConfigs`, the three ACL RPCs and
 //! `ListPartitionReassignments`.
 
+mod support;
+
 use std::time::Duration;
 
 use assert2::{assert, check};
 use bytes::Bytes;
-use krabka_broker::{Broker, BrokerConfig, BrokerHandle, NodeId, config::NodeRole};
+use krabka_broker::{BrokerConfig, BrokerHandle, NodeId, config::NodeRole};
 use krabka_client_core::{Connection, ConnectionOptions};
 use krabka_protocol::{
     UnknownTaggedFields,
@@ -142,27 +144,11 @@ async fn start_node(
     roles: &[NodeRole],
     configure: fn(&mut BrokerConfig),
 ) -> (BrokerHandle, tempfile::TempDir) {
-    let dir = tempfile::TempDir::new().expect("tempdir");
-    let data_listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-        .await
-        .expect("bind data listener");
-    let controller_listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-        .await
-        .expect("bind controller listener");
-    let data_addr = data_listener.local_addr().expect("data addr");
-    let controller_addr = controller_listener.local_addr().expect("controller addr");
-    let mut config = BrokerConfig::for_tests(dir.path().to_path_buf());
-    config.listen_addr = data_addr;
-    config.advertised_listener = data_addr.to_string();
-    config.controller_listen_addr = controller_addr;
-    config.controller_quorum_voters = vec![(NodeId(1), controller_addr.to_string())];
-    config.roles = roles.to_vec();
-    configure(&mut config);
-    let broker =
-        Broker::start_with_listeners(config, Some(controller_listener), Some(data_listener))
-            .await
-            .expect("broker start");
-    (broker, dir)
+    crate::support::start_with_bound_listeners(|config| {
+        config.roles = roles.to_vec();
+        configure(config);
+    })
+    .await
 }
 
 /// An `ApiVersions` request that passes Kafka's `ApiVersionsRequest.isValid`:

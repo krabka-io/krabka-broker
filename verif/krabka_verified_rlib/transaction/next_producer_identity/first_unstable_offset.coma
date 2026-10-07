@@ -1,22 +1,22 @@
-(* #"/workspace/crates/verified/src/transaction/next_producer_identity.rs" 19 0 19 73 *)
+(* #"/workspace/crates/verified/src/transaction/next_producer_identity.rs" 20 0 20 73 *)
 
-let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
-let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
-let%span swell_founded = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/well_founded.rs" 43 8 43 33
-let%span sslice = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 331 18 331 22
-let%span snext_producer_identity = "/workspace/crates/verified/src/transaction/next_producer_identity.rs" 21 20 21 26
-let%span snext_producer_identity'0 = "/workspace/crates/verified/src/transaction/next_producer_identity.rs" 28 14 28 36
-let%span snext_producer_identity'1 = "/workspace/crates/verified/src/transaction/next_producer_identity.rs" 29 18 29 30
-let%span snext_producer_identity'2 = "/workspace/crates/verified/src/transaction/next_producer_identity.rs" 27 16 27 75
-let%span snext_producer_identity'3 = "/workspace/crates/verified/src/transaction/next_producer_identity.rs" 26 16 26 89
-let%span snext_producer_identity'4 = "/workspace/crates/verified/src/transaction/next_producer_identity.rs" 25 16 25 48
-let%span snext_producer_identity'5 = "/workspace/crates/verified/src/transaction/next_producer_identity.rs" 24 16 24 79
-let%span snext_producer_identity'6 = "/workspace/crates/verified/src/transaction/next_producer_identity.rs" 23 16 23 32
-let%span snext_producer_identity'7 = "/workspace/crates/verified/src/transaction/next_producer_identity.rs" 22 16 22 39
-let%span snext_producer_identity'8 = "/workspace/crates/verified/src/transaction/next_producer_identity.rs" 30 20 30 33
-let%span snext_producer_identity'9 = "/workspace/crates/verified/src/transaction/next_producer_identity.rs" 37 17 37 18
-let%span snext_producer_identity'10 = "/workspace/crates/verified/src/transaction/next_producer_identity.rs" 37 8 37 18
-let%span snext_producer_identity'11 = "/workspace/crates/verified/src/transaction/next_producer_identity.rs" 9 10 17 1
+let%span sord = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span sord'0 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span swell_founded = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/well_founded.rs" 43 8 43 33
+let%span sslice = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 331 18 331 22
+let%span snext_producer_identity = "/workspace/crates/verified/src/transaction/next_producer_identity.rs" 22 20 22 26
+let%span snext_producer_identity'0 = "/workspace/crates/verified/src/transaction/next_producer_identity.rs" 29 14 29 36
+let%span snext_producer_identity'1 = "/workspace/crates/verified/src/transaction/next_producer_identity.rs" 30 18 30 30
+let%span snext_producer_identity'2 = "/workspace/crates/verified/src/transaction/next_producer_identity.rs" 28 16 28 75
+let%span snext_producer_identity'3 = "/workspace/crates/verified/src/transaction/next_producer_identity.rs" 27 16 27 89
+let%span snext_producer_identity'4 = "/workspace/crates/verified/src/transaction/next_producer_identity.rs" 26 16 26 48
+let%span snext_producer_identity'5 = "/workspace/crates/verified/src/transaction/next_producer_identity.rs" 25 16 25 79
+let%span snext_producer_identity'6 = "/workspace/crates/verified/src/transaction/next_producer_identity.rs" 24 16 24 32
+let%span snext_producer_identity'7 = "/workspace/crates/verified/src/transaction/next_producer_identity.rs" 23 16 23 39
+let%span snext_producer_identity'8 = "/workspace/crates/verified/src/transaction/next_producer_identity.rs" 31 20 31 33
+let%span snext_producer_identity'9 = "/workspace/crates/verified/src/transaction/next_producer_identity.rs" 38 17 38 18
+let%span snext_producer_identity'10 = "/workspace/crates/verified/src/transaction/next_producer_identity.rs" 38 8 38 18
+let%span snext_producer_identity'11 = "/workspace/crates/verified/src/transaction/next_producer_identity.rs" 10 10 18 1
 
 use creusot.int.UInt64
 use seq.Seq
@@ -49,7 +49,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let first_unstable_offset [#"/workspace/crates/verified/src/transaction/next_producer_identity.rs" 19 0 19 73]
+let first_unstable_offset [#"/workspace/crates/verified/src/transaction/next_producer_identity.rs" 20 0 20 73]
   (starts: Slice64.slice Int64.t) (log_end: Int64.t) (return (x: t_Option_i64)) = (! bb0
   [ bb0 = s0
     [ s0 = [ &lso <- log_end ] s1 | s1 = [ &index <- [%#snext_producer_identity] (0: UInt64.t) ] s2 | s2 = bb1 ]

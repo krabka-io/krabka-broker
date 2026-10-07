@@ -100,7 +100,6 @@ mod jvm_acceptance;
 mod support;
 
 use std::{
-    io::Write as _,
     path::PathBuf,
     process::{Command, Output, Stdio},
     time::Duration,
@@ -108,6 +107,7 @@ use std::{
 
 use assert2::assert;
 use jvm_acceptance::{broker0_listen, host_port, start_host_broker_with};
+use support::bridge_gateway;
 
 /// The release both clusters and every tool come from: the source broker is
 /// this image, MM2 is its `connect-mirror-maker.sh`, and the admin tools aimed
@@ -323,19 +323,6 @@ fn docker_bridge_gateway() -> String {
     bridge_gateway(&rendered).unwrap_or_else(|| panic!("no bridge gateway in {rendered:?}"))
 }
 
-/// The gateway out of the `Gateway|Subnet` pair `docker network inspect`
-/// renders, falling back to the subnet's first address when the daemon reports
-/// no gateway of its own.
-fn bridge_gateway(rendered: &str) -> Option<String> {
-    let (gateway, subnet) = rendered.trim().split_once('|')?;
-    if gateway.parse::<std::net::IpAddr>().is_ok() {
-        return Some(gateway.to_owned());
-    }
-    let (base, _prefix) = subnet.split_once('/')?;
-    let base: std::net::Ipv4Addr = base.parse().ok()?;
-    Some(std::net::Ipv4Addr::from(u32::from(base).checked_add(1)?).to_string())
-}
-
 /// Run `<tool>.sh <args>` from a throwaway container on the default bridge and
 /// hand back what it did, without asserting that it succeeded.
 fn tool_allowing_failure(tool_name: &str, args: &[&str]) -> Output {
@@ -366,24 +353,7 @@ fn tool_with_stdin(tool_name: &str, args: &[&str], stdin: Option<&str>) -> Outpu
         .args(args)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    let out = match stdin {
-        None => {
-            command.stdin(Stdio::null());
-            command.output().expect("spawn docker run")
-        }
-        Some(text) => {
-            command.stdin(Stdio::piped());
-            let mut child = command.spawn().expect("spawn docker run");
-            child
-                .stdin
-                .as_mut()
-                .expect("the container has a piped stdin")
-                .write_all(text.as_bytes())
-                .expect("write to the tool's stdin");
-            drop(child.stdin.take());
-            child.wait_with_output().expect("wait for docker run")
-        }
-    };
+    let out = support::docker_output(&mut command, stdin, "write to the tool's stdin");
     eprintln!(
         "KRABKA[test] {tool_name} {args:?} status={}\n{}",
         out.status,

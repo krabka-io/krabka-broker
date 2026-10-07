@@ -4,8 +4,8 @@
 //! batch that set the timestamp.
 
 use std::{
-    fs::{File, OpenOptions},
-    io::{Read, Seek, SeekFrom},
+    fs::File,
+    io::{Seek, SeekFrom},
     path::Path,
 };
 
@@ -45,10 +45,7 @@ pub struct TimeIndex {
 }
 
 impl TimeIndex {
-    #[cfg(not(target_os = "wasi"))]
-    pub(crate) fn flush_handle(&self) -> std::io::Result<File> {
-        self.file.try_clone()
-    }
+    flush_handle!();
 
     #[instrument(
         level = "debug",
@@ -57,14 +54,7 @@ impl TimeIndex {
         err,
     )]
     pub fn open(path: &Path) -> Result<Self, LogError> {
-        let mut file = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create(true)
-            .truncate(false)
-            .open(path)?;
-        let mut buf = Vec::new();
-        file.read_to_end(&mut buf)?;
+        let (file, buf) = super::open_index_file(path)?;
         let truncated_len = (buf.len() / TIME_ENTRY_SIZE) * TIME_ENTRY_SIZE;
         let raws = <[TimeEntryRaw]>::ref_from_bytes(&buf[..truncated_len])
             .expect("length is a multiple of TIME_ENTRY_SIZE and TimeEntryRaw is Unaligned");
@@ -173,6 +163,8 @@ impl TimeIndex {
 
 #[cfg(test)]
 mod time_tests {
+    use std::fs::OpenOptions;
+
     use assert2::check;
     use tempfile::tempdir;
 

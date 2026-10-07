@@ -1,0 +1,100 @@
+//! Auto-join mock-controller frames and the default voter-update driver.
+
+use std::{net::SocketAddr, sync::Arc};
+
+use krabka_protocol::{
+    Encode,
+    owned::api_versions_response::{ApiVersion, ApiVersionsResponse},
+};
+use krabka_raft::NodeId;
+use krabka_units::{millis, secs};
+use tokio::{
+    io::{AsyncReadExt, AsyncWriteExt},
+    net::TcpStream,
+};
+
+use super::AutoJoinParams;
+use crate::{metadata_source::MetadataSource, test_support::FakeMetadataSource};
+
+pub(super) async fn read_frame(socket: &mut TcpStream) -> std::io::Result<Vec<u8>> {
+    let mut length = [0u8; 4];
+    socket.read_exact(&mut length).await?;
+    let mut frame = vec![0u8; u32::from_be_bytes(length) as usize];
+    socket.read_exact(&mut frame).await?;
+    Ok(frame)
+}
+
+pub(super) async fn write_response(
+    socket: &mut TcpStream,
+    request: &[u8],
+    response: &impl Encode,
+    version: i16,
+    flexible: bool,
+) -> std::io::Result<()> {
+    let mut body = bytes::BytesMut::new();
+    response
+        .encode(&mut body, version)
+        .expect("encode response");
+    let length =
+        u32::try_from(4 + usize::from(flexible) + body.len()).expect("response length fits u32");
+    let mut frame = Vec::new();
+    frame.extend_from_slice(&length.to_be_bytes());
+    frame.extend_from_slice(&request[4..8]);
+    if flexible {
+        frame.push(0);
+    }
+    frame.extend_from_slice(&body);
+    socket.write_all(&frame).await
+}
+
+pub(super) async fn negotiate_versions(
+    socket: &mut TcpStream,
+    apis: &[(i16, i16)],
+) -> std::io::Result<()> {
+    let request = read_frame(socket).await?;
+    let response = ApiVersionsResponse {
+        error_code: 0,
+        api_keys: apis
+            .iter()
+            .map(|&(api_key, max_version)| ApiVersion {
+                api_key,
+                min_version: 0,
+                max_version,
+                ..Default::default()
+            })
+            .collect(),
+        ..Default::default()
+    };
+    write_response(socket, &request, &response, 0, false).await
+}
+
+pub(super) fn voter_update_params(addr: SocketAddr, leader: Option<NodeId>) -> AutoJoinParams {
+    let controller = Arc::new(
+        FakeMetadataSource::builder()
+            .leader(leader)
+            .term(1)
+            .controller_bound_addr("127.0.0.1:9093".parse().expect("addr"))
+            .build(),
+    );
+    params(controller, vec![addr.to_string()])
+}
+
+pub(super) fn params(
+    controller: Arc<dyn MetadataSource>,
+    bootstrap_servers: Vec<String>,
+) -> AutoJoinParams {
+    AutoJoinParams {
+        auto_join: true,
+        retry_backoff: millis(10),
+        voter_request_timeout: secs(1),
+        node_id: NodeId(2),
+        directory_id: uuid::Uuid::from_u128(2),
+        cluster_id: None,
+        bootstrap_servers,
+        advertised_controller: None,
+        listener_protocol: krabka_security::ListenerProtocol::Plaintext,
+        inter_broker_server_name: "broker.internal".to_string(),
+        controller,
+        inter_broker_client: Arc::new(crate::network::client::InterBrokerClient::new(None, None)),
+    }
+}

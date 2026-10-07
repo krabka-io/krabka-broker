@@ -6,23 +6,16 @@ use std::{io, net::SocketAddr};
 
 use assert2::{assert, check};
 use bytes::BytesMut;
-use krabka_broker::{Broker, BrokerConfig, config::ListenerSpec};
+use krabka_broker::Broker;
 use krabka_protocol::{
-    Decode, Encode,
+    Encode,
     owned::{
-        api_versions_request::ApiVersionsRequest, api_versions_response::ApiVersionsResponse,
-        metadata_request::MetadataRequest, metadata_response::MetadataResponse,
         sasl_authenticate_request::SaslAuthenticateRequest,
         sasl_authenticate_response::SaslAuthenticateResponse,
-        sasl_handshake_request::SaslHandshakeRequest,
-        sasl_handshake_response::SaslHandshakeResponse,
     },
 };
-use krabka_security::{ListenerProtocol, SaslMechanism};
-use tokio::{
-    io::{AsyncReadExt, AsyncWriteExt},
-    net::TcpStream,
-};
+use krabka_security::SaslMechanism;
+use tokio::net::TcpStream;
 
 use crate::harness::{alice_password, round_trip, wrong_scram_password};
 
@@ -36,20 +29,7 @@ use crate::harness::{alice_password, round_trip, wrong_scram_password};
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn sasl_plain_happy_path() {
     let log_dir = tempfile::tempdir().unwrap();
-    let mut cfg = BrokerConfig::for_tests(log_dir.path().to_path_buf());
-    cfg.listeners = vec![ListenerSpec {
-        name: "SASL_PLAINTEXT".to_string(),
-        bind_addr: "127.0.0.1:0".parse().unwrap(),
-        advertised: "127.0.0.1:0".to_string(),
-        protocol: ListenerProtocol::SaslPlaintext,
-        tls_config: None,
-        sasl_mechanisms: None,
-        principal_mapper: krabka_broker::SslPrincipalMapper::default(),
-    }];
-    cfg.inter_broker_listener_name = "SASL_PLAINTEXT".to_string();
-    cfg.enabled_sasl_mechanisms = vec![SaslMechanism::Plain];
-    cfg.plain_credentials
-        .insert("alice".to_string(), alice_password());
+    let cfg = crate::harness::alice_plain_config(log_dir.path().to_path_buf(), alice_password());
 
     let handle = Broker::start(cfg).await.expect("broker must start");
     let addr = handle.listen_addr();
@@ -68,20 +48,8 @@ async fn sasl_plain_happy_path() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn sasl_plain_authentication_metrics_tick_for_success_and_failure() {
     let log_dir = tempfile::tempdir().unwrap();
-    let mut cfg = BrokerConfig::for_tests(log_dir.path().to_path_buf());
-    cfg.listeners = vec![ListenerSpec {
-        name: "SASL_PLAINTEXT".to_string(),
-        bind_addr: "127.0.0.1:0".parse().unwrap(),
-        advertised: "127.0.0.1:0".to_string(),
-        protocol: ListenerProtocol::SaslPlaintext,
-        tls_config: None,
-        sasl_mechanisms: None,
-        principal_mapper: krabka_broker::SslPrincipalMapper::default(),
-    }];
-    cfg.inter_broker_listener_name = "SASL_PLAINTEXT".to_string();
-    cfg.enabled_sasl_mechanisms = vec![SaslMechanism::Plain];
-    cfg.plain_credentials
-        .insert("alice".to_string(), alice_password());
+    let mut cfg =
+        crate::harness::alice_plain_config(log_dir.path().to_path_buf(), alice_password());
     cfg.metrics_listen_addr = Some("127.0.0.1:0".parse().unwrap());
 
     let handle = Broker::start(cfg).await.expect("broker must start");
@@ -115,21 +83,9 @@ async fn sasl_plain_authentication_metrics_tick_for_success_and_failure() {
 
 /// Send an HTTP GET `/metrics` to `addr` and return the response body.
 ///
-/// The returned body holds no HTTP head. This helper is a copy of the helper
-/// in `tests/metrics.rs`. It stays inline here so that the test does not need
-/// a cross-test module.
+/// The returned body holds no HTTP head.
 async fn scrape_metrics(addr: SocketAddr) -> String {
-    let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
-    let req = format!(
-        "GET /metrics HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\nAccept: */*\r\n\r\n",
-    );
-    stream.write_all(req.as_bytes()).await.unwrap();
-    stream.flush().await.unwrap();
-    let mut buf = Vec::new();
-    stream.read_to_end(&mut buf).await.unwrap();
-    let s = String::from_utf8(buf).unwrap();
-    let body_start = s.find("\r\n\r\n").map_or(0, |i| i + 4);
-    s[body_start..].to_string()
+    crate::support::client::scrape_metrics(addr).await
 }
 
 /// Negative path: with a wrong password, `SaslAuthenticate` responds with
@@ -143,20 +99,7 @@ async fn scrape_metrics(addr: SocketAddr) -> String {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn sasl_plain_wrong_password_closes_connection() {
     let log_dir = tempfile::tempdir().unwrap();
-    let mut cfg = BrokerConfig::for_tests(log_dir.path().to_path_buf());
-    cfg.listeners = vec![ListenerSpec {
-        name: "SASL_PLAINTEXT".to_string(),
-        bind_addr: "127.0.0.1:0".parse().unwrap(),
-        advertised: "127.0.0.1:0".to_string(),
-        protocol: ListenerProtocol::SaslPlaintext,
-        tls_config: None,
-        sasl_mechanisms: None,
-        principal_mapper: krabka_broker::SslPrincipalMapper::default(),
-    }];
-    cfg.inter_broker_listener_name = "SASL_PLAINTEXT".to_string();
-    cfg.enabled_sasl_mechanisms = vec![SaslMechanism::Plain];
-    cfg.plain_credentials
-        .insert("alice".to_string(), alice_password());
+    let cfg = crate::harness::alice_plain_config(log_dir.path().to_path_buf(), alice_password());
 
     let handle = Broker::start(cfg).await.expect("broker must start");
     let addr = handle.listen_addr();
@@ -192,153 +135,40 @@ async fn drive_sasl_plain_session(
     password: &[u8],
 ) -> Result<(), io::Error> {
     let mut stream = TcpStream::connect(addr).await?;
-
-    // ── 1. ApiVersions (v0, non-flexible): proves the pre-auth allowlist
-    //    lets us talk to the broker before authentication. We decode the
-    //    response and ignore the contents — its presence is enough.
-    let av_req = ApiVersionsRequest::default();
-    let mut av_body = BytesMut::new();
-    av_req
-        .encode(&mut av_body, 0)
-        .map_err(|e| io::Error::other(format!("ApiVersions encode: {e}")))?;
-    let av_resp_bytes = round_trip(&mut stream, 18, 0, 1, false, &av_body).await?;
-    let mut cur: &[u8] = &av_resp_bytes;
-    let _av_resp = ApiVersionsResponse::decode(&mut cur, 0)
-        .map_err(|e| io::Error::other(format!("ApiVersions decode: {e}")))?;
-
-    // ── 2. SaslHandshake v1 (non-flexible, mechanism="PLAIN").
-    let mut sh_body = BytesMut::new();
-    let sh_req = SaslHandshakeRequest {
-        mechanism: "PLAIN".to_string(),
-        ..Default::default()
-    };
-    sh_req
-        .encode(&mut sh_body, 1)
-        .map_err(|e| io::Error::other(format!("SaslHandshake encode: {e}")))?;
-    let sh_resp_bytes = round_trip(&mut stream, 17, 1, 2, false, &sh_body).await?;
-    let mut cur: &[u8] = &sh_resp_bytes;
-    let sh_resp = SaslHandshakeResponse::decode(&mut cur, 1)
-        .map_err(|e| io::Error::other(format!("SaslHandshake decode: {e}")))?;
-    if sh_resp.error_code != 0 {
-        return Err(io::Error::other(format!(
-            "SaslHandshake failed: error_code={}",
-            sh_resp.error_code
-        )));
-    }
-
-    // ── 3. SaslAuthenticate v2 (flexible). auth_bytes = \0user\0password.
-    let mut payload = Vec::with_capacity(2 + user.len() + password.len());
-    payload.push(0); // authzid (empty)
-    payload.extend_from_slice(user.as_bytes());
-    payload.push(0);
-    payload.extend_from_slice(password);
-    let auth_req = SaslAuthenticateRequest {
-        auth_bytes: bytes::Bytes::from(payload),
-        ..Default::default()
-    };
-    let mut auth_body = BytesMut::new();
-    auth_req
-        .encode(&mut auth_body, 2)
-        .map_err(|e| io::Error::other(format!("SaslAuthenticate encode: {e}")))?;
-    let auth_resp_bytes = round_trip(&mut stream, 36, 2, 3, true, &auth_body).await?;
-    let mut cur: &[u8] = &auth_resp_bytes;
-    let auth_resp = SaslAuthenticateResponse::decode(&mut cur, 2)
-        .map_err(|e| io::Error::other(format!("SaslAuthenticate decode: {e}")))?;
-    if auth_resp.error_code != 0 {
-        return Err(io::Error::other(format!(
-            "SaslAuthenticate failed: error_code={} error_message={:?}",
-            auth_resp.error_code, auth_resp.error_message
-        )));
-    }
-
-    // ── 4. Post-auth Metadata round-trip proves the connection survived
-    //    and the data plane is reachable.
-    let md_req = MetadataRequest::default();
-    let mut md_body = BytesMut::new();
-    md_req
-        .encode(&mut md_body, 12)
-        .map_err(|e| io::Error::other(format!("Metadata encode: {e}")))?;
-    let md_resp_bytes = round_trip(&mut stream, 3, 12, 4, true, &md_body).await?;
-    let mut cur: &[u8] = &md_resp_bytes;
-    let md_resp = MetadataResponse::decode(&mut cur, 12)
-        .map_err(|e| io::Error::other(format!("Metadata decode: {e}")))?;
-    if md_resp.brokers.is_empty() {
-        return Err(io::Error::other("Metadata response carried no brokers"));
-    }
-
-    Ok(())
+    crate::kafka_wire::sasl_plain_authenticate_on(&mut stream, "krabka-sasl-test", user, password)
+        .await?;
+    crate::harness::metadata_probe(&mut stream, 4).await
 }
 
 /// Opens a PLAIN session on `stream` and returns the `SaslAuthenticate`
 /// response, whose `session_lifetime_ms` is the KIP-368 window. `corr` keeps
 /// correlation ids unique across the initial authentication and any later
 /// in-band re-auth on the same connection.
-async fn plain_authenticate(
+pub async fn plain_authenticate(
     stream: &mut TcpStream,
     corr: &mut i32,
     user: &str,
     password: &[u8],
 ) -> Result<SaslAuthenticateResponse, io::Error> {
-    let sh_req = SaslHandshakeRequest {
-        mechanism: "PLAIN".to_string(),
-        ..Default::default()
-    };
-    let mut sh_body = BytesMut::new();
-    sh_req
-        .encode(&mut sh_body, 1)
-        .map_err(|e| io::Error::other(format!("SaslHandshake encode: {e}")))?;
-    *corr += 1;
-    let sh_resp_bytes = round_trip(stream, 17, 1, *corr, false, &sh_body).await?;
-    let mut cur: &[u8] = &sh_resp_bytes;
-    let sh_resp = SaslHandshakeResponse::decode(&mut cur, 1)
-        .map_err(|e| io::Error::other(format!("SaslHandshake decode: {e}")))?;
-    if sh_resp.error_code != 0 {
-        return Err(io::Error::other(format!(
-            "SaslHandshake failed: error_code={}",
-            sh_resp.error_code
-        )));
-    }
-
-    let mut payload = Vec::with_capacity(2 + user.len() + password.len());
-    payload.push(0);
-    payload.extend_from_slice(user.as_bytes());
-    payload.push(0);
-    payload.extend_from_slice(password);
-    let auth_req = SaslAuthenticateRequest {
-        auth_bytes: bytes::Bytes::from(payload),
-        ..Default::default()
-    };
-    let mut auth_body = BytesMut::new();
-    auth_req
-        .encode(&mut auth_body, 2)
-        .map_err(|e| io::Error::other(format!("SaslAuthenticate encode: {e}")))?;
-    *corr += 1;
-    let auth_resp_bytes = round_trip(stream, 36, 2, *corr, true, &auth_body).await?;
-    let mut cur: &[u8] = &auth_resp_bytes;
-    SaslAuthenticateResponse::decode(&mut cur, 2)
-        .map_err(|e| io::Error::other(format!("SaslAuthenticate decode: {e}")))
+    crate::kafka_wire::sasl_plain_reauthenticate_on(
+        stream,
+        "krabka-sasl-test",
+        corr,
+        user,
+        password,
+    )
+    .await
 }
 
 /// A `SASL_PLAINTEXT` broker serving PLAIN for alice and bob, with the KIP-368
 /// re-authentication window set to `max_reauth` and the idle window switched
 /// off, so the only deadline these tests can observe is the one under test.
-async fn start_plain_reauth_broker(
+pub async fn start_plain_reauth_broker(
     log_dir: &std::path::Path,
     max_reauth: krabka_units::Time,
 ) -> krabka_broker::BrokerHandle {
-    let mut cfg = BrokerConfig::for_tests(log_dir.to_path_buf());
-    cfg.connections_max_idle = Some(krabka_units::millis(0));
-    cfg.connections_max_reauth = Some(max_reauth);
-    cfg.listeners = vec![ListenerSpec {
-        name: "SASL_PLAINTEXT".to_string(),
-        bind_addr: "127.0.0.1:0".parse().unwrap(),
-        advertised: "127.0.0.1:0".to_string(),
-        protocol: ListenerProtocol::SaslPlaintext,
-        tls_config: None,
-        sasl_mechanisms: None,
-        principal_mapper: krabka_broker::SslPrincipalMapper::default(),
-    }];
-    cfg.inter_broker_listener_name = "SASL_PLAINTEXT".to_string();
+    let mut cfg = crate::harness::reauth_config(log_dir, max_reauth);
+
     cfg.enabled_sasl_mechanisms = vec![SaslMechanism::Plain];
     cfg.plain_credentials
         .insert("alice".to_string(), alice_password());
@@ -352,81 +182,14 @@ async fn start_plain_reauth_broker(
 /// it elapses without an in-band re-authentication closes the connection.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn plain_session_capped_by_connections_max_reauth_then_closes() {
-    let log_dir = tempfile::tempdir().unwrap();
-    let handle = start_plain_reauth_broker(log_dir.path(), krabka_units::millis(300)).await;
-    let addr = handle.listen_addr();
-
-    let mut stream = TcpStream::connect(addr).await.unwrap();
-    let mut corr = 0;
-    let resp = plain_authenticate(&mut stream, &mut corr, "alice", alice_password().as_bytes())
-        .await
-        .expect("PLAIN authenticate round-trip");
-    check!(resp.error_code == 0);
-    check!(
-        (200..=300).contains(&resp.session_lifetime_ms),
-        "session_lifetime_ms = {}, expected the 300 ms cap",
-        resp.session_lifetime_ms
-    );
-
-    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-
-    // The request that arrives on the expired session is what ends it.
-    let md_req = MetadataRequest::default();
-    let mut md_body = BytesMut::new();
-    md_req.encode(&mut md_body, 12).unwrap();
-    corr += 1;
-    let _ = round_trip(&mut stream, 3, 12, corr, true, &md_body).await;
-
-    let mut buf = [0_u8; 16];
-    let n = tokio::time::timeout(std::time::Duration::from_secs(5), stream.read(&mut buf))
-        .await
-        .expect("read should not hang")
-        .expect("read should not error");
-    check!(
-        n == 0,
-        "expected EOF after the re-auth window, got {n} bytes"
-    );
-
-    handle.shutdown().await;
+    crate::reauth_cases::capped_session_closes(SaslMechanism::Plain).await;
 }
 
 /// KIP-368: an in-band re-authentication with the same principal succeeds and
 /// re-opens the data plane on the same connection.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn plain_in_band_reauth_same_principal_reopens_data_plane() {
-    let log_dir = tempfile::tempdir().unwrap();
-    let handle = start_plain_reauth_broker(log_dir.path(), krabka_units::secs(30)).await;
-    let addr = handle.listen_addr();
-
-    let mut stream = TcpStream::connect(addr).await.unwrap();
-    let mut corr = 0;
-    plain_authenticate(&mut stream, &mut corr, "alice", alice_password().as_bytes())
-        .await
-        .expect("initial PLAIN authenticate");
-    let reauth = plain_authenticate(&mut stream, &mut corr, "alice", alice_password().as_bytes())
-        .await
-        .expect("in-band PLAIN re-auth round-trip");
-    check!(reauth.error_code == 0, "in-band re-auth must succeed");
-    check!(
-        (29_000..=30_000).contains(&reauth.session_lifetime_ms),
-        "re-auth must re-arm the window, got {}",
-        reauth.session_lifetime_ms
-    );
-
-    // The data plane answers again, which the request gate would refuse had
-    // the connection stayed in `Reauthenticating`.
-    let md_req = MetadataRequest::default();
-    let mut md_body = BytesMut::new();
-    md_req.encode(&mut md_body, 12).unwrap();
-    corr += 1;
-    let md_resp_bytes = round_trip(&mut stream, 3, 12, corr, true, &md_body)
-        .await
-        .expect("Metadata RPC after in-band re-auth");
-    let mut cur: &[u8] = &md_resp_bytes;
-    let md_resp = MetadataResponse::decode(&mut cur, 12).unwrap();
-    check!(!md_resp.brokers.is_empty());
-
-    handle.shutdown().await;
+    crate::reauth_cases::same_principal_reopens(SaslMechanism::Plain).await;
 }
 
 /// KIP-368 forbids a principal switch mid-connection: a PLAIN re-auth that
@@ -434,32 +197,7 @@ async fn plain_in_band_reauth_same_principal_reopens_data_plane() {
 /// and the broker closes the connection.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn plain_in_band_reauth_with_different_principal_closes() {
-    let log_dir = tempfile::tempdir().unwrap();
-    let handle = start_plain_reauth_broker(log_dir.path(), krabka_units::secs(30)).await;
-    let addr = handle.listen_addr();
-
-    let mut stream = TcpStream::connect(addr).await.unwrap();
-    let mut corr = 0;
-    plain_authenticate(&mut stream, &mut corr, "alice", alice_password().as_bytes())
-        .await
-        .expect("initial PLAIN authenticate");
-    let reauth = plain_authenticate(&mut stream, &mut corr, "bob", alice_password().as_bytes())
-        .await
-        .expect("re-auth round-trip completes");
-    check!(
-        reauth.error_code == 58,
-        "expected SASL_AUTHENTICATION_FAILED, got {}",
-        reauth.error_code
-    );
-
-    let mut buf = [0_u8; 16];
-    let n = tokio::time::timeout(std::time::Duration::from_secs(5), stream.read(&mut buf))
-        .await
-        .expect("read should not hang")
-        .expect("read should not error");
-    check!(n == 0, "expected EOF after a refused re-auth");
-
-    handle.shutdown().await;
+    crate::reauth_cases::different_principal_closes(SaslMechanism::Plain).await;
 }
 
 /// A `SaslAuthenticate` before any handshake closes the connection with no
@@ -501,49 +239,10 @@ async fn plain_authenticate_without_handshake_closes_the_connection() {
 /// each of the three rounds starts expired.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn plain_reauth_after_the_window_elapsed_keeps_serving_round_after_round() {
-    let log_dir = tempfile::tempdir().unwrap();
-    let handle = start_plain_reauth_broker(log_dir.path(), krabka_units::millis(300)).await;
-    let addr = handle.listen_addr();
-
-    let mut stream = TcpStream::connect(addr).await.unwrap();
-    let mut corr = 0;
-    let initial = plain_authenticate(&mut stream, &mut corr, "alice", alice_password().as_bytes())
-        .await
-        .expect("initial PLAIN authenticate");
-    check!(initial.error_code == 0);
-
-    for round in 1..=3 {
-        // Past the deadline, and a second or more after the previous
-        // re-authentication started (Kafka's `MIN_REAUTH_INTERVAL_ONE_SECOND`).
-        tokio::time::sleep(std::time::Duration::from_millis(1_050)).await;
-
-        let reauth =
-            plain_authenticate(&mut stream, &mut corr, "alice", alice_password().as_bytes())
-                .await
-                .unwrap_or_else(|e| panic!("re-auth round {round} must round-trip: {e}"));
-        check!(
-            reauth.error_code == 0,
-            "re-auth round {round} must succeed, got {} {:?}",
-            reauth.error_code,
-            reauth.error_message
-        );
-        check!(
-            (200..=300).contains(&reauth.session_lifetime_ms),
-            "re-auth round {round} must re-arm the window, got {}",
-            reauth.session_lifetime_ms
-        );
-
-        let md_req = MetadataRequest::default();
-        let mut md_body = BytesMut::new();
-        md_req.encode(&mut md_body, 12).unwrap();
-        corr += 1;
-        let md_resp_bytes = round_trip(&mut stream, 3, 12, corr, true, &md_body)
-            .await
-            .unwrap_or_else(|e| panic!("Metadata after re-auth round {round}: {e}"));
-        let mut cur: &[u8] = &md_resp_bytes;
-        let md_resp = MetadataResponse::decode(&mut cur, 12).unwrap();
-        check!(!md_resp.brokers.is_empty(), "round {round}");
-    }
-
-    handle.shutdown().await;
+    crate::reauth_cases::repeated_expired_reauth(
+        SaslMechanism::Plain,
+        krabka_units::millis(300),
+        200..=300,
+    )
+    .await;
 }

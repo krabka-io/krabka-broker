@@ -1,12 +1,12 @@
-(* #"/workspace/crates/verified/src/restore_sidecar/restore_producer_ids_strict.rs" 143 0 149 9 *)
+(* #"/workspace/crates/verified/src/restore_sidecar/restore_producer_ids_strict.rs" 144 0 150 9 *)
 
-let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
-let%span srestore_producer_ids_strict = "/workspace/crates/verified/src/restore_sidecar/restore_producer_ids_strict.rs" 150 13 150 14
-let%span srestore_producer_ids_strict'0 = "/workspace/crates/verified/src/restore_sidecar/restore_producer_ids_strict.rs" 151 27 151 28
-let%span srestore_producer_ids_strict'1 = "/workspace/crates/verified/src/restore_sidecar/restore_producer_ids_strict.rs" 156 16 156 71
-let%span srestore_producer_ids_strict'2 = "/workspace/crates/verified/src/restore_sidecar/restore_producer_ids_strict.rs" 158 20 158 24
-let%span srestore_producer_ids_strict'3 = "/workspace/crates/verified/src/restore_sidecar/restore_producer_ids_strict.rs" 150 4 159 9
-let%span srestore_producer_ids_strict'4 = "/workspace/crates/verified/src/restore_sidecar/restore_producer_ids_strict.rs" 133 10 141 6
+let%span sord = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span srestore_producer_ids_strict = "/workspace/crates/verified/src/restore_sidecar/restore_producer_ids_strict.rs" 151 13 151 14
+let%span srestore_producer_ids_strict'0 = "/workspace/crates/verified/src/restore_sidecar/restore_producer_ids_strict.rs" 152 27 152 28
+let%span srestore_producer_ids_strict'1 = "/workspace/crates/verified/src/restore_sidecar/restore_producer_ids_strict.rs" 157 16 157 71
+let%span srestore_producer_ids_strict'2 = "/workspace/crates/verified/src/restore_sidecar/restore_producer_ids_strict.rs" 159 20 159 24
+let%span srestore_producer_ids_strict'3 = "/workspace/crates/verified/src/restore_sidecar/restore_producer_ids_strict.rs" 151 4 160 9
+let%span srestore_producer_ids_strict'4 = "/workspace/crates/verified/src/restore_sidecar/restore_producer_ids_strict.rs" 134 10 142 6
 
 use creusot.int.Int32
 use creusot.int.Int64
@@ -33,7 +33,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let restore_leader_epoch_entry_valid [#"/workspace/crates/verified/src/restore_sidecar/restore_producer_ids_strict.rs" 143 0 149 9]
+let restore_leader_epoch_entry_valid [#"/workspace/crates/verified/src/restore_sidecar/restore_producer_ids_strict.rs" 144 0 150 9]
   (previous: t_Option_tup2_i32_i64) (epoch: Int32.t) (start_offset: Int64.t) (segment_base: Int64.t)
   (segment_end: Int64.t) (return (x: bool)) = (! bb0
   [ bb0 = s0

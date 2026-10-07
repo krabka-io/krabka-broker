@@ -1,7 +1,10 @@
 use assert2::assert;
 use proptest::prelude::*;
 
-use super::{ProducerDecision, ProducerSnapshotEntryFacts, truncated_replay_bounds_first_retry};
+use super::{
+    ProducerDecision, ProducerSnapshotEntryFacts, oracle_next_producer_decision,
+    truncated_replay_bounds_first_retry,
+};
 
 fn sequence(value: i64) -> i32 {
     i32::try_from(value.rem_euclid(1_i64 << 31)).unwrap()
@@ -54,24 +57,8 @@ fn check(
         ProducerDecision::Duplicate {
             retained: if index + 1 == window.len() { 4 } else { index },
         }
-    } else if let Some(last) = kept.last() {
-        if request.0 < last.producer_epoch {
-            ProducerDecision::Fenced
-        } else if request.0 > last.producer_epoch {
-            if request.1 == 0 {
-                ProducerDecision::Append
-            } else {
-                ProducerDecision::OutOfOrder
-            }
-        } else if request.1 == sequence(i64::from(last.last_sequence) + 1) {
-            ProducerDecision::Append
-        } else {
-            ProducerDecision::OutOfOrder
-        }
-    } else if request.3 && end == 0 && request.1 != 0 {
-        ProducerDecision::OutOfOrder
     } else {
-        ProducerDecision::Append
+        oracle_next_producer_decision(kept.last().copied(), request, end)
     };
     let witness = match_index.map(|index| {
         let row = window[index];

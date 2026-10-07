@@ -14,20 +14,15 @@ use std::{
 };
 
 use assert2::assert;
-use bytes::Bytes;
 use krabka_metadata::{GroupConfigRecord, MetadataRecord};
 use krabka_protocol::{
     owned::{
-        create_topics_request::{CreatableTopic, CreateTopicsRequest},
-        produce_request::{PartitionProduceData, ProduceRequest, TopicProduceData},
-        produce_response::ProduceResponse,
         share_fetch_request::{
             AcknowledgementBatch, FetchPartition, FetchTopic, ForgottenTopic, ShareFetchRequest,
         },
         share_fetch_response::ShareFetchResponse,
     },
     primitives::uuid::Uuid as WireUuid,
-    records::{Record, RecordBatch, RecordsPayload},
 };
 
 use crate::{
@@ -41,7 +36,6 @@ use crate::{
     },
 };
 
-const PRODUCE_VERSION: i16 = 12;
 const VERSION: i16 = 2;
 const ACCEPT: i8 = 1;
 
@@ -55,76 +49,13 @@ async fn start(session_max: usize) -> (BrokerHandle, tempfile::TempDir) {
 
 /// Creates `topic` with `partitions` partitions and returns its id.
 async fn create_topic(broker: &BrokerHandle, topic: &str, partitions: i32) -> WireUuid {
-    let client = krabka_client_core::Client::builder()
-        .bootstrap(broker.listen_addr().to_string())
-        .client_id("share-session-test")
-        .build()
+    crate::handlers::test_support::create_topic(broker, "share-session-test", topic, partitions)
         .await
-        .expect("client build");
-    let response = client
-        .send(CreateTopicsRequest {
-            topics: vec![CreatableTopic {
-                name: topic.to_string(),
-                num_partitions: partitions,
-                replication_factor: 1,
-                ..Default::default()
-            }],
-            timeout_ms: 5_000,
-            ..Default::default()
-        })
-        .await
-        .expect("CreateTopics");
-    assert!(response.topics[0].error_code == codes::NONE, "{response:?}");
-    for partition in 0..partitions {
-        broker.wait_until_partition_present(topic, partition).await;
-    }
-    let image = broker.controller_image_for_test();
-    WireUuid(
-        image
-            .topic(topic)
-            .expect("created topic")
-            .topic_id
-            .into_bytes(),
-    )
 }
 
 /// Appends three records to `partition` of `topic`.
 async fn produce(broker: &BrokerHandle, topic: &str, partition: i32) {
-    let request = ProduceRequest {
-        acks: -1,
-        timeout_ms: 5_000,
-        topic_data: vec![TopicProduceData {
-            name: topic.to_string(),
-            partition_data: vec![PartitionProduceData {
-                index: partition,
-                records: Some(RecordsPayload::V2(vec![RecordBatch {
-                    last_offset_delta: 2,
-                    records: (0..3)
-                        .map(|offset_delta| Record {
-                            offset_delta,
-                            value: Some(Bytes::from_static(b"v")),
-                            ..Default::default()
-                        })
-                        .collect(),
-                    ..Default::default()
-                }])),
-                ..Default::default()
-            }],
-            ..Default::default()
-        }],
-        ..Default::default()
-    };
-    let shared = broker.broker_arc_for_test();
-    let user = principal("producer");
-    let address = peer();
-    let ctx = request_context(&user, &address, "producer-client");
-    let bytes = encode_request(&request, PRODUCE_VERSION);
-    let response =
-        crate::handlers::produce::handle(&shared, PRODUCE_VERSION, &bytes, bytes.clone(), &ctx)
-            .await
-            .expect("handle produce");
-    let response: ProduceResponse = decode_response(&response, PRODUCE_VERSION);
-    assert!(response.responses[0].partition_responses[0].error_code == codes::NONE);
+    crate::handlers::test_support::produce_records(broker, topic, partition, 3).await;
 }
 
 /// Starts `group` at the earliest offset of each partition of `topic_id`.

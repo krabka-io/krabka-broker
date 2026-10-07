@@ -7,10 +7,7 @@
 //! `INTERNAL` listeners and the image that ships `javac`, which is why it is
 //! its own file.
 
-use std::{
-    io::Write,
-    process::{Command, Stdio},
-};
+use std::{io::Write, process::Stdio};
 
 use assert2::assert;
 use krabka_broker::{Broker, BrokerConfig};
@@ -134,13 +131,7 @@ async fn transactional_console_producer_eos() {
     /// below two, so no batch can ever fit twice.
     const SEGMENT_SIZE: krabka_units::ByteSize = krabka_units::bytes(128);
 
-    let _ = tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("krabka_broker=debug,info")),
-        )
-        .with_test_writer()
-        .try_init();
+    crate::support::init_jvm_tracing("krabka_broker=debug,info");
 
     let client_ports = [9792u16, 9892, 9992];
     let controller_ports = [9793u16, 9893, 9993];
@@ -170,35 +161,17 @@ async fn transactional_console_producer_eos() {
             .parse()
             .expect("static addr");
         let cfg = BrokerConfig {
-            broker_id: i32::try_from(i + 1).unwrap(),
-            listen_addr,
-            advertised_listener: advertised_listener.clone(),
-            log_dir: dir.path().to_path_buf(),
             // Neither topic below overrides a segment size, so both inherit
             // this one. See `SEGMENT_SIZE`.
             log_config: LogConfig {
                 segment_size: SEGMENT_SIZE,
                 ..LogConfig::default()
             },
-            node_id: krabka_broker::NodeId(u64::try_from(i + 1).unwrap()),
-            controller_listen_addr: format!("0.0.0.0:{}", controller_ports[i])
-                .parse()
-                .expect("static addr"),
-            controller_quorum_voters: voters
-                .iter()
-                .map(|(id, a)| (krabka_broker::NodeId(*id), a.to_string()))
-                .collect(),
-            heartbeat_interval: krabka_units::millis(3_000),
-            heartbeat_timeout: krabka_units::millis(9_000),
-            replica_lag_time_max: krabka_units::millis(30_000),
-            controller_election_timeout: krabka_units::secs(5),
-            controller_heartbeat_interval: krabka_units::millis(500),
-            bootstrap_mode: krabka_broker::BootstrapMode::Bootstrap,
             listeners: vec![
                 krabka_broker::config::ListenerSpec {
                     name: "EXTERNAL".to_string(),
                     bind_addr: listen_addr,
-                    advertised: advertised_listener,
+                    advertised: advertised_listener.clone(),
                     protocol: krabka_security::ListenerProtocol::Plaintext,
                     tls_config: None,
                     sasl_mechanisms: None,
@@ -215,7 +188,16 @@ async fn transactional_console_producer_eos() {
                 },
             ],
             inter_broker_listener_name: "INTERNAL".to_string(),
-            ..BrokerConfig::default().with_internal_topics_for(3)
+            ..crate::support::jvm_broker_config(
+                u64::try_from(i + 1).unwrap(),
+                listen_addr,
+                format!("0.0.0.0:{}", controller_ports[i])
+                    .parse()
+                    .expect("static addr"),
+                &advertised_listener,
+                dir.path().to_path_buf(),
+                &voters,
+            )
         };
         tempdirs.push(dir);
         spawns.push(tokio::spawn(async move {
@@ -263,14 +245,7 @@ async fn transactional_console_producer_eos() {
     // 2. Compile the small Java helper against the image's Kafka client jars.
     //    It writes one committed transaction, one aborted transaction, and a
     //    later record that seals the abort marker's transaction index.
-    let mut producer = Command::new("docker")
-        .args([
-            "run",
-            "--rm",
-            "-i",
-            "--add-host=host.docker.internal:host-gateway",
-            "--entrypoint",
-            "bash",
+    let mut producer = crate::support::jvm_docker_command("--entrypoint", &[], &["bash",
             KAFKA_IMAGE_TXN,
             "-c",
             r#"set -e; cat >/tmp/TransactionalProducer.java; \
@@ -280,7 +255,7 @@ async fn transactional_console_producer_eos() {
             "--",
             &bootstrap_1,
             TOPIC,
-        ])
+        ], true)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -405,14 +380,7 @@ async fn transactional_console_producer_eos() {
         "--bootstrap-server",
         &bootstrap_1,
     ]);
-    let mut zombie = Command::new("docker")
-        .args([
-            "run",
-            "--rm",
-            "-i",
-            "--add-host=host.docker.internal:host-gateway",
-            "--entrypoint",
-            "bash",
+    let mut zombie = crate::support::jvm_docker_command("--entrypoint", &[], &["bash",
             KAFKA_IMAGE_TXN,
             "-c",
             r#"set -e; cat >/tmp/ZombieProducer.java; \
@@ -422,7 +390,7 @@ async fn transactional_console_producer_eos() {
             "--",
             &bootstrap_1,
             ZOMBIE_TOPIC,
-        ])
+        ], true)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())

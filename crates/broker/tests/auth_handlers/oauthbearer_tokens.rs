@@ -9,23 +9,15 @@ use std::io;
 
 use assert2::assert;
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD as B64};
-use bytes::BytesMut;
-use krabka_protocol::{
-    Decode, Encode,
-    owned::{metadata_request::MetadataRequest, metadata_response::MetadataResponse},
-};
 use ring::{
     rand::SystemRandom,
     signature::{ECDSA_P256_SHA256_FIXED_SIGNING, EcdsaKeyPair, KeyPair},
 };
 use tokio::net::TcpStream;
 
-use crate::{
-    harness::round_trip,
-    oauthbearer::{
-        now_unix_secs, oauthbearer_authenticate, oauthbearer_handshake, oauthbearer_initial,
-        start_oauthbearer_broker, unsecured_jws,
-    },
+use crate::oauthbearer::{
+    now_unix_secs, oauthbearer_authenticate, oauthbearer_handshake, oauthbearer_initial,
+    start_oauthbearer_broker, unsecured_jws,
 };
 
 /// Happy path: a valid unsecured token authenticates in a single round.
@@ -62,19 +54,7 @@ async fn sasl_oauthbearer_happy_path() {
             ));
         }
 
-        let md_req = MetadataRequest::default();
-        let mut md_body = BytesMut::new();
-        md_req
-            .encode(&mut md_body, 12)
-            .map_err(|e| io::Error::other(format!("Metadata encode: {e}")))?;
-        let md = round_trip(&mut stream, 3, 12, corr, true, &md_body).await?;
-        let mut cur: &[u8] = &md;
-        let md_resp = MetadataResponse::decode(&mut cur, 12)
-            .map_err(|e| io::Error::other(format!("Metadata decode: {e}")))?;
-        if md_resp.brokers.is_empty() {
-            return Err(io::Error::other("Metadata carried no brokers"));
-        }
-        Ok(())
+        crate::harness::metadata_probe(&mut stream, corr).await
     }
     .await;
 
@@ -106,19 +86,7 @@ async fn sasl_oauthbearer_invalid_token_two_round_failure() {
 
         // Expired token (exp an hour in the past, zero skew).
         let token = unsecured_jws("admin", now_unix_secs() - 3600);
-        let round1 =
-            oauthbearer_authenticate(&mut stream, &mut corr, oauthbearer_initial(&token)).await?;
-        assert!(round1.error_code == 0, "round 1 must not close yet");
-        assert!(
-            &round1.auth_bytes[..] == br#"{"status":"invalid_token"}"#,
-            "round 1 must carry the RFC 7628 error JSON"
-        );
-
-        // The client's `\x01` dummy → SASL_AUTHENTICATION_FAILED (58).
-        let round2 =
-            oauthbearer_authenticate(&mut stream, &mut corr, bytes::Bytes::from_static(&[1u8]))
-                .await?;
-        assert!(round2.error_code == 58, "round 2 must fail the connection");
+        expect_invalid_token(&mut stream, &mut corr, &token).await?;
         Ok(())
     }
     .await;
@@ -200,19 +168,7 @@ async fn sasl_oauthbearer_signed_token_happy_path() {
         }
 
         // Post-auth Metadata proves the connection survived authentication.
-        let md_req = MetadataRequest::default();
-        let mut md_body = BytesMut::new();
-        md_req
-            .encode(&mut md_body, 12)
-            .map_err(|e| io::Error::other(format!("Metadata encode: {e}")))?;
-        let md = round_trip(&mut stream, 3, 12, corr, true, &md_body).await?;
-        let mut cur: &[u8] = &md;
-        let md_resp = MetadataResponse::decode(&mut cur, 12)
-            .map_err(|e| io::Error::other(format!("Metadata decode: {e}")))?;
-        if md_resp.brokers.is_empty() {
-            return Err(io::Error::other("Metadata carried no brokers"));
-        }
-        Ok(())
+        crate::harness::metadata_probe(&mut stream, corr).await
     }
     .await;
 
@@ -241,22 +197,29 @@ async fn sasl_oauthbearer_signed_token_wrong_key_two_round_failure() {
 
         let claims = format!("{{\"sub\":\"admin\",\"exp\":{}}}", now_unix_secs() + 3600);
         let token = es256_token(&kp_b, "k1", &claims);
-        let round1 =
-            oauthbearer_authenticate(&mut stream, &mut corr, oauthbearer_initial(&token)).await?;
-        assert!(round1.error_code == 0, "round 1 must not close yet");
-        assert!(
-            &round1.auth_bytes[..] == br#"{"status":"invalid_token"}"#,
-            "round 1 must carry the RFC 7628 error JSON"
-        );
-
-        let round2 =
-            oauthbearer_authenticate(&mut stream, &mut corr, bytes::Bytes::from_static(&[1u8]))
-                .await?;
-        assert!(round2.error_code == 58, "round 2 must fail the connection");
+        expect_invalid_token(&mut stream, &mut corr, &token).await?;
         Ok(())
     }
     .await;
 
     handle.shutdown().await;
     result.expect("signed OAUTHBEARER failure handshake must complete");
+}
+
+async fn expect_invalid_token(
+    stream: &mut TcpStream,
+    corr: &mut i32,
+    token: &str,
+) -> io::Result<()> {
+    let round1 = oauthbearer_authenticate(stream, corr, oauthbearer_initial(token)).await?;
+    assert!(round1.error_code == 0, "round 1 must not close yet");
+    assert!(
+        &round1.auth_bytes[..] == br#"{"status":"invalid_token"}"#,
+        "round 1 must carry the RFC 7628 error JSON"
+    );
+
+    // The client's `\x01` dummy → SASL_AUTHENTICATION_FAILED (58).
+    let round2 = oauthbearer_authenticate(stream, corr, bytes::Bytes::from_static(&[1u8])).await?;
+    assert!(round2.error_code == 58, "round 2 must fail the connection");
+    Ok(())
 }

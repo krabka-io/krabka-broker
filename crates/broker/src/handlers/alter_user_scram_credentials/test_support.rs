@@ -57,6 +57,22 @@ pub(super) fn deletion(name: &str) -> ScramCredentialDeletion {
     }
 }
 
+pub(super) fn mixed_mechanisms(name: &str) -> super::AlterUserScramCredentialsRequest {
+    super::AlterUserScramCredentialsRequest {
+        deletions: vec![ScramCredentialDeletion {
+            name: name.into(),
+            mechanism: 2,
+            ..Default::default()
+        }],
+        upsertions: vec![valid_upsertion_for_mechanism(
+            name,
+            1,
+            SaslMechanism::ScramSha256,
+        )],
+        ..Default::default()
+    }
+}
+
 /// A fully-pinned per-user result row, as the handler renders it.
 pub(super) fn expected_result(
     user: &str,
@@ -69,6 +85,29 @@ pub(super) fn expected_result(
         error_message: error_message.map(Into::into),
         unknown_tagged_fields: UnknownTaggedFields(Vec::new()),
     }
+}
+
+pub(super) fn expected_response(
+    results: Vec<AlterUserScramCredentialsResult>,
+) -> super::AlterUserScramCredentialsResponse {
+    super::AlterUserScramCredentialsResponse {
+        throttle_time_ms: 0,
+        results,
+        unknown_tagged_fields: UnknownTaggedFields(Vec::new()),
+    }
+}
+
+pub(super) async fn low_metadata_version(broker: &Broker) {
+    broker
+        .controller
+        .submit_change(vec![MetadataRecord::V1FeatureLevel(
+            krabka_metadata::FeatureLevelRecord {
+                name: crate::features::METADATA_VERSION.to_string(),
+                level: krabka_metadata::metadata_version::SCRAM_MIN_LEVEL - 1,
+            },
+        )])
+        .await
+        .expect("seed low metadata.version");
 }
 
 crate::test_support::context_helper!(pub(super) client_id = "admin-client");

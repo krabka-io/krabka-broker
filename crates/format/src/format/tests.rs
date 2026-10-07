@@ -389,6 +389,23 @@ async fn a_standalone_format_writes_what_a_boot_reads() {
     check!(len > 0, "offset-zero checkpoint should carry the voter set");
 }
 
+fn standalone_argv(log_dir: &std::path::Path, extra: &[&str]) -> Vec<String> {
+    let mut argv = [
+        "krabka-format",
+        "--log-dir",
+        &log_dir.display().to_string(),
+        "--standalone",
+        "--node-id",
+        "1",
+        "--controller-listener",
+        "controller-1:9093",
+    ]
+    .map(str::to_owned)
+    .to_vec();
+    argv.extend(extra.iter().map(|s| (*s).to_owned()));
+    argv
+}
+
 /// `--ignore-formatted` is what lets a Kubernetes init container run the
 /// formatter unconditionally: the second run is a no-op that exits 0 and
 /// leaves the first run's identity in place, while the same directory without
@@ -397,21 +414,7 @@ async fn a_standalone_format_writes_what_a_boot_reads() {
 async fn ignore_formatted_makes_a_second_format_a_no_op() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let log_dir = tmp.path().join("data");
-    let dir = log_dir.display().to_string();
-    let argv = |extra: &[&str]| {
-        let mut argv = vec![
-            "krabka-format".to_string(),
-            "--log-dir".to_string(),
-            dir.clone(),
-            "--standalone".to_string(),
-            "--node-id".to_string(),
-            "1".to_string(),
-            "--controller-listener".to_string(),
-            "controller-1:9093".to_string(),
-        ];
-        argv.extend(extra.iter().map(|s| (*s).to_string()));
-        argv
-    };
+    let argv = |extra: &[&str]| standalone_argv(&log_dir, extra);
 
     check!(crate::run_from_args(argv(&[])).await == EXIT_OK);
     let formatted = std::fs::read(log_dir.join(META_PROPERTIES)).expect("meta properties");
@@ -464,21 +467,7 @@ async fn ignore_formatted_still_formats_a_fresh_directory() {
 async fn a_failed_format_is_not_mistaken_for_a_finished_one() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let log_dir = tmp.path().join("data");
-    let dir = log_dir.display().to_string();
-    let argv = |extra: &[&str]| {
-        let mut argv = vec![
-            "krabka-format".to_string(),
-            "--log-dir".to_string(),
-            dir.clone(),
-            "--standalone".to_string(),
-            "--node-id".to_string(),
-            "1".to_string(),
-            "--controller-listener".to_string(),
-            "controller-1:9093".to_string(),
-        ];
-        argv.extend(extra.iter().map(|s| (*s).to_string()));
-        argv
-    };
+    let argv = |extra: &[&str]| standalone_argv(&log_dir, extra);
 
     let weak = "SCRAM-SHA-256=[name=alice,password=hunter2,iterations=1]";
     check!(crate::run_from_args(argv(&["--add-scram", weak])).await == EXIT_LOW_ITERATIONS);

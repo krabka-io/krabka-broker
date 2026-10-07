@@ -19,20 +19,15 @@ use std::{
 };
 
 use assert2::assert;
-use bytes::Bytes;
 use krabka_broker::{BootstrapMode, Broker, BrokerConfig, BrokerError, BrokerHandle, NodeId};
-use krabka_client_consumer::{AutoOffsetReset, Consumer, IsolationLevel};
 use krabka_client_core::{Client, Connection, ConnectionOptions};
 use krabka_protocol::{
     owned::{
         add_offsets_to_txn_request::AddOffsetsToTxnRequest,
-        add_partitions_to_txn_request::{AddPartitionsToTxnRequest, AddPartitionsToTxnTransaction},
-        common::add_partitions_to_txn_request::add_partitions_to_txn_topic::AddPartitionsToTxnTopic,
         create_topics_request::CreateTopicsRequest,
         describe_transactions_request::DescribeTransactionsRequest,
         end_txn_request::EndTxnRequest,
         end_txn_response::EndTxnResponse,
-        init_producer_id_request::InitProducerIdRequest,
         offset_commit_request::{
             OffsetCommitRequest, OffsetCommitRequestPartition, OffsetCommitRequestTopic,
         },
@@ -40,13 +35,11 @@ use krabka_protocol::{
             OffsetDeleteRequest, OffsetDeleteRequestPartition, OffsetDeleteRequestTopic,
         },
         offset_delete_response::OffsetDeleteResponse,
-        produce_request::{PartitionProduceData, ProduceRequest, TopicProduceData},
         txn_offset_commit_request::{
             TxnOffsetCommitRequest, TxnOffsetCommitRequestPartition, TxnOffsetCommitRequestTopic,
         },
     },
     primitives::uuid::Uuid as WireUuid,
-    records::{Attributes, Record, RecordBatch},
 };
 use tempfile::TempDir;
 
@@ -135,13 +128,7 @@ async fn init_producer(connection: &Connection) -> (i64, i16) {
     let deadline = Instant::now() + SETTLE;
     loop {
         let response = connection
-            .send(InitProducerIdRequest {
-                transactional_id: Some(TID.into()),
-                transaction_timeout_ms: 60_000,
-                producer_id: -1,
-                producer_epoch: -1,
-                ..Default::default()
-            })
+            .send(crate::txn_fixture::init_producer_request(TID))
             .await
             .expect("InitProducerId");
         if retriable(response.error_code) && Instant::now() < deadline {
@@ -154,36 +141,14 @@ async fn init_producer(connection: &Connection) -> (i64, i16) {
     }
 }
 
-async fn add_partition(connection: &Connection, (producer_id, epoch): (i64, i16)) {
-    let topic = AddPartitionsToTxnTopic {
-        name: TOPIC.into(),
-        partitions: vec![0],
-        ..Default::default()
-    };
+async fn add_partition(connection: &Connection, producer: (i64, i16)) {
     let response = connection
-        .send(AddPartitionsToTxnRequest {
-            transactions: vec![AddPartitionsToTxnTransaction {
-                transactional_id: TID.into(),
-                producer_id,
-                producer_epoch: epoch,
-                topics: vec![topic.clone()],
-                ..Default::default()
-            }],
-            v3_and_below_transactional_id: TID.into(),
-            v3_and_below_producer_id: producer_id,
-            v3_and_below_producer_epoch: epoch,
-            v3_and_below_topics: vec![topic],
-            ..Default::default()
-        })
+        .send(crate::txn_fixture::add_partition_request(
+            TID, TOPIC, producer,
+        ))
         .await
         .expect("AddPartitionsToTxn");
-    let code = response
-        .results_by_transaction
-        .first()
-        .and_then(|transaction| transaction.topic_results.first())
-        .and_then(|row| row.results_by_partition.first())
-        .map_or(response.error_code, |row| row.partition_error_code);
-    assert!(code == 0, "AddPartitionsToTxn: {response:?}");
+    crate::txn_fixture::assert_partition_added(&response);
 }
 
 async fn produce(
@@ -192,42 +157,10 @@ async fn produce(
     producer: Option<(i64, i16)>,
     values: &[&'static str],
 ) {
-    let records = i32::try_from(values.len()).expect("record count");
-    let batch = RecordBatch {
-        attributes: Attributes::default().with_transactional(producer.is_some()),
-        producer_id: producer.map_or(-1, |(producer_id, _)| producer_id),
-        producer_epoch: producer.map_or(-1, |(_, epoch)| epoch),
-        base_sequence: if producer.is_some() { 0 } else { -1 },
-        last_offset_delta: records - 1,
-        max_timestamp: 1,
-        records: values
-            .iter()
-            .zip(0..)
-            .map(|(value, offset_delta)| Record {
-                offset_delta,
-                value: Some(Bytes::from_static(value.as_bytes())),
-                ..Record::default()
-            })
-            .collect(),
-        ..RecordBatch::default()
-    };
     let response = connection
-        .send(ProduceRequest {
-            transactional_id: producer.map(|_| TID.to_string()),
-            acks: -1,
-            timeout_ms: 5_000,
-            topic_data: vec![TopicProduceData {
-                name: TOPIC.into(),
-                topic_id,
-                partition_data: vec![PartitionProduceData {
-                    index: 0,
-                    records: Some(batch.into()),
-                    ..Default::default()
-                }],
-                ..Default::default()
-            }],
-            ..Default::default()
-        })
+        .send(crate::txn_fixture::produce_request(
+            TID, TOPIC, topic_id, producer, values,
+        ))
         .await
         .expect("Produce");
     let code = response.responses[0].partition_responses[0].error_code;
@@ -301,28 +234,8 @@ async fn describe_until(connection: &Connection, expected: &Described) -> Option
 }
 
 async fn read_committed(bootstrap: SocketAddr, last: &str) -> Vec<String> {
-    let mut consumer = Consumer::builder()
-        .bootstrap(bootstrap.to_string())
-        .group_id(format!("{TOPIC}-reader"))
-        .auto_offset_reset(AutoOffsetReset::Earliest)
-        .isolation_level(IsolationLevel::ReadCommitted)
-        .subscribe([TOPIC.to_string()])
-        .build()
+    crate::txn_consumer_fixture::read_committed_through(&bootstrap.to_string(), TOPIC, last, SETTLE)
         .await
-        .expect("consumer");
-    let mut seen = Vec::new();
-    let deadline = Instant::now() + SETTLE;
-    while seen.last().map(String::as_str) != Some(last) && Instant::now() < deadline {
-        for record in consumer
-            .poll(krabka_units::millis(200))
-            .await
-            .expect("poll")
-        {
-            seen.push(String::from_utf8_lossy(record.value.as_deref().unwrap_or(b"")).into_owned());
-        }
-    }
-    consumer.close().await.expect("close consumer");
-    seen
 }
 
 /// Three brokers whose data listeners each sit behind a [`Relay`]: every

@@ -403,36 +403,20 @@ async fn refresher_passes_ignore_key_use_through_to_jwks_parser() {
 
 #[tokio::test]
 async fn refresher_stops_without_fetching_when_the_first_deadline_is_refused() {
-    let (addr, srv_shutdown, requests) = serve_jwks_counting(JWKS_BODY).await;
-    let handle = JwksHandle::default();
-    let timer = BrokenTimer::dead(TimerFailure::Registration);
-    let refresher = test_refresher(
-        format!("http://{addr}/jwks"),
-        handle.clone(),
-        millis(50),
-        // Nothing cancels this token, so the refused start-up deadline is the
-        // only thing that can end the task.
-        CancellationToken::new(),
-        None,
-        timer.injectable(),
-    );
-
-    // The loop gives up before its t=0 fetch, so the endpoint is never called
-    // and the key set validators read stays empty.
-    tokio::spawn(refresher.run())
-        .await
-        .expect("refresher task exits");
-    check!(handle.load().is_empty());
-    check!(requests.load(Ordering::Relaxed) == 0);
-    check!(timer.registrations() == 1);
-    srv_shutdown.cancel();
+    check_first_deadline_failure(TimerFailure::Registration).await;
 }
 
 #[tokio::test]
 async fn refresher_stops_when_the_first_deadline_is_armed_but_never_completes() {
+    check_first_deadline_failure(TimerFailure::Completion).await;
+}
+
+async fn check_first_deadline_failure(failure: TimerFailure) {
     let (addr, srv_shutdown, requests) = serve_jwks_counting(JWKS_BODY).await;
     let handle = JwksHandle::default();
-    let timer = BrokenTimer::dead(TimerFailure::Completion);
+    let timer = BrokenTimer::dead(failure);
+    // No caller cancels this token. A refused registration or a failed first
+    // deadline is therefore the only reason the refresher can stop.
     let refresher = test_refresher(
         format!("http://{addr}/jwks"),
         handle.clone(),
@@ -441,9 +425,6 @@ async fn refresher_stops_when_the_first_deadline_is_armed_but_never_completes() 
         None,
         timer.injectable(),
     );
-
-    // The registration is accepted, so the loop reaches its select; the
-    // deadline then fails, which is the other way a ticker goes away.
     tokio::spawn(refresher.run())
         .await
         .expect("refresher task exits");

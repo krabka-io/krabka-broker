@@ -1,11 +1,11 @@
-(* #"/workspace/crates/verified/src/restore_sidecar/restore_producer_ids_strict.rs" 78 0 83 9 *)
+(* #"/workspace/crates/verified/src/restore_sidecar/restore_producer_ids_strict.rs" 79 0 84 9 *)
 
-let%span sconvert = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/convert.rs" 274 26 274 51
-let%span srestore_producer_ids_strict = "/workspace/crates/verified/src/restore_sidecar/restore_producer_ids_strict.rs" 84 4 84 30
-let%span srestore_producer_ids_strict'0 = "/workspace/crates/verified/src/restore_sidecar/restore_producer_ids_strict.rs" 87 16 87 86
-let%span srestore_producer_ids_strict'1 = "/workspace/crates/verified/src/restore_sidecar/restore_producer_ids_strict.rs" 89 20 89 24
-let%span srestore_producer_ids_strict'2 = "/workspace/crates/verified/src/restore_sidecar/restore_producer_ids_strict.rs" 84 4 90 9
-let%span srestore_producer_ids_strict'3 = "/workspace/crates/verified/src/restore_sidecar/restore_producer_ids_strict.rs" 71 10 76 6
+let%span sconvert = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/convert.rs" 274 26 274 51
+let%span srestore_producer_ids_strict = "/workspace/crates/verified/src/restore_sidecar/restore_producer_ids_strict.rs" 85 4 85 30
+let%span srestore_producer_ids_strict'0 = "/workspace/crates/verified/src/restore_sidecar/restore_producer_ids_strict.rs" 88 16 88 86
+let%span srestore_producer_ids_strict'1 = "/workspace/crates/verified/src/restore_sidecar/restore_producer_ids_strict.rs" 90 20 90 24
+let%span srestore_producer_ids_strict'2 = "/workspace/crates/verified/src/restore_sidecar/restore_producer_ids_strict.rs" 85 4 91 9
+let%span srestore_producer_ids_strict'3 = "/workspace/crates/verified/src/restore_sidecar/restore_producer_ids_strict.rs" 72 10 77 6
 
 use creusot.int.UInt32
 use creusot.int.Int64
@@ -33,7 +33,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let restore_time_index_entry_valid [#"/workspace/crates/verified/src/restore_sidecar/restore_producer_ids_strict.rs" 78 0 83 9]
+let restore_time_index_entry_valid [#"/workspace/crates/verified/src/restore_sidecar/restore_producer_ids_strict.rs" 79 0 84 9]
   (previous: t_Option_tup2_i64_u32) (timestamp: Int64.t) (relative_offset: UInt32.t) (max_relative: Int64.t)
   (return (x: bool)) = (! bb0
   [ bb0 = s0

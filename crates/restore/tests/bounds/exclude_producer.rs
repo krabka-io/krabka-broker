@@ -36,11 +36,6 @@ async fn exclude_producer_id_drops_only_that_producers_batch() {
     let (_target, target_dir) =
         run_restore(archive.path(), &["--exclude-producer-id", "101"]).await;
 
-    let log = reopen(&target_dir, "orders", 0);
-    check!(log.log_end_offset() == Offset(3));
-    let read = log
-        .read(Offset(0), LogConfig::default().segment_size)
-        .expect("read back");
     let expected = vec![
         RecordBatch {
             records: Vec::new(),
@@ -48,7 +43,7 @@ async fn exclude_producer_id_drops_only_that_producers_batch() {
         },
         fixture[1].clone(),
     ];
-    check!(read.batches == expected);
+    crate::harness::check_batches(&target_dir, 3, &expected);
 }
 
 // ---------------------------------------------------------------------

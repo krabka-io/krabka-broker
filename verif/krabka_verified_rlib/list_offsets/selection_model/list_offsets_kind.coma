@@ -1,12 +1,12 @@
-(* #"/workspace/crates/verified/src/list_offsets/selection_model.rs" 25 0 25 79 *)
+(* #"/workspace/crates/verified/src/list_offsets/selection_model.rs" 26 0 26 79 *)
 
-let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
-let%span sselection_model = "/workspace/crates/verified/src/list_offsets/selection_model.rs" 32 25 32 27
-let%span sselection_model'0 = "/workspace/crates/verified/src/list_offsets/selection_model.rs" 31 25 31 26
-let%span sselection_model'1 = "/workspace/crates/verified/src/list_offsets/selection_model.rs" 30 25 30 26
-let%span sselection_model'2 = "/workspace/crates/verified/src/list_offsets/selection_model.rs" 29 25 29 26
-let%span sselection_model'3 = "/workspace/crates/verified/src/list_offsets/selection_model.rs" 33 26 33 27
-let%span sselection_model'4 = "/workspace/crates/verified/src/list_offsets/selection_model.rs" 11 10 24 1
+let%span sord = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sselection_model = "/workspace/crates/verified/src/list_offsets/selection_model.rs" 33 25 33 27
+let%span sselection_model'0 = "/workspace/crates/verified/src/list_offsets/selection_model.rs" 32 25 32 26
+let%span sselection_model'1 = "/workspace/crates/verified/src/list_offsets/selection_model.rs" 31 25 31 26
+let%span sselection_model'2 = "/workspace/crates/verified/src/list_offsets/selection_model.rs" 30 25 30 26
+let%span sselection_model'3 = "/workspace/crates/verified/src/list_offsets/selection_model.rs" 34 26 34 27
+let%span sselection_model'4 = "/workspace/crates/verified/src/list_offsets/selection_model.rs" 12 10 25 1
 
 use creusot.int.Int64
 use creusot.int.Int16
@@ -31,7 +31,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let list_offsets_kind [#"/workspace/crates/verified/src/list_offsets/selection_model.rs" 25 0 25 79]
+let list_offsets_kind [#"/workspace/crates/verified/src/list_offsets/selection_model.rs" 26 0 26 79]
   (timestamp: Int64.t) (version: Int16.t) (return (x: t_ListOffsetsKind)) = (! bb0
   [ bb0 = any
     [ br0 -> {timestamp = (-2: Int64.t)} (! bb15)

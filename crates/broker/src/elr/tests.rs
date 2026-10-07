@@ -15,11 +15,7 @@ use krabka_metadata::{
     TopicConfigRecord, TopicRecord,
 };
 use krabka_protocol::owned::{
-    alter_partition_request::{
-        AlterPartitionRequest, PartitionData as ReqPartitionData, TopicData as ReqTopicData,
-    },
     broker_registration_request::{BrokerRegistrationRequest, Feature, Listener},
-    broker_registration_response::BrokerRegistrationResponse,
     describe_topic_partitions_request::{DescribeTopicPartitionsRequest, TopicRequest},
     describe_topic_partitions_response::DescribeTopicPartitionsResponsePartition,
 };
@@ -174,38 +170,17 @@ async fn activate_followers(broker: &Broker) {
 /// Propose `new_isr` for partition 0 through the real `AlterPartition`
 /// handler, and assert the controller accepted it.
 async fn alter_isr(broker: &Arc<Broker>, new_isr: &[i32]) {
-    let principal = principal("replica");
-    let peer = peer();
-    let ctx = request_context(&principal, &peer, "broker-client");
-    // The controller checks the sender's broker epoch and the row's
-    // partition epoch, as Kafka's `ReplicationControlManager` does.
-    let image = broker.controller.current_image();
-    let request = AlterPartitionRequest {
-        broker_id: 1,
-        broker_epoch: image.broker_epoch(krabka_metadata::NodeId(1)).unwrap_or(-1),
-        topics: vec![ReqTopicData {
-            topic_id: krabka_protocol::primitives::uuid::Uuid(TOPIC_ID_BYTES),
-            partitions: vec![ReqPartitionData {
-                partition_index: 0,
-                leader_epoch: LEADER_EPOCH,
-                // The controller refuses a stale partition epoch with
-                // INVALID_UPDATE_VERSION, as Kafka does.
-                partition_epoch: broker
-                    .controller
-                    .current_image()
-                    .partition(TOPIC, 0)
-                    .expect("partition")
-                    .partition_epoch,
-                new_isr: new_isr.to_vec(),
-                ..Default::default()
-            }],
-            ..Default::default()
-        }],
-        ..Default::default()
-    };
-    let response = crate::handlers::alter_partition::handle(broker, request, ALTER_VERSION, &ctx)
-        .await
-        .expect("AlterPartition");
+    let response = crate::test_support::propose_isr(
+        broker,
+        TOPIC,
+        (
+            krabka_protocol::primitives::uuid::Uuid(TOPIC_ID_BYTES),
+            LEADER_EPOCH,
+            ALTER_VERSION,
+        ),
+        new_isr,
+    )
+    .await;
 
     assert!(response.error_code == codes::NONE);
     assert!(
@@ -253,6 +228,14 @@ fn expected_row(isr: &[i32], eligible: &[i32]) -> DescribeTopicPartitionsRespons
     row(isr, eligible, &[], &[])
 }
 
+/// Expected row while both followers remain unavailable to the client listener.
+fn offline_followers_row(
+    isr: &[i32],
+    eligible: &[i32],
+) -> DescribeTopicPartitionsResponsePartition {
+    row(isr, eligible, &[], &[2, 3])
+}
+
 /// [`expected_row`] with the last-known ELR and the offline set given too.
 /// The registration tests need the offline set: they register broker 3, which
 /// takes it out of it.
@@ -277,12 +260,12 @@ fn row(
 }
 
 /// Register broker 3 under `incarnation` through the real
-/// `BrokerRegistration` handler, and answer with what it replied.
+/// `BrokerRegistration` handler, and check that it accepts the incarnation.
 ///
 /// The features are read back off the image so the request satisfies whatever
 /// the cluster has finalized, which is what a real broker's
 /// `SupportedFeatures` does.
-async fn register_broker_3(broker: &Arc<Broker>, incarnation: u128) -> BrokerRegistrationResponse {
+async fn register_broker_3(broker: &Arc<Broker>, incarnation: u128) {
     let image = broker.controller.current_image();
     let features = image
         .finalized_features()
@@ -316,9 +299,11 @@ async fn register_broker_3(broker: &Arc<Broker>, incarnation: u128) -> BrokerReg
     let principal = principal("replica");
     let peer = peer();
     let ctx = request_context(&principal, &peer, "broker-client");
-    crate::handlers::broker_registration::handle(broker, request, REGISTER_VERSION, &ctx)
-        .await
-        .expect("BrokerRegistration")
+    let response =
+        crate::handlers::broker_registration::handle(broker, request, REGISTER_VERSION, &ctx)
+            .await
+            .expect("BrokerRegistration");
+    assert!(response.error_code == codes::NONE, "{response:?}");
 }
 
 /// The issue's acceptance path: shrink the ISR below `min.insync.replicas`
@@ -372,6 +357,24 @@ async fn an_isr_that_stays_at_min_insync_replicas_reports_no_elr() {
     handle.shutdown().await;
 }
 
+async fn seed_returning_broker(
+    min_isr: &str,
+) -> (crate::BrokerHandle, Arc<Broker>, tempfile::TempDir) {
+    let (handle, dir) =
+        start_broker_with_authorizer(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
+    let broker = handle.broker_arc_for_test();
+    crate::test_support::wait_for_controller_leader(&broker).await;
+    let mut seed = seed_records_with_min_isr(min_isr);
+    seed.push(registration_record(1));
+    broker
+        .controller
+        .submit_change(seed)
+        .await
+        .expect("seed orders");
+    mark_broker_3_unavailable(&broker).await;
+    (handle, broker, dir)
+}
+
 /// krabka-io/krabka-broker#314: a broker that comes back under a new
 /// incarnation must not be re-derived into the ELR from the ISR the image
 /// still holds it in.
@@ -388,36 +391,24 @@ async fn an_isr_that_stays_at_min_insync_replicas_reports_no_elr() {
 /// is the whole point of KIP-966.
 #[tokio::test]
 async fn a_returning_broker_is_not_re_derived_into_the_elr_from_a_stale_isr() {
-    let (handle, _dir) =
-        start_broker_with_authorizer(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
-    let broker = handle.broker_arc_for_test();
-    crate::test_support::wait_for_controller_leader(&broker).await;
-    let mut seed = seed_records();
-    seed.push(registration_record(1));
-    broker
-        .controller
-        .submit_change(seed)
-        .await
-        .expect("seed orders");
-    mark_broker_3_unavailable(&broker).await;
+    let (handle, broker, _dir) = seed_returning_broker("2").await;
 
     // Broker 3 is registered and in a healthy ISR, so nothing is published
     // about it. It is explicitly fenced so the returning incarnation is
     // deterministic even when coverage instrumentation delays this test.
-    assert!(describe_partition(&broker).await == row(&[1, 2, 3], &[], &[], &[2, 3]));
+    assert!(describe_partition(&broker).await == offline_followers_row(&[1, 2, 3], &[]));
 
-    let response = register_broker_3(&broker, 2).await;
-    assert!(response.error_code == codes::NONE, "{response:?}");
+    register_broker_3(&broker, 2).await;
 
     // The registration itself takes broker 3 out of the ISR. The ISR that is
     // left still meets `min.insync.replicas`, so nothing is eligible yet.
-    assert!(describe_partition(&broker).await == row(&[1, 2], &[], &[], &[2, 3]));
+    assert!(describe_partition(&broker).await == offline_followers_row(&[1, 2], &[]));
 
     // The change that used to re-derive the membership. Broker 2 left an ISR
     // that met min ISR, so it is eligible; broker 3 is no longer in any ISR
     // the derivation reads, so it is not.
     alter_isr(&broker, &[1]).await;
-    assert!(describe_partition(&broker).await == row(&[1], &[2], &[], &[2, 3]));
+    assert!(describe_partition(&broker).await == offline_followers_row(&[1], &[2]));
 
     handle.shutdown().await;
 }
@@ -437,28 +428,16 @@ async fn a_returning_broker_is_not_re_derived_into_the_elr_from_a_stale_isr() {
 /// process actually has.
 #[tokio::test]
 async fn the_registration_batch_cannot_publish_the_broker_it_is_withdrawing() {
-    let (handle, _dir) =
-        start_broker_with_authorizer(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
-    let broker = handle.broker_arc_for_test();
-    crate::test_support::wait_for_controller_leader(&broker).await;
-    let mut seed = seed_records_with_min_isr("3");
-    seed.push(registration_record(1));
-    broker
-        .controller
-        .submit_change(seed)
-        .await
-        .expect("seed orders");
-    mark_broker_3_unavailable(&broker).await;
+    let (handle, broker, _dir) = seed_returning_broker("3").await;
 
-    let response = register_broker_3(&broker, 2).await;
-    assert!(response.error_code == codes::NONE, "{response:?}");
+    register_broker_3(&broker, 2).await;
 
-    assert!(describe_partition(&broker).await == row(&[1, 2], &[], &[], &[2, 3]));
+    assert!(describe_partition(&broker).await == offline_followers_row(&[1, 2], &[]));
 
     // And it stays out of every later derivation, while broker 2 -- which
     // left the ISR without its log being called into question -- goes in.
     alter_isr(&broker, &[1]).await;
-    assert!(describe_partition(&broker).await == row(&[1], &[2], &[], &[2, 3]));
+    assert!(describe_partition(&broker).await == offline_followers_row(&[1], &[2]));
 
     handle.shutdown().await;
 }

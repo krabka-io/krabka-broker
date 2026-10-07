@@ -1077,6 +1077,35 @@ mod tests {
     /// partition. The record here is superseded by a later write, and Kafka
     /// refuses it all the same, because the offset map reads it before it knows
     /// that. The refused pass leaves the log as it found it.
+    fn append_compressed_versions(log: &mut Log, codec: krabka_compression::CompressionType) {
+        let large = [b'x'; 1_000];
+        for (key, value) in [
+            (b"k1".as_slice(), large.as_slice()),
+            (b"k1", b"new"),
+            (b"tail", b"t"),
+        ] {
+            let mut batch = keyed_batch(0, &[(0, key, value)]);
+            batch.attributes = batch.attributes.with_compression(codec);
+            log.append(&mut batch).unwrap();
+        }
+    }
+
+    fn append_versions(log: &mut Log) {
+        for i in 0..3 {
+            let value = format!("v{i}");
+            log.append(&mut keyed_batch(0, &[(0, b"k1", value.as_bytes())]))
+                .unwrap();
+        }
+    }
+
+    fn append_distinct_keys(log: &mut Log) {
+        for i in 0..6 {
+            let key = format!("k{i}");
+            log.append(&mut keyed_batch(i, &[(0, key.as_bytes(), b"v")]))
+                .unwrap();
+        }
+    }
+
     #[test]
     fn compact_refuses_a_compressed_record_above_the_limit_and_leaves_the_log_alone() {
         use krabka_compression::CompressionType;
@@ -1103,16 +1132,7 @@ mod tests {
                 ..tiny_segments()
             };
             let mut log = Log::open(dir.path(), cfg).unwrap();
-            let large = [b'x'; 1_000];
-            for (key, value) in [
-                (b"k1".as_slice(), large.as_slice()),
-                (b"k1", b"new"),
-                (b"tail", b"t"),
-            ] {
-                let mut batch = keyed_batch(0, &[(0, key, value)]);
-                batch.attributes = batch.attributes.with_compression(codec);
-                log.append(&mut batch).unwrap();
-            }
+            append_compressed_versions(&mut log, codec);
             let files = |log: &Log| -> Vec<(i64, Vec<u8>)> {
                 log.segments
                     .iter()
@@ -1172,16 +1192,7 @@ mod tests {
                 ..tiny_segments()
             };
             let mut log = Log::open(dir.path(), cfg).unwrap();
-            let large = [b'x'; 1_000];
-            for (key, value) in [
-                (b"k1".as_slice(), large.as_slice()),
-                (b"k1", b"new"),
-                (b"tail", b"t"),
-            ] {
-                let mut batch = keyed_batch(0, &[(0, key, value)]);
-                batch.attributes = batch.attributes.with_compression(CompressionType::Gzip);
-                log.append(&mut batch).unwrap();
-            }
+            append_compressed_versions(&mut log, CompressionType::Gzip);
             // Every batch is stamped 0, long past, so the walk reads them all.
             log.advance_delivery_watermark(1_000_000);
             assert2::assert!(log.delivery_watermark() == log.log_end_offset(), "{name}");
@@ -1224,13 +1235,7 @@ mod tests {
         let mut log = Log::open(dir.path(), cfg).unwrap();
 
         // Write 3 sealed segments, each with one record under "k1".
-        for i in 0..3 {
-            let v = format!("v{i}");
-            let mut b = keyed_batch(0, &[(0, b"k1", v.as_bytes())]);
-            log.append(&mut b).unwrap();
-            // Roll the active segment by forcing a tick or a large pad batch.
-            // Easiest: call set_segment_size or rely on the small segment_size.
-        }
+        append_versions(&mut log);
         // Add one more append to ensure the last write is in a fresh active
         // segment (not part of what compaction touches).
         let mut b = keyed_batch(0, &[(0, b"active-key", b"active-value")]);
@@ -1268,11 +1273,7 @@ mod tests {
         let mut log = Log::open(dir.path(), cfg).unwrap();
 
         // Three sealed segments, each one record under "k1" (v0, v1, v2).
-        for i in 0..3 {
-            let v = format!("v{i}");
-            let mut b = keyed_batch(0, &[(0, b"k1", v.as_bytes())]);
-            log.append(&mut b).unwrap();
-        }
+        append_versions(&mut log);
         // A final append lands in a fresh active segment (untouched by compact).
         let mut tail = keyed_batch(0, &[(0, b"tail", b"t")]);
         log.append(&mut tail).unwrap();
@@ -1313,11 +1314,7 @@ mod tests {
             ..Default::default()
         };
         let mut log = Log::open(dir.path(), cfg).unwrap();
-        for i in 0..3 {
-            let v = format!("v{i}");
-            let mut b = keyed_batch(0, &[(0, b"k1", v.as_bytes())]);
-            log.append(&mut b).unwrap();
-        }
+        append_versions(&mut log);
         let mut b = keyed_batch(0, &[(0, b"active", b"x")]);
         log.append(&mut b).unwrap();
         log.compact(&compaction_ctx()).unwrap();
@@ -1347,11 +1344,7 @@ mod tests {
         let mut log = Log::open(dir.path(), cfg).unwrap();
         // Six distinct keys: nothing is superseded, so the pass only
         // regroups records into size-bounded outputs, it never shrinks them.
-        for i in 0..6 {
-            let key = format!("k{i}");
-            let mut batch = keyed_batch(i, &[(0, key.as_bytes(), b"v")]);
-            log.append(&mut batch).unwrap();
-        }
+        append_distinct_keys(&mut log);
         // Five sealed segments (one record each) and the active sixth.
         assert2::assert!(log.segments.len() == 5);
 
@@ -1412,11 +1405,7 @@ mod tests {
             ..tiny_segments()
         };
         let mut log = Log::open(dir.path(), cfg).unwrap();
-        for i in 0..6 {
-            let key = format!("k{i}");
-            let mut batch = keyed_batch(i, &[(0, key.as_bytes(), b"v")]);
-            log.append(&mut batch).unwrap();
-        }
+        append_distinct_keys(&mut log);
         let original_bases: Vec<i64> = log.segments.iter().map(|s| s.base_offset().0).collect();
         assert2::assert!(original_bases.len() == 5);
 

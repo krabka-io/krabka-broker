@@ -5,6 +5,8 @@
 //! body. The zero-copy descriptor form of the same walk is the sibling
 //! `read_raw_desc` module.
 
+use std::ops::Range;
+
 use bytes::Bytes;
 use krabka_ids::Offset;
 use krabka_protocol::records::{HEADER_LEN, RecordBatchHeader};
@@ -14,6 +16,73 @@ use zerocopy::FromBytes;
 
 use super::{RawSegmentRead, Segment};
 use crate::{config::DEFAULT_READ_BUFFER_CAP, error::LogError};
+
+/// Header fields used to choose a verbatim range without decoding records.
+pub(super) struct RawBatch {
+    start_offset: Offset,
+    last_offset: Offset,
+    len: usize,
+}
+
+impl RawBatch {
+    pub(super) fn decode(bytes: &[u8]) -> Result<Self, LogError> {
+        let header = RecordBatchHeader::ref_from_bytes(bytes)
+            .map_err(|_| LogError::Corrupt("record batch header".into()))?;
+        let base = header.base_offset.get();
+        Ok(Self {
+            start_offset: Offset(base),
+            last_offset: Offset(base + i64::from(header.last_offset_delta.get())),
+            len: 12 + usize::try_from(header.batch_length.get().max(0)).unwrap_or(0),
+        })
+    }
+}
+
+/// A selected byte range relative to the first read position.
+pub(super) struct RawRange {
+    pub(super) positions: Range<usize>,
+    pub(super) start_offset: Offset,
+    pub(super) last_offset: Offset,
+}
+
+/// Select the same complete batches for buffered and file-region fetches.
+///
+/// Only the first eligible batch may extend past the initial window. The
+/// caller checks that this anti-stall batch is complete in its source.
+pub(super) fn select_raw_range(
+    fetch_offset: Offset,
+    limit_offset: Offset,
+    max_bytes: usize,
+    window: usize,
+    mut read_header: impl FnMut(usize) -> Result<Option<RawBatch>, LogError>,
+) -> Result<Option<RawRange>, LogError> {
+    let mut pos = 0;
+    let mut range: Option<RawRange> = None;
+    while pos + HEADER_LEN <= window {
+        let Some(batch) = read_header(pos)? else {
+            break;
+        };
+        let end = pos + batch.len;
+        if batch.last_offset < fetch_offset {
+            pos = end;
+            continue;
+        }
+        if batch.start_offset >= limit_offset || (end > window && range.is_some()) {
+            break;
+        }
+        let selected = range.get_or_insert(RawRange {
+            positions: pos..end,
+            start_offset: batch.start_offset,
+            last_offset: batch.last_offset,
+        });
+        selected.positions.end = end;
+        selected.last_offset = batch.last_offset;
+        pos = end;
+        if end > window || selected.positions.len() >= max_bytes {
+            break;
+        }
+    }
+    Ok(range)
+}
 
 impl Segment {
     /// Read a contiguous run of **complete, verbatim** record-batch bytes.
@@ -68,72 +137,30 @@ impl Segment {
         let mut buf: Vec<u8> = Vec::with_capacity(first_read.min(read_buffer_cap.bytes_usize()));
         self.read_log_range(start_pos, &mut buf, first_read)?;
 
-        let mut pos = 0usize;
-        let mut range_start: Option<usize> = None;
-        let mut range_end = 0usize;
-        let mut start_offset = fetch_offset;
-        let mut last_offset = fetch_offset - 1;
-
-        loop {
-            if pos + HEADER_LEN > buf.len() {
-                break;
+        let Some(range) =
+            select_raw_range(fetch_offset, limit_offset, max_bytes, buf.len(), |pos| {
+                RawBatch::decode(&buf[pos..pos + HEADER_LEN]).map(Some)
+            })?
+        else {
+            return Ok(RawSegmentRead::empty());
+        };
+        let bytes = if range.positions.end > buf.len() {
+            let len = range.positions.len();
+            let mut one = Vec::with_capacity(len);
+            self.read_log_range(start_pos + range.positions.start as u64, &mut one, len)?;
+            if one.len() < len {
+                return Ok(RawSegmentRead::empty());
             }
-            let hdr = RecordBatchHeader::ref_from_bytes(&buf[pos..pos + HEADER_LEN])
-                .map_err(|_| LogError::Corrupt("record batch header".into()))?;
-            // Wire values from the fixed v2 header stay raw `i64`.
-            let base = hdr.base_offset.get();
-            let batch_len = usize::try_from(hdr.batch_length.get().max(0)).unwrap_or(0);
-            let total = 12 + batch_len;
-            let batch_last = base + i64::from(hdr.last_offset_delta.get());
-
-            if batch_last < fetch_offset {
-                pos += total;
-                continue;
-            }
-            if base >= limit_offset {
-                break;
-            }
-            if pos + total > buf.len() {
-                if range_start.is_none() {
-                    let mut one: Vec<u8> = Vec::with_capacity(total);
-                    self.read_log_range(start_pos + pos as u64, &mut one, total)?;
-                    if one.len() < total {
-                        break;
-                    }
-                    return Ok(RawSegmentRead {
-                        start_offset: Offset(base),
-                        last_offset: Offset(batch_last),
-                        bytes: Bytes::from(one),
-                    });
-                }
-                break;
-            }
-
-            if range_start.is_none() {
-                range_start = Some(pos);
-                start_offset = Offset(base);
-            }
-            range_end = pos + total;
-            last_offset = Offset(batch_last);
-            pos += total;
-
-            if range_end - range_start.expect("set above") >= max_bytes {
-                break;
-            }
-        }
-
-        match range_start {
-            Some(s) => {
-                let bytes = Bytes::from(buf).slice(s..range_end);
-                tracing::Span::current().record("bytes", bytes.len());
-                Ok(RawSegmentRead {
-                    start_offset,
-                    last_offset,
-                    bytes,
-                })
-            }
-            None => Ok(RawSegmentRead::empty()),
-        }
+            Bytes::from(one)
+        } else {
+            Bytes::from(buf).slice(range.positions)
+        };
+        tracing::Span::current().record("bytes", bytes.len());
+        Ok(RawSegmentRead {
+            start_offset: range.start_offset,
+            last_offset: range.last_offset,
+            bytes,
+        })
     }
 }
 
@@ -282,11 +309,7 @@ mod tests {
     // becomes 105.
     #[test]
     fn read_raw_uses_relative_offset_for_index_lookup() {
-        let dir = tempdir().unwrap();
-        let mut seg = Segment::create(dir.path(), Offset(100)).unwrap();
-        seg.append(&sample_batch(100, 3, 100), DENSE_INDEX).unwrap(); // offsets 100..=102
-        seg.append(&sample_batch(103, 2, 200), DENSE_INDEX).unwrap(); // offsets 103..=104
-        seg.append(&sample_batch(105, 1, 300), DENSE_INDEX).unwrap(); // offset 105
+        let (_dir, seg) = super::super::test_support::indexed_segment();
 
         let r = seg.read_raw(Offset(103), Offset(1000), NO_LIMIT).unwrap();
         assert2::assert!(!r.is_empty());

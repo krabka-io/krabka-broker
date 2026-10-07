@@ -6,10 +6,7 @@
 //! a `RemoteLogManager` needs, rolls when that manager tells it to roll, and
 //! deletes what that manager tells it to delete.
 
-use std::{
-    collections::HashSet,
-    path::{Path, PathBuf},
-};
+use std::path::{Path, PathBuf};
 
 use krabka_ids::{LeaderEpoch, Offset};
 use krabka_units::prelude::{ByteSize, ByteSizeExt as _};
@@ -116,6 +113,23 @@ fn last_modified_ms(path: &Path) -> i64 {
 }
 
 impl Log {
+    /// Pair each sealed segment with the exclusive end supplied by its successor.
+    pub(super) fn sealed_segments_with_next_base(
+        &self,
+    ) -> impl Iterator<Item = (&Segment, Offset)> {
+        let active_base = self
+            .active
+            .as_ref()
+            .map_or_else(|| self.log_end_offset(), Segment::base_offset);
+        self.segments.iter().zip(
+            self.segments
+                .iter()
+                .skip(1)
+                .map(Segment::base_offset)
+                .chain(std::iter::once(active_base)),
+        )
+    }
+
     /// Kafka's `LogSegment.largestTimestamp()`: the segment's highest record
     /// timestamp when one is non-negative, and otherwise its `.log` file's
     /// modification time. Retention ages a segment by this, so a segment
@@ -184,49 +198,15 @@ impl Log {
             return Ok(0);
         }
 
-        // Mirror `tierable_segments`: each sealed segment's last offset is
-        // `next.base_offset - 1`, where `next` is the next sealed segment
-        // or — for the most-recent sealed segment — the active segment.
-        let active_base = self
-            .active
-            .as_ref()
-            .map_or_else(|| self.log_end_offset(), Segment::base_offset);
-        let next_bases: Vec<Offset> = self
-            .segments
-            .iter()
-            .map(Segment::base_offset)
-            .skip(1)
-            .chain(std::iter::once(active_base))
-            .collect();
-
         let to_drop: Vec<Offset> = self
-            .segments
-            .iter()
-            .zip(next_bases.iter())
-            .filter_map(|(seg, next_base)| {
-                let last = *next_base - 1;
-                (last < target).then(|| seg.base_offset())
-            })
+            .sealed_segments_with_next_base()
+            .filter(|(_, next_base)| *next_base - 1 < target)
+            .map(|(segment, _)| segment.base_offset())
             .collect();
 
         let removed = to_drop.len();
         tracing::Span::current().record("removed", removed);
-        let drop_set: HashSet<Offset> = to_drop.iter().copied().collect();
-        self.segments
-            .retain(|s| !drop_set.contains(&s.base_offset()));
-        self.sealed_txn_indexes
-            .retain(|base, _| !drop_set.contains(base));
-        self.stamp_indexes
-            .retain(|base, _| !drop_set.contains(base));
-        for base in &to_drop {
-            let _ = retention::delete_segment_files(&*self.io, &self.dir, *base);
-            // Kafka's `deleteSegments` → `deleteProducerSnapshots` removes the
-            // snapshot at every deleted segment's base. The one at the first
-            // surviving base stays: it is the state that segment starts from,
-            // and the copy of it the remote tier holds is the one a remote
-            // read rebuilds from.
-            producer_snapshot::remove_at(&self.dir, *base)?;
-        }
+        self.remove_sealed_segments(&to_drop)?;
 
         Ok(removed)
     }
@@ -297,21 +277,7 @@ impl Log {
         // `epochs_for_range`.
         let mut epoch_entries = self.epoch_checkpoint.entries().to_vec();
         epoch_entries.sort_by_key(|e| e.start_offset);
-        let active_base = self
-            .active
-            .as_ref()
-            .map_or_else(|| self.log_end_offset(), Segment::base_offset);
-        let next_bases: Vec<Offset> = self
-            .segments
-            .iter()
-            .map(Segment::base_offset)
-            .skip(1)
-            .chain(std::iter::once(active_base))
-            .collect();
-
-        self.segments
-            .iter()
-            .zip(next_bases)
+        self.sealed_segments_with_next_base()
             // A rollover's snapshot appears only after its records and indexes
             // have flushed. Pending segments stay local until then.
             .filter(|(_, next_base)| producer_snapshot::path(&self.dir, *next_base).exists())

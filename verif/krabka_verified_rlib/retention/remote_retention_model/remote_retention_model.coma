@@ -1,9 +1,9 @@
-(* #"/workspace/crates/verified/src/retention/remote_retention_model.rs" 170 0 170 94 *)
+(* #"/workspace/crates/verified/src/retention/remote_retention_model.rs" 191 0 191 94 *)
 
-let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
-let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
-let%span swell_founded = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/well_founded.rs" 43 8 43 33
-let%span sremote_retention_model = "/workspace/crates/verified/src/retention/remote_retention_model.rs" 169 10 169 28
+let%span sord = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sord'0 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span swell_founded = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/well_founded.rs" 43 8 43 33
+let%span sremote_retention_model = "/workspace/crates/verified/src/retention/remote_retention_model.rs" 190 10 190 28
 
 use creusot.int.UInt64
 use seq.Seq
@@ -34,7 +34,7 @@ constant i : int
 
 constant debt : int
 
-function remote_retention_model [#"/workspace/crates/verified/src/retention/remote_retention_model.rs" 170 0 170 94] (segments: Seq.seq t_RemoteRetentionSegment) (i: int) (debt: int) : int
+function remote_retention_model [#"/workspace/crates/verified/src/retention/remote_retention_model.rs" 191 0 191 94] (segments: Seq.seq t_RemoteRetentionSegment) (i: int) (debt: int) : int
 
 goal vc_remote_retention_model: if ge_log_Int i (Seq.length segments) then
     true

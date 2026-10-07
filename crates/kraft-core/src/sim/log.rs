@@ -35,16 +35,11 @@ impl LogView for SimLog {
 
 impl SimLog {
     pub(super) fn append_in_epoch(&mut self, epoch: Epoch, count: usize) {
-        for _ in 0..count {
-            self.epochs.push(epoch);
-        }
+        crate::simulation_support::append_epochs(&mut self.epochs, epoch, count);
     }
 
     pub(super) fn truncate_to(&mut self, offset: i64) {
-        let offset = usize::try_from(offset.max(0)).unwrap_or(usize::MAX);
-        if offset < self.epochs.len() {
-            self.epochs.truncate(offset);
-        }
+        crate::simulation_support::truncate_epochs(&mut self.epochs, offset);
     }
 
     pub(super) fn replicate_from(&mut self, leader: &Self) {

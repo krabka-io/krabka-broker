@@ -5,21 +5,31 @@ use super::{election_has_quorum, select_wal_voters, wal_voter_set_valid};
 type InstalledPlacement = (Vec<(u64, u64)>, Vec<u64>, bool);
 type RackLossPlacement = (Vec<(u64, u64)>, Vec<u64>, bool, bool);
 
+/// A maximal local-first placement uses distinct nodes and racks from its input.
+// cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
+#[cfg(creusot)]
+#[cfg_attr(test, mutants::skip)]
+#[logic(open)]
+fn placement_valid(
+    candidates: Seq<(u64, u64)>,
+    selected: Seq<(u64, u64)>,
+    local: u64,
+    requested: Int,
+) -> bool {
+    pearlite! {
+        selected.len() <= requested
+            && ((selected.len() == 0) == (requested == 0 || forall<i: Int> 0 <= i && i < candidates.len() ==> candidates[i].0 != local))
+            && (selected.len() > 0 ==> selected[0].0 == local)
+            && (forall<i: Int> 0 <= i && i < selected.len() ==> exists<j: Int> 0 <= j && j < candidates.len() && selected[i] == candidates[j])
+            && (forall<i: Int, j: Int> 0 <= i && i < j && j < selected.len() ==> selected[i].0 != selected[j].0 && selected[i].1 != selected[j].1)
+            && (0 < selected.len() && selected.len() < requested ==> forall<i: Int> 0 <= i && i < candidates.len() ==> exists<j: Int> 0 <= j && j < selected.len() && (candidates[i].0 == selected[j].0 || candidates[i].1 == selected[j].1))
+    }
+}
+
 /// Return the actual placement, projected node IDs and exact installer admission.
 /// Greedy placement is maximal, not globally maximum on conflicting metadata.
 /// Faithful node/rack projection and durable membership transitions are external.
-#[ensures(result.0@.len() <= requested@)]
-#[ensures((result.0@.len() == 0) == (requested@ == 0
-    || forall<i: Int> 0 <= i && i < candidates@.len() ==> candidates@[i].0 != local_node))]
-#[ensures(result.0@.len() > 0 ==> result.0@[0].0 == local_node)]
-#[ensures(forall<i: Int> 0 <= i && i < result.0@.len()
-    ==> exists<j: Int> 0 <= j && j < candidates@.len() && result.0@[i] == candidates@[j])]
-#[ensures(forall<i: Int, j: Int> 0 <= i && i < j && j < result.0@.len()
-    ==> result.0@[i].0 != result.0@[j].0 && result.0@[i].1 != result.0@[j].1)]
-#[ensures(0 < result.0@.len() && result.0@.len() < requested@ ==>
-    forall<i: Int> 0 <= i && i < candidates@.len() ==>
-        exists<j: Int> 0 <= j && j < result.0@.len()
-            && (candidates@[i].0 == result.0@[j].0 || candidates@[i].1 == result.0@[j].1))]
+#[ensures(placement_valid(candidates@, result.0@, local_node, requested@))]
 #[ensures(result.1@.len() == result.0@.len()
     && forall<i: Int> 0 <= i && i < result.1@.len() ==> result.1@[i] == result.0@[i].0)]
 #[ensures(result.2 == (requested@ > 0 && result.0@.len() == requested@))]
@@ -52,18 +62,7 @@ pub(super) fn constructed_wal_placement_is_installable(
 /// incomplete configuration never exports an available installed quorum.
 /// Physical rack identity, communication and fsync remain host obligations.
 #[requires(requested@ >= 3)]
-#[ensures(result.0@.len() <= requested@)]
-#[ensures((result.0@.len() == 0) == (forall<i: Int>
-    0 <= i && i < candidates@.len() ==> candidates@[i].0 != local_node))]
-#[ensures(result.0@.len() > 0 ==> result.0@[0].0 == local_node)]
-#[ensures(forall<i: Int> 0 <= i && i < result.0@.len()
-    ==> exists<j: Int> 0 <= j && j < candidates@.len() && result.0@[i] == candidates@[j])]
-#[ensures(forall<i: Int, j: Int> 0 <= i && i < j && j < result.0@.len()
-    ==> result.0@[i].0 != result.0@[j].0 && result.0@[i].1 != result.0@[j].1)]
-#[ensures(0 < result.0@.len() && result.0@.len() < requested@ ==>
-    forall<i: Int> 0 <= i && i < candidates@.len() ==>
-        exists<j: Int> 0 <= j && j < result.0@.len()
-            && (candidates@[i].0 == result.0@[j].0 || candidates@[i].1 == result.0@[j].1))]
+#[ensures(placement_valid(candidates@, result.0@, local_node, requested@))]
 #[ensures(result.2 == (result.0@.len() == requested@) && result.3 == result.2)]
 #[ensures(result.0@.len() - 1 <= result.1@.len() && result.1@.len() <= result.0@.len())]
 #[ensures(forall<i: Int> 0 <= i && i < result.1@.len()
@@ -86,6 +85,9 @@ pub(super) fn wal_placement_survives_one_rack_loss(
 ) -> RackLossPlacement {
     let (selected, nodes, installed) =
         constructed_wal_placement_is_installable(candidates, local_node, requested);
+    // Losing one rack can remove at most one selected node.
+    proof_assert!(forall<i: Int, j: Int> 0 <= i && i < j && j < selected@.len()
+        ==> selected@[i].0 != selected@[j].0 && selected@[i].1 != selected@[j].1);
     let mut survivors: Vec<u64> = Vec::new();
     #[cfg(creusot)]
     let mut removed: Option<usize> = None;

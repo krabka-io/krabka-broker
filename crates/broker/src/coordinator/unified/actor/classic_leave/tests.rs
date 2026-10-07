@@ -12,7 +12,7 @@ use crate::coordinator::unified::{
         member_state::build_member,
         test_support::{
             completing_classic_group, last_classic_metadata, make_coordinator,
-            make_coordinator_with_topic_policy, rpc, seed_classic_member,
+            make_coordinator_with_topic_policy, rpc,
         },
     },
     classic_state::GroupState as ClassicGroupState,
@@ -20,33 +20,10 @@ use crate::coordinator::unified::{
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn classic_leave_last_member_persists_empty_generation() {
-    use krabka_protocol::owned::leave_group_request::MemberIdentity;
-
     let (coord, log) = make_coordinator();
-    let mut group = completing_classic_group(&["m1"]);
-    group.as_classic_mut().unwrap().state = ClassicGroupState::Stable;
-    let prior_generation = group.as_classic().unwrap().generation_id;
-    coord.seed_classic("g", Box::new(group));
-    let handle = coord.find("g").unwrap();
-    let (tx, rx) = tokio::sync::oneshot::channel();
-    handle
-        .tx
-        .send(GroupActorMessage::ClassicLeave {
-            req: LeaveGroupRequest {
-                group_id: "g".into(),
-                members: vec![MemberIdentity {
-                    member_id: "m1".into(),
-                    ..Default::default()
-                }],
-                ..Default::default()
-            },
-            version: 3,
-            reply: tx,
-        })
-        .await
-        .unwrap();
-
-    let result = rx.await.unwrap();
+    let (handle, prior_generation) =
+        crate::coordinator::unified::actor::test_support::seed_stable_classic(&coord, &["m1"]);
+    let result = rpc::classic_leave_member(&handle, "m1").await;
     check!(result.error_code == codes::NONE);
     check!(result.members[0].error_code == codes::NONE);
     let view = rpc::classic_inspect(&handle).await;
@@ -61,33 +38,13 @@ async fn classic_leave_last_member_persists_empty_generation() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn classic_leave_with_members_remaining_does_not_commit_empty_generation() {
-    use krabka_protocol::owned::leave_group_request::MemberIdentity;
-
     let (coord, log) = make_coordinator();
-    let mut group = completing_classic_group(&["m1", "m2"]);
-    group.as_classic_mut().unwrap().state = ClassicGroupState::Stable;
-    let prior_generation = group.as_classic().unwrap().generation_id;
-    coord.seed_classic("g", Box::new(group));
-    let handle = coord.find("g").unwrap();
-    let (tx, rx) = tokio::sync::oneshot::channel();
-    handle
-        .tx
-        .send(GroupActorMessage::ClassicLeave {
-            req: LeaveGroupRequest {
-                group_id: "g".into(),
-                members: vec![MemberIdentity {
-                    member_id: "m1".into(),
-                    ..Default::default()
-                }],
-                ..Default::default()
-            },
-            version: 3,
-            reply: tx,
-        })
-        .await
-        .unwrap();
-
-    let result = rx.await.unwrap();
+    let (handle, prior_generation) =
+        crate::coordinator::unified::actor::test_support::seed_stable_classic(
+            &coord,
+            &["m1", "m2"],
+        );
+    let result = rpc::classic_leave_member(&handle, "m1").await;
     check!(result.error_code == codes::NONE);
     check!(result.members[0].error_code == codes::NONE);
     let view = rpc::classic_inspect(&handle).await;
@@ -100,28 +57,20 @@ async fn classic_leave_with_members_remaining_does_not_commit_empty_generation()
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn classic_leave_legacy_append_failure_rolls_back_and_reports_error() {
     let (coord, log) = make_coordinator();
-    let mut group = completing_classic_group(&["m1"]);
-    group.as_classic_mut().unwrap().state = ClassicGroupState::Stable;
-    coord.seed_classic("g", Box::new(group));
-    let handle = coord.find("g").unwrap();
+    let (handle, _generation) =
+        crate::coordinator::unified::actor::test_support::seed_stable_classic(&coord, &["m1"]);
     log.fail_next
         .store(true, std::sync::atomic::Ordering::SeqCst);
-    let (tx, rx) = tokio::sync::oneshot::channel();
-    handle
-        .tx
-        .send(GroupActorMessage::ClassicLeave {
-            req: LeaveGroupRequest {
-                group_id: "g".into(),
-                member_id: "m1".into(),
-                ..Default::default()
-            },
-            version: 2,
-            reply: tx,
-        })
-        .await
-        .unwrap();
-
-    let result = rx.await.unwrap();
+    let result = rpc::classic_leave_request(
+        &handle,
+        LeaveGroupRequest {
+            group_id: "g".into(),
+            member_id: "m1".into(),
+            ..Default::default()
+        },
+        2,
+    )
+    .await;
     check!(result.error_code == codes::COORDINATOR_LOAD_IN_PROGRESS);
     check!(result.members.is_empty());
     let view = rpc::classic_inspect(&handle).await;
@@ -151,22 +100,14 @@ async fn classic_leave_removes_a_hosted_member_from_an_upgraded_group() {
 
     let (coord, _log) =
         make_coordinator_with_topic_policy("t", 2, ConsumerGroupMigrationPolicy::Bidirectional);
-    let handle = seed_classic_member(&coord, "m-classic", "t", None);
-    let joined = rpc::consumer_heartbeat(&handle, "", 0, Some("t")).await;
-    check!(joined.error_code == codes::NONE);
-    let native = joined.member_id.expect("native member id");
+    let (handle, native) =
+        crate::coordinator::unified::actor::test_support::seed_classic_with_native(&coord).await;
 
     let response = rpc::classic_leave(&handle, "m-classic").await;
     check!(response.len() == 1);
     check!(response[0].error_code == codes::NONE);
 
-    let (tx, rx) = tokio::sync::oneshot::channel();
-    handle
-        .tx
-        .send(GroupActorMessage::Describe { reply: tx })
-        .await
-        .unwrap();
-    let view = rx.await.unwrap();
+    let view = rpc::describe(&handle).await;
     check!(view.members.len() == 1);
     check!(view.members[0].member_id == native);
     check!(!view.members[0].is_classic);
@@ -174,8 +115,6 @@ async fn classic_leave_removes_a_hosted_member_from_an_upgraded_group() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn classic_leave_consumer_log_failure_stops_the_actor() {
-    use krabka_protocol::owned::leave_group_request::MemberIdentity;
-
     let (coord, log) = make_coordinator();
     let handle = coord.get_or_create_consumer("g");
     let joined = rpc::consumer_heartbeat(&handle, "", 0, None).await;
@@ -184,24 +123,7 @@ async fn classic_leave_consumer_log_failure_stops_the_actor() {
     log.fail_next
         .store(true, std::sync::atomic::Ordering::SeqCst);
 
-    let (tx, rx) = tokio::sync::oneshot::channel();
-    handle
-        .tx
-        .send(GroupActorMessage::ClassicLeave {
-            req: LeaveGroupRequest {
-                group_id: "g".into(),
-                members: vec![MemberIdentity {
-                    member_id: native,
-                    ..Default::default()
-                }],
-                ..Default::default()
-            },
-            version: 3,
-            reply: tx,
-        })
-        .await
-        .unwrap();
-    let result = rx.await.unwrap();
+    let result = rpc::classic_leave_member(&handle, &native).await;
     check!(result.error_code == codes::COORDINATOR_LOAD_IN_PROGRESS);
     check!(result.members.is_empty());
 

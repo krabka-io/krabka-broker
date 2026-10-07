@@ -35,7 +35,9 @@ use crate::{
     metrics::{BrokerMetrics, TopicLabel},
     remote_log_manager::{
         LocalRetentionBounds, RemoteTier, copy_eligible, local_retention_pass,
-        test_support::rolled_tiered_partition_with_config,
+        test_support::{
+            TEST_COPY_TIMEOUT, partition_snapshot, rolled_tiered_partition_with_config,
+        },
     },
 };
 
@@ -99,10 +101,7 @@ fn tiered_partition(
             ..LogConfig::default()
         },
     );
-    let (exports, config) = {
-        let log = partition.log.lock().expect("partition log mutex poisoned");
-        (log.tierable_segments(), log.config_snapshot())
-    };
+    let (exports, config) = partition_snapshot(&partition);
     assert!(exports.len() >= 2, "the fixture needs sealed segments");
     (partition, exports, config)
 }
@@ -146,13 +145,7 @@ async fn a_healthy_store_finishes_every_copy() {
     let index_cache = Arc::new(krabka_remote_storage::RemoteIndexCache::disabled());
 
     let copied = copy_eligible(
-        &faulty_tier(
-            &rsm,
-            &rlmm,
-            &metrics,
-            &index_cache,
-            crate::remote_log_manager::test_support::TEST_COPY_TIMEOUT,
-        ),
+        &faulty_tier(&rsm, &rlmm, &metrics, &index_cache, TEST_COPY_TIMEOUT),
         &tp(),
         1,
         LeaderEpoch(0),
@@ -189,13 +182,7 @@ async fn a_throttling_store_finishes_nothing_and_moves_the_error_and_lag_series(
     let rlmm: Arc<dyn RemoteLogMetadataManager> = Arc::new(InmemoryRemoteLogMetadataManager::new());
     let metrics = BrokerMetrics::new();
     let index_cache = Arc::new(krabka_remote_storage::RemoteIndexCache::disabled());
-    let tier = faulty_tier(
-        &rsm,
-        &rlmm,
-        &metrics,
-        &index_cache,
-        crate::remote_log_manager::test_support::TEST_COPY_TIMEOUT,
-    );
+    let tier = faulty_tier(&rsm, &rlmm, &metrics, &index_cache, TEST_COPY_TIMEOUT);
 
     let copied = copy_eligible(&tier, &tp(), 1, LeaderEpoch(0), exports.clone()).await;
 
@@ -342,11 +329,7 @@ async fn local_retention_keeps_segments_whose_copy_never_finished() {
     type Case = (&'static str, fn() -> Arc<FaultInjectingStore>, Time);
 
     let cases: [Case; 2] = [
-        (
-            "throttled",
-            throttling_store,
-            crate::remote_log_manager::test_support::TEST_COPY_TIMEOUT,
-        ),
+        ("throttled", throttling_store, TEST_COPY_TIMEOUT),
         ("stalled", stalling_store, SHORT_COPY_DEADLINE),
     ];
     for (case, store, copy_timeout) in cases {

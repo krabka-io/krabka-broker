@@ -485,62 +485,36 @@ mod tests {
         registry.replace_placements(
             &maplit::hashmap! {shard => placement(vec![krabka_raft::NodeId(9)], 0)},
         );
-        let body = encode_fetch_for_group(
-            QuorumGroup::diskless_wal(shard.topic_id, shard.partition),
-            krabka_raft::NodeId(9),
-            0,
-            4,
-        );
-
         let router = WalShardRouter::new(registry);
         let principal = broker_principal(9);
-        let response = router
-            .route(
-                krabka_raft::kraft::transport::api_key::FETCH,
-                body,
-                Some(&principal),
-            )
-            .await
-            .unwrap()
-            .unwrap();
-        let decoded = FetchResponse::decode(&mut response.as_ref(), 17).unwrap();
-        let partition = &decoded.responses[0].partitions[0];
-        assert2::assert!((partition.error_code) == (OFFSET_OUT_OF_RANGE));
-        assert2::assert!((partition.log_start_offset) == (5));
-        assert2::assert!((partition.last_stable_offset) == (6));
-        assert2::assert!(
-            partition
-                .records
-                .as_ref()
-                .is_some_and(|records| records.payload_len() == 0)
-        );
-
-        let body = encode_fetch_for_group(
-            QuorumGroup::diskless_wal(shard.topic_id, shard.partition),
-            krabka_raft::NodeId(9),
-            0,
-            7,
-        );
-        let response = router
-            .route(
-                krabka_raft::kraft::transport::api_key::FETCH,
-                body,
-                Some(&principal),
-            )
-            .await
-            .unwrap()
-            .unwrap();
-        let decoded = FetchResponse::decode(&mut response.as_ref(), 17).unwrap();
-        let partition = &decoded.responses[0].partitions[0];
-        assert2::assert!((partition.error_code) == (OFFSET_OUT_OF_RANGE));
-        assert2::assert!((partition.log_start_offset) == (5));
-        assert2::assert!((partition.last_stable_offset) == (6));
-        assert2::assert!(
-            partition
-                .records
-                .as_ref()
-                .is_some_and(|records| records.payload_len() == 0)
-        );
+        for fetch_offset in [4, 7] {
+            let body = encode_fetch_for_group(
+                QuorumGroup::diskless_wal(shard.topic_id, shard.partition),
+                krabka_raft::NodeId(9),
+                0,
+                fetch_offset,
+            );
+            let response = router
+                .route(
+                    krabka_raft::kraft::transport::api_key::FETCH,
+                    body,
+                    Some(&principal),
+                )
+                .await
+                .unwrap()
+                .unwrap();
+            let decoded = FetchResponse::decode(&mut response.as_ref(), 17).unwrap();
+            let partition = &decoded.responses[0].partitions[0];
+            assert2::assert!((partition.error_code) == (OFFSET_OUT_OF_RANGE));
+            assert2::assert!((partition.log_start_offset) == (5));
+            assert2::assert!((partition.last_stable_offset) == (6));
+            assert2::assert!(
+                partition
+                    .records
+                    .as_ref()
+                    .is_some_and(|records| records.payload_len() == 0)
+            );
+        }
     }
 
     #[tokio::test]

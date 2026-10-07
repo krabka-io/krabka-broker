@@ -6,16 +6,10 @@
 //! `JoinGroup`, `OffsetFetch` and `OffsetCommit` -- through the authorize
 //! preamble to a successful read.
 
-use std::{
-    io::Write,
-    process::{Command, Stdio},
-};
-
 use assert2::assert;
 
 use crate::jvm_acceptance::{
-    KAFKA_IMAGE_TXN, broker0_advertised, docker_run_kafka_tool_with_image_and_mount,
-    nc_check_connectivity, plain_jaas, start_sasl_plaintext_broker_with_super_user,
+    KAFKA_IMAGE_TXN, broker0_advertised, docker_run_kafka_tool_with_image_and_mount, plain_jaas,
     write_client_props,
 };
 
@@ -42,91 +36,35 @@ use crate::jvm_acceptance::{
 async fn jvm_authorized_produce_consume() {
     const TOPIC: &str = "foo";
     const GROUP: &str = "cg-foo";
-    const ADMIN: &str = "admin";
-    const ADMIN_PASS: &str = "admin-secret";
     const ALICE: &str = "alice";
     const ALICE_PASS: &str = "alice-secret";
 
-    let (broker, _dir) = start_sasl_plaintext_broker_with_super_user(
-        ADMIN,
-        &[(ADMIN, ADMIN_PASS), (ALICE, ALICE_PASS)],
-    )
-    .await;
-    nc_check_connectivity();
-
-    // ---- Admin step: pre-create the topic and provision alice's ACLs.
-    let admin_props = write_client_props(&format!(
-        "security.protocol=SASL_PLAINTEXT\n\
-         sasl.mechanism=PLAIN\n\
-         sasl.jaas.config={}\n",
-        plain_jaas(ADMIN, ADMIN_PASS),
-    ));
+    let (broker, _dir, admin_props) =
+        crate::jvm_acceptance::start_plain_acl_topic(TOPIC, ALICE, ALICE_PASS).await;
     let admin_mount = admin_props.mount_str();
-
-    docker_run_kafka_tool_with_image_and_mount(
-        KAFKA_IMAGE_TXN,
-        &admin_mount,
-        &[
-            "kafka-topics",
-            "--create",
-            "--if-not-exists",
-            "--topic",
-            TOPIC,
-            "--partitions",
-            "1",
-            "--replication-factor",
-            "1",
-            "--bootstrap-server",
-            broker0_advertised(),
-            "--command-config",
-            "/client.properties",
-        ],
-    );
 
     // Allow Read+Write on Topic foo for User:alice. ACL implications grant
     // Describe from Read/Write on the same topic, so no explicit Describe
     // ACL is required here.
-    docker_run_kafka_tool_with_image_and_mount(
+    crate::jvm_acceptance::add_console_acl(
         KAFKA_IMAGE_TXN,
-        &admin_mount,
-        &[
-            "kafka-acls",
-            "--bootstrap-server",
-            broker0_advertised(),
-            "--command-config",
-            "/client.properties",
-            "--add",
-            "--allow-principal",
-            "User:alice",
-            "--operation",
-            "Read",
-            "--operation",
-            "Write",
-            "--topic",
-            TOPIC,
-        ],
+        &[&admin_mount],
+        "User:alice",
+        &["Read", "Write"],
+        "--topic",
+        TOPIC,
     );
 
     // Allow Read on Group cg-foo for User:alice. ACL implications grant Describe
     // from Read on the same group resource, so no explicit Describe is
     // needed.
-    docker_run_kafka_tool_with_image_and_mount(
+    crate::jvm_acceptance::add_console_acl(
         KAFKA_IMAGE_TXN,
-        &admin_mount,
-        &[
-            "kafka-acls",
-            "--bootstrap-server",
-            broker0_advertised(),
-            "--command-config",
-            "/client.properties",
-            "--add",
-            "--allow-principal",
-            "User:alice",
-            "--operation",
-            "Read",
-            "--group",
-            GROUP,
-        ],
+        &[&admin_mount],
+        "User:alice",
+        &["Read"],
+        "--group",
+        GROUP,
     );
 
     // ---- Alice step: produce + consume over PLAIN as an ordinary user.
@@ -148,40 +86,15 @@ async fn jvm_authorized_produce_consume() {
     let alice_mount = alice_props.mount_str();
 
     // Produce 10 records via stdin.
-    let mut child = Command::new("docker")
-        .args([
-            "run",
-            "--rm",
-            "-i",
-            "-v",
-            &alice_mount,
-            "--add-host=host.docker.internal:host-gateway",
-            KAFKA_IMAGE_TXN,
-            "kafka-console-producer",
-            "--bootstrap-server",
-            broker0_advertised(),
-            "--topic",
-            TOPIC,
-            "--producer.config",
-            "/client.properties",
-        ])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("spawn producer");
-    let payload: String = (0..10)
-        .map(|i| format!("msg-{i}\n"))
-        .collect::<Vec<_>>()
-        .concat();
-    child
-        .stdin
-        .as_mut()
-        .expect("stdin")
-        .write_all(payload.as_bytes())
-        .expect("write stdin");
-    drop(child.stdin.take());
-    let producer_out = child.wait_with_output().expect("wait producer");
+
+    let payload: String = crate::jvm_acceptance::numbered_payload("msg", 10);
+    let producer_out = crate::jvm_acceptance::produce_console(
+        KAFKA_IMAGE_TXN,
+        &[&alice_mount],
+        TOPIC,
+        false,
+        payload.as_bytes(),
+    );
     assert!(
         producer_out.status.success(),
         "producer failed: stdout={} stderr={}",

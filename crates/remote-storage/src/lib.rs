@@ -145,6 +145,9 @@ mod s3;
 mod storage_manager;
 mod worm;
 
+#[cfg(test)]
+mod test_support;
+
 pub use dump::{PartitionDump, RlmmCacheDump};
 pub use error::RemoteStorageError;
 pub use index::{
@@ -185,3 +188,6 @@ pub use worm::{
     canonical_manifest_bytes, manifest_head, manifest_signing_bytes, next_chain_stamp,
     verify_archive, verify_manifest_signature,
 };
+
+#[cfg(test)]
+extern crate self as krabka_remote_storage;

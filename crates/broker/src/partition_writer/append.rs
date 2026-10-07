@@ -283,15 +283,32 @@ mod tests {
         }
     }
 
-    #[test]
-    fn grouped_produce_surfaces_nth_log_write_failure_without_advancing_leo() {
-        let dir = tempdir().expect("tempdir");
-        let mut log = Log::open(dir.path(), LogConfig::default()).expect("open log");
+    fn failing_log(path: &std::path::Path) -> Mutex<Log> {
+        let mut log = Log::open(path, LogConfig::default()).expect("open log");
         log.test_set_io(Arc::new(FailNthWrite {
             next: std::sync::atomic::AtomicUsize::new(0),
             fail_at: 2,
         }));
-        let log = Mutex::new(log);
+        Mutex::new(log)
+    }
+
+    fn assert_partial_append(
+        results: &[Result<AppendedBatch, crate::error::BrokerError>],
+        leo: Offset,
+    ) {
+        assert!(results[0].as_ref().unwrap().base_offset == Offset(0));
+        assert!(matches!(
+            &results[1],
+            Err(crate::error::BrokerError::Log(krabka_log::LogError::Io(error)))
+                if error.kind() == std::io::ErrorKind::StorageFull
+        ));
+        assert!(leo == Offset(1));
+    }
+
+    #[test]
+    fn grouped_produce_surfaces_nth_log_write_failure_without_advancing_leo() {
+        let dir = tempdir().expect("tempdir");
+        let log = failing_log(dir.path());
 
         let (results, leo, _) = append_produce_batch(
             &log,
@@ -305,25 +322,14 @@ mod tests {
             ),
         );
 
-        assert!(results[0].as_ref().unwrap().base_offset == Offset(0));
-        assert!(matches!(
-            &results[1],
-            Err(crate::error::BrokerError::Log(krabka_log::LogError::Io(error)))
-                if error.kind() == std::io::ErrorKind::StorageFull
-        ));
-        assert!(leo == Offset(1));
+        assert_partial_append(&results, leo);
         assert!(log.lock().unwrap().log_end_offset() == Offset(1));
     }
 
     #[test]
     fn diskless_group_reanchors_after_partial_append_failure() {
         let dir = tempdir().expect("tempdir");
-        let mut log = Log::open(dir.path(), LogConfig::default()).expect("open log");
-        log.test_set_io(Arc::new(FailNthWrite {
-            next: std::sync::atomic::AtomicUsize::new(0),
-            fail_at: 2,
-        }));
-        let log = Mutex::new(log);
+        let log = failing_log(dir.path());
 
         let (results, leo, _) = append_produce_batch_at(
             &log,
@@ -338,13 +344,7 @@ mod tests {
             ),
         );
 
-        assert!(results[0].as_ref().unwrap().base_offset == Offset(0));
-        assert!(matches!(
-            &results[1],
-            Err(crate::error::BrokerError::Log(krabka_log::LogError::Io(error)))
-                if error.kind() == std::io::ErrorKind::StorageFull
-        ));
-        assert!(leo == Offset(1));
+        assert_partial_append(&results, leo);
 
         let (results, leo, _) = append_produce_batch_at(
             &log,

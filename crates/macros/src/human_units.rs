@@ -8,8 +8,10 @@
 
 use moxy::{
     ast::{List, Meta, ParseError, Parser},
-    token::{Group, Span, TokenStream, TokenTree},
+    token::{Group, TokenStream, TokenTree},
 };
+
+use crate::meta::compact;
 
 /// A `krabka_units` value type that a config file writes as a human string.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -69,15 +71,6 @@ fn option_unit(ty: &str) -> Option<Unit> {
         "Ratio" => Some(Unit::Ratio),
         _ => None,
     }
-}
-
-/// `tokens` as text with every whitespace character removed.
-fn compact(tokens: &[TokenTree]) -> String {
-    TokenStream::from(tokens)
-        .to_string()
-        .chars()
-        .filter(|c| !c.is_whitespace())
-        .collect()
 }
 
 /// Splits a brace-delimited field list at its top-level commas. A comma
@@ -146,7 +139,7 @@ fn annotate(field: &[TokenTree]) -> Result<Vec<TokenTree>, ParseError> {
     let Some(colon) = rest.iter().position(TokenTree::is_punct_colon) else {
         return Ok(field.to_vec());
     };
-    let Some(unit) = option_unit(&compact(&rest[colon + 1..])) else {
+    let Some(unit) = option_unit(&compact(&TokenStream::from(&rest[colon + 1..]))) else {
         return Ok(field.to_vec());
     };
     let args = serde_args(attrs)?;
@@ -163,11 +156,6 @@ fn annotate(field: &[TokenTree]) -> Result<Vec<TokenTree>, ParseError> {
         .collect())
 }
 
-/// The span of the first token of `tokens`, for an error about all of them.
-fn first_span(tokens: &[TokenTree]) -> Span {
-    tokens.first().map_or_else(Span::call_site, TokenTree::span)
-}
-
 /// Expands `#[human_units]` on `item`.
 pub(crate) fn expand(meta: TokenStream, item: TokenStream) -> Result<TokenStream, ParseError> {
     if let Some(argument) = meta.into_iter().next() {
@@ -176,22 +164,9 @@ pub(crate) fn expand(meta: TokenStream, item: TokenStream) -> Result<TokenStream
             "`#[human_units]` takes no arguments",
         ));
     }
-    let mut tokens = item.to_vec();
-    let span = first_span(&tokens);
-    let body = tokens
-        .iter()
-        .any(TokenTree::is_keyword_struct)
-        .then(|| {
-            tokens
-                .iter()
-                .rposition(|token| token.as_group().is_some_and(|group| group.delim.is_brace()))
-        })
-        .flatten();
-    let Some(TokenTree::Group(group)) = body.map(|index| &mut tokens[index]) else {
-        return Err(ParseError::new(
-            span,
-            "`#[human_units]` needs a struct with named fields",
-        ));
+    let (mut tokens, body) = crate::meta::named_body(item, "human_units")?;
+    let TokenTree::Group(group) = &mut tokens[body] else {
+        unreachable!()
     };
     let comma: TokenStream = ",".parse()?;
     let mut fields = Vec::new();
@@ -213,6 +188,7 @@ mod tests {
     use moxy::token::TokenStream;
 
     use super::{Unit, expand, option_unit};
+    use crate::meta::compact;
 
     #[test]
     fn option_unit_matches_the_last_segment() {
@@ -234,12 +210,7 @@ mod tests {
 
     fn expanded(item: &str) -> String {
         let item: TokenStream = item.parse().expect("item tokenizes");
-        expand(TokenStream::new(), item)
-            .expect("expands")
-            .to_string()
-            .chars()
-            .filter(|c| !c.is_whitespace())
-            .collect()
+        compact(&expand(TokenStream::new(), item).expect("expands"))
     }
 
     #[test]

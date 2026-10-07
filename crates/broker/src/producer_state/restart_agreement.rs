@@ -45,7 +45,12 @@ struct Case {
     expected: &'static [(Probe, Decision)],
 }
 
-fn data_batch(epoch: i16, base_sequence: i32, records: i32, transactional: bool) -> RecordBatch {
+pub(super) fn data_batch(
+    epoch: i16,
+    base_sequence: i32,
+    records: i32,
+    transactional: bool,
+) -> RecordBatch {
     RecordBatch {
         attributes: Attributes::default().with_transactional(transactional),
         last_offset_delta: records - 1,
@@ -63,6 +68,27 @@ fn data_batch(epoch: i16, base_sequence: i32, records: i32, transactional: bool)
             .collect(),
         ..RecordBatch::default()
     }
+}
+
+/// A live producer tracker sharing the real writer's root-level log fixture.
+pub(super) fn producer_partition() -> (
+    tempfile::TempDir,
+    Arc<ProducerState>,
+    Arc<crate::partition::Partition>,
+) {
+    let directory = tempfile::tempdir().expect("tempdir");
+    let state = Arc::new(ProducerState::new());
+    let log = Log::open(directory.path(), LogConfig::default()).expect("open log");
+    let partition = crate::broker::spawn_partition(
+        TOPIC.to_string(),
+        PARTITION,
+        directory.path().to_path_buf(),
+        log,
+        crate::log_dir_status::LogDirRegistry::default(),
+        Arc::clone(&state),
+        false,
+    );
+    (directory, state, partition)
 }
 
 /// Run the steps on a live partition, as the Produce handler and the marker
@@ -132,18 +158,7 @@ async fn decisions(state: &ProducerState, probes: &[(Probe, Decision)]) -> Vec<(
 /// Decisions from the live tracker, then from a tracker rebuilt from the
 /// reopened log.
 async fn live_and_recovered(case: &Case) -> (Vec<(Probe, Decision)>, Vec<(Probe, Decision)>) {
-    let directory = tempfile::tempdir().expect("tempdir");
-    let state = Arc::new(ProducerState::new());
-    let log = Log::open(directory.path(), LogConfig::default()).expect("open log");
-    let partition = crate::broker::spawn_partition(
-        TOPIC.to_string(),
-        PARTITION,
-        directory.path().to_path_buf(),
-        log,
-        crate::log_dir_status::LogDirRegistry::default(),
-        Arc::clone(&state),
-        false,
-    );
+    let (directory, state, partition) = producer_partition();
     run_steps(&partition, &state, case.steps).await;
     let live = decisions(&state, case.expected).await;
 

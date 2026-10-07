@@ -30,7 +30,7 @@ use krabka_protocol::owned::{
     join_group_response::JoinGroupResponse,
     share_group_heartbeat_request::{self, ShareGroupHeartbeatRequest},
     share_group_heartbeat_response::ShareGroupHeartbeatResponse,
-    streams_group_heartbeat_request::{self, StreamsGroupHeartbeatRequest, Subtopology, Topology},
+    streams_group_heartbeat_request::{self, StreamsGroupHeartbeatRequest},
     streams_group_heartbeat_response::StreamsGroupHeartbeatResponse,
     sync_group_request::{self, SyncGroupRequest, SyncGroupRequestAssignment},
     sync_group_response::SyncGroupResponse,
@@ -312,24 +312,8 @@ async fn streams_group_heartbeat_takes_32767_byte_ids_and_refuses_32768() {
         let client_id = header_client_id(long, length);
         let (group_id, member_id, instance_id) = ids(case, long, length, "member-short");
         let request = StreamsGroupHeartbeatRequest {
-            group_id: group_id.clone(),
-            member_id,
             instance_id: (long == Long::Instance).then_some(instance_id),
-            member_epoch: 0,
-            rebalance_timeout_ms: 1_000,
-            active_tasks: Some(vec![]),
-            standby_tasks: Some(vec![]),
-            warmup_tasks: Some(vec![]),
-            topology: Some(Topology {
-                epoch: 1,
-                subtopologies: vec![Subtopology {
-                    subtopology_id: "0".into(),
-                    source_topics: vec!["in".into()],
-                    ..Default::default()
-                }],
-                ..Default::default()
-            }),
-            ..Default::default()
+            ..crate::handlers::group_heartbeat_test_support::streams_request(&group_id, &member_id)
         };
 
         let result = crate::test_support::try_dispatch_context(

@@ -344,8 +344,8 @@ mod tests {
     use krabka_ids::LeaderEpoch;
     use krabka_log::Offset;
     use krabka_remote_storage::{
-        ChainHead, ChainStamp, CustomMetadata, EpochId, IndexType,
-        InmemoryRemoteLogMetadataManager, LocalTieredStorage, ManifestSeq, RemoteStorageError,
+        ChainHead, ChainStamp, CustomMetadata, EpochId, InmemoryRemoteLogMetadataManager,
+        ManifestSeq, RemoteStorageError,
     };
     use krabka_units::bytes;
 
@@ -354,7 +354,10 @@ mod tests {
         metrics::BrokerMetrics,
         remote_log_manager::{
             copy_eligible,
-            test_support::{FakeWormArchive, rolled_log, synth_export, tier, tp},
+            test_support::{
+                FakeWormArchive, TEST_COPY_TIMEOUT, local_backends, missing_remote_reads,
+                rolled_log, synth_export, tier, tp,
+            },
         },
     };
 
@@ -370,25 +373,7 @@ mod tests {
         ) -> Result<Option<CustomMetadata>, RemoteStorageError> {
             Err(RemoteStorageError::InvalidArgument("boom".into()))
         }
-        fn fetch_log_segment(
-            &self,
-            metadata: &RemoteLogSegmentMetadata,
-            _start: u32,
-            _end: Option<u32>,
-        ) -> Result<Vec<u8>, RemoteStorageError> {
-            Err(RemoteStorageError::SegmentNotFound(
-                metadata.remote_log_segment_id().clone(),
-            ))
-        }
-        fn fetch_index(
-            &self,
-            metadata: &RemoteLogSegmentMetadata,
-            _index_type: IndexType,
-        ) -> Result<Vec<u8>, RemoteStorageError> {
-            Err(RemoteStorageError::SegmentNotFound(
-                metadata.remote_log_segment_id().clone(),
-            ))
-        }
+        missing_remote_reads!();
         fn delete_log_segment_data(
             &self,
             _metadata: &RemoteLogSegmentMetadata,
@@ -408,25 +393,7 @@ mod tests {
         ) -> Result<Option<CustomMetadata>, RemoteStorageError> {
             Ok(self.0.clone())
         }
-        fn fetch_log_segment(
-            &self,
-            metadata: &RemoteLogSegmentMetadata,
-            _start: u32,
-            _end: Option<u32>,
-        ) -> Result<Vec<u8>, RemoteStorageError> {
-            Err(RemoteStorageError::SegmentNotFound(
-                metadata.remote_log_segment_id().clone(),
-            ))
-        }
-        fn fetch_index(
-            &self,
-            metadata: &RemoteLogSegmentMetadata,
-            _index_type: IndexType,
-        ) -> Result<Vec<u8>, RemoteStorageError> {
-            Err(RemoteStorageError::SegmentNotFound(
-                metadata.remote_log_segment_id().clone(),
-            ))
-        }
+        missing_remote_reads!();
         fn delete_log_segment_data(
             &self,
             _metadata: &RemoteLogSegmentMetadata,
@@ -455,25 +422,7 @@ mod tests {
                 .push(metadata.clone());
             Err(RemoteStorageError::InvalidArgument("captured".into()))
         }
-        fn fetch_log_segment(
-            &self,
-            metadata: &RemoteLogSegmentMetadata,
-            _start: u32,
-            _end: Option<u32>,
-        ) -> Result<Vec<u8>, RemoteStorageError> {
-            Err(RemoteStorageError::SegmentNotFound(
-                metadata.remote_log_segment_id().clone(),
-            ))
-        }
-        fn fetch_index(
-            &self,
-            metadata: &RemoteLogSegmentMetadata,
-            _index_type: IndexType,
-        ) -> Result<Vec<u8>, RemoteStorageError> {
-            Err(RemoteStorageError::SegmentNotFound(
-                metadata.remote_log_segment_id().clone(),
-            ))
-        }
+        missing_remote_reads!();
         fn delete_log_segment_data(
             &self,
             _metadata: &RemoteLogSegmentMetadata,
@@ -514,10 +463,7 @@ mod tests {
     #[tokio::test]
     async fn fallback_leader_epoch_when_export_has_none() {
         let remote_dir = tempfile::tempdir().unwrap();
-        let rsm: Arc<dyn RemoteStorageManager> =
-            Arc::new(LocalTieredStorage::new(remote_dir.path()));
-        let rlmm: Arc<dyn RemoteLogMetadataManager> =
-            Arc::new(InmemoryRemoteLogMetadataManager::new());
+        let (rsm, rlmm) = local_backends(remote_dir.path());
 
         // Hand-build an export with no leader epochs but real files on disk.
         let src = tempfile::tempdir().unwrap();
@@ -709,7 +655,7 @@ mod tests {
                 rlmm: &rlmm,
                 metrics: &metrics,
                 index_cache: &index_cache,
-                copy_timeout: crate::remote_log_manager::test_support::TEST_COPY_TIMEOUT,
+                copy_timeout: TEST_COPY_TIMEOUT,
                 unstable_api_versions: crate::api_catalog::UnstableApiVersions::Disabled,
             };
 

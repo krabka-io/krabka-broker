@@ -1,11 +1,72 @@
 //! Fixtures shared by the WAL quorum unit tests: a synthetic record batch, and
 //! an append that reaches the source log through the real produce path.
 
-use krabka_ids::Offset;
-use krabka_protocol::records::{Record, RecordBatch};
+use std::{
+    path::Path,
+    sync::{Arc, Mutex},
+};
 
-use super::QuorumWalStore;
+use krabka_ids::{Offset, PartitionIndex};
+use krabka_kraft_core::NodeId;
+use krabka_log::{Log, LogConfig};
+use krabka_protocol::records::{Record, RecordBatch};
+use uuid::Uuid;
+
+use super::{QuorumWalStore, engine::WalShardEngine};
 use crate::error::BrokerError;
+
+pub(super) fn open_log(path: &Path) -> Arc<Mutex<Log>> {
+    Arc::new(Mutex::new(Log::open(path, LogConfig::default()).unwrap()))
+}
+
+pub(super) fn source_log(root: &Path) -> Arc<Mutex<Log>> {
+    open_log(&root.join("source"))
+}
+
+pub(super) fn local_replicas(count: usize) -> (Vec<tempfile::TempDir>, Arc<WalShardEngine>) {
+    let dirs = (0..count)
+        .map(|_| tempfile::tempdir().unwrap())
+        .collect::<Vec<_>>();
+    let logs = dirs
+        .iter()
+        .enumerate()
+        .map(|(index, dir)| {
+            (
+                NodeId(u64::try_from(index + 1).unwrap()),
+                open_log(dir.path()),
+            )
+        })
+        .collect();
+    (dirs, Arc::new(WalShardEngine::for_logs(logs)))
+}
+
+pub(super) fn partition_store(
+    root: &Path,
+    source: Arc<Mutex<Log>>,
+    count: usize,
+) -> QuorumWalStore {
+    QuorumWalStore::for_partition("topic", None, PartitionIndex(0), root, source, None, count)
+        .unwrap()
+}
+
+pub(super) fn distributed_store(
+    source: Arc<Mutex<Log>>,
+    topic_id: Uuid,
+    count: usize,
+) -> QuorumWalStore {
+    QuorumWalStore::for_distributed_partition(topic_id, PartitionIndex(0), source, None, count)
+        .unwrap()
+}
+
+pub(super) fn distributed_engine(
+    source: &Arc<Mutex<Log>>,
+    count: usize,
+    voters: &[NodeId],
+) -> WalShardEngine {
+    let engine = WalShardEngine::new_distributed(Arc::clone(source), count).unwrap();
+    engine.configure_distributed(NodeId(1), voters);
+    engine
+}
 
 pub(super) fn batch(records: i32) -> RecordBatch {
     let mut batch = RecordBatch {

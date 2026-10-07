@@ -5,7 +5,9 @@
 //! re-compress zstd-compressed batches as snappy, because v0 and v1 do not
 //! support zstd.
 
-use bytes::{Bytes, BytesMut};
+use std::borrow::Cow;
+
+use bytes::BytesMut;
 use krabka_compression::CompressionType;
 use krabka_protocol::records::{RecordBatch, RecordsPayload};
 use krabka_records_legacy::{Magic, v2_to_legacy};
@@ -37,9 +39,9 @@ pub(crate) fn down_convert_for_fetch(
     let working = if batch.attributes.compression() == CompressionType::Zstd {
         let mut clone = batch.clone();
         clone.attributes = clone.attributes.with_compression(CompressionType::Snappy);
-        clone
+        Cow::Owned(clone)
     } else {
-        batch.clone()
+        Cow::Borrowed(batch)
     };
     // Fetch v0-1 → Magic::V0 (no per-message timestamps)
     // Fetch v2-3 → Magic::V1 (KIP-32 timestamps)
@@ -66,10 +68,10 @@ pub(crate) fn down_convert_payload_for_fetch(
     payload: &RecordsPayload,
     request_version: i16,
 ) -> Result<Option<RecordsPayload>, i16> {
-    let batches: Vec<RecordBatch> = match payload {
-        RecordsPayload::V2(b) => b.clone(),
+    let batches: Cow<'_, [RecordBatch]> = match payload {
+        RecordsPayload::V2(b) => Cow::Borrowed(b),
         RecordsPayload::Raw(bytes) => match RecordsPayload::from_bytes(bytes.clone()) {
-            Ok(RecordsPayload::V2(b)) => b,
+            Ok(RecordsPayload::V2(b)) => Cow::Owned(b),
             _ => return Err(crate::codes::CORRUPT_MESSAGE),
         },
         RecordsPayload::Legacy(_) => return Ok(Some(payload.clone())),
@@ -88,32 +90,17 @@ pub(crate) fn down_convert_payload_for_fetch(
     };
 
     let mut out = BytesMut::new();
-    for batch in &batches {
+    for batch in batches.iter() {
         match down_convert_for_fetch(batch, request_version)? {
             Some(RecordsPayload::Legacy(b)) => out.extend_from_slice(&b),
-            Some(RecordsPayload::V2(_) | RecordsPayload::Raw(_)) => {
-                return Err(crate::codes::CORRUPT_MESSAGE);
-            }
-            // `down_convert_for_fetch` only ever yields Legacy/V2/Raw.
-            #[cfg(any(
-                target_os = "linux",
-                target_os = "macos",
-                target_os = "ios",
-                target_os = "tvos",
-                target_os = "watchos",
-                target_os = "freebsd",
-                target_os = "dragonfly",
-            ))]
-            Some(RecordsPayload::FileRegions(_)) => {
-                return Err(crate::codes::CORRUPT_MESSAGE);
-            }
+            Some(_) => return Err(codes::CORRUPT_MESSAGE),
             None => {}
         }
     }
     if out.is_empty() {
         Ok(None)
     } else {
-        Ok(Some(RecordsPayload::Legacy(Bytes::from(out))))
+        Ok(Some(RecordsPayload::Legacy(out.freeze())))
     }
 }
 

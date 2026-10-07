@@ -2,8 +2,6 @@
 //! [`super::replay::replay_records`] advances, and the transactional records
 //! it holds back until a commit marker arrives.
 
-use std::sync::Arc;
-
 use assert2::check;
 use krabka_protocol::records::RecordBatch;
 use tempfile::tempdir;
@@ -22,47 +20,13 @@ use crate::coordinator::persistence::OffsetCommitValue;
 /// `acc.committed`.
 #[tokio::test]
 async fn replay_records_walks_all_batches() {
-    use krabka_log::Offset;
     use krabka_protocol::records::Record;
 
-    use crate::coordinator::unified::{
-        GroupCoordinator, offsets_log::fake::InMemoryOffsetsLog, reconciler::ReconcileInput,
-    };
-
-    #[derive(Debug)]
-    struct EmptyMeta;
-    impl crate::coordinator::unified::actor::MetadataProvider for EmptyMeta {
-        fn snapshot(&self) -> ReconcileInput {
-            ReconcileInput::default()
-        }
-    }
-
-    let coord = Arc::new(GroupCoordinator::new(
-        crate::coordinator::unified::config::NextGenConfig::default(),
-        crate::coordinator::unified::share::config::ShareGroupConfig::default(),
-        Arc::new(EmptyMeta),
-        Arc::new(InMemoryOffsetsLog::default()),
-        crate::coordinator::unified::streams::config::StreamsGroupConfig::default(),
-    ));
+    let coord = super::test_support::bare_coordinator();
 
     // Build an offset-commit record with a distinct committed offset per
     // (topic, partition), so we can tell which batches were replayed.
-    let commit_record = |partition: i32, offset: i64| Record {
-        offset_delta: 0,
-        key: Some(OffsetCommitValue::encode_key("g", "t", partition).unwrap()),
-        value: Some(
-            OffsetCommitValue {
-                offset: Offset(offset),
-                leader_epoch: -1,
-                metadata: String::new(),
-                commit_timestamp_ms: 0,
-                expire_timestamp_ms: None,
-                topic_id: None,
-            }
-            .encode_value(),
-        ),
-        ..Default::default()
-    };
+    let commit_record = super::test_support::commit_record;
 
     let dir = tempdir().unwrap();
     let mut log = krabka_log::Log::open(dir.path(), krabka_log::LogConfig::default()).unwrap();
@@ -103,45 +67,12 @@ async fn replay_records_walks_all_batches() {
 #[test]
 fn replay_applies_only_committed_transactional_offsets() {
     use krabka_log::{Offset, ProducerId};
-    use krabka_protocol::records::{Attributes, Record};
+    use krabka_protocol::records::Attributes;
 
-    use crate::{
-        coordinator::unified::{
-            GroupCoordinator, offsets_log::fake::InMemoryOffsetsLog, reconciler::ReconcileInput,
-        },
-        txn::marker::{MarkerType, build_marker_batch},
-    };
+    use crate::txn::marker::{MarkerType, build_marker_batch};
 
-    #[derive(Debug)]
-    struct EmptyMeta;
-    impl crate::coordinator::unified::actor::MetadataProvider for EmptyMeta {
-        fn snapshot(&self) -> ReconcileInput {
-            ReconcileInput::default()
-        }
-    }
-
-    let coordinator = Arc::new(GroupCoordinator::new(
-        crate::coordinator::unified::config::NextGenConfig::default(),
-        crate::coordinator::unified::share::config::ShareGroupConfig::default(),
-        Arc::new(EmptyMeta),
-        Arc::new(InMemoryOffsetsLog::default()),
-        crate::coordinator::unified::streams::config::StreamsGroupConfig::default(),
-    ));
-    let record = |partition: i32, offset: i64| Record {
-        key: Some(OffsetCommitValue::encode_key("g", "t", partition).unwrap()),
-        value: Some(
-            OffsetCommitValue {
-                offset: Offset(offset),
-                leader_epoch: -1,
-                metadata: String::new(),
-                commit_timestamp_ms: 0,
-                expire_timestamp_ms: None,
-                topic_id: None,
-            }
-            .encode_value(),
-        ),
-        ..Default::default()
-    };
+    let coordinator = super::test_support::bare_coordinator();
+    let record = super::test_support::commit_record;
     let transactional = |partition: i32, offset: i64| RecordBatch {
         producer_id: 7,
         producer_epoch: 0,
@@ -316,46 +247,12 @@ async fn replay_seeds_every_open_transaction_past_the_actor_mailbox() {
 /// what `GroupMetadataManager.loadGroupsAndOffsets` does.
 #[test]
 fn replay_honours_offset_and_group_tombstones() {
-    use krabka_log::Offset;
     use krabka_protocol::records::Record;
 
-    use crate::coordinator::{
-        persistence::GroupMetadataValue,
-        unified::{
-            GroupCoordinator, offsets_log::fake::InMemoryOffsetsLog, reconciler::ReconcileInput,
-        },
-    };
+    use crate::coordinator::persistence::GroupMetadataValue;
 
-    #[derive(Debug)]
-    struct EmptyMeta;
-    impl crate::coordinator::unified::actor::MetadataProvider for EmptyMeta {
-        fn snapshot(&self) -> ReconcileInput {
-            ReconcileInput::default()
-        }
-    }
-
-    let coordinator = Arc::new(GroupCoordinator::new(
-        crate::coordinator::unified::config::NextGenConfig::default(),
-        crate::coordinator::unified::share::config::ShareGroupConfig::default(),
-        Arc::new(EmptyMeta),
-        Arc::new(InMemoryOffsetsLog::default()),
-        crate::coordinator::unified::streams::config::StreamsGroupConfig::default(),
-    ));
-    let commit = |partition: i32, offset: i64| Record {
-        key: Some(OffsetCommitValue::encode_key("g", "t", partition).unwrap()),
-        value: Some(
-            OffsetCommitValue {
-                offset: Offset(offset),
-                leader_epoch: -1,
-                metadata: String::new(),
-                commit_timestamp_ms: 0,
-                expire_timestamp_ms: None,
-                topic_id: None,
-            }
-            .encode_value(),
-        ),
-        ..Default::default()
-    };
+    let coordinator = super::test_support::bare_coordinator();
+    let commit = super::test_support::commit_record;
     let tombstone = |key: bytes::Bytes| Record {
         key: Some(key),
         value: None,
@@ -425,32 +322,12 @@ fn replay_honours_offset_and_group_tombstones() {
 /// the operator already reaped back on `ListGroups` after every restart.
 #[tokio::test]
 async fn a_fully_reaped_group_does_not_come_back_after_replay() {
-    use krabka_log::Offset;
     use krabka_protocol::records::Record;
 
     use super::replay::finalize;
-    use crate::coordinator::{
-        persistence::GroupMetadataValue,
-        unified::{
-            GroupCoordinator, offsets_log::fake::InMemoryOffsetsLog, reconciler::ReconcileInput,
-        },
-    };
+    use crate::coordinator::persistence::GroupMetadataValue;
 
-    #[derive(Debug)]
-    struct EmptyMeta;
-    impl crate::coordinator::unified::actor::MetadataProvider for EmptyMeta {
-        fn snapshot(&self) -> ReconcileInput {
-            ReconcileInput::default()
-        }
-    }
-
-    let coordinator = Arc::new(GroupCoordinator::new(
-        crate::coordinator::unified::config::NextGenConfig::default(),
-        crate::coordinator::unified::share::config::ShareGroupConfig::default(),
-        Arc::new(EmptyMeta),
-        Arc::new(InMemoryOffsetsLog::default()),
-        crate::coordinator::unified::streams::config::StreamsGroupConfig::default(),
-    ));
+    let coordinator = super::test_support::bare_coordinator();
     let tombstone = |key: bytes::Bytes| Record {
         key: Some(key),
         value: None,
@@ -460,21 +337,7 @@ async fn a_fully_reaped_group_does_not_come_back_after_replay() {
     let dir = tempdir().unwrap();
     let mut log = krabka_log::Log::open(dir.path(), krabka_log::LogConfig::default()).unwrap();
     for record in [
-        Record {
-            key: Some(OffsetCommitValue::encode_key("reaped", "t", 0).unwrap()),
-            value: Some(
-                OffsetCommitValue {
-                    offset: Offset(100),
-                    leader_epoch: -1,
-                    metadata: String::new(),
-                    commit_timestamp_ms: 0,
-                    expire_timestamp_ms: None,
-                    topic_id: None,
-                }
-                .encode_value(),
-            ),
-            ..Default::default()
-        },
+        super::test_support::commit_record_for_group("reaped", 0, 100),
         // The sweep's batch: the last offset, then the group itself.
         tombstone(OffsetCommitValue::encode_key("reaped", "t", 0).unwrap()),
         tombstone(GroupMetadataValue::encode_key("reaped").unwrap()),
@@ -503,26 +366,9 @@ async fn replay_keeps_the_committed_topic_id() {
     use krabka_log::Offset;
     use krabka_protocol::records::Record;
 
-    use crate::coordinator::unified::{
-        GroupCoordinator, classic_state::OffsetEntry, offsets_log::fake::InMemoryOffsetsLog,
-        reconciler::ReconcileInput,
-    };
+    use crate::coordinator::unified::classic_state::OffsetEntry;
 
-    #[derive(Debug)]
-    struct EmptyMeta;
-    impl crate::coordinator::unified::actor::MetadataProvider for EmptyMeta {
-        fn snapshot(&self) -> ReconcileInput {
-            ReconcileInput::default()
-        }
-    }
-
-    let coord = Arc::new(GroupCoordinator::new(
-        crate::coordinator::unified::config::NextGenConfig::default(),
-        crate::coordinator::unified::share::config::ShareGroupConfig::default(),
-        Arc::new(EmptyMeta),
-        Arc::new(InMemoryOffsetsLog::default()),
-        crate::coordinator::unified::streams::config::StreamsGroupConfig::default(),
-    ));
+    let coord = super::test_support::bare_coordinator();
     let topic_id = uuid::Uuid::from_u128(0xABCD);
     let entry = |offset: i64, expire_timestamp_ms, topic_id| OffsetEntry {
         offset: Offset(offset),

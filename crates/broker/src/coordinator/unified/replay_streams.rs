@@ -250,26 +250,14 @@ impl GroupCoordinator {
             self.group_types.remove(group_id);
             return;
         }
-        let scrub = |seed: &mut StreamsGroupSeed| match key {
-            K::GroupMetadata { .. } => unreachable!("handled above"),
-            K::MemberMetadata { member_id, .. } => {
-                seed.members.remove(member_id);
-                seed.target_per_member.remove(member_id);
-                seed.current_per_member.remove(member_id);
-            }
+        let scrub = |seed: &mut StreamsGroupSeed| {
+            super::seeds::scrub_seed_assignments!(seed, key, K, assignment_epoch;
+                K::GroupMetadata { .. } => unreachable!("handled above"),
             K::Topology { .. } => seed.topology = None,
             K::PartitionMetadata { .. } => seed.partition_metadata = None,
-            K::TargetAssignmentMetadata { .. } => {
-                seed.assignment_epoch = 0;
-                seed.target_per_member.clear();
-            }
-            K::TargetAssignmentMember { member_id, .. } => {
-                seed.target_per_member.remove(member_id);
-            }
-            K::CurrentMemberAssignment { member_id, .. } => {
-                seed.current_per_member.remove(member_id);
-            }
+            );
         };
+
         {
             if let Some(mut s) = self.streams_seeds.get_mut(group_id) {
                 scrub(s.value_mut());

@@ -111,19 +111,10 @@ pub(super) fn log_size(partition: &Partition) -> u64 {
 /// Returns the paths it blocked so a test can unblock them and watch the sweep
 /// recover.
 pub(super) fn block_segment_deletion(root: &TempDir, topic: &str) -> Vec<std::path::PathBuf> {
-    let part_dir = crate::log_dir::partition_dir(root.path(), topic, 0);
-    let mut blocked = Vec::new();
-    for entry in std::fs::read_dir(&part_dir).expect("read partition dir") {
-        let path = entry.expect("partition dir entry").path();
-        if path.extension().is_some_and(|ext| ext == "log") {
-            let tombstone = path.with_extension("log.deleted");
-            std::fs::create_dir(&tombstone).expect("block the tombstone path");
-            blocked.push(tombstone);
-        }
-    }
-    assert2::assert!(
-        !blocked.is_empty(),
-        "the fixture sealed no segment to block"
-    );
-    blocked
+    crate::test_support::block_log_artifact_paths(
+        root.path(),
+        topic,
+        "log.deleted",
+        "block the tombstone path",
+    )
 }

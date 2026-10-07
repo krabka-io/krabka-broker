@@ -4,11 +4,6 @@
 //! The group-driven console runs live in `console_groups`, so a failure here
 //! points at the produce and fetch path and not at the coordinator.
 
-use std::{
-    io::Write,
-    process::{Command, Stdio},
-};
-
 use assert2::assert;
 
 use crate::jvm_acceptance::{
@@ -32,47 +27,23 @@ async fn console_producer_round_trip() {
     nc_check_connectivity();
 
     // 1. Create the topic via the JVM client.
-    docker_run_kafka_tool(&[
-        "kafka-topics",
-        "--create",
-        "--if-not-exists",
-        "--topic",
+    crate::jvm_acceptance::create_console_topic(
+        crate::jvm_acceptance::KAFKA_IMAGE,
+        &[],
         TOPIC,
-        "--partitions",
-        "1",
-        "--replication-factor",
-        "1",
-        "--bootstrap-server",
-        broker0_advertised(),
-    ]);
+        1,
+        1,
+    );
 
     // 2. Produce 3 records via stdin.
-    let mut child = Command::new("docker")
-        .args([
-            "run",
-            "--rm",
-            "-i",
-            "--add-host=host.docker.internal:host-gateway",
-            KAFKA_IMAGE,
-            "kafka-console-producer",
-            "--bootstrap-server",
-            broker0_advertised(),
-            "--topic",
-            TOPIC,
-        ])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("spawn producer");
-    child
-        .stdin
-        .as_mut()
-        .expect("stdin")
-        .write_all(b"alpha\nbravo\ncharlie\n")
-        .expect("write stdin");
-    drop(child.stdin.take());
-    let producer_out = child.wait_with_output().expect("wait producer");
+
+    let producer_out = crate::jvm_acceptance::produce_console(
+        KAFKA_IMAGE,
+        &[],
+        TOPIC,
+        false,
+        b"alpha\nbravo\ncharlie\n",
+    );
     assert!(
         producer_out.status.success(),
         "producer failed: {}",
@@ -115,19 +86,13 @@ async fn rust_producer_to_console_consumer() {
     let (broker, _dir) = start_host_broker().await;
 
     // 1. Create the topic.
-    docker_run_kafka_tool(&[
-        "kafka-topics",
-        "--create",
-        "--if-not-exists",
-        "--topic",
+    crate::jvm_acceptance::create_console_topic(
+        crate::jvm_acceptance::KAFKA_IMAGE,
+        &[],
         TOPIC,
-        "--partitions",
-        "1",
-        "--replication-factor",
-        "1",
-        "--bootstrap-server",
-        broker0_advertised(),
-    ]);
+        1,
+        1,
+    );
 
     // 2. Build a Rust producer pointed at the host broker and produce 3 records.
     let producer = Producer::builder()
@@ -220,32 +185,8 @@ async fn console_consumer_prints_log_append_time() {
         broker0_advertised(),
     ]);
 
-    let mut child = Command::new("docker")
-        .args([
-            "run",
-            "--rm",
-            "-i",
-            "--add-host=host.docker.internal:host-gateway",
-            KAFKA_IMAGE,
-            "kafka-console-producer",
-            "--bootstrap-server",
-            broker0_advertised(),
-            "--topic",
-            TOPIC,
-        ])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("spawn producer");
-    child
-        .stdin
-        .as_mut()
-        .expect("stdin")
-        .write_all(b"stamped\n")
-        .expect("write stdin");
-    drop(child.stdin.take());
-    let producer_out = child.wait_with_output().expect("wait producer");
+    let producer_out =
+        crate::jvm_acceptance::produce_console(KAFKA_IMAGE, &[], TOPIC, false, b"stamped\n");
     assert!(
         producer_out.status.success(),
         "producer failed: {}",

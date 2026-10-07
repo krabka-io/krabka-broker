@@ -31,8 +31,6 @@ use krabka_broker::{Broker, BrokerConfig, BrokerHandle};
 use krabka_protocol::{
     Decode, Encode,
     owned::{
-        create_topics_request::{CreatableTopic, CreateTopicsRequest},
-        create_topics_response::CreateTopicsResponse,
         describe_topic_partitions_request::{DescribeTopicPartitionsRequest, TopicRequest},
         describe_topic_partitions_response::{
             DescribeTopicPartitionsResponse, DescribeTopicPartitionsResponsePartition,
@@ -108,24 +106,13 @@ async fn create_topic(addr: SocketAddr) {
 }
 
 async fn create_topic_named(addr: SocketAddr, name: &str, partitions: i32, replication: i16) {
-    const VERSION: i16 = 7;
-    let req = CreateTopicsRequest {
-        topics: vec![CreatableTopic {
-            name: name.to_string(),
-            num_partitions: partitions,
-            replication_factor: replication,
-            ..Default::default()
-        }],
-        timeout_ms: 5_000,
-        ..Default::default()
-    };
     let mut stream = TcpStream::connect(addr).await.unwrap();
-    let mut body = BytesMut::new();
-    req.encode(&mut body, VERSION).unwrap();
-    let resp_bytes = round_trip(&mut stream, 19, VERSION, &body).await.unwrap();
-    let mut cur: &[u8] = &resp_bytes;
-    let resp = CreateTopicsResponse::decode(&mut cur, VERSION).unwrap();
-    assert!(resp.topics[0].error_code == 0, "CreateTopics must succeed");
+    kafka_wire::create_topic_on(
+        &mut stream,
+        CLIENT_ID,
+        kafka_wire::topic(name, partitions, replication),
+    )
+    .await;
 }
 
 async fn metadata_partitions(addr: SocketAddr) -> Vec<MetadataResponsePartition> {

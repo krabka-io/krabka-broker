@@ -22,6 +22,7 @@ pub mod action;
 pub mod core;
 pub mod event;
 pub mod role;
+pub mod simulation_support;
 pub mod snapshot_fetch;
 pub mod types;
 

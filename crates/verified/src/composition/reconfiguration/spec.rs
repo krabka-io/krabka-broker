@@ -95,3 +95,20 @@ pub fn grant_count(
 #[ensures(forall<id: u64> has_node(nodes, count + 1, id)
     == (has_node(nodes, count, id) || nodes[count] == id))]
 pub fn prefix_node_extend(nodes: Seq<u64>, count: Int) {}
+
+// cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
+#[cfg(creusot)]
+#[cfg_attr(test, mutants::skip)]
+#[logic(open)]
+pub(super) fn single_change_shape(
+    old: Seq<u64>,
+    next: Seq<u64>,
+    kind: VoterChangeKind,
+    node: u64,
+) -> bool {
+    pearlite! {
+        old.len() - 1 <= next.len() && next.len() <= old.len() + 1
+        && (forall<id: u64> has_node(next, next.len(), id) == expected_member(old, old.len(), kind, node, id))
+        && (forall<i: Int, j: Int> 0 <= i && i < j && j < next.len() ==> next[i] != next[j])
+    }
+}

@@ -239,54 +239,20 @@ mod tests {
             partitions: i32::try_from(imbalanced + balanced).expect("partition count fits i32"),
             replication_factor: 3,
         }));
-        let mut p = 0i32;
-        // Imbalanced: leader = 2 (not preferred). ISR has all three.
-        for _ in 0..imbalanced {
+        // Imbalanced partitions precede balanced ones, preserving their indices.
+        for (partition, leader) in std::iter::repeat_n(2, imbalanced)
+            .chain(std::iter::repeat_n(1, balanced))
+            .enumerate()
+        {
             img.apply(&MetadataRecord::V1Partition(PartitionRecord {
                 topic: "foo".into(),
-                partition: p,
-                leader: krabka_audit::NodeId(2),
-                replicas: vec![
-                    krabka_audit::NodeId(1),
-                    krabka_audit::NodeId(2),
-                    krabka_audit::NodeId(3),
-                ],
-                isr: vec![
-                    krabka_audit::NodeId(1),
-                    krabka_audit::NodeId(2),
-                    krabka_audit::NodeId(3),
-                ],
+                partition: i32::try_from(partition).expect("partition count fits i32"),
+                leader: krabka_audit::NodeId(leader),
+                replicas: [1, 2, 3].map(krabka_audit::NodeId).to_vec(),
+                isr: [1, 2, 3].map(krabka_audit::NodeId).to_vec(),
                 leader_epoch: krabka_metadata::LeaderEpoch(5),
-                adding_replicas: vec![],
-                removing_replicas: vec![],
-                directories: vec![],
-                partition_epoch: 0,
+                ..Default::default()
             }));
-            p += 1;
-        }
-        // Balanced: leader = 1 (preferred).
-        for _ in 0..balanced {
-            img.apply(&MetadataRecord::V1Partition(PartitionRecord {
-                topic: "foo".into(),
-                partition: p,
-                leader: krabka_audit::NodeId(1),
-                replicas: vec![
-                    krabka_audit::NodeId(1),
-                    krabka_audit::NodeId(2),
-                    krabka_audit::NodeId(3),
-                ],
-                isr: vec![
-                    krabka_audit::NodeId(1),
-                    krabka_audit::NodeId(2),
-                    krabka_audit::NodeId(3),
-                ],
-                leader_epoch: krabka_metadata::LeaderEpoch(5),
-                adding_replicas: vec![],
-                removing_replicas: vec![],
-                directories: vec![],
-                partition_epoch: 0,
-            }));
-            p += 1;
         }
         Arc::new(img)
     }

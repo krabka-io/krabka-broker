@@ -115,7 +115,7 @@ pub(crate) fn minio_make_bucket(bucket: &str) {
            sleep 1; \
          done && mc mb -p local/{bucket}"
     );
-    let out = Command::new("docker")
+    let out = std::process::Command::new("docker")
         .args([
             "run",
             "--rm",
@@ -159,7 +159,7 @@ pub(crate) fn minio_make_locked_bucket(bucket: &str) {
          done && mc mb --with-lock local/{bucket} \
          && mc retention set --default COMPLIANCE 1d local/{bucket}"
     );
-    let out = Command::new("docker")
+    let out = std::process::Command::new("docker")
         .args([
             "run",
             "--rm",
@@ -187,7 +187,7 @@ pub(crate) fn minio_list_objects(bucket: &str) -> String {
         "mc alias set local http://host.docker.internal:{minio_port} {MINIO_ACCESS_KEY} {MINIO_SECRET_KEY} >/dev/null && \
          mc ls --recursive local/{bucket}"
     );
-    let out = Command::new("docker")
+    let out = std::process::Command::new("docker")
         .args([
             "run",
             "--rm",

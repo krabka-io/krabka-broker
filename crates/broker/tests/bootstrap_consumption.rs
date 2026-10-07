@@ -25,18 +25,9 @@ mod kafka_wire;
 use std::{io, net::SocketAddr};
 
 use assert2::assert;
-use bytes::BytesMut;
 use krabka_broker::{Broker, BrokerConfig, config::ListenerSpec};
-use krabka_protocol::{
-    Decode, Encode,
-    owned::{
-        api_versions_request::ApiVersionsRequest, api_versions_response::ApiVersionsResponse,
-        metadata_request::MetadataRequest, metadata_response::MetadataResponse,
-        sasl_authenticate_request::SaslAuthenticateRequest,
-        sasl_authenticate_response::SaslAuthenticateResponse,
-        sasl_handshake_request::SaslHandshakeRequest,
-        sasl_handshake_response::SaslHandshakeResponse,
-    },
+use krabka_protocol::owned::{
+    metadata_request::MetadataRequest, metadata_response::MetadataResponse,
 };
 use krabka_security::{ListenerProtocol, SaslMechanism};
 use tokio::net::TcpStream;
@@ -157,112 +148,26 @@ async fn drive_sasl_scram_session(
     password: &str,
 ) -> Result<(), io::Error> {
     let mut stream = TcpStream::connect(addr).await?;
-
-    // 1. ApiVersions (v0, non-flexible). Pre-auth allowlist.
-    let av_req = ApiVersionsRequest::default();
-    let mut av_body = BytesMut::new();
-    av_req
-        .encode(&mut av_body, 0)
-        .map_err(|e| io::Error::other(format!("ApiVersions encode: {e}")))?;
-    let av_resp_bytes =
-        kafka_wire::round_trip(&mut stream, 18, 0, 1, CLIENT_ID, false, &av_body).await?;
-    let mut cur: &[u8] = &av_resp_bytes;
-    let _av_resp = ApiVersionsResponse::decode(&mut cur, 0)
-        .map_err(|e| io::Error::other(format!("ApiVersions decode: {e}")))?;
-
-    // 2. SaslHandshake v1 (non-flexible, mechanism="SCRAM-SHA-512").
-    let mut sh_body = BytesMut::new();
-    let sh_req = SaslHandshakeRequest {
-        mechanism: "SCRAM-SHA-512".to_string(),
-        ..Default::default()
-    };
-    sh_req
-        .encode(&mut sh_body, 1)
-        .map_err(|e| io::Error::other(format!("SaslHandshake encode: {e}")))?;
-    let sh_resp_bytes =
-        kafka_wire::round_trip(&mut stream, 17, 1, 2, CLIENT_ID, false, &sh_body).await?;
-    let mut cur: &[u8] = &sh_resp_bytes;
-    let sh_resp = SaslHandshakeResponse::decode(&mut cur, 1)
-        .map_err(|e| io::Error::other(format!("SaslHandshake decode: {e}")))?;
-    if sh_resp.error_code != 0 {
-        return Err(io::Error::other(format!(
-            "SaslHandshake failed: error_code={}",
-            sh_resp.error_code
-        )));
-    }
-
-    // 3. SCRAM client-first → server-first.
-    let client = krabka_security::ScramClientExchange::new(
-        user.to_string(),
-        password.as_bytes().to_vec(),
+    kafka_wire::sasl_scram_authenticate_on(
+        &mut stream,
+        CLIENT_ID,
+        user,
+        password,
         krabka_security::SaslMechanism::ScramSha512,
-    );
-    let (client_first, client) = client
-        .client_first()
-        .map_err(|e| io::Error::other(format!("scram client_first: {e:?}")))?;
-    let scram_req_first = SaslAuthenticateRequest {
-        auth_bytes: bytes::Bytes::from(client_first),
-        ..Default::default()
-    };
-    let mut scram_body_first = BytesMut::new();
-    scram_req_first
-        .encode(&mut scram_body_first, 2)
-        .map_err(|e| io::Error::other(format!("SaslAuthenticate(1) encode: {e}")))?;
-    let scram_first_response_bytes =
-        kafka_wire::round_trip(&mut stream, 36, 2, 3, CLIENT_ID, true, &scram_body_first).await?;
-    let mut cur: &[u8] = &scram_first_response_bytes;
-    let scram_first_response = SaslAuthenticateResponse::decode(&mut cur, 2)
-        .map_err(|e| io::Error::other(format!("SaslAuthenticate(1) decode: {e}")))?;
-    if scram_first_response.error_code != 0 {
-        return Err(io::Error::other(format!(
-            "SaslAuthenticate round 1 failed: error_code={} error_message={:?}",
-            scram_first_response.error_code, scram_first_response.error_message
-        )));
-    }
-    let server_first = scram_first_response.auth_bytes.to_vec();
-
-    // 4. SCRAM client-final → server-final.
-    let (client_final, client) = client
-        .step(&server_first)
-        .map_err(|e| io::Error::other(format!("scram client step: {e:?}")))?;
-    let scram_req_final = SaslAuthenticateRequest {
-        auth_bytes: bytes::Bytes::from(client_final),
-        ..Default::default()
-    };
-    let mut scram_body_final = BytesMut::new();
-    scram_req_final
-        .encode(&mut scram_body_final, 2)
-        .map_err(|e| io::Error::other(format!("SaslAuthenticate(2) encode: {e}")))?;
-    let scram_final_response_bytes =
-        kafka_wire::round_trip(&mut stream, 36, 2, 4, CLIENT_ID, true, &scram_body_final).await?;
-    let mut cur: &[u8] = &scram_final_response_bytes;
-    let scram_final_response = SaslAuthenticateResponse::decode(&mut cur, 2)
-        .map_err(|e| io::Error::other(format!("SaslAuthenticate(2) decode: {e}")))?;
-    if scram_final_response.error_code != 0 {
-        return Err(io::Error::other(format!(
-            "SaslAuthenticate round 2 failed: error_code={} error_message={:?}",
-            scram_final_response.error_code, scram_final_response.error_message
-        )));
-    }
-    client
-        .verify_server_final(&scram_final_response.auth_bytes)
-        .map_err(|e| io::Error::other(format!("server-final verify: {e:?}")))?;
-
-    // 5. Post-auth Metadata round-trip proves the connection survived
-    //    and the data plane is reachable.
-    let md_req = MetadataRequest::default();
-    let mut md_body = BytesMut::new();
-    md_req
-        .encode(&mut md_body, 12)
-        .map_err(|e| io::Error::other(format!("Metadata encode: {e}")))?;
-    let md_resp_bytes =
-        kafka_wire::round_trip(&mut stream, 3, 12, 5, CLIENT_ID, true, &md_body).await?;
-    let mut cur: &[u8] = &md_resp_bytes;
-    let md_resp = MetadataResponse::decode(&mut cur, 12)
-        .map_err(|e| io::Error::other(format!("Metadata decode: {e}")))?;
+    )
+    .await?;
+    let md_resp: MetadataResponse = kafka_wire::exchange(
+        &mut stream,
+        &MetadataRequest::default(),
+        3,
+        12,
+        5,
+        CLIENT_ID,
+        true,
+    )
+    .await?;
     if md_resp.brokers.is_empty() {
         return Err(io::Error::other("Metadata response carried no brokers"));
     }
-
     Ok(())
 }

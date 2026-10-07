@@ -1,9 +1,9 @@
-(* #"/workspace/crates/verified/src/freeze/mutation_decision.rs" 145 0 145 61 *)
+(* #"/workspace/crates/verified/src/freeze/mutation_decision.rs" 146 0 146 61 *)
 
-let%span smutation_decision = "/workspace/crates/verified/src/freeze/mutation_decision.rs" 159 45 159 50
-let%span smutation_decision'0 = "/workspace/crates/verified/src/freeze/mutation_decision.rs" 153 43 153 47
-let%span smutation_decision'1 = "/workspace/crates/verified/src/freeze/mutation_decision.rs" 143 10 143 46
-let%span smutation_decision'2 = "/workspace/crates/verified/src/freeze/mutation_decision.rs" 169 4 183 5
+let%span smutation_decision = "/workspace/crates/verified/src/freeze/mutation_decision.rs" 160 45 160 50
+let%span smutation_decision'0 = "/workspace/crates/verified/src/freeze/mutation_decision.rs" 154 43 154 47
+let%span smutation_decision'1 = "/workspace/crates/verified/src/freeze/mutation_decision.rs" 144 10 144 46
+let%span smutation_decision'2 = "/workspace/crates/verified/src/freeze/mutation_decision.rs" 170 4 184 5
 
 use creusot.prelude.Any
 
@@ -22,7 +22,7 @@ type t_FreezeMutationKind =
   | BarrierMarker
   | TieringCopy
 
-predicate freeze_refusal_model [#"/workspace/crates/verified/src/freeze/mutation_decision.rs" 168 0 168 57] (kind: t_FreezeMutationKind) =
+predicate freeze_refusal_model [#"/workspace/crates/verified/src/freeze/mutation_decision.rs" 169 0 169 57] (kind: t_FreezeMutationKind) =
   [%#smutation_decision'2] match kind with
     | Produce | TransactionEnlistment | DeleteRecords | DeleteTopic | ReassignmentAlter | Compaction | Retention -> true
     | TransactionCompletion | ReassignmentCompletion | OffsetCommit | Replication | BarrierMarker | TieringCopy -> false
@@ -32,7 +32,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let freeze_refuses [#"/workspace/crates/verified/src/freeze/mutation_decision.rs" 145 0 145 61]
+let freeze_refuses [#"/workspace/crates/verified/src/freeze/mutation_decision.rs" 146 0 146 61]
   (kind: t_FreezeMutationKind) (return (x: bool)) = (! bb0
   [ bb0 = any
     [ br0 -> {kind = Produce} (! bb4)

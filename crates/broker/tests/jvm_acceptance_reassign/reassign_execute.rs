@@ -9,9 +9,8 @@ use std::{io::Write as _, process::Stdio, time::Duration};
 use assert2::assert;
 
 use crate::jvm_acceptance::{
-    KAFKA_IMAGE_TXN, broker0_advertised, docker_run_kafka_tool_with_image_and_mount,
-    nc_check_connectivity, plain_jaas, start_three_broker_sasl_plaintext_jvm_cluster,
-    wait_three_brokers_registered, write_client_props, write_temp_file,
+    KAFKA_IMAGE_TXN, broker0_advertised, nc_check_connectivity, plain_jaas,
+    start_three_broker_sasl_plaintext_jvm_cluster, wait_three_brokers_registered, write_temp_file,
 };
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -28,47 +27,19 @@ async fn jvm_kafka_reassign_partitions_end_to_end() {
 
     wait_three_brokers_registered(&h1, &h2, &h3, 3).await;
 
-    let admin_props = write_client_props(&format!(
-        "security.protocol=SASL_PLAINTEXT\n\
-         sasl.mechanism=PLAIN\n\
-         sasl.jaas.config={}\n",
-        plain_jaas(ADMIN, ADMIN_PASS),
-    ));
+    let admin_props = crate::jvm_acceptance::write_plain_props(ADMIN, ADMIN_PASS);
     let admin_mount = admin_props.mount_str();
 
     // Create rf=2 topic.
-    docker_run_kafka_tool_with_image_and_mount(
-        KAFKA_IMAGE_TXN,
-        &admin_mount,
-        &[
-            "kafka-topics",
-            "--create",
-            "--if-not-exists",
-            "--topic",
-            TOPIC,
-            "--partitions",
-            "1",
-            "--replication-factor",
-            "2",
-            "--bootstrap-server",
-            broker0_advertised(),
-            "--command-config",
-            "/client.properties",
-        ],
-    );
+    crate::jvm_acceptance::create_console_topic(KAFKA_IMAGE_TXN, &[&admin_mount], TOPIC, 1, 2);
 
     // Wait for broker 1 to see the partition in the committed metadata image.
     h1.wait_until_partition_present(TOPIC, 0).await;
 
-    let mut producer = std::process::Command::new("docker")
-        .args([
-            "run",
-            "--rm",
-            "-i",
-            "-v",
-            &admin_mount,
-            "--add-host=host.docker.internal:host-gateway",
-            KAFKA_IMAGE_TXN,
+    let mut producer = crate::support::jvm_docker_command(
+        KAFKA_IMAGE_TXN,
+        &[&admin_mount],
+        &[
             "kafka-console-producer",
             "--topic",
             TOPIC,
@@ -76,10 +47,12 @@ async fn jvm_kafka_reassign_partitions_end_to_end() {
             broker0_advertised(),
             "--producer.config",
             "/client.properties",
-        ])
-        .stdin(Stdio::piped())
-        .spawn()
-        .expect("spawn kafka-console-producer");
+        ],
+        true,
+    )
+    .stdin(Stdio::piped())
+    .spawn()
+    .expect("spawn kafka-console-producer");
     producer
         .stdin
         .as_mut()
@@ -110,16 +83,10 @@ async fn jvm_kafka_reassign_partitions_end_to_end() {
     let json_mount = format!("{}:/reassignment.json", json_file.host_path());
 
     // Execute reassignment.
-    let out = std::process::Command::new("docker")
-        .args([
-            "run",
-            "--rm",
-            "-v",
-            &admin_mount,
-            "-v",
-            &json_mount,
-            "--add-host=host.docker.internal:host-gateway",
-            KAFKA_IMAGE_TXN,
+    let out = crate::support::jvm_docker_command(
+        KAFKA_IMAGE_TXN,
+        &[&admin_mount, &json_mount],
+        &[
             "kafka-reassign-partitions",
             "--execute",
             "--reassignment-json-file",
@@ -128,9 +95,11 @@ async fn jvm_kafka_reassign_partitions_end_to_end() {
             broker0_advertised(),
             "--command-config",
             "/client.properties",
-        ])
-        .output()
-        .expect("spawn kafka-reassign-partitions --execute");
+        ],
+        false,
+    )
+    .output()
+    .expect("spawn kafka-reassign-partitions --execute");
     eprintln!(
         "KRABKA[test] --execute status={} stdout={} stderr={}",
         out.status,
@@ -216,40 +185,8 @@ async fn jvm_kafka_reassign_partitions_end_to_end() {
     eprintln!("KRABKA[test] reassignment completed; running --verify");
 
     // --verify should report completion.
-    let verify_out = std::process::Command::new("docker")
-        .args([
-            "run",
-            "--rm",
-            "-v",
-            &admin_mount,
-            "-v",
-            &json_mount,
-            "--add-host=host.docker.internal:host-gateway",
-            KAFKA_IMAGE_TXN,
-            "kafka-reassign-partitions",
-            "--verify",
-            "--reassignment-json-file",
-            "/reassignment.json",
-            "--bootstrap-server",
-            broker0_advertised(),
-            "--command-config",
-            "/client.properties",
-        ])
-        .output()
-        .expect("spawn kafka-reassign-partitions --verify");
-    eprintln!(
-        "KRABKA[test] --verify status={} stdout={} stderr={}",
-        verify_out.status,
-        String::from_utf8_lossy(&verify_out.stdout),
-        String::from_utf8_lossy(&verify_out.stderr),
-    );
-    // Broker-scoped IncrementalAlterConfigs (resource_type=4) is supported,
-    // so --verify can clear throttles and exit 0.
-    assert!(
-        verify_out.status.success(),
-        "kafka-reassign-partitions --verify failed: stderr={}",
-        String::from_utf8_lossy(&verify_out.stderr)
-    );
+    let verify_out = crate::jvm_acceptance::verify_console_reassignment(&admin_mount, &json_mount);
+
     assert!(
         String::from_utf8_lossy(&verify_out.stdout)
             .to_ascii_lowercase()

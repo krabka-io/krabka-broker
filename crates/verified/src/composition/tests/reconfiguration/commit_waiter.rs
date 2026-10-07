@@ -53,16 +53,7 @@ proptest! {
         progress in (any::<i64>(), any::<i64>(), any::<i64>(), any::<i64>()),
         reports in prop::collection::vec((any::<i64>(), any::<i64>()), 11),
     ) {
-        let flag = |i: u32| bits & (1u16 << i) != 0u16;
-        let leader = ReconfigurationLeadership { is_leader: flag(0), no_pending_change: flag(1), epoch_committed: flag(2) };
-        let context = CurrentVoterSet { voter_count: old.len(), kraft_version: version,
-            latest_controls_committed: flag(3), all_voters_support_requested: flag(4) };
-        let request = VoterChangeRequest { kind: match operation { 0 => VoterChangeKind::Add,
-            1 => VoterChangeKind::Remove, 2 => VoterChangeKind::Update, _ => VoterChangeKind::FinalizeKraftVersion },
-            requested_kraft_version: requested_version };
-        let candidate = TargetVoter { membership: match membership { 0 => TargetMembership::Absent,
-            1 => TargetMembership::PresentUnknownDirectory, 2 => TargetMembership::PresentSameDirectory,
-            _ => TargetMembership::PresentOtherDirectory }, version_compatible: flag(5), caught_up: flag(6) };
+        let (leader, context, request, candidate) = generated_request(old.len(), bits, operation, membership, version, requested_version);
         check_waiter(&old, (leader, context), request, node, candidate, &reports[..=old.len()], progress);
     }
 }

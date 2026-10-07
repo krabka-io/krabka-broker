@@ -104,70 +104,13 @@ fn led_epoch_is_the_term_this_broker_leads_the_partition_under() {
 /// leader of the partition never got.
 #[tokio::test]
 async fn a_write_completes_only_when_committed_under_its_term() {
-    struct Case {
-        what: &'static str,
-        /// The high watermark when the wait starts.
-        hw_now: i64,
-        /// The leader and epoch the image moves to during the wait.
-        moves_to: Option<(u64, i32)>,
-        /// The high watermark that followers bring during the wait, after
-        /// any move.
-        hw_later: Option<i64>,
-        timeout: Duration,
-        expected: Result<(), (i32, i16)>,
-    }
-    let long = Duration::from_secs(30);
-    let cases = [
-        Case {
-            what: "already committed",
-            hw_now: 2,
-            moves_to: None,
-            hw_later: None,
-            timeout: long,
-            expected: Ok(()),
-        },
-        Case {
-            what: "committed when the followers catch up",
-            hw_now: 0,
-            moves_to: None,
-            hw_later: Some(2),
-            timeout: long,
-            expected: Ok(()),
-        },
-        Case {
-            what: "another broker takes the partition first",
-            hw_now: 0,
-            moves_to: Some((2, 1)),
-            hw_later: None,
-            timeout: long,
-            expected: Err((0, codes::NOT_COORDINATOR)),
-        },
-        Case {
-            what: "this broker leads again, at a newer epoch",
-            hw_now: 0,
-            moves_to: Some((1, 1)),
-            hw_later: None,
-            timeout: long,
-            expected: Err((0, codes::NOT_COORDINATOR)),
-        },
-        Case {
-            what: "the high watermark passes the write after the partition moved",
-            hw_now: 0,
-            moves_to: Some((2, 1)),
-            hw_later: Some(2),
-            timeout: long,
-            expected: Err((0, codes::NOT_COORDINATOR)),
-        },
-        Case {
-            what: "the followers never catch up",
-            hw_now: 0,
-            moves_to: None,
-            hw_later: None,
-            timeout: Duration::from_millis(100),
-            expected: Err((0, codes::COORDINATOR_NOT_AVAILABLE)),
-        },
-    ];
-    for case in cases {
+    use crate::coordinator::test_support::{CommitWaitOutcome, commit_wait_cases};
+    for case in commit_wait_cases() {
+        let expected = match case.expected {
+            CommitWaitOutcome::Committed => Ok(()),
+            CommitWaitOutcome::NotLeader => Err((0, codes::NOT_COORDINATOR)),
+            CommitWaitOutcome::TimedOut => Err((0, codes::COORDINATOR_NOT_AVAILABLE)),
+        };
         let hw_notify = Arc::new(Notify::new());
         let (partition, _dir) =
             crate::partition::test_support::test_partition(Arc::clone(&hw_notify));
@@ -205,7 +148,7 @@ async fn a_write_completes_only_when_committed_under_its_term() {
         let result = await_committed(&partition, &mut images, term, Offset(2), case.timeout).await;
         changes.await.expect("the changes land");
 
-        assert!(outcome(result) == case.expected, "{}", case.what);
+        assert!(outcome(result) == expected, "{}", case.what);
     }
 }
 

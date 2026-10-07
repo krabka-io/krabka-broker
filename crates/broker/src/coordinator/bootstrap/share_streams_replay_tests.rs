@@ -1,8 +1,6 @@
 //! Tests for the reconstruction of the KIP-932 share-group and KIP-1071
 //! streams-group seeds from their persisted records.
 
-use std::sync::Arc;
-
 use assert2::{assert, check};
 use krabka_protocol::records::RecordBatch;
 
@@ -19,26 +17,9 @@ use crate::coordinator::persistence;
 async fn share_group_records_replay_into_seed() {
     use krabka_protocol::primitives::uuid::Uuid;
 
-    use crate::coordinator::unified::{
-        GroupCoordinator, offsets_log::fake::InMemoryOffsetsLog, reconciler::ReconcileInput,
-        share::persistence as sp,
-    };
+    use crate::coordinator::unified::share::persistence as sp;
 
-    #[derive(Debug)]
-    struct EmptyMeta;
-    impl crate::coordinator::unified::actor::MetadataProvider for EmptyMeta {
-        fn snapshot(&self) -> ReconcileInput {
-            ReconcileInput::default()
-        }
-    }
-
-    let coord = Arc::new(GroupCoordinator::new(
-        crate::coordinator::unified::config::NextGenConfig::default(),
-        crate::coordinator::unified::share::config::ShareGroupConfig::default(),
-        Arc::new(EmptyMeta),
-        Arc::new(InMemoryOffsetsLog::default()),
-        crate::coordinator::unified::streams::config::StreamsGroupConfig::default(),
-    ));
+    let coord = super::test_support::bare_coordinator();
 
     let tid = Uuid([9; 16]);
     // Drive the same path bootstrap takes: parse_key on the encoded key,
@@ -117,26 +98,9 @@ async fn share_group_records_replay_into_seed() {
 async fn streams_group_records_replay_into_seed() {
     use std::collections::BTreeMap;
 
-    use crate::coordinator::unified::{
-        GroupCoordinator, offsets_log::fake::InMemoryOffsetsLog, reconciler::ReconcileInput,
-        streams::persistence as sp,
-    };
+    use crate::coordinator::unified::streams::persistence as sp;
 
-    #[derive(Debug)]
-    struct EmptyMeta;
-    impl crate::coordinator::unified::actor::MetadataProvider for EmptyMeta {
-        fn snapshot(&self) -> ReconcileInput {
-            ReconcileInput::default()
-        }
-    }
-
-    let coord = Arc::new(GroupCoordinator::new(
-        crate::coordinator::unified::config::NextGenConfig::default(),
-        crate::coordinator::unified::share::config::ShareGroupConfig::default(),
-        Arc::new(EmptyMeta),
-        Arc::new(InMemoryOffsetsLog::default()),
-        crate::coordinator::unified::streams::config::StreamsGroupConfig::default(),
-    ));
+    let coord = super::test_support::bare_coordinator();
 
     // Drive the same path bootstrap takes: parse_key on the encoded key,
     // then apply_record on the value bytes.
@@ -235,25 +199,10 @@ async fn streams_group_records_replay_into_seed() {
 #[test]
 fn malformed_and_orphan_records_do_not_publish_type_or_state() {
     use crate::coordinator::unified::{
-        GroupCoordinator, offsets_log::fake::InMemoryOffsetsLog, reconciler::ReconcileInput,
         share::persistence as share, streams::persistence as streams,
     };
 
-    #[derive(Debug)]
-    struct EmptyMeta;
-    impl crate::coordinator::unified::actor::MetadataProvider for EmptyMeta {
-        fn snapshot(&self) -> ReconcileInput {
-            ReconcileInput::default()
-        }
-    }
-
-    let coord = Arc::new(GroupCoordinator::new(
-        crate::coordinator::unified::config::NextGenConfig::default(),
-        crate::coordinator::unified::share::config::ShareGroupConfig::default(),
-        Arc::new(EmptyMeta),
-        Arc::new(InMemoryOffsetsLog::default()),
-        crate::coordinator::unified::streams::config::StreamsGroupConfig::default(),
-    ));
+    let coord = super::test_support::bare_coordinator();
     let batch = RecordBatch::default();
     let mut acc = Replayed::default();
 

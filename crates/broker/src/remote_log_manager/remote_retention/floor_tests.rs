@@ -1,24 +1,18 @@
-use std::sync::Arc;
-
 use assert2::assert;
 use krabka_remote_storage::{
-    InmemoryRemoteLogMetadataManager, LocalTieredStorage, RemoteLogMetadataManager,
     RemoteLogSegmentDetails, RemoteLogSegmentId, RemoteLogSegmentMetadataUpdate,
-    RemoteStorageManager,
 };
 use krabka_units::millis;
 use uuid::Uuid;
 
 use super::*;
-use crate::remote_log_manager::test_support::{tier, tp};
+use crate::remote_log_manager::test_support::{local_backends, tier, tp};
 
 #[tokio::test]
 async fn completed_remote_delete_uses_a_representable_floor() {
     for (end, expected) in [(i64::MAX - 1, Some(Offset(i64::MAX))), (i64::MAX, None)] {
         let dir = tempfile::tempdir().unwrap();
-        let rsm: Arc<dyn RemoteStorageManager> = Arc::new(LocalTieredStorage::new(dir.path()));
-        let rlmm: Arc<dyn RemoteLogMetadataManager> =
-            Arc::new(InmemoryRemoteLogMetadataManager::new());
+        let (rsm, rlmm) = local_backends(dir.path());
         let id = RemoteLogSegmentId::new(tp(), Uuid::new_v4());
         let md = RemoteLogSegmentMetadata::new(
             id.clone(),

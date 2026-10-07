@@ -140,7 +140,6 @@ async fn a_recreated_topic_does_not_inherit_the_old_committed_offsets() {
         offset_commit_request::{
             OffsetCommitRequest, OffsetCommitRequestPartition, OffsetCommitRequestTopic,
         },
-        offset_fetch_request::{OffsetFetchRequest, OffsetFetchRequestTopic},
     };
 
     use crate::{
@@ -156,22 +155,7 @@ async fn a_recreated_topic_does_not_inherit_the_old_committed_offsets() {
     const FETCH_VERSION: i16 = 7;
 
     async fn fetched_offset(broker: &Broker) -> i64 {
-        let request = OffsetFetchRequest {
-            group_id: GROUP.into(),
-            topics: Some(vec![OffsetFetchRequestTopic {
-                name: TOPIC.into(),
-                partition_indexes: vec![0],
-                ..Default::default()
-            }]),
-            ..Default::default()
-        };
-        let principal = principal("admin");
-        let peer = peer();
-        let ctx = request_context(&principal, &peer, "consumer");
-        let response = crate::handlers::offset_fetch::handle(broker, request, FETCH_VERSION, &ctx)
-            .await
-            .expect("OffsetFetch");
-        response.topics[0].partitions[0].committed_offset
+        crate::coordinator::test_support::fetch_offset(broker, GROUP, TOPIC, FETCH_VERSION).await
     }
 
     let (handle, _dir) = crate::test_support::start_broker_with_authorizer_no_audit(Arc::new(

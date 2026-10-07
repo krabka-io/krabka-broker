@@ -1,11 +1,11 @@
 //! `#[derive(RefinedNewtype)]`: see the crate documentation.
 
 use moxy::{
-    ast::{Attributed, ItemStruct, ParseError, Type},
-    token::{LitStr, Spanner, TokenStream},
+    ast::{Attributed, ItemStruct, ParseError},
+    token::{Ident, LitStr, Spanner, ToTokenStream, TokenStream},
 };
 
-use crate::meta::Tokens;
+use crate::meta::{Tokens, inner_type};
 
 /// The tokens inside a `key(...)` argument. A type with generic arguments
 /// goes here rather than after `=`, where moxy reads an expression and stops
@@ -77,34 +77,10 @@ struct Quantity {
 impl Quantity {
     /// The quantity that `name` names.
     fn named(name: &Tokens) -> Result<Self, ParseError> {
-        let (ty, ext, to_raw, from_raw, raw, parse, unit) = match name.0.to_string().as_str() {
-            "ByteSize" => (
-                moxy::template! { ::krabka_units::ByteSize },
-                moxy::template! { ::krabka_units::convert::ByteSizeExt },
-                moxy::template! { bytes_i64 },
-                moxy::template! { from_bytes_i64 },
-                moxy::template! { i64 },
-                moxy::template! { ::krabka_units::parse::byte_size },
-                "bytes",
-            ),
-            "Time" => (
-                moxy::template! { ::krabka_units::Time },
-                moxy::template! { ::krabka_units::convert::TimeExt },
-                moxy::template! { millis_i64 },
-                moxy::template! { from_millis },
-                moxy::template! { i64 },
-                moxy::template! { ::krabka_units::parse::time },
-                "milliseconds",
-            ),
-            "Frequency" => (
-                moxy::template! { ::krabka_units::Frequency },
-                moxy::template! { ::krabka_units::convert::FrequencyExt },
-                moxy::template! { per_sec_u64 },
-                moxy::template! { from_per_sec_u64 },
-                moxy::template! { u64 },
-                moxy::template! { ::krabka_units::parse::frequency },
-                "Hz",
-            ),
+        let (to_raw, from_raw, raw, parse, unit) = match name.0.to_string().as_str() {
+            "ByteSize" => ("bytes_i64", "from_bytes_i64", "i64", "byte_size", "bytes"),
+            "Time" => ("millis_i64", "from_millis", "i64", "time", "milliseconds"),
+            "Frequency" => ("per_sec_u64", "from_per_sec_u64", "u64", "frequency", "Hz"),
             _ => {
                 return Err(ParseError::new(
                     name.0.span(),
@@ -112,28 +88,18 @@ impl Quantity {
                 ));
             }
         };
+        let ident = |text: &str| Ident::new(text).with_span(name.0.span()).to_token_stream();
+        let ext = ident(&format!("{}Ext", name.0));
+        let parse = ident(parse);
         Ok(Self {
-            ty,
-            ext,
-            to_raw,
-            from_raw,
-            raw,
-            parse,
+            ty: moxy::template! { ::krabka_units::{{ name.0 }} },
+            ext: moxy::template! { ::krabka_units::convert::{{ ext }} },
+            to_raw: ident(to_raw),
+            from_raw: ident(from_raw),
+            raw: ident(raw),
+            parse: moxy::template! { ::krabka_units::parse::{{ parse }} },
             unit,
         })
-    }
-}
-
-/// The single field of a newtype, or an error naming the derive.
-pub(crate) fn inner_type(item: &ItemStruct, derive: &str) -> Result<Type, ParseError> {
-    let message = format!("`{derive}` needs a tuple struct with exactly one field");
-    let Some(unnamed) = item.fields.as_unnamed() else {
-        return Err(ParseError::new(item.ident.span(), &message));
-    };
-    let mut fields = unnamed.fields.iter();
-    match (fields.next(), fields.next()) {
-        (Some(field), None) => Ok(field.ty.clone()),
-        _ => Err(ParseError::new(item.ident.span(), &message)),
     }
 }
 

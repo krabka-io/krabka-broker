@@ -54,8 +54,7 @@ pub(crate) async fn rebuild_producer_state(
 #[cfg(test)]
 mod tests {
     use assert2::assert;
-    use bytes::Bytes;
-    use krabka_protocol::records::{Attributes, Record, RecordBatch};
+    use krabka_protocol::records::RecordBatch;
     use tempfile::tempdir;
 
     use super::*;
@@ -65,40 +64,19 @@ mod tests {
         RecordBatch {
             base_offset,
             partition_leader_epoch: 0,
-            attributes: Attributes::default(),
-            last_offset_delta: count - 1,
-            base_timestamp: 0,
             max_timestamp: 7,
             producer_id: 42,
             producer_epoch: 3,
             base_sequence,
-            records: (0..count)
-                .map(|offset_delta| Record {
-                    attributes: 0,
-                    offset_delta,
-                    timestamp_delta: 0,
-                    key: None,
-                    value: Some(Bytes::from_static(b"v")),
-                    headers: vec![],
-                })
-                .collect(),
+            ..crate::test_support::repeated_records_batch(count, 0)
         }
     }
 
-    #[tokio::test]
-    async fn producer_dedup_rebuilt_from_recovered_wal() {
-        let dir = tempdir().unwrap();
-        {
-            let mut log = Log::open(dir.path(), LogConfig::default()).unwrap();
-            log.append(&mut idempotent_batch(0, 0, 2)).unwrap();
-        }
-        let log = Log::open(dir.path(), LogConfig::default()).unwrap();
+    async fn check_rebuilt_dedup(log: &Log) {
         let producer_state = Arc::new(ProducerState::new());
-
-        rebuild_producer_state("orders", PartitionIndex(0), &log, &producer_state)
+        rebuild_producer_state("orders", PartitionIndex(0), log, &producer_state)
             .await
             .unwrap();
-
         assert!(
             producer_state
                 .check("orders", PartitionIndex(0), 42, 3, 0, 1)
@@ -111,6 +89,17 @@ mod tests {
                 .await
                 == Decision::Append
         );
+    }
+
+    #[tokio::test]
+    async fn producer_dedup_rebuilt_from_recovered_wal() {
+        let dir = tempdir().unwrap();
+        {
+            let mut log = Log::open(dir.path(), LogConfig::default()).unwrap();
+            log.append(&mut idempotent_batch(0, 0, 2)).unwrap();
+        }
+        let log = Log::open(dir.path(), LogConfig::default()).unwrap();
+        check_rebuilt_dedup(&log).await;
     }
 
     #[tokio::test]
@@ -127,24 +116,7 @@ mod tests {
         );
         marker.base_sequence = 0;
         log.append(&mut marker).unwrap();
-        let producer_state = Arc::new(ProducerState::new());
-
-        rebuild_producer_state("orders", PartitionIndex(0), &log, &producer_state)
-            .await
-            .unwrap();
-
-        assert!(
-            producer_state
-                .check("orders", PartitionIndex(0), 42, 3, 0, 1)
-                .await
-                == Decision::Duplicate { base_offset: 0 }
-        );
-        assert!(
-            producer_state
-                .check("orders", PartitionIndex(0), 42, 3, 2, 0)
-                .await
-                == Decision::Append
-        );
+        check_rebuilt_dedup(&log).await;
     }
 
     #[tokio::test]

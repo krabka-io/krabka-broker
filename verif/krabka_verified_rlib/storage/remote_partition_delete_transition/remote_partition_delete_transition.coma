@@ -1,7 +1,7 @@
-(* #"/workspace/crates/verified/src/storage/remote_partition_delete_transition.rs" 141 0 144 9 *)
+(* #"/workspace/crates/verified/src/storage/remote_partition_delete_transition.rs" 142 0 145 9 *)
 
-let%span sremote_partition_delete_transition = "/workspace/crates/verified/src/storage/remote_partition_delete_transition.rs" 136 10 139 1
-let%span sremote_partition_delete_transition'0 = "/workspace/crates/verified/src/storage/remote_partition_delete_transition.rs" 124 4 130 5
+let%span sremote_partition_delete_transition = "/workspace/crates/verified/src/storage/remote_partition_delete_transition.rs" 137 10 140 1
+let%span sremote_partition_delete_transition'0 = "/workspace/crates/verified/src/storage/remote_partition_delete_transition.rs" 125 4 131 5
 
 use creusot.prelude.Any
 
@@ -25,7 +25,7 @@ type tup2_RemotePartitionDeleteLifecycle_RemotePartitionDeleteLifecycle = {
   f0'0: t_RemotePartitionDeleteLifecycle;
   f1'0: t_RemotePartitionDeleteLifecycle }
 
-predicate partition_delete_forward_edge [#"/workspace/crates/verified/src/storage/remote_partition_delete_transition.rs" 120 0 123 9] (from: t_RemotePartitionDeleteLifecycle) (to': t_RemotePartitionDeleteLifecycle) =
+predicate partition_delete_forward_edge [#"/workspace/crates/verified/src/storage/remote_partition_delete_transition.rs" 121 0 124 9] (from: t_RemotePartitionDeleteLifecycle) (to': t_RemotePartitionDeleteLifecycle) =
   [%#sremote_partition_delete_transition'0] match { f0'0 = from; f1'0 = to' } with
     | {f0'0 = Marked; f1'0 = Started} | {f0'0 = Started; f1'0 = Finished} -> true
     | _ -> false
@@ -35,7 +35,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let remote_partition_delete_transition [#"/workspace/crates/verified/src/storage/remote_partition_delete_transition.rs" 141 0 144 9]
+let remote_partition_delete_transition [#"/workspace/crates/verified/src/storage/remote_partition_delete_transition.rs" 142 0 145 9]
   (from: t_Option_RemotePartitionDeleteLifecycle) (to': t_RemotePartitionDeleteLifecycle) (return (x: bool)) = (! bb0
   [ bb0 = s0
     [ s0 = [ &_6 <- { f0 = from; f1 = to' } ] s1

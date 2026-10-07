@@ -29,17 +29,30 @@ pub(super) fn running_maximum_index_entry(
     }
 }
 
+// cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
+#[cfg(creusot)]
+#[cfg_attr(test, mutants::skip)]
+#[logic(open)]
+pub(super) fn sparse_maxima_bound_prefix(
+    entries: Seq<(i64, u32)>,
+    offsets: Seq<u32>,
+    timestamps: Seq<i64>,
+) -> bool {
+    pearlite! {
+        (forall<i: Int, j: Int> 0 <= i && i < j && j < entries.len() ==> entries[i].0@ <= entries[j].0@)
+        && (forall<i: Int, j: Int> 0 <= i && i < entries.len()
+            && 0 <= j && j < offsets.len() && offsets[j]@ < entries[i].1@
+            ==> timestamps[j]@ <= entries[i].0@)
+    }
+}
+
 /// A strict-predecessor sparse start followed by the existing record selector
 /// finds the global first match, even with nonmonotone timestamps and offset
 /// gaps. Each sparse timestamp must bound all records before its offset.
 #[requires(offsets@.len() == timestamps@.len())]
 #[requires(forall<i: Int, j: Int> 0 <= i && i < j && j < offsets@.len()
     ==> offsets@[i]@ < offsets@[j]@)]
-#[requires(forall<i: Int, j: Int> 0 <= i && i < j && j < entries@.len()
-    ==> entries@[i].0@ <= entries@[j].0@)]
-#[requires(forall<i: Int, j: Int> 0 <= i && i < entries@.len()
-    && 0 <= j && j < offsets@.len() && offsets@[j]@ < entries@[i].1@
-    ==> timestamps@[j]@ <= entries@[i].0@)]
+#[requires(sparse_maxima_bound_prefix(entries@, offsets@, timestamps@))]
 #[ensures(match result {
     Some(index) => index@ < timestamps@.len() && timestamps@[index@]@ >= target@
         && forall<i: Int> 0 <= i && i < index@ ==> timestamps@[i]@ < target@,
@@ -51,6 +64,12 @@ pub(super) fn indexed_timestamp_scan_finds_first(
     timestamps: &[i64],
     target: i64,
 ) -> Option<usize> {
+    // Give the sparse scan and its prefix witness the separate quantified laws.
+    proof_assert!(forall<i: Int, j: Int> 0 <= i && i < j && j < entries@.len()
+        ==> entries@[i].0@ <= entries@[j].0@);
+    proof_assert!(forall<i: Int, j: Int> 0 <= i && i < entries@.len()
+        && 0 <= j && j < offsets@.len() && offsets@[j]@ < entries@[i].1@
+        ==> timestamps@[j]@ <= entries@[i].0@);
     let relative = time_index_scan_start(entries, target);
     let mut start = 0usize;
     #[invariant(start@ <= offsets@.len())]
@@ -60,7 +79,11 @@ pub(super) fn indexed_timestamp_scan_finds_first(
         proof_assert!(timestamps@[start@]@ < target@);
         start += 1;
     }
-    let index = first_timestamp_index(&timestamps[start..], target)?;
+    let suffix = &timestamps[start..];
+    // Translate suffix indexes back to the original record window.
+    proof_assert!(forall<i: Int> start@ <= i && i < timestamps@.len()
+        ==> suffix@[i - start@] == timestamps@[i]);
+    let index = first_timestamp_index(suffix, target)?;
     Some(start + index)
 }
 

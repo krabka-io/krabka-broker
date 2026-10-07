@@ -1,11 +1,11 @@
-(* #"/workspace/crates/verified/src/delegation_token/token_mutation_decision.rs" 144 0 144 82 *)
+(* #"/workspace/crates/verified/src/delegation_token/token_mutation_decision.rs" 145 0 145 82 *)
 
-let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
-let%span stoken_mutation_decision = "/workspace/crates/verified/src/delegation_token/token_mutation_decision.rs" 183 31 183 32
-let%span stoken_mutation_decision'0 = "/workspace/crates/verified/src/delegation_token/token_mutation_decision.rs" 187 47 187 48
-let%span stoken_mutation_decision'1 = "/workspace/crates/verified/src/delegation_token/token_mutation_decision.rs" 165 30 165 31
-let%span stoken_mutation_decision'2 = "/workspace/crates/verified/src/delegation_token/token_mutation_decision.rs" 110 10 130 10
-let%span stoken_mutation_decision'3 = "/workspace/crates/verified/src/delegation_token/token_mutation_decision.rs" 131 10 142 74
+let%span sord = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span stoken_mutation_decision = "/workspace/crates/verified/src/delegation_token/token_mutation_decision.rs" 184 31 184 32
+let%span stoken_mutation_decision'0 = "/workspace/crates/verified/src/delegation_token/token_mutation_decision.rs" 188 47 188 48
+let%span stoken_mutation_decision'1 = "/workspace/crates/verified/src/delegation_token/token_mutation_decision.rs" 166 30 166 31
+let%span stoken_mutation_decision'2 = "/workspace/crates/verified/src/delegation_token/token_mutation_decision.rs" 111 10 131 10
+let%span stoken_mutation_decision'3 = "/workspace/crates/verified/src/delegation_token/token_mutation_decision.rs" 132 10 143 74
 
 use creusot.int.Int64
 use creusot.prelude.Any
@@ -34,7 +34,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let token_mutation_decision [#"/workspace/crates/verified/src/delegation_token/token_mutation_decision.rs" 144 0 144 82]
+let token_mutation_decision [#"/workspace/crates/verified/src/delegation_token/token_mutation_decision.rs" 145 0 145 82]
   (facts: t_TokenMutationFacts) (return (x: t_TokenMutationDecision)) = (! bb0
   [ bb0 = any [ br0 -> {facts.uncommitted_tail = false} (! bb2) | br1 -> {facts.uncommitted_tail} (! bb1) ]
   | bb1 = s0 [ s0 = [ &_ret <- Reject ] s1 | s1 = return {_ret} ]

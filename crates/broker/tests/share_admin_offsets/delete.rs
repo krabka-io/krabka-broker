@@ -16,8 +16,8 @@ use krabka_protocol::owned::delete_share_group_offsets_request::{
 use crate::{
     describe::{describe_all_offsets, describe_until},
     harness::{
-        NONE, bootstrap_share_state, broker_config, broker_test_permit, connect, create_topic,
-        fetch_until_acquired, join, leave, produce_n, topic_id, wait_for_share_init,
+        NONE, bootstrap_share_state, broker_config, broker_test_permit, connect,
+        fetch_until_acquired, leave,
     },
 };
 
@@ -28,20 +28,8 @@ use crate::{
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn delete_removes_topic() {
     let _permit = broker_test_permit().await;
-    let dir = tempfile::TempDir::new().unwrap();
-    let broker = Broker::start(broker_config(dir.path().to_path_buf()))
-        .await
-        .unwrap();
-    let client = connect(&broker.listen_addr().to_string()).await;
-    create_topic(&broker, &client, "t", 1).await;
-    let tid = topic_id(&broker, "t");
-    bootstrap_share_state(&broker, &client, "g1").await;
-    produce_n(&client, "t", tid, 0, 3).await;
-
-    // Initialize the topic's share state via the join lifecycle + a consume, then
-    // leave so the group is empty.
-    let (member, _epoch) = join(&client, "g1", "t").await;
-    wait_for_share_init(&broker, "g1", tid, 0).await;
+    let (broker, client, _dir, tid) = crate::support::share::topic_fixture("t", 1, |_| {}).await;
+    let (member, _epoch) = crate::harness::initialize_consumption(&broker, &client, tid, 3).await;
     let _ = fetch_until_acquired(&client, "g1", &member, tid, 0, 0).await;
     leave(&client, "g1", &member).await;
 
@@ -106,17 +94,11 @@ async fn delete_rewrites_metadata_topic_absent_after_restart() {
 
     let tid;
     {
-        let broker = Broker::start(broker_config(log_dir.clone())).await.unwrap();
-        let client = connect(&broker.listen_addr().to_string()).await;
-        create_topic(&broker, &client, "t", 1).await;
-        tid = topic_id(&broker, "t");
-        bootstrap_share_state(&broker, &client, "g1").await;
-        produce_n(&client, "t", tid, 0, 3).await;
-
-        // Initialize the topic's share state via the join lifecycle + a consume,
-        // then leave so the group is empty (Delete requires an empty group).
-        let (member, _epoch) = join(&client, "g1", "t").await;
-        wait_for_share_init(&broker, "g1", tid, 0).await;
+        let (broker, client, topic) =
+            crate::support::share::start_topic(broker_config(log_dir.clone()), "t", 1).await;
+        tid = topic;
+        let (member, _epoch) =
+            crate::harness::initialize_consumption(&broker, &client, tid, 3).await;
         let _ = fetch_until_acquired(&client, "g1", &member, tid, 0, 0).await;
 
         // Sanity: a describe with no topic list enumerates the initialized

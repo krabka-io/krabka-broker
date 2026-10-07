@@ -1,8 +1,9 @@
+mod support;
+
 use krabka_broker::{Broker, BrokerConfig};
 use krabka_client_consumer::{AutoOffsetReset, Consumer, Header as ConsumerHeader};
 use krabka_client_core::Client;
 use krabka_client_producer::{Header, Producer, ProducerRecord};
-use krabka_protocol::owned::create_topics_request::{CreatableTopic, CreateTopicsRequest};
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn consumer_record_carries_headers() {
@@ -18,20 +19,7 @@ async fn consumer_record_carries_headers() {
         .build()
         .await
         .unwrap();
-    let ct = admin
-        .send(CreateTopicsRequest {
-            topics: vec![CreatableTopic {
-                name: "h".into(),
-                num_partitions: 1,
-                replication_factor: 1,
-                ..Default::default()
-            }],
-            timeout_ms: 5_000,
-            ..Default::default()
-        })
-        .await
-        .unwrap();
-    assert2::assert!(ct.topics[0].error_code == 0);
+    crate::support::client::create_topic(&admin, "h", 1).await;
 
     let producer = Producer::builder()
         .bootstrap(&bootstrap)

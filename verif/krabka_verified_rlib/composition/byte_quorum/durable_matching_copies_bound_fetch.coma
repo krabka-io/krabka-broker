@@ -1,18 +1,18 @@
-(* #"/workspace/crates/verified/src/composition/byte_quorum.rs" 78 0 85 23 *)
+(* #"/workspace/crates/verified/src/composition/byte_quorum.rs" 93 0 100 23 *)
 
-let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
-let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
-let%span swell_founded = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/well_founded.rs" 43 8 43 33
-let%span sslice = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 331 18 331 22
-let%span sops = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/ops.rs" 688 18 691 9
-let%span sops'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/ops.rs" 702 25 702 33
-let%span sops'1 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/ops.rs" 701 18 701 32
-let%span soption = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/option.rs" 148 18 148 22
-let%span soption'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/option.rs" 149 18 149 22
-let%span svec = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 104 18 104 36
-let%span svec'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 18 14 18 41
-let%span svec'1 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 118 18 118 48
-let%span svec'2 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 202 18 202 34
+let%span sord = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span sord'0 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span soption = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/option.rs" 148 18 148 22
+let%span soption'0 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/option.rs" 149 18 149 22
+let%span swell_founded = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/well_founded.rs" 43 8 43 33
+let%span sslice = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 331 18 331 22
+let%span sops = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/ops.rs" 688 18 691 9
+let%span sops'0 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/ops.rs" 702 25 702 33
+let%span sops'1 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/ops.rs" 701 18 701 32
+let%span svec = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 104 18 104 36
+let%span svec'0 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 18 14 18 41
+let%span svec'1 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 118 18 118 48
+let%span svec'2 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 202 18 202 34
 let%span scopy_vote = "/workspace/crates/verified/src/composition/byte_quorum/copy_vote.rs" 15 11 15 68
 let%span scopy_vote'0 = "/workspace/crates/verified/src/composition/byte_quorum/copy_vote.rs" 16 10 17 84
 let%span scopy_vote'1 = "/workspace/crates/verified/src/composition/byte_quorum/copy_vote.rs" 18 10 29 1
@@ -34,41 +34,42 @@ let%span sfailover'0 = "/workspace/crates/verified/src/consensus/failover.rs" 20
 let%span sfailover'1 = "/workspace/crates/verified/src/consensus/failover.rs" 186 10 186 15
 let%span sfailover'2 = "/workspace/crates/verified/src/consensus/failover.rs" 189 8 195 9
 let%span sfailover'3 = "/workspace/crates/verified/src/consensus/failover.rs" 178 8 178 48
-let%span sbyte_quorum = "/workspace/crates/verified/src/composition/byte_quorum.rs" 86 7 86 19
-let%span sbyte_quorum'0 = "/workspace/crates/verified/src/composition/byte_quorum.rs" 86 23 86 41
-let%span sbyte_quorum'1 = "/workspace/crates/verified/src/composition/byte_quorum.rs" 86 46 86 99
-let%span sbyte_quorum'2 = "/workspace/crates/verified/src/composition/byte_quorum.rs" 95 8 95 9
-let%span sbyte_quorum'3 = "/workspace/crates/verified/src/composition/byte_quorum.rs" 96 8 96 16
-let%span sbyte_quorum'4 = "/workspace/crates/verified/src/composition/byte_quorum.rs" 90 4 98 5
-let%span sbyte_quorum'5 = "/workspace/crates/verified/src/composition/byte_quorum.rs" 90 4 98 6
-let%span sbyte_quorum'6 = "/workspace/crates/verified/src/composition/byte_quorum.rs" 99 18 99 66
-let%span sbyte_quorum'7 = "/workspace/crates/verified/src/composition/byte_quorum.rs" 100 32 100 42
-let%span sbyte_quorum'8 = "/workspace/crates/verified/src/composition/byte_quorum.rs" 101 16 101 22
-let%span sbyte_quorum'9 = "/workspace/crates/verified/src/composition/byte_quorum.rs" 109 14 109 32
-let%span sbyte_quorum'10 = "/workspace/crates/verified/src/composition/byte_quorum.rs" 110 14 110 26
-let%span sbyte_quorum'11 = "/workspace/crates/verified/src/composition/byte_quorum.rs" 104 16 108 31
-let%span sbyte_quorum'12 = "/workspace/crates/verified/src/composition/byte_quorum.rs" 103 16 103 110
-let%span sbyte_quorum'13 = "/workspace/crates/verified/src/composition/byte_quorum.rs" 102 16 102 59
-let%span sbyte_quorum'14 = "/workspace/crates/verified/src/composition/byte_quorum.rs" 113 12 113 21
-let%span sbyte_quorum'15 = "/workspace/crates/verified/src/composition/byte_quorum.rs" 117 13 117 28
-let%span sbyte_quorum'16 = "/workspace/crates/verified/src/composition/byte_quorum.rs" 117 12 117 28
-let%span sbyte_quorum'17 = "/workspace/crates/verified/src/composition/byte_quorum.rs" 111 21 118 9
-let%span sbyte_quorum'18 = "/workspace/crates/verified/src/composition/byte_quorum.rs" 111 21 119 31
-let%span sbyte_quorum'19 = "/workspace/crates/verified/src/composition/byte_quorum.rs" 120 8 120 28
-let%span sbyte_quorum'20 = "/workspace/crates/verified/src/composition/byte_quorum.rs" 121 13 121 14
-let%span sbyte_quorum'21 = "/workspace/crates/verified/src/composition/byte_quorum.rs" 121 8 121 14
-let%span sbyte_quorum'22 = "/workspace/crates/verified/src/composition/byte_quorum.rs" 123 18 130 36
-let%span sbyte_quorum'23 = "/workspace/crates/verified/src/composition/byte_quorum.rs" 133 8 136 23
-let%span sbyte_quorum'24 = "/workspace/crates/verified/src/composition/byte_quorum.rs" 139 50 139 58
-let%span sbyte_quorum'25 = "/workspace/crates/verified/src/composition/byte_quorum.rs" 139 8 139 97
-let%span sbyte_quorum'26 = "/workspace/crates/verified/src/composition/byte_quorum.rs" 139 8 139 98
-let%span sbyte_quorum'27 = "/workspace/crates/verified/src/composition/byte_quorum.rs" 26 11 26 84
-let%span sbyte_quorum'28 = "/workspace/crates/verified/src/composition/byte_quorum.rs" 27 10 32 96
-let%span sbyte_quorum'29 = "/workspace/crates/verified/src/composition/byte_quorum.rs" 33 10 42 1
-let%span sbyte_quorum'30 = "/workspace/crates/verified/src/composition/byte_quorum.rs" 43 10 47 1
-let%span sbyte_quorum'31 = "/workspace/crates/verified/src/composition/byte_quorum.rs" 48 10 62 1
-let%span sbyte_quorum'32 = "/workspace/crates/verified/src/composition/byte_quorum.rs" 63 10 67 1
-let%span sbyte_quorum'33 = "/workspace/crates/verified/src/composition/byte_quorum.rs" 68 10 77 1
+let%span sbyte_quorum = "/workspace/crates/verified/src/composition/byte_quorum.rs" 101 7 101 19
+let%span sbyte_quorum'0 = "/workspace/crates/verified/src/composition/byte_quorum.rs" 101 23 101 41
+let%span sbyte_quorum'1 = "/workspace/crates/verified/src/composition/byte_quorum.rs" 101 46 101 99
+let%span sbyte_quorum'2 = "/workspace/crates/verified/src/composition/byte_quorum.rs" 110 8 110 9
+let%span sbyte_quorum'3 = "/workspace/crates/verified/src/composition/byte_quorum.rs" 111 8 111 16
+let%span sbyte_quorum'4 = "/workspace/crates/verified/src/composition/byte_quorum.rs" 105 4 113 5
+let%span sbyte_quorum'5 = "/workspace/crates/verified/src/composition/byte_quorum.rs" 105 4 113 6
+let%span sbyte_quorum'6 = "/workspace/crates/verified/src/composition/byte_quorum.rs" 114 18 114 66
+let%span sbyte_quorum'7 = "/workspace/crates/verified/src/composition/byte_quorum.rs" 115 32 115 42
+let%span sbyte_quorum'8 = "/workspace/crates/verified/src/composition/byte_quorum.rs" 116 16 116 22
+let%span sbyte_quorum'9 = "/workspace/crates/verified/src/composition/byte_quorum.rs" 124 14 124 32
+let%span sbyte_quorum'10 = "/workspace/crates/verified/src/composition/byte_quorum.rs" 125 14 125 26
+let%span sbyte_quorum'11 = "/workspace/crates/verified/src/composition/byte_quorum.rs" 119 16 123 31
+let%span sbyte_quorum'12 = "/workspace/crates/verified/src/composition/byte_quorum.rs" 118 16 118 110
+let%span sbyte_quorum'13 = "/workspace/crates/verified/src/composition/byte_quorum.rs" 117 16 117 59
+let%span sbyte_quorum'14 = "/workspace/crates/verified/src/composition/byte_quorum.rs" 128 12 128 21
+let%span sbyte_quorum'15 = "/workspace/crates/verified/src/composition/byte_quorum.rs" 132 13 132 28
+let%span sbyte_quorum'16 = "/workspace/crates/verified/src/composition/byte_quorum.rs" 132 12 132 28
+let%span sbyte_quorum'17 = "/workspace/crates/verified/src/composition/byte_quorum.rs" 126 21 133 9
+let%span sbyte_quorum'18 = "/workspace/crates/verified/src/composition/byte_quorum.rs" 126 21 134 31
+let%span sbyte_quorum'19 = "/workspace/crates/verified/src/composition/byte_quorum.rs" 135 8 135 28
+let%span sbyte_quorum'20 = "/workspace/crates/verified/src/composition/byte_quorum.rs" 136 13 136 14
+let%span sbyte_quorum'21 = "/workspace/crates/verified/src/composition/byte_quorum.rs" 136 8 136 14
+let%span sbyte_quorum'22 = "/workspace/crates/verified/src/composition/byte_quorum.rs" 138 18 140 36
+let%span sbyte_quorum'23 = "/workspace/crates/verified/src/composition/byte_quorum.rs" 143 8 146 23
+let%span sbyte_quorum'24 = "/workspace/crates/verified/src/composition/byte_quorum.rs" 149 50 149 58
+let%span sbyte_quorum'25 = "/workspace/crates/verified/src/composition/byte_quorum.rs" 149 8 149 97
+let%span sbyte_quorum'26 = "/workspace/crates/verified/src/composition/byte_quorum.rs" 149 8 149 98
+let%span sbyte_quorum'27 = "/workspace/crates/verified/src/composition/byte_quorum.rs" 46 11 46 84
+let%span sbyte_quorum'28 = "/workspace/crates/verified/src/composition/byte_quorum.rs" 47 10 52 96
+let%span sbyte_quorum'29 = "/workspace/crates/verified/src/composition/byte_quorum.rs" 53 10 62 1
+let%span sbyte_quorum'30 = "/workspace/crates/verified/src/composition/byte_quorum.rs" 63 10 67 1
+let%span sbyte_quorum'31 = "/workspace/crates/verified/src/composition/byte_quorum.rs" 68 10 82 1
+let%span sbyte_quorum'32 = "/workspace/crates/verified/src/composition/byte_quorum.rs" 83 10 87 1
+let%span sbyte_quorum'33 = "/workspace/crates/verified/src/composition/byte_quorum.rs" 88 10 92 1
+let%span sbyte_quorum'34 = "/workspace/crates/verified/src/composition/byte_quorum.rs" 31 8 36 52
 let%span squorum_fetch = "/workspace/crates/verified/src/composition/quorum_fetch.rs" 55 11 55 63
 let%span squorum_fetch'0 = "/workspace/crates/verified/src/composition/quorum_fetch.rs" 56 10 60 41
 let%span squorum_fetch'1 = "/workspace/crates/verified/src/composition/quorum_fetch.rs" 61 10 65 1
@@ -471,6 +472,17 @@ let push_i64 (self_: MutBorrow.t t_Vec_i64_Global) (v: Int64.t) (return (x: ()))
     = Seq.snoc (view_Vec_i64_Global self_.current) v}
     (! return {result}) ]
 
+predicate complete_copy [#"/workspace/crates/verified/src/composition/byte_quorum.rs" 24 0 29 9] (observation: tup4_Option_u64_i32_bool_Vec_tup3_i64_i32_Vec_u8_Global_Global) (voter: UInt64.t) (epoch: Int32.t) (source: Seq.seq tup3_i64_i32_Vec_u8_Global) =
+  [%#sbyte_quorum'34] observation.f2
+  /\ observation.f0 = Some voter
+  /\ (Int32.to_int observation.f1 < 0 \/ observation.f1 = epoch)
+  /\ Seq.length (view_Vec_tup3_i64_i32_Vec_u8_Global_Global observation.f3) = Seq.length source
+  /\ (forall j: int. 0 <= j /\ j < Seq.length source
+    -> (Seq.get (view_Vec_tup3_i64_i32_Vec_u8_Global_Global observation.f3) j).f0'2 = (Seq.get source j).f0'2
+    /\ (Seq.get (view_Vec_tup3_i64_i32_Vec_u8_Global_Global observation.f3) j).f1'2 = (Seq.get source j).f1'2
+    /\ view_Vec_u8_Global (Seq.get (view_Vec_tup3_i64_i32_Vec_u8_Global_Global observation.f3) j).f2'2
+    = view_Vec_u8_Global (Seq.get source j).f2'2)
+
 function hwm_member_at [#"/workspace/crates/verified/src/consensus/failover.rs" 176 0 176 62] (log_end'0: int) (s: Seq.seq Int64.t) (k: int) : int
  = [%#sfailover'3] if k = 0 then log_end'0 else Int64.to_int (Seq.get s (k - 1))
 
@@ -622,7 +634,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let durable_matching_copies_bound_fetch [#"/workspace/crates/verified/src/composition/byte_quorum.rs" 78 0 85 23]
+let durable_matching_copies_bound_fetch [#"/workspace/crates/verified/src/composition/byte_quorum.rs" 93 0 100 23]
   (voters: Slice64.slice UInt64.t)
   (observations: Slice64.slice tup4_Option_u64_i32_bool_Vec_tup3_i64_i32_Vec_u8_Global_Global)
   (placement: tup3_u64_usize_i32) (source: Slice64.slice tup3_i64_i32_Vec_u8_Global) (current': Int64.t)
@@ -718,19 +730,7 @@ let durable_matching_copies_bound_fetch [#"/workspace/crates/verified/src/compos
   | bb26 = s0
     [ s0 = {[@expl:assertion] [%#sbyte_quorum'22] forall i'0: int. 0 <= i'0
           /\ i'0 < Seq.length (Slice64.view observations)
-          /\ (Seq.get (Slice64.view observations) i'0).f2
-          /\ (Seq.get (Slice64.view observations) i'0).f0 = Some (Seq.get (Slice64.view voters) i'0)
-          /\ (Int32.to_int (Seq.get (Slice64.view observations) i'0).f1 < 0
-            \/ (Seq.get (Slice64.view observations) i'0).f1 = placement.f2'0)
-          /\ Seq.length (view_Vec_tup3_i64_i32_Vec_u8_Global_Global (Seq.get (Slice64.view observations) i'0).f3)
-            = Seq.length (Slice64.view source)
-          /\ (forall j: int. 0 <= j /\ j < Seq.length (Slice64.view source)
-            -> (Seq.get (view_Vec_tup3_i64_i32_Vec_u8_Global_Global (Seq.get (Slice64.view observations) i'0).f3) j).f0'2
-              = (Seq.get (Slice64.view source) j).f0'2
-            /\ (Seq.get (view_Vec_tup3_i64_i32_Vec_u8_Global_Global (Seq.get (Slice64.view observations) i'0).f3) j).f1'2
-              = (Seq.get (Slice64.view source) j).f1'2
-            /\ view_Vec_u8_Global (Seq.get (view_Vec_tup3_i64_i32_Vec_u8_Global_Global (Seq.get (Slice64.view observations) i'0).f3) j).f2'2
-            = view_Vec_u8_Global (Seq.get (Slice64.view source) j).f2'2)
+          /\ complete_copy (Seq.get (Slice64.view observations) i'0) (Seq.get (Slice64.view voters) i'0) placement.f2'0 (Slice64.view source)
         -> Seq.get (view_Vec_i64_Global reports) i'0 = w.log_end}
       s1
     | s1 = {[@expl:assertion] [%#sbyte_quorum'23] if forall i'0: int. 0 <= i'0
@@ -902,18 +902,7 @@ let durable_matching_copies_bound_fetch [#"/workspace/crates/verified/src/compos
     /\ ([@stop_split] [@expl:durable_matching_copies_bound_fetch ensures #5] [%#sbyte_quorum'33] match result with
       | None'3 -> true
       | Some'3 {f0'4 = hw'0} -> (forall i: int. 0 <= i /\ i < Seq.length (Slice64.view observations)
-          -> (Seq.get (Slice64.view observations) i).f2
-          /\ (Seq.get (Slice64.view observations) i).f0 = Some (Seq.get (Slice64.view voters) i)
-          /\ (Int32.to_int (Seq.get (Slice64.view observations) i).f1 < 0
-            \/ (Seq.get (Slice64.view observations) i).f1 = placement.f2'0)
-          /\ Seq.length (view_Vec_tup3_i64_i32_Vec_u8_Global_Global (Seq.get (Slice64.view observations) i).f3)
-            = Seq.length (Slice64.view source)
-          /\ (forall j: int. 0 <= j /\ j < Seq.length (Slice64.view source)
-            -> (Seq.get (view_Vec_tup3_i64_i32_Vec_u8_Global_Global (Seq.get (Slice64.view observations) i).f3) j).f0'2
-              = (Seq.get (Slice64.view source) j).f0'2
-            /\ (Seq.get (view_Vec_tup3_i64_i32_Vec_u8_Global_Global (Seq.get (Slice64.view observations) i).f3) j).f1'2
-              = (Seq.get (Slice64.view source) j).f1'2
-            /\ view_Vec_u8_Global (Seq.get (view_Vec_tup3_i64_i32_Vec_u8_Global_Global (Seq.get (Slice64.view observations) i).f3) j).f2'2
-            = view_Vec_u8_Global (Seq.get (Slice64.view source) j).f2'2)) -> hw'0 = w.log_end
+          -> complete_copy (Seq.get (Slice64.view observations) i) (Seq.get (Slice64.view voters) i) placement.f2'0 (Slice64.view source))
+      -> hw'0 = w.log_end
       end)}
     (! return {result}) ]

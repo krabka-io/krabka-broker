@@ -12,23 +12,9 @@ use std::{
 };
 
 use assert2::assert;
-use krabka_broker::{Broker, BrokerConfig, BrokerHandle};
-use tempfile::TempDir;
+use krabka_broker::BrokerHandle;
 
 use crate::wire::describe_log_dirs;
-
-pub(crate) fn start_two_dir_broker()
--> impl std::future::Future<Output = (BrokerHandle, TempDir, TempDir, SocketAddr)> {
-    let primary = tempfile::tempdir().unwrap();
-    let extra = tempfile::tempdir().unwrap();
-    let mut cfg = BrokerConfig::for_tests(primary.path().to_path_buf());
-    cfg.extra_log_dirs = vec![extra.path().to_path_buf()];
-    Box::pin(async move {
-        let handle = Broker::start(cfg).await.expect("broker start");
-        let addr = handle.listen_addr();
-        (handle, primary, extra, addr)
-    })
-}
 
 pub(crate) async fn wait_all_partitions(handle: &BrokerHandle, topic: &str, n: i32) {
     for p in 0..n {
@@ -101,3 +87,5 @@ pub(crate) async fn wait_for_move_complete(
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
 }
+
+pub use crate::support::storage::start_two_dir_broker;

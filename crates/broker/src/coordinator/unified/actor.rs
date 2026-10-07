@@ -450,6 +450,10 @@ pub(crate) use self::{
 };
 
 #[cfg(test)]
+#[path = "reconciliation_model_support.rs"]
+mod reconciliation_model_support;
+
+#[cfg(test)]
 #[path = "reconciler_model.rs"]
 mod reconciler_model;
 

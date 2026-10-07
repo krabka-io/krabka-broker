@@ -341,6 +341,8 @@ mod cli_main;
 mod dispatch;
 mod enum_str;
 mod field_defaults;
+mod fixtures;
+mod gcs_fields;
 mod human_units;
 mod krabka_env;
 mod meta;
@@ -348,7 +350,9 @@ mod metrics;
 mod primitive_cmp;
 mod refined_newtype;
 mod runtime_overlay;
+mod runtime_policy_fields;
 mod throttle_probes;
+mod timestamped_batch;
 
 /// Derives `unregistered` and `register` for a struct of metric handles. The
 /// crate documentation lists the field attributes.
@@ -437,4 +441,77 @@ pub fn field_defaults(item: ItemStruct) -> Result<TokenStream, ParseError> {
 #[moxy::function(name = "cli_main")]
 pub fn cli_main(tokens: TokenStream) -> Result<TokenStream, ParseError> {
     cli_main::expand(tokens)
+}
+
+/// Generate the bounded exhaustive Stateright runner under the supplied function name.
+#[moxy::function(name = "bounded_bfs")]
+pub fn bounded_bfs(tokens: TokenStream) -> Result<TokenStream, ParseError> {
+    fixtures::bounded_bfs(tokens)
+}
+
+/// Generate the compacted-batch test projection under the supplied struct name.
+#[moxy::function(name = "compacted_batch")]
+pub fn compacted_batch(tokens: TokenStream) -> Result<TokenStream, ParseError> {
+    fixtures::compacted_batch(tokens)
+}
+
+/// Generate the benchmark's Kafka record-batch builder under the supplied function name.
+#[moxy::function(name = "record_batch_fixture")]
+pub fn record_batch_fixture(tokens: TokenStream) -> Result<TokenStream, ParseError> {
+    fixtures::record_batch(tokens)
+}
+
+/// Prepend the common bucket, prefix, redacted credentials and endpoint fields to a GCS config.
+/// Select `file` or `runtime` to preserve that configuration's field documentation.
+#[moxy::attribute(name = "gcs_fields")]
+pub fn gcs_fields(meta: TokenStream, item: TokenStream) -> Result<TokenStream, ParseError> {
+    gcs_fields::expand(meta, item)
+}
+
+/// Generate action-to-message/log/timer adaptation inside a simulation impl.
+#[moxy::function(name = "simulation_actions")]
+pub fn simulation_actions(tokens: TokenStream) -> Result<TokenStream, ParseError> {
+    fixtures::simulation_actions(tokens)
+}
+
+/// Delegate unchanged metadata-log operations through `self.inner`, before `async_trait`.
+#[moxy::attribute(name = "metadata_log_delegate")]
+pub fn metadata_log_delegate(
+    meta: TokenStream,
+    item: TokenStream,
+) -> Result<TokenStream, ParseError> {
+    fixtures::metadata_log_delegate(meta, item)
+}
+
+/// Generate the finished remote-segment lookup assertions shared by manager fixtures.
+#[moxy::function(name = "remote_segment_check")]
+pub fn remote_segment_check(tokens: TokenStream) -> Result<TokenStream, ParseError> {
+    fixtures::remote_segment_check(tokens)
+}
+
+/// Add the shared runtime policy fields before TOML or CLI field derives.
+#[moxy::attribute(name = "runtime_policy_fields")]
+pub fn runtime_policy_fields(
+    meta: TokenStream,
+    item: TokenStream,
+) -> Result<TokenStream, ParseError> {
+    runtime_policy_fields::expand(meta, item)
+}
+
+/// Generate the shared simulation event adapter inside a harness impl.
+#[moxy::function(name = "simulation_step")]
+pub fn simulation_step(tokens: TokenStream) -> Result<TokenStream, ParseError> {
+    fixtures::simulation_step(tokens)
+}
+
+/// Generate the shared two-partition metadata topic fixture.
+#[moxy::function(name = "snapshot_topic_fixture")]
+pub fn snapshot_topic_fixture(tokens: TokenStream) -> Result<TokenStream, ParseError> {
+    fixtures::snapshot_topic(tokens)
+}
+
+/// Generate the timestamped record-batch fixture used by local and remote read tests.
+#[moxy::function(name = "timestamped_batch")]
+pub fn timestamped_batch(tokens: TokenStream) -> Result<TokenStream, ParseError> {
+    timestamped_batch::expand(tokens)
 }

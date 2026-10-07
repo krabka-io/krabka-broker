@@ -17,10 +17,13 @@ use std::{
 
 use assert2::check;
 use krabka_remote_storage::{
-    CustomMetadata, IndexType, LogSegmentData, RemoteLogSegmentMetadata, RemoteStorageError,
+    CustomMetadata, LogSegmentData, RemoteLogSegmentMetadata, RemoteStorageError,
 };
 
 use super::*;
+use crate::remote_log_manager::test_support::{
+    missing_remote_reads, rolled_tiered_partition_at, sweep_once,
+};
 
 /// How long a parked copy waits for the other partition before it gives up.
 ///
@@ -128,26 +131,7 @@ impl RemoteStorageManager for TestRsm {
         }
     }
 
-    fn fetch_log_segment(
-        &self,
-        metadata: &RemoteLogSegmentMetadata,
-        _start: u32,
-        _end: Option<u32>,
-    ) -> Result<Vec<u8>, RemoteStorageError> {
-        Err(RemoteStorageError::SegmentNotFound(
-            metadata.remote_log_segment_id().clone(),
-        ))
-    }
-
-    fn fetch_index(
-        &self,
-        metadata: &RemoteLogSegmentMetadata,
-        _index_type: IndexType,
-    ) -> Result<Vec<u8>, RemoteStorageError> {
-        Err(RemoteStorageError::SegmentNotFound(
-            metadata.remote_log_segment_id().clone(),
-        ))
-    }
+    missing_remote_reads!();
 
     fn delete_log_segment_data(
         &self,
@@ -172,7 +156,7 @@ fn image_with_orders_partitions(partitions: i32) -> MetadataImage {
 
 /// `orders-index`, led by this broker, with sealed segments the tier lacks.
 fn tiered_partition_at(index: i32, log_dir: &std::path::Path) -> Arc<Partition> {
-    crate::remote_log_manager::test_support::rolled_tiered_partition_at(
+    rolled_tiered_partition_at(
         PartitionIndex(index),
         log_dir,
         LogConfig {
@@ -215,13 +199,10 @@ async fn a_parked_copy_does_not_hold_the_next_partitions_copy() {
     let controller = fixed_source(image_with_orders_partitions(2));
 
     let started = Instant::now();
-    tick_all(
+    sweep_once(
         &partitions,
         &controller,
         &tier(ArchiveMode::Mutable, &rsm, &rlmm),
-        NodeId(1),
-        1,
-        SweepConcurrency::default(),
     )
     .await;
     let elapsed = started.elapsed();

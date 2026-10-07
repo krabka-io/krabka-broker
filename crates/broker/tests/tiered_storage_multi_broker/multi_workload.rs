@@ -9,16 +9,16 @@
 //! `local.retention.bytes` configuration that makes the eviction happen in one
 //! place, beside the two directory walks that observe it.
 
-use std::time::{Duration, Instant};
+use std::{
+    path::Path,
+    time::{Duration, Instant},
+};
 
 use assert2::assert;
 use krabka_broker::BrokerHandle;
 use krabka_client_core::Client;
 use krabka_protocol::{
-    owned::{
-        create_topics_request::{CreatableTopic, CreatableTopicConfig, CreateTopicsRequest},
-        produce_request::{PartitionProduceData, ProduceRequest, TopicProduceData},
-    },
+    owned::create_topics_request::{CreatableTopic, CreateTopicsRequest},
     records::{Record, RecordBatch},
 };
 
@@ -130,33 +130,7 @@ pub(crate) async fn create_tiered_topic(admin: &Client, b1: &BrokerHandle, b2: &
             // read the follower's log on 2. An automatic placement would pick
             // either as the leader.
             topics: vec![CreatableTopic {
-                configs: vec![
-                    CreatableTopicConfig {
-                        name: "remote.storage.enable".into(),
-                        value: Some("true".into()),
-                        ..Default::default()
-                    },
-                    CreatableTopicConfig {
-                        name: "internal.segment.bytes".into(),
-                        value: Some("1024".into()),
-                        ..Default::default()
-                    },
-                    CreatableTopicConfig {
-                        name: "local.retention.bytes".into(),
-                        value: Some("1".into()),
-                        ..Default::default()
-                    },
-                    CreatableTopicConfig {
-                        name: "retention.bytes".into(),
-                        value: Some("-1".into()),
-                        ..Default::default()
-                    },
-                    CreatableTopicConfig {
-                        name: "retention.ms".into(),
-                        value: Some("-1".into()),
-                        ..Default::default()
-                    },
-                ],
+                configs: crate::topic_fixture::tiered_configs(Some("1024")),
                 ..crate::support::topic_on(TOPIC, &[&[1, 2]])
             }],
             timeout_ms: 10_000,
@@ -208,28 +182,9 @@ pub(crate) async fn produce_and_await_remote_segments(
             }],
             ..Default::default()
         };
-        let response = admin
-            .send(ProduceRequest {
-                acks: -1,
-                timeout_ms: 10_000,
-                topic_data: vec![TopicProduceData {
-                    name: TOPIC.into(),
-                    topic_id,
-                    partition_data: vec![PartitionProduceData {
-                        index: 0,
-                        records: Some(batch.into()),
-                        ..Default::default()
-                    }],
-                    ..Default::default()
-                }],
-                ..Default::default()
-            })
-            .await
-            .expect("Produce");
-        assert!(
-            response.responses[0].partition_responses[0].error_code == 0,
-            "Produce failed: {response:?}"
-        );
+        let response =
+            crate::support::client::produce_batch(admin, TOPIC, topic_id, batch, -1, 10_000).await;
+        assert!(response.error_code == 0, "Produce failed: {response:?}");
     }
 
     let deadline = Instant::now() + Duration::from_mins(1);
@@ -240,4 +195,30 @@ pub(crate) async fn produce_and_await_remote_segments(
         );
         tokio::time::sleep(Duration::from_millis(300)).await;
     }
+}
+
+/// The base offsets of the `*.log` files in one replica's partition
+/// directory, ascending. The highest is the active segment's; everything below
+/// it is sealed. A first entry above zero is local retention having evicted an
+/// archived segment, which is the only signal a tiered partition gives on
+/// disk: the *global* log start does not move when a segment is merely
+/// evicted, only when it is deleted from the tier as well.
+pub(crate) fn local_segment_bases(partition_dir: &Path) -> Vec<i64> {
+    let Ok(entries) = std::fs::read_dir(partition_dir) else {
+        return Vec::new();
+    };
+    let mut bases: Vec<i64> = entries
+        .flatten()
+        .filter_map(|entry| {
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) != Some("log") {
+                return None;
+            }
+            path.file_stem()
+                .and_then(|stem| stem.to_str())
+                .and_then(|stem| stem.parse::<i64>().ok())
+        })
+        .collect();
+    bases.sort_unstable();
+    bases
 }

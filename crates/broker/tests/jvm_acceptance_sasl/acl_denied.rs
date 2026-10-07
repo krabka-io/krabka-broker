@@ -6,17 +6,13 @@
 //! refuses them, so each case asserts on the exception name the client logs to
 //! stderr.
 
-use std::{
-    io::Write,
-    process::{Command, Stdio},
-};
+use std::process::Stdio;
 
 use assert2::assert;
 
 use crate::jvm_acceptance::{
-    KAFKA_IMAGE_TXN, broker0_advertised, docker_run_kafka_tool_with_image_and_mount,
-    nc_check_connectivity, plain_jaas, start_sasl_plaintext_broker_with_super_user,
-    write_client_props,
+    KAFKA_IMAGE_TXN, broker0_advertised, nc_check_connectivity, plain_jaas,
+    start_sasl_plaintext_broker_with_super_user, write_client_props,
 };
 
 /// JVM acceptance: produce by an unauthorized principal must fail.
@@ -52,56 +48,21 @@ async fn jvm_unauthorized_produce_fails() {
     nc_check_connectivity();
 
     // ---- Admin step: pre-create topic + provision alice (not bob).
-    let admin_props = write_client_props(&format!(
-        "security.protocol=SASL_PLAINTEXT\n\
-         sasl.mechanism=PLAIN\n\
-         sasl.jaas.config={}\n",
-        plain_jaas(ADMIN, ADMIN_PASS),
-    ));
+    let admin_props = crate::jvm_acceptance::write_plain_props(ADMIN, ADMIN_PASS);
     let admin_mount = admin_props.mount_str();
 
-    docker_run_kafka_tool_with_image_and_mount(
-        KAFKA_IMAGE_TXN,
-        &admin_mount,
-        &[
-            "kafka-topics",
-            "--create",
-            "--if-not-exists",
-            "--topic",
-            TOPIC,
-            "--partitions",
-            "1",
-            "--replication-factor",
-            "1",
-            "--bootstrap-server",
-            broker0_advertised(),
-            "--command-config",
-            "/client.properties",
-        ],
-    );
+    crate::jvm_acceptance::create_console_topic(KAFKA_IMAGE_TXN, &[&admin_mount], TOPIC, 1, 1);
 
     // alice gets Read+Write — proves that the broker has ACLs configured
     // (i.e. the empty-ACL ALLOW shim is not active). ACL implications grant
     // Describe from Read/Write so no explicit Describe ACL is needed.
-    docker_run_kafka_tool_with_image_and_mount(
+    crate::jvm_acceptance::add_console_acl(
         KAFKA_IMAGE_TXN,
-        &admin_mount,
-        &[
-            "kafka-acls",
-            "--bootstrap-server",
-            broker0_advertised(),
-            "--command-config",
-            "/client.properties",
-            "--add",
-            "--allow-principal",
-            "User:alice",
-            "--operation",
-            "Read",
-            "--operation",
-            "Write",
-            "--topic",
-            TOPIC,
-        ],
+        &[&admin_mount],
+        "User:alice",
+        &["Read", "Write"],
+        "--topic",
+        TOPIC,
     );
 
     // ---- Bob step: attempt to produce. Expect stderr to contain
@@ -116,37 +77,14 @@ async fn jvm_unauthorized_produce_fails() {
     ));
     let bob_mount = bob_props.mount_str();
 
-    let mut child = Command::new("docker")
-        .args([
-            "run",
-            "--rm",
-            "-i",
-            "-v",
-            &bob_mount,
-            "--add-host=host.docker.internal:host-gateway",
-            KAFKA_IMAGE_TXN,
-            "kafka-console-producer",
-            "--bootstrap-server",
-            broker0_advertised(),
-            "--topic",
-            TOPIC,
-            "--producer.config",
-            "/client.properties",
-        ])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("spawn bob producer");
     let payload = b"unauth-msg\n";
-    child
-        .stdin
-        .as_mut()
-        .expect("stdin")
-        .write_all(payload)
-        .expect("write stdin");
-    drop(child.stdin.take());
-    let bob_out = child.wait_with_output().expect("wait bob producer");
+    let bob_out = crate::jvm_acceptance::produce_console(
+        KAFKA_IMAGE_TXN,
+        &[&bob_mount],
+        TOPIC,
+        false,
+        payload,
+    );
     let stderr = String::from_utf8_lossy(&bob_out.stderr);
     let stdout = String::from_utf8_lossy(&bob_out.stdout);
     eprintln!(
@@ -176,84 +114,32 @@ async fn jvm_unauthorized_produce_fails() {
 async fn jvm_unauthorized_consumer_fails_group_check() {
     const TOPIC: &str = "foo";
     const GROUP: &str = "cg-other";
-    const ADMIN: &str = "admin";
-    const ADMIN_PASS: &str = "admin-secret";
     const ALICE: &str = "alice";
     const ALICE_PASS: &str = "alice-secret";
 
-    let (broker, _dir) = start_sasl_plaintext_broker_with_super_user(
-        ADMIN,
-        &[(ADMIN, ADMIN_PASS), (ALICE, ALICE_PASS)],
-    )
-    .await;
-    nc_check_connectivity();
-
-    let admin_props = write_client_props(&format!(
-        "security.protocol=SASL_PLAINTEXT\n\
-         sasl.mechanism=PLAIN\n\
-         sasl.jaas.config={}\n",
-        plain_jaas(ADMIN, ADMIN_PASS),
-    ));
+    let (broker, _dir, admin_props) =
+        crate::jvm_acceptance::start_plain_acl_topic(TOPIC, ALICE, ALICE_PASS).await;
     let admin_mount = admin_props.mount_str();
-
-    docker_run_kafka_tool_with_image_and_mount(
-        KAFKA_IMAGE_TXN,
-        &admin_mount,
-        &[
-            "kafka-topics",
-            "--create",
-            "--if-not-exists",
-            "--topic",
-            TOPIC,
-            "--partitions",
-            "1",
-            "--replication-factor",
-            "1",
-            "--bootstrap-server",
-            broker0_advertised(),
-            "--command-config",
-            "/client.properties",
-        ],
-    );
 
     // alice: Read on Topic foo (Describe implied by Read). Deliberately
     // no group ACL so the consumer hits GroupAuthorizationException.
-    docker_run_kafka_tool_with_image_and_mount(
+    crate::jvm_acceptance::add_console_acl(
         KAFKA_IMAGE_TXN,
-        &admin_mount,
-        &[
-            "kafka-acls",
-            "--bootstrap-server",
-            broker0_advertised(),
-            "--command-config",
-            "/client.properties",
-            "--add",
-            "--allow-principal",
-            "User:alice",
-            "--operation",
-            "Read",
-            "--topic",
-            TOPIC,
-        ],
+        &[&admin_mount],
+        "User:alice",
+        &["Read"],
+        "--topic",
+        TOPIC,
     );
 
     // ---- Alice consumer using --group cg-other. Expect group-denied stderr.
-    let alice_props = write_client_props(&format!(
-        "security.protocol=SASL_PLAINTEXT\n\
-         sasl.mechanism=PLAIN\n\
-         sasl.jaas.config={}\n",
-        plain_jaas(ALICE, ALICE_PASS),
-    ));
+    let alice_props = crate::jvm_acceptance::write_plain_props(ALICE, ALICE_PASS);
     let alice_mount = alice_props.mount_str();
 
-    let out = Command::new("docker")
-        .args([
-            "run",
-            "--rm",
-            "-v",
-            &alice_mount,
-            "--add-host=host.docker.internal:host-gateway",
-            KAFKA_IMAGE_TXN,
+    let out = crate::support::jvm_docker_command(
+        KAFKA_IMAGE_TXN,
+        &[&alice_mount],
+        &[
             "kafka-console-consumer",
             "--bootstrap-server",
             broker0_advertised(),
@@ -268,11 +154,13 @@ async fn jvm_unauthorized_consumer_fails_group_check() {
             "15000",
             "--consumer.config",
             "/client.properties",
-        ])
-        .stderr(Stdio::piped())
-        .stdout(Stdio::piped())
-        .output()
-        .expect("spawn alice consumer");
+        ],
+        false,
+    )
+    .stderr(Stdio::piped())
+    .stdout(Stdio::piped())
+    .output()
+    .expect("spawn alice consumer");
     let stderr = String::from_utf8_lossy(&out.stderr);
     let stdout = String::from_utf8_lossy(&out.stdout);
     eprintln!(

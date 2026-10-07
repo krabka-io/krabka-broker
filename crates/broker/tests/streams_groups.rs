@@ -20,6 +20,8 @@
 // directory is `tests/`. `#[path]` re-bases each declaration onto the sibling
 // `streams_groups/` directory, which keeps the parts out of `tests/` where
 // every `.rs` file would become another test binary.
+mod support;
+
 #[path = "streams_groups/streams_admin.rs"]
 mod streams_admin;
 #[path = "streams_groups/streams_harness.rs"]

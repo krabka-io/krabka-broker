@@ -427,16 +427,17 @@ mod tests {
         let ObjectStoreConfig::S3(s3) = args.to_config().expect("config") else {
             panic!("the s3 bucket selects the S3 backend");
         };
-        // `S3Config` carries no `PartialEq`, so the fields the mapping sets
-        // are checked one by one.
-        check!(s3.bucket == "backups");
-        check!(s3.region == "eu-west-1");
-        check!(s3.endpoint.as_deref() == Some("http://minio:9000"));
-        check!(s3.access_key_id.as_deref() == Some("key"));
-        check!(s3.secret_access_key.as_deref() == Some("secret"));
-        check!(s3.allow_http);
-        // The prefix belongs to the handle, not to the store config.
-        check!(s3.prefix.is_none());
+        check!(
+            s3 == crate::S3Config {
+                bucket: "backups".into(),
+                region: "eu-west-1".into(),
+                endpoint: Some("http://minio:9000".into()),
+                access_key_id: Some("key".into()),
+                secret_access_key: Some("secret".into()),
+                allow_http: true,
+                ..Default::default()
+            }
+        );
     }
 
     #[test]

@@ -65,19 +65,13 @@ async fn kafka_topics_alter_partitions() {
     let (_broker, _dir) = start_host_broker().await;
     nc_check_connectivity();
 
-    docker_run_kafka_tool(&[
-        "kafka-topics",
-        "--create",
-        "--if-not-exists",
-        "--topic",
+    crate::jvm_acceptance::create_console_topic(
+        crate::jvm_acceptance::KAFKA_IMAGE,
+        &[],
         TOPIC,
-        "--partitions",
-        "1",
-        "--replication-factor",
-        "1",
-        "--bootstrap-server",
-        broker0_advertised(),
-    ]);
+        1,
+        1,
+    );
 
     docker_run_kafka_tool(&[
         "kafka-topics",

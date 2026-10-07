@@ -24,25 +24,24 @@
 //! one-off CI matrix surprises.
 
 mod kafka_wire;
+mod support;
 
 use std::{io, net::SocketAddr};
 
 use assert2::assert;
 use bytes::BytesMut;
-use krabka_broker::{
-    Broker, BrokerConfig, BrokerHandle, authorizer::opa::OpaAuthorizer, config::ListenerSpec,
-};
+use kafka_wire::single_record_produce_request;
+use krabka_broker::{Broker, BrokerHandle, authorizer::opa::OpaAuthorizer};
 use krabka_protocol::{
     Decode, Encode,
     owned::{
         create_topics_request::{CreatableTopic, CreateTopicsRequest},
         create_topics_response::CreateTopicsResponse,
-        produce_request::{PartitionProduceData, ProduceRequest, TopicProduceData},
+        produce_request::ProduceRequest,
         produce_response::ProduceResponse,
     },
-    records::{Record, RecordBatch},
 };
-use krabka_security::{ListenerProtocol, SaslMechanism};
+use krabka_security::SaslMechanism;
 use tempfile::TempDir;
 use wiremock::{Mock, MockServer, ResponseTemplate, matchers::method};
 
@@ -81,17 +80,7 @@ fn start_broker_with_opa_authorizer(
     opa_url: String,
 ) -> impl std::future::Future<Output = (BrokerHandle, TempDir, SocketAddr)> {
     let log_dir = tempfile::tempdir().unwrap();
-    let mut cfg = BrokerConfig::for_tests(log_dir.path().to_path_buf());
-    cfg.listeners = vec![ListenerSpec {
-        name: "SASL_PLAINTEXT".to_string(),
-        bind_addr: "127.0.0.1:0".parse().unwrap(),
-        advertised: "127.0.0.1:0".to_string(),
-        protocol: ListenerProtocol::SaslPlaintext,
-        tls_config: None,
-        sasl_mechanisms: None,
-        principal_mapper: krabka_broker::SslPrincipalMapper::default(),
-    }];
-    cfg.inter_broker_listener_name = "SASL_PLAINTEXT".to_string();
+    let mut cfg = crate::support::sasl_plaintext_config(log_dir.path().to_path_buf());
     cfg.enabled_sasl_mechanisms = vec![SaslMechanism::Plain];
     cfg.plain_credentials
         .insert("admin".to_string(), "admin-secret".to_string());
@@ -144,35 +133,6 @@ fn start_broker_with_opa_authorizer(
 // ─────────────────────────────────────────────────────────────────────────────
 // Wire driver helpers.
 // ─────────────────────────────────────────────────────────────────────────────
-
-fn single_record_produce_request(topic: &str, partition: i32, value: &[u8]) -> ProduceRequest {
-    ProduceRequest {
-        transactional_id: None,
-        acks: -1,
-        timeout_ms: 5_000,
-        topic_data: vec![TopicProduceData {
-            name: topic.to_string(),
-            partition_data: vec![PartitionProduceData {
-                index: partition,
-                records: Some(
-                    RecordBatch {
-                        last_offset_delta: 0,
-                        records: vec![Record {
-                            offset_delta: 0,
-                            value: Some(bytes::Bytes::copy_from_slice(value)),
-                            ..Default::default()
-                        }],
-                        ..Default::default()
-                    }
-                    .into(),
-                ),
-                ..Default::default()
-            }],
-            ..Default::default()
-        }],
-        ..Default::default()
-    }
-}
 
 async fn drive_create_topics_as_plain(
     addr: SocketAddr,

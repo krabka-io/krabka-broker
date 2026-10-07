@@ -1,0 +1,234 @@
+(* #"/workspace/crates/verified/src/remote_read/remote_time_index_candidate_count.rs" 30 0 35 18 *)
+
+let%span sord = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sord'0 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span swell_founded = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/well_founded.rs" 43 8 43 33
+let%span sslice = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 331 18 331 22
+let%span sremote_time_index_candidate_count = "/workspace/crates/verified/src/remote_read/remote_time_index_candidate_count.rs" 37 20 37 26
+let%span sremote_time_index_candidate_count'0 = "/workspace/crates/verified/src/remote_read/remote_time_index_candidate_count.rs" 40 14 40 36
+let%span sremote_time_index_candidate_count'1 = "/workspace/crates/verified/src/remote_read/remote_time_index_candidate_count.rs" 41 18 41 30
+let%span sremote_time_index_candidate_count'2 = "/workspace/crates/verified/src/remote_read/remote_time_index_candidate_count.rs" 39 16 39 83
+let%span sremote_time_index_candidate_count'3 = "/workspace/crates/verified/src/remote_read/remote_time_index_candidate_count.rs" 38 16 38 39
+let%span sremote_time_index_candidate_count'4 = "/workspace/crates/verified/src/remote_read/remote_time_index_candidate_count.rs" 42 11 42 26
+let%span sremote_time_index_candidate_count'5 = "/workspace/crates/verified/src/remote_read/remote_time_index_candidate_count.rs" 42 30 42 43
+let%span sremote_time_index_candidate_count'6 = "/workspace/crates/verified/src/remote_read/remote_time_index_candidate_count.rs" 42 47 42 48
+let%span sremote_time_index_candidate_count'7 = "/workspace/crates/verified/src/remote_read/remote_time_index_candidate_count.rs" 42 52 42 65
+let%span sremote_time_index_candidate_count'8 = "/workspace/crates/verified/src/remote_read/remote_time_index_candidate_count.rs" 42 69 42 80
+let%span sremote_time_index_candidate_count'9 = "/workspace/crates/verified/src/remote_read/remote_time_index_candidate_count.rs" 46 24 46 37
+let%span sremote_time_index_candidate_count'10 = "/workspace/crates/verified/src/remote_read/remote_time_index_candidate_count.rs" 46 41 46 52
+let%span sremote_time_index_candidate_count'11 = "/workspace/crates/verified/src/remote_read/remote_time_index_candidate_count.rs" 48 24 48 39
+let%span sremote_time_index_candidate_count'12 = "/workspace/crates/verified/src/remote_read/remote_time_index_candidate_count.rs" 48 43 48 56
+let%span sremote_time_index_candidate_count'13 = "/workspace/crates/verified/src/remote_read/remote_time_index_candidate_count.rs" 51 24 51 29
+let%span sremote_time_index_candidate_count'14 = "/workspace/crates/verified/src/remote_read/remote_time_index_candidate_count.rs" 57 17 57 18
+let%span sremote_time_index_candidate_count'15 = "/workspace/crates/verified/src/remote_read/remote_time_index_candidate_count.rs" 57 8 57 18
+let%span sremote_time_index_candidate_count'16 = "/workspace/crates/verified/src/remote_read/remote_time_index_candidate_count.rs" 28 11 28 75
+let%span sremote_time_index_candidate_count'17 = "/workspace/crates/verified/src/remote_read/remote_time_index_candidate_count.rs" 29 10 29 86
+let%span sremote_time_index_candidate_count'18 = "/workspace/crates/verified/src/remote_read/remote_time_index_candidate_count.rs" 16 8 24 9
+
+use creusot.int.UInt64
+use seq.Seq
+use creusot.slice.Slice64
+use creusot.int.Int64
+use creusot.prelude.Any
+use int.Int
+
+type t_Option_usize = None | Some UInt64.t
+
+predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other <= self
+
+meta "rewrite_def" predicate ge_log_Int
+
+predicate gt_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord'0] other < self
+
+meta "rewrite_def" predicate gt_log_Int
+
+predicate well_founded_relation_Int [@inline:trivial] (self: int) (other: int) =
+  [%#swell_founded] ge_log_Int self 0 /\ gt_log_Int self other
+
+meta "rewrite_def" predicate well_founded_relation_Int
+
+let len_i64 (self_: Slice64.slice Int64.t) (return (x: UInt64.t)) = any
+  [ return (result: UInt64.t) -> {[@stop_split] [@expl:len ensures] [%#sslice] Seq.length (Slice64.view self_)
+    = UInt64.t'int result}
+    (! return {result}) ]
+
+predicate finished_selection [#"/workspace/crates/verified/src/remote_read/remote_time_index_candidate_count.rs" 7 0 14 9] (starts: Seq.seq Int64.t) (ends: Seq.seq Int64.t) (finished: Seq.seq bool) (best: t_Option_usize) (count: int) (latest: bool) =
+  [%#sremote_time_index_candidate_count'18] match best with
+    | Some best'0 -> UInt64.t'int best'0 < count
+    /\ Seq.get finished (UInt64.t'int best'0)
+    /\ 0 <= Int64.to_int (Seq.get starts (UInt64.t'int best'0))
+    /\ Int64.to_int (Seq.get starts (UInt64.t'int best'0)) <= Int64.to_int (Seq.get ends (UInt64.t'int best'0))
+    /\ (forall i: int. 0 <= i
+        /\ i < count
+        /\ Seq.get finished i
+        /\ 0 <= Int64.to_int (Seq.get starts i) /\ Int64.to_int (Seq.get starts i) <= Int64.to_int (Seq.get ends i)
+      -> (if latest then
+        Int64.to_int (Seq.get ends i) <= Int64.to_int (Seq.get ends (UInt64.t'int best'0))
+      else
+        Int64.to_int (Seq.get starts (UInt64.t'int best'0)) <= Int64.to_int (Seq.get starts i)
+      ))
+    | None -> forall i: int. 0 <= i /\ i < count
+      -> not Seq.get finished i
+      \/ Int64.to_int (Seq.get starts i) < 0 \/ Int64.to_int (Seq.get ends i) < Int64.to_int (Seq.get starts i)
+    end
+
+let elim_Some (_x: t_Option_usize) (return (f0: UInt64.t)) = any
+  [ _k (f0: UInt64.t) -> {Some f0 = _x} (! return {f0})
+  | _chk -> (! {[@expl:elim Some] match _x with
+      | Some _ -> true
+      | _ -> false
+      end}
+    any) ]
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let select_finished_index [#"/workspace/crates/verified/src/remote_read/remote_time_index_candidate_count.rs" 30 0 35 18]
+  (starts: Slice64.slice Int64.t) (ends: Slice64.slice Int64.t) (finished: Slice64.slice bool) (latest: bool)
+  (return (x: t_Option_usize)) =
+{[@stop_split] [@expl:select_finished_index requires] [%#sremote_time_index_candidate_count'16] Seq.length (Slice64.view starts)
+    = Seq.length (Slice64.view ends)
+  /\ Seq.length (Slice64.view starts) = Seq.length (Slice64.view finished)}
+  (! bb0
+  [ bb0 = s0
+    [ s0 = [ &best <- None ] s1
+    | s1 = [ &index <- [%#sremote_time_index_candidate_count] (0: UInt64.t) ] s2
+    | s2 = bb1 ]
+  | bb1 = bb1invariant
+    [ bb1 =
+      {[@expl:loop variant] well_founded_relation_Int variant_old_bb1 ([%#sremote_time_index_candidate_count'0] Seq.length (Slice64.view starts)
+      - UInt64.t'int index)}
+      bb1invariant
+    | bb1invariant = {[@expl:loop invariant #0] [%#sremote_time_index_candidate_count'3] UInt64.t'int index
+      <= Seq.length (Slice64.view starts)}
+      {[@expl:loop invariant #1] [%#sremote_time_index_candidate_count'2] finished_selection (Slice64.view starts) (Slice64.view ends) (Slice64.view finished) best (UInt64.t'int index) latest}
+      (! [ &variant_old_bb1 <- [%#sremote_time_index_candidate_count'0] Seq.length (Slice64.view starts)
+      - UInt64.t'int index ] s0)
+      [ s0 = len_i64 [%#sremote_time_index_candidate_count'1] {starts} (fun (_x: UInt64.t) -> [ &_34 <- _x ] s1)
+      | s1 = [ &_32 <- UInt64.lt index _34 ] s2
+      | s2 = any [ br0 -> {_32 = false} (! bb32) | br1 -> {_32} (! bb4) ] ]
+      [ bb4 = s0
+        [ s0 = [ &_38 <- index ] s1
+        | s1 = [ &_39 <- Slice64.length finished ] s2
+        | s2 = [ &_40 <- UInt64.lt _38 _39 ] s3
+        | s3 = {[@expl:index in bounds] [%#sremote_time_index_candidate_count'4] _40} s4
+        | s4 = Slice64.get [%#sremote_time_index_candidate_count'4] <bool> {finished} {_38}
+            (fun (r: bool) -> [ &_37 <- r ] s5)
+        | s5 = any [ br0 -> {_37 = false} (! bb31) | br1 -> {_37} (! bb6) ] ]
+      | bb6 = s0
+        [ s0 = [ &_43 <- index ] s1
+        | s1 = [ &_44 <- Slice64.length starts ] s2
+        | s2 = [ &_45 <- UInt64.lt _43 _44 ] s3
+        | s3 = {[@expl:index in bounds] [%#sremote_time_index_candidate_count'5] _45} s4
+        | s4 = Slice64.get [%#sremote_time_index_candidate_count'5] <Int64.t> {starts} {_43}
+            (fun (r: Int64.t) -> [ &_42 <- r ] s5)
+        | s5 = [ &_41 <- Int64.ge _42 ([%#sremote_time_index_candidate_count'6] (0: Int64.t)) ] s6
+        | s6 = any [ br0 -> {_41 = false} (! bb31) | br1 -> {_41} (! bb8) ] ]
+      | bb8 = s0
+        [ s0 = [ &_48 <- index ] s1
+        | s1 = [ &_49 <- Slice64.length starts ] s2
+        | s2 = [ &_50 <- UInt64.lt _48 _49 ] s3
+        | s3 = {[@expl:index in bounds] [%#sremote_time_index_candidate_count'7] _50} s4
+        | s4 = Slice64.get [%#sremote_time_index_candidate_count'7] <Int64.t> {starts} {_48}
+            (fun (r: Int64.t) -> [ &_47 <- r ] s5)
+        | s5 = [ &_52 <- index ] s6
+        | s6 = [ &_53 <- Slice64.length ends ] s7
+        | s7 = [ &_54 <- UInt64.lt _52 _53 ] s8
+        | s8 = {[@expl:index in bounds] [%#sremote_time_index_candidate_count'8] _54} s9
+        | s9 = Slice64.get [%#sremote_time_index_candidate_count'8] <Int64.t> {ends} {_52}
+            (fun (r: Int64.t) -> [ &_51 <- r ] s10)
+        | s10 = [ &_46 <- Int64.le _47 _51 ] s11
+        | s11 = any [ br0 -> {_46 = false} (! bb31) | br1 -> {_46} (! bb11) ] ]
+      | bb11 = any [ br0 -> {best = None} (! bb14) | br1 (x0: UInt64.t) -> {best = Some x0} (! bb15) ]
+      | bb15 = s0
+        [ s0 = elim_Some {best} (fun (r0: UInt64.t) -> [ &current' <- r0 ] s1)
+        | s1 = any [ br0 -> {latest = false} (! bb19) | br1 -> {latest} (! bb16) ] ]
+      | bb16 = s0
+        [ s0 = [ &_60 <- current' ] s1
+        | s1 = [ &_61 <- Slice64.length ends ] s2
+        | s2 = [ &_62 <- UInt64.lt _60 _61 ] s3
+        | s3 = {[@expl:index in bounds] [%#sremote_time_index_candidate_count'9] _62} s4
+        | s4 = Slice64.get [%#sremote_time_index_candidate_count'9] <Int64.t> {ends} {_60}
+            (fun (r: Int64.t) -> [ &_59 <- r ] s5)
+        | s5 = [ &_64 <- index ] s6
+        | s6 = [ &_65 <- Slice64.length ends ] s7
+        | s7 = [ &_66 <- UInt64.lt _64 _65 ] s8
+        | s8 = {[@expl:index in bounds] [%#sremote_time_index_candidate_count'10] _66} s9
+        | s9 = Slice64.get [%#sremote_time_index_candidate_count'10] <Int64.t> {ends} {_64}
+            (fun (r: Int64.t) -> [ &_63 <- r ] s10)
+        | s10 = [ &keep <- Int64.ge _59 _63 ] s11
+        | s11 = bb23 ]
+      | bb19 = s0
+        [ s0 = [ &_68 <- current' ] s1
+        | s1 = [ &_69 <- Slice64.length starts ] s2
+        | s2 = [ &_70 <- UInt64.lt _68 _69 ] s3
+        | s3 = {[@expl:index in bounds] [%#sremote_time_index_candidate_count'11] _70} s4
+        | s4 = Slice64.get [%#sremote_time_index_candidate_count'11] <Int64.t> {starts} {_68}
+            (fun (r: Int64.t) -> [ &_67 <- r ] s5)
+        | s5 = [ &_72 <- index ] s6
+        | s6 = [ &_73 <- Slice64.length starts ] s7
+        | s7 = [ &_74 <- UInt64.lt _72 _73 ] s8
+        | s8 = {[@expl:index in bounds] [%#sremote_time_index_candidate_count'12] _74} s9
+        | s9 = Slice64.get [%#sremote_time_index_candidate_count'12] <Int64.t> {starts} {_72}
+            (fun (r: Int64.t) -> [ &_71 <- r ] s10)
+        | s10 = [ &keep <- Int64.le _67 _71 ] s11
+        | s11 = bb23 ]
+      | bb14 = s0 [ s0 = [ &keep <- [%#sremote_time_index_candidate_count'13] false ] s1 | s1 = bb23 ]
+      | bb23 = any [ br0 -> {keep = false} (! bb24) | br1 -> {keep} (! bb31) ]
+      | bb24 = s0 [ s0 = [ &_76 <- Some index ] s1 | s1 = [ &best <- _76 ] s2 | s2 = bb31 ]
+      | bb31 = s0
+        [ s0 = UInt64.add [%#sremote_time_index_candidate_count'15] {index}
+            {[%#sremote_time_index_candidate_count'14] (1: UInt64.t)} (fun (_x: UInt64.t) -> [ &index <- _x ] s1)
+        | s1 = bb1 ] ] ]
+  | bb32 = s0 [ s0 = [ &_ret <- best ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_Option_usize = Any.any_l ()
+  | & starts: Slice64.slice Int64.t = starts
+  | & ends: Slice64.slice Int64.t = ends
+  | & finished: Slice64.slice bool = finished
+  | & latest: bool = latest
+  | & best: t_Option_usize = Any.any_l ()
+  | & index: UInt64.t = Any.any_l ()
+  | & _32: bool = Any.any_l ()
+  | & _34: UInt64.t = Any.any_l ()
+  | & _37: bool = Any.any_l ()
+  | & _38: UInt64.t = Any.any_l ()
+  | & _39: UInt64.t = Any.any_l ()
+  | & _40: bool = Any.any_l ()
+  | & _41: bool = Any.any_l ()
+  | & _42: Int64.t = Any.any_l ()
+  | & _43: UInt64.t = Any.any_l ()
+  | & _44: UInt64.t = Any.any_l ()
+  | & _45: bool = Any.any_l ()
+  | & _46: bool = Any.any_l ()
+  | & _47: Int64.t = Any.any_l ()
+  | & _48: UInt64.t = Any.any_l ()
+  | & _49: UInt64.t = Any.any_l ()
+  | & _50: bool = Any.any_l ()
+  | & _51: Int64.t = Any.any_l ()
+  | & _52: UInt64.t = Any.any_l ()
+  | & _53: UInt64.t = Any.any_l ()
+  | & _54: bool = Any.any_l ()
+  | & keep: bool = Any.any_l ()
+  | & current': UInt64.t = Any.any_l ()
+  | & _59: Int64.t = Any.any_l ()
+  | & _60: UInt64.t = Any.any_l ()
+  | & _61: UInt64.t = Any.any_l ()
+  | & _62: bool = Any.any_l ()
+  | & _63: Int64.t = Any.any_l ()
+  | & _64: UInt64.t = Any.any_l ()
+  | & _65: UInt64.t = Any.any_l ()
+  | & _66: bool = Any.any_l ()
+  | & _67: Int64.t = Any.any_l ()
+  | & _68: UInt64.t = Any.any_l ()
+  | & _69: UInt64.t = Any.any_l ()
+  | & _70: bool = Any.any_l ()
+  | & _71: Int64.t = Any.any_l ()
+  | & _72: UInt64.t = Any.any_l ()
+  | & _73: UInt64.t = Any.any_l ()
+  | & _74: bool = Any.any_l ()
+  | & _76: t_Option_usize = Any.any_l ()
+  | & variant_old_bb1: int = Any.any_l () ])
+  [ return (result: t_Option_usize) ->
+  {[@stop_split] [@expl:select_finished_index ensures] [%#sremote_time_index_candidate_count'17] finished_selection (Slice64.view starts) (Slice64.view ends) (Slice64.view finished) result (Seq.length (Slice64.view starts)) latest}
+    (! return {result}) ]

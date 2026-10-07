@@ -2,13 +2,13 @@
 
 use moxy::{
     ast::{Attributed, Field, ItemStruct, ParseError},
-    token::{Ident, LitStr, Spanner, TokenStream},
+    token::{Ident, LitStr, TokenStream},
 };
 
-use crate::meta::Tokens;
+use crate::meta::{Tokens, field_ident, named_fields};
 
 /// The arguments of one `#[metric(...)]` field attribute.
-#[derive(moxy::FromMeta)]
+#[derive(Default, moxy::FromMeta)]
 struct MetricArgs {
     /// Leave the field out of the registration. It is still constructed.
     #[meta(default)]
@@ -54,21 +54,10 @@ fn is_family(field: &Field) -> bool {
 }
 
 fn metric(field: &Field) -> Result<Metric, ParseError> {
-    let Some(ident) = field.ident.as_ref() else {
-        return Err(ParseError::new(
-            field.span(),
-            "`RegisterMetrics` needs named fields",
-        ));
-    };
+    let ident = field_ident(field, "RegisterMetrics")?;
     let args = field
         .parse_meta::<MetricArgs>("metric")?
-        .unwrap_or(MetricArgs {
-            skip: false,
-            name: None,
-            help: None,
-            buckets: None,
-            new: None,
-        });
+        .unwrap_or_default();
 
     let constructor = match (args.new, args.buckets) {
         (Some(_), Some(buckets)) => {
@@ -113,24 +102,13 @@ fn metric(field: &Field) -> Result<Metric, ParseError> {
 
 /// Expands `#[derive(RegisterMetrics)]` on `item`.
 pub(crate) fn expand(item: ItemStruct) -> Result<TokenStream, ParseError> {
-    // Moved out field by field: moxy's `ItemFn` parser rejects a `let`
-    // that destructures `item` with a struct pattern.
-    let ident = item.ident;
-    let generics = item.generics;
-    let fields = item.fields;
-    let Some(named) = fields.as_named() else {
-        return Err(ParseError::new(
-            ident.span(),
-            "`RegisterMetrics` needs a struct with named fields",
-        ));
-    };
-    let metrics = named
-        .fields
+    let metrics = named_fields(&item, "RegisterMetrics")?
         .iter()
         .map(metric)
         .collect::<Result<Vec<_>, _>>()?;
 
-    let (impl_generics, type_generics, where_clause) = generics.split();
+    let ident = item.ident;
+    let (impl_generics, type_generics, where_clause) = item.generics.split();
     Ok(moxy::template! {
         impl {{ impl_generics }} {{ ident }} {{ type_generics }} {{ where_clause }} {
             fn unregistered() -> Self {

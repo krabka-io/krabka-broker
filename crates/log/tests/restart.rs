@@ -89,24 +89,9 @@ fn a_compacted_segment_keeps_the_maximum_of_the_records_it_kept() {
     check!(log.tierable_segments().len() == 1);
 }
 
-/// A two-record batch stamped at `ts`, sized so a 256-byte segment holds one.
-fn batch_at(ts: i64) -> RecordBatch {
-    let mut batch = RecordBatch {
-        base_timestamp: ts,
-        max_timestamp: ts,
-        last_offset_delta: 1,
-        ..RecordBatch::default()
-    };
-    for delta in 0..2 {
-        batch.records.push(Record {
-            offset_delta: delta,
-            key: Some(Bytes::from(format!("k{delta}"))),
-            value: Some(Bytes::from(vec![b'v'; 96])),
-            ..Record::default()
-        });
-    }
-    batch
-}
+#[path = "support/scheduled.rs"]
+mod scheduled;
+use scheduled::batch_at;
 
 /// Retention must not mistake a reopened sealed segment for an ancient one.
 ///

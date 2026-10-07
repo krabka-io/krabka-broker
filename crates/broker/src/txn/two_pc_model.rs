@@ -76,7 +76,10 @@ use super::{
     two_pc::{resolve_txn_timeout, should_abort_idle_txn},
     version::TxnVersion,
 };
-use crate::model_check::run_bfs;
+use crate::{
+    model_check::run_bfs,
+    txn::decision_model_support::{fenced_as_kafka, initialize},
+};
 
 const MAX_STATES: usize = 1_000_000;
 const MAX_DEPTH: usize = 80;
@@ -239,62 +242,20 @@ fn kafka_timed_out(s: &TwoPcProj, now_ms: i64) -> bool {
         && i128::from(s.start_ms) + i128::from(s.requested_ms) < i128::from(now_ms)
 }
 
-/// Kafka's abort of an `Ongoing` transaction by the coordinator itself,
-/// restated from `TransactionMetadata` (`prepareFenceProducerEpoch`, then
-/// `prepareAbortOrCommit` from `endTransaction(isFromClient = false)` at the
-/// cluster's version) instead of read back from the function under test. The
-/// producer epoch moves from `held` to `held + 1` once, and the producer
-/// continues at that epoch. `TV_2` records the epoch it held as the last epoch,
-/// and stamps `TV_2`. Below it the last epoch is cleared and the record carries
-/// `TV_0`.
-fn fenced_as_kafka(entry: &TxnEntry, held: i16, version: TxnVersion) -> bool {
-    let verified = version == TxnVersion::Verified;
-    entry.producer_epoch == held + 1
-        && entry.last_producer_epoch == if verified { held } else { -1 }
-        && entry.client_transaction_version == if verified { 2 } else { 0 }
-        && completion_producer_identity(entry) == (entry.producer_id, held + 1)
-}
-
 impl TwoPcModel {
     fn init(&self, s: &mut TwoPcProj, enable_2pc: bool, requested_ms: i32) -> Option<()> {
         // The handler resolves the timeout before it reads the entry, and
         // answers INVALID_TRANSACTION_TIMEOUT when Kafka refuses it.
         let timeout_ms = resolve_txn_timeout(enable_2pc, requested_ms, MAX_TIMEOUT_MS).ok()?;
-        let mut entry = rebuild(s);
-        // `pending_completion_response`: CONCURRENT_TRANSACTIONS, no write.
-        if completion_for(entry.state).is_some() {
-            return None;
+        let initialized = initialize(rebuild(s), self.fence_version, timeout_ms, CLOCK[s.clock])?;
+        if !initialized.fence_matches {
+            s.violations.insert(Violation::FenceDiverged);
         }
-        if entry.state == TxnState::Ongoing {
-            // `prepareFenceProducerEpoch` and the server's abort at the
-            // cluster's version. The client retries after the completion, so
-            // this call does not apply its own timeout.
-            let held = entry.producer_epoch;
-            entry.state = TxnState::PrepareAbort;
-            prepare_server_abort_identities_with_fresh(&mut entry, self.fence_version, None)
-                .expect("model epochs never reach the rotation boundary");
-            if !fenced_as_kafka(&entry, held, self.fence_version) {
-                s.violations.insert(Violation::FenceDiverged);
-            }
-        } else {
-            let (pid, epoch) = krabka_verified::transaction::next_producer_identity(
-                true,
-                false,
-                entry.producer_id.get(),
-                entry.producer_epoch,
-                None,
-            )
-            .expect("model epochs never reach the rotation boundary");
-            entry = TxnEntry::new_empty(
-                "tid".to_string(),
-                ProducerId(pid),
-                epoch,
-                timeout_ms,
-                CLOCK[s.clock],
-            );
+        if initialized.reset {
             s.enable_2pc = enable_2pc;
             s.requested_ms = requested_ms;
         }
+        let entry = initialized.entry;
         project(s, &entry);
         Some(())
     }

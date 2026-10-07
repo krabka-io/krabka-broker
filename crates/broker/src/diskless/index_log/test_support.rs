@@ -14,7 +14,7 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use futures_util::{FutureExt as _, StreamExt as _};
 use krabka_remote_storage_topic::{
-    AssignmentHandle, MetadataEventLog, MetadataEventStream, MetadataLogError, PartitionStart,
+    AssignmentHandle, MetadataEventLog, MetadataEventStream, PartitionStart,
 };
 
 /// How fast the wrapped log's subscription delivers what it replays.
@@ -42,25 +42,9 @@ impl PacedReplayLog {
     }
 }
 
+#[krabka_macros::metadata_log_delegate(krabka_remote_storage_topic, keyed)]
 #[async_trait]
 impl MetadataEventLog for PacedReplayLog {
-    fn partition_count(&self) -> i32 {
-        self.inner.partition_count()
-    }
-
-    async fn publish(&self, partition: i32, event: Bytes) -> Result<i64, MetadataLogError> {
-        self.inner.publish(partition, event).await
-    }
-
-    async fn publish_keyed(
-        &self,
-        partition: i32,
-        key: Bytes,
-        event: Option<Bytes>,
-    ) -> Result<i64, MetadataLogError> {
-        self.inner.publish_keyed(partition, key, event).await
-    }
-
     fn subscribe(
         &self,
         assignment: Vec<PartitionStart>,
@@ -75,10 +59,6 @@ impl MetadataEventLog for PacedReplayLog {
             event
         });
         (Box::pin(paced), handle)
-    }
-
-    async fn high_water_marks(&self) -> Result<Vec<i64>, MetadataLogError> {
-        self.inner.high_water_marks().await
     }
 }
 
@@ -107,25 +87,9 @@ impl RacingAppendLog {
     }
 }
 
+#[krabka_macros::metadata_log_delegate(krabka_remote_storage_topic, keyed)]
 #[async_trait]
 impl MetadataEventLog for RacingAppendLog {
-    fn partition_count(&self) -> i32 {
-        self.inner.partition_count()
-    }
-
-    async fn publish(&self, partition: i32, event: Bytes) -> Result<i64, MetadataLogError> {
-        self.inner.publish(partition, event).await
-    }
-
-    async fn publish_keyed(
-        &self,
-        partition: i32,
-        key: Bytes,
-        event: Option<Bytes>,
-    ) -> Result<i64, MetadataLogError> {
-        self.inner.publish_keyed(partition, key, event).await
-    }
-
     fn subscribe(
         &self,
         assignment: Vec<PartitionStart>,
@@ -146,9 +110,5 @@ impl MetadataEventLog for RacingAppendLog {
                 .expect("racing append");
         }
         self.inner.subscribe(assignment)
-    }
-
-    async fn high_water_marks(&self) -> Result<Vec<i64>, MetadataLogError> {
-        self.inner.high_water_marks().await
     }
 }

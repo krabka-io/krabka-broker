@@ -13,27 +13,7 @@ use krabka_protocol::owned::fetch_request::{FetchPartition, FetchRequest, FetchT
 /// Fetch the audit topic and return the `seq` header value (parsed as `u64`)
 /// from each non-checkpoint record, in order.
 pub async fn audit_record_seqs(client: &krabka_client_core::Client) -> Vec<u64> {
-    let topic_id = super::topic_id_for(client, AUDIT_TOPIC).await;
-    let fr = client
-        .send(FetchRequest {
-            max_wait_ms: 500,
-            min_bytes: 1,
-            max_bytes: 1 << 20,
-            topics: vec![FetchTopic {
-                topic: AUDIT_TOPIC.into(),
-                topic_id,
-                partitions: vec![FetchPartition {
-                    partition: 0,
-                    fetch_offset: 0,
-                    partition_max_bytes: 1 << 20,
-                    ..Default::default()
-                }],
-                ..Default::default()
-            }],
-            ..Default::default()
-        })
-        .await
-        .expect("FetchRequest for audit topic");
+    let fr = fetch_audit(client).await;
 
     let mut seqs = Vec::new();
     if let Some(part) = fr.responses.first().and_then(|r| r.partitions.first())
@@ -66,8 +46,30 @@ pub async fn audit_record_seqs(client: &krabka_client_core::Client) -> Vec<u64> 
 }
 
 pub async fn consume_audit_records(client: &krabka_client_core::Client) -> Vec<serde_json::Value> {
+    let fr = fetch_audit(client).await;
+
+    let mut records = Vec::new();
+    if let Some(part) = fr.responses.first().and_then(|r| r.partitions.first())
+        && let Some(batches) = part.records.as_ref().and_then(|r| r.as_v2())
+    {
+        for batch in batches {
+            for rec in &batch.records {
+                if let Some(value) = &rec.value
+                    && let Ok(j) = serde_json::from_slice::<serde_json::Value>(value)
+                {
+                    records.push(j);
+                }
+            }
+        }
+    }
+    records
+}
+
+async fn fetch_audit(
+    client: &krabka_client_core::Client,
+) -> krabka_protocol::owned::fetch_response::FetchResponse {
     let topic_id = super::topic_id_for(client, AUDIT_TOPIC).await;
-    let fr = client
+    client
         .send(FetchRequest {
             max_wait_ms: 500,
             min_bytes: 1,
@@ -86,21 +88,5 @@ pub async fn consume_audit_records(client: &krabka_client_core::Client) -> Vec<s
             ..Default::default()
         })
         .await
-        .expect("FetchRequest for audit topic");
-
-    let mut records = Vec::new();
-    if let Some(part) = fr.responses.first().and_then(|r| r.partitions.first())
-        && let Some(batches) = part.records.as_ref().and_then(|r| r.as_v2())
-    {
-        for batch in batches {
-            for rec in &batch.records {
-                if let Some(value) = &rec.value
-                    && let Ok(j) = serde_json::from_slice::<serde_json::Value>(value)
-                {
-                    records.push(j);
-                }
-            }
-        }
-    }
-    records
+        .expect("FetchRequest for audit topic")
 }

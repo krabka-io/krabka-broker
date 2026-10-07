@@ -24,6 +24,16 @@ pub(crate) fn restore_args(
     controller_listener: &str,
     extra: &[&str],
 ) -> RestoreArgs {
+    let argv = restore_argv(archive_root, log_dir, controller_listener, extra);
+    Cli::try_parse_from(argv).expect("valid command line").args
+}
+
+pub(crate) fn restore_argv(
+    archive_root: &Path,
+    log_dir: &Path,
+    controller_listener: &str,
+    extra: &[&str],
+) -> Vec<String> {
     let mut argv = vec![
         "krabka-restore".to_owned(),
         "--archive-local".to_owned(),
@@ -37,7 +47,7 @@ pub(crate) fn restore_args(
         controller_listener.to_owned(),
     ];
     argv.extend(extra.iter().map(|s| (*s).to_owned()));
-    Cli::try_parse_from(argv).expect("valid command line").args
+    argv
 }
 
 /// The controller listener of a restored node, bound before the restore

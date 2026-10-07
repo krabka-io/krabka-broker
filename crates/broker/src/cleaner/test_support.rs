@@ -76,26 +76,16 @@ pub(super) async fn compactable_partition_in_registry(
 /// every user including root, so this is a storage failure the filesystem
 /// raises rather than one a test hook fabricates.
 ///
-/// Returns the paths it blocked so a test can unblock them and watch the
-/// cleaner recover.
+/// The rewrite streams into `.cleaned` files, which `atomic_swap` promotes
+/// through `.swap`. Returns the blocked paths so a test can unblock them and
+/// watch the cleaner recover.
 pub(super) fn block_compaction_swap(root: &TempDir, topic: &str) -> Vec<std::path::PathBuf> {
-    let part_dir = crate::log_dir::partition_dir(root.path(), topic, 0);
-    let mut blocked = Vec::new();
-    for entry in std::fs::read_dir(&part_dir).expect("read partition dir") {
-        let path = entry.expect("partition dir entry").path();
-        if path.extension().is_some_and(|ext| ext == "log") {
-            // The rewrite streams into `.cleaned` files, which `atomic_swap`
-            // promotes through `.swap`.
-            let swap = path.with_extension("log.cleaned");
-            std::fs::create_dir(&swap).expect("block the rewrite path");
-            blocked.push(swap);
-        }
-    }
-    assert2::assert!(
-        !blocked.is_empty(),
-        "the fixture sealed no segment to block"
-    );
-    blocked
+    crate::test_support::block_log_artifact_paths(
+        root.path(),
+        topic,
+        "log.cleaned",
+        "block the rewrite path",
+    )
 }
 
 /// The same fixture over a caller-chosen `LogConfig`, for the cleaner's

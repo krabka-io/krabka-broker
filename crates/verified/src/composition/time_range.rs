@@ -1,6 +1,8 @@
 use creusot_std::prelude::*;
 
 #[cfg(creusot)]
+use super::time_index::sparse_timestamp_window_valid;
+#[cfg(creusot)]
 use super::time_index::time_segment_valid;
 use super::{
     SparseTimestampWindow, constructed_time_index_preserves_first, first_timestamp_index,
@@ -13,12 +15,9 @@ type TimeRangeWitness = (i64, i64, i64, Option<usize>);
 /// first retained timestamp in a closed interval. Scan the complete suffix:
 /// an upper timestamp cursor cannot exclude later timestamp regressions.
 /// Faithful decoding/enumeration, physical reads and coherent floors are external.
+#[requires(sparse_timestamp_window_valid(window.0@, window.1@, window.2@))]
 #[requires(bounds.0@ >= 0 && bounds.2@ >= 0 && targets.0@ <= targets.1@)]
-#[requires(window.0@.len() == window.1@.len())]
 #[requires(forall<i: Int> 0 <= i && i < window.0@.len() ==> bounds.0@ + window.0@[i]@ <= i64::MAX@)]
-#[requires(forall<i: Int, j: Int> 0 <= i && i < j && j < window.0@.len() ==> window.0@[i]@ < window.0@[j]@)]
-#[requires(forall<i: Int> 0 <= i && i < window.2@.len() ==> window.2@[i].0@ <= window.2@[i].1@ && window.2@[i].1@ < window.1@.len())]
-#[requires(forall<i: Int, j: Int> 0 <= i && i < j && j < window.2@.len() ==> window.2@[i].0@ < window.2@[j].0@ && window.2@[i].1@ <= window.2@[j].1@)]
 #[ensures(match result {
     Err(()) => !time_segment_valid(bounds.0@, bounds.1@)
         || exists<i: Int> 0 <= i && i < window.0@.len() && bounds.0@ + window.0@[i]@ > bounds.1@,

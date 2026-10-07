@@ -46,54 +46,7 @@ enum Role {
     Follower,
 }
 
-/// One batch of the log after compaction. The compared fields are the ones
-/// that carry the state of a producer, and the records.
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct Kept {
-    base_offset: i64,
-    last_offset: i64,
-    producer_id: i64,
-    producer_epoch: i16,
-    base_sequence: i32,
-    control: bool,
-    records: Vec<(Option<Bytes>, Option<Bytes>)>,
-}
-
-impl Kept {
-    fn of(batch: &RecordBatch) -> Self {
-        Self {
-            base_offset: batch.base_offset,
-            last_offset: batch.base_offset + i64::from(batch.last_offset_delta),
-            producer_id: batch.producer_id,
-            producer_epoch: batch.producer_epoch,
-            base_sequence: batch.base_sequence,
-            control: batch.attributes.is_control_batch(),
-            records: batch
-                .records
-                .iter()
-                .map(|record| (record.key.clone(), record.value.clone()))
-                .collect(),
-        }
-    }
-
-    /// The one-record `batch` at `offset` with no records: the bare header
-    /// that Kafka's `RETAIN_EMPTY` writes.
-    fn header(offset: i64, batch: &RecordBatch) -> Self {
-        Self {
-            records: Vec::new(),
-            ..Self::whole(offset, batch)
-        }
-    }
-
-    /// The one-record `batch` at `offset` with its record.
-    fn whole(offset: i64, batch: &RecordBatch) -> Self {
-        Self {
-            base_offset: offset,
-            last_offset: offset,
-            ..Self::of(batch)
-        }
-    }
-}
+krabka_macros::compacted_batch!(Kept);
 
 /// A one-record data batch of `key` and `value`. `producer` is `(id, epoch,
 /// base_sequence)`, or `None` for a client with no idempotence.
@@ -298,19 +251,16 @@ async fn compacted(role: Role, history: &History, now_ms: i64) -> Vec<Kept> {
     let producer_state = Arc::new(ProducerState::new());
     let replica_state = Arc::new(tokio::sync::Mutex::new(ReplicaState::new()));
     let (tx, rx) = mpsc::channel(1);
-    let writer = tokio::spawn(run_writer!(
-        "t".to_string(),
-        PartitionIndex(0),
+    let writer = spawn_writer(
+        dir.path(),
         log.clone(),
-        Arc::new(ArcSwap::from_pointee(dir.path().to_path_buf())),
         rx,
-        Arc::new(Notify::new()),
-        replica_state.clone(),
-        Arc::new(Notify::new()),
-        crate::log_dir_status::LogDirRegistry::default(),
-        producer_state.clone(),
-        None,
-    ));
+        WriterOptions {
+            replica_state: replica_state.clone(),
+            producer_state: producer_state.clone(),
+            ..Default::default()
+        },
+    );
 
     for (offset, batch) in (0..).zip(&history.batches) {
         append(role, &tx, &producer_state, batch.clone(), offset).await;

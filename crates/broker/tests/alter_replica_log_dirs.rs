@@ -24,6 +24,8 @@ mod kafka_wire;
 // directory is `tests/`. `#[path]` re-bases each declaration onto the sibling
 // `alter_replica_log_dirs/` directory, which keeps the parts out of `tests/`
 // where every `.rs` file would become another test binary.
+mod support;
+
 #[path = "alter_replica_log_dirs/cordoned.rs"]
 mod cordoned;
 #[path = "alter_replica_log_dirs/errors.rs"]

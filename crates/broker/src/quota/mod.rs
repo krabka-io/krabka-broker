@@ -210,8 +210,22 @@ pub(crate) fn u64_to_f64(value: u64) -> f64 {
 }
 
 #[cfg(test)]
-mod test_support {
+pub(crate) mod test_support {
     use krabka_metadata::{ClientQuotaRecord, MetadataImage, MetadataRecord, QuotaEntity};
+    use krabka_units::{Time, convert::TimeExt, secs};
+
+    /// Independent expected throttles for producer and consumer quotas.
+    pub(crate) fn fractional_bandwidth_cases() -> [(f64, u64, Time); 7] {
+        [
+            (1024.0, 1024, <Time as TimeExt>::ZERO),
+            (1024.0, 2048, secs(1)),
+            (0.5, 1, secs(1)),
+            (0.5, 100, secs(199)),
+            (0.25, 1, secs(3)),
+            (1.5, 1, <Time as TimeExt>::ZERO),
+            (1.5, 3, secs(1)),
+        ]
+    }
 
     pub(super) fn image_with_quota(
         entity: Vec<(&str, Option<&str>)>,

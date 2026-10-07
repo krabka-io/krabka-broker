@@ -16,50 +16,20 @@ use bytes::Bytes;
 use krabka_compression::CompressionType;
 use krabka_metadata::{BrokerConfigRecord, DEFAULT_BROKER_CONFIG_NODE_ID, MetadataRecord};
 use krabka_protocol::{
-    owned::{
-        create_topics_request::{CreatableTopic, CreateTopicsRequest},
-        produce_request::{PartitionProduceData, ProduceRequest, TopicProduceData},
-        produce_response::ProduceResponse,
-    },
+    owned::produce_request::{PartitionProduceData, ProduceRequest, TopicProduceData},
     records::{Attributes, Record, RecordBatch, RecordsPayload},
 };
 
-use super::handle;
 use crate::{
-    authorizer::AllowAllAuthorizer,
-    broker::BrokerHandle,
-    codes,
-    test_support::{
-        decode_response, encode_request, peer, principal, request_context,
-        start_broker_with_authorizer_no_audit,
-    },
+    authorizer::AllowAllAuthorizer, broker::BrokerHandle, codes,
+    test_support::start_broker_with_authorizer_no_audit,
 };
 
 /// The `Produce` version these tests speak.
 const VERSION: i16 = 9;
 
 async fn create_topic(broker: &BrokerHandle, name: &str) {
-    let client = krabka_client_core::Client::builder()
-        .bootstrap(broker.listen_addr().to_string())
-        .client_id("broker-default-test")
-        .build()
-        .await
-        .expect("client build");
-    let response = client
-        .send(CreateTopicsRequest {
-            topics: vec![CreatableTopic {
-                name: name.to_string(),
-                num_partitions: 1,
-                replication_factor: 1,
-                ..Default::default()
-            }],
-            timeout_ms: 5_000,
-            ..Default::default()
-        })
-        .await
-        .expect("CreateTopics");
-    assert!(response.topics[0].error_code == codes::NONE, "{response:?}");
-    broker.wait_until_partition_present(name, 0).await;
+    crate::handlers::test_support::create_topic(broker, "broker-default-test", name, 1).await;
 }
 
 /// The stored value of one dynamic broker config, on `node` (the cluster
@@ -117,21 +87,7 @@ async fn produce_error_code_compressed(
         }],
         ..Default::default()
     };
-    let shared = broker.broker_arc_for_test();
-    let user = principal("producer");
-    let address = peer();
-    let ctx = request_context(&user, &address, "producer-client");
-    let request_bytes = encode_request(&request, VERSION);
-    let response_bytes = handle(
-        &shared,
-        VERSION,
-        &request_bytes,
-        request_bytes.clone(),
-        &ctx,
-    )
-    .await
-    .expect("handle produce");
-    let response: ProduceResponse = decode_response(&response_bytes, VERSION);
+    let response = crate::handlers::test_support::produce_wire(broker, VERSION, &request).await;
     response.responses[0].partition_responses[0].error_code
 }
 

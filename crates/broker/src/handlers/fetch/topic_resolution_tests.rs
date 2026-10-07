@@ -16,9 +16,7 @@ use std::sync::Arc;
 use assert2::assert;
 use bytes::Bytes;
 use krabka_protocol::{
-    Decode,
     owned::{
-        create_topics_request::{CreatableTopic, CreateTopicsRequest},
         fetch_request::{FetchPartition, FetchRequest, FetchTopic},
         fetch_response::{FetchResponse, FetchableTopicResponse, PartitionData},
     },
@@ -26,16 +24,13 @@ use krabka_protocol::{
     records::RecordsPayload,
 };
 
-use super::{FIRST_TOPIC_ID_VERSION, encode_fetch_response, handle};
+use super::FIRST_TOPIC_ID_VERSION;
 use crate::{
     authorizer::{AllowAllAuthorizer, Authorizer},
     broker::BrokerHandle,
     codes,
     fetch_session::{FINAL_EPOCH, INITIAL_EPOCH, INVALID_SESSION_ID},
-    test_support::{
-        DenyAll, encode_request, peer, principal, request_context,
-        start_broker_with_authorizer_no_audit,
-    },
+    test_support::{DenyAll, start_broker_with_authorizer_no_audit},
 };
 
 /// An id that no topic in these tests has.
@@ -137,48 +132,13 @@ async fn start(authorizer: Arc<dyn Authorizer>) -> (BrokerHandle, tempfile::Temp
 }
 
 async fn create_topic(broker: &BrokerHandle, name: &str) -> WireUuid {
-    let client = krabka_client_core::Client::builder()
-        .bootstrap(broker.listen_addr().to_string())
-        .client_id("fetch-resolution-test")
-        .build()
-        .await
-        .expect("client build");
-    let response = client
-        .send(CreateTopicsRequest {
-            topics: vec![CreatableTopic {
-                name: name.to_string(),
-                num_partitions: 1,
-                replication_factor: 1,
-                ..Default::default()
-            }],
-            timeout_ms: 5_000,
-            ..Default::default()
-        })
-        .await
-        .expect("CreateTopics");
-    assert!(response.topics[0].error_code == codes::NONE, "{response:?}");
-    broker.wait_until_partition_present(name, 0).await;
-    let image = broker.controller_image_for_test();
-    let topic = image.topic(name).expect("created topic in the image");
-    WireUuid(topic.topic_id.into_bytes())
+    crate::handlers::test_support::create_topic(broker, "fetch-resolution-test", name, 1).await
 }
 
 /// Send one `Fetch` at `version` and return the response as a client decodes
 /// it.
 async fn fetch(broker: &BrokerHandle, version: i16, request: &FetchRequest) -> FetchResponse {
-    let shared = broker.broker_arc_for_test();
-    let user = principal("consumer");
-    let address = peer();
-    let ctx = request_context(&user, &address, "consumer-client");
-    let request_bytes = encode_request(request, version);
-    let (response, response_version) = handle(&shared, version, 7, &request_bytes, &ctx)
-        .await
-        .expect("handle fetch");
-    let wire = encode_fetch_response(response, response_version).expect("encode response");
-    let mut cursor: &[u8] = wire.as_ref();
-    let decoded = FetchResponse::decode(&mut cursor, version).expect("decode response");
-    assert!(cursor.is_empty(), "the decoder consumed every byte");
-    decoded
+    super::test_support::fetch_wire(broker, version, "consumer", "consumer-client", request).await
 }
 
 /// Send one sessionless single-row `Fetch` at `case.version` for `case.topic`.
@@ -318,14 +278,10 @@ async fn unresolved_id_answers_before_topic_authorization() {
     ];
     let (broker, _dir) = start(Arc::new(DenyAll)).await;
 
-    let mut actual = Vec::with_capacity(cases.len());
-    let mut expected = Vec::with_capacity(cases.len());
-    for case in cases {
-        let (got, want) = drive(&broker, None, case).await;
-        actual.push(got);
-        expected.push(want);
-    }
-    assert!(actual == expected);
+    crate::handlers::test_support::check_cases(cases, async |case| {
+        drive(&broker, None, case).await
+    })
+    .await;
     broker.shutdown().await;
 }
 

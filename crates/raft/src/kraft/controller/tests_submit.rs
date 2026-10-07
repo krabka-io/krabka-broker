@@ -23,6 +23,35 @@ use crate::{
     },
 };
 
+async fn acknowledge_tip(ctrl: &crate::kraft::KraftController, follower: NodeId) {
+    tokio::time::sleep(StdDuration::from_millis(20)).await;
+    let state = ctrl.quorum_state().await.unwrap();
+    ctrl.inject_event(Event::ReceiveFetch {
+        from: follower,
+        fetch_epoch: state.leader_epoch,
+        fetch_offset: state.log_end_offset,
+    })
+    .await
+    .unwrap();
+}
+
+fn park_waiter(
+    engine: &mut super::Engine,
+    base: i64,
+    need: i64,
+) -> oneshot::Receiver<Result<SubmitChangeResult, RaftError>> {
+    let (reply, receiver) = oneshot::channel();
+    engine.commit_waiters.push(CommitWaiter {
+        base_offset: Offset(base),
+        need_offset: Offset(need),
+        rejection: None,
+        creates: Vec::new(),
+        result: SubmitChangeResult::default(),
+        reply,
+    });
+    receiver
+}
+
 #[test]
 fn direct_single_voter_submit_applies_image_and_resolves_waiter() {
     let (mut engine, _dir) = build_engine_only(NodeId(1), &[NodeId(1)]);
@@ -119,29 +148,13 @@ async fn pending_offset_reservations_are_contiguous_before_commit() {
     let create_ctrl = ctrl.clone();
     let create =
         tokio::spawn(async move { create_ctrl.submit_change(topic_record("topic")).await });
-    tokio::time::sleep(StdDuration::from_millis(20)).await;
-    let qs = ctrl.quorum_state().await.unwrap();
-    ctrl.inject_event(Event::ReceiveFetch {
-        from: NodeId(2),
-        fetch_epoch: qs.leader_epoch,
-        fetch_offset: qs.log_end_offset,
-    })
-    .await
-    .unwrap();
+    acknowledge_tip(&ctrl, NodeId(2)).await;
     create.await.unwrap().unwrap();
 
     let create_other_ctrl = ctrl.clone();
     let create_other =
         tokio::spawn(async move { create_other_ctrl.submit_change(topic_record("other")).await });
-    tokio::time::sleep(StdDuration::from_millis(20)).await;
-    let qs = ctrl.quorum_state().await.unwrap();
-    ctrl.inject_event(Event::ReceiveFetch {
-        from: NodeId(2),
-        fetch_epoch: qs.leader_epoch,
-        fetch_offset: qs.log_end_offset,
-    })
-    .await
-    .unwrap();
+    acknowledge_tip(&ctrl, NodeId(2)).await;
     create_other.await.unwrap().unwrap();
 
     let advance = |count| {
@@ -225,15 +238,7 @@ async fn break_glass_consume_is_exact_and_single_flight_until_commit() {
             .submit_change(vec![MetadataRecord::V1BreakGlassProposal(proposed)])
             .await
     });
-    tokio::time::sleep(StdDuration::from_millis(20)).await;
-    let qs = ctrl.quorum_state().await.unwrap();
-    ctrl.inject_event(Event::ReceiveFetch {
-        from: NodeId(2),
-        fetch_epoch: qs.leader_epoch,
-        fetch_offset: qs.log_end_offset,
-    })
-    .await
-    .unwrap();
+    acknowledge_tip(&ctrl, NodeId(2)).await;
     create.await.unwrap().unwrap();
 
     let log_end = ctrl.quorum_state().await.unwrap().log_end_offset;
@@ -430,15 +435,7 @@ async fn topic_freeze_replacement_is_newer_only_and_single_flight_until_commit()
             ))])
             .await
     });
-    tokio::time::sleep(StdDuration::from_millis(20)).await;
-    let qs = ctrl.quorum_state().await.unwrap();
-    ctrl.inject_event(Event::ReceiveFetch {
-        from: NodeId(2),
-        fetch_epoch: qs.leader_epoch,
-        fetch_offset: qs.log_end_offset,
-    })
-    .await
-    .unwrap();
+    acknowledge_tip(&ctrl, NodeId(2)).await;
     create.await.unwrap().unwrap();
 
     let log_end = ctrl.quorum_state().await.unwrap().log_end_offset;
@@ -680,15 +677,7 @@ async fn offset_reservation_waits_for_current_epoch_commit_then_retries() {
     let create_ctrl = ctrl.clone();
     let create =
         tokio::spawn(async move { create_ctrl.submit_change(topic_record("topic")).await });
-    tokio::time::sleep(StdDuration::from_millis(20)).await;
-    let qs = ctrl.quorum_state().await.unwrap();
-    ctrl.inject_event(Event::ReceiveFetch {
-        from: NodeId(2),
-        fetch_epoch: qs.leader_epoch,
-        fetch_offset: qs.log_end_offset,
-    })
-    .await
-    .unwrap();
+    acknowledge_tip(&ctrl, NodeId(2)).await;
     create.await.unwrap().unwrap();
 
     let retry_ctrl = ctrl.clone();
@@ -703,15 +692,7 @@ async fn offset_reservation_waits_for_current_epoch_commit_then_retries() {
             )])
             .await
     });
-    tokio::time::sleep(StdDuration::from_millis(20)).await;
-    let qs = ctrl.quorum_state().await.unwrap();
-    ctrl.inject_event(Event::ReceiveFetch {
-        from: NodeId(2),
-        fetch_epoch: qs.leader_epoch,
-        fetch_offset: qs.log_end_offset,
-    })
-    .await
-    .unwrap();
+    acknowledge_tip(&ctrl, NodeId(2)).await;
     let retry = retry.await.unwrap().unwrap();
     assert!(retry.offset_reservations[0].base_offset == 0);
     assert!(ctrl.current_image().partition_next_offset("topic", 0) == Some(1));
@@ -727,24 +708,8 @@ fn try_resolve_waiters_resolves_at_exact_hwm_and_keeps_future_waiter() {
     }
     engine.log.advance_hwm(Offset(5));
 
-    let (ready_tx, mut ready_rx) = oneshot::channel();
-    let (future_tx, mut future_rx) = oneshot::channel();
-    engine.commit_waiters.push(CommitWaiter {
-        base_offset: Offset(4),
-        need_offset: Offset(5),
-        rejection: None,
-        creates: Vec::new(),
-        result: SubmitChangeResult::default(),
-        reply: ready_tx,
-    });
-    engine.commit_waiters.push(CommitWaiter {
-        base_offset: Offset(5),
-        need_offset: Offset(6),
-        rejection: None,
-        creates: Vec::new(),
-        result: SubmitChangeResult::default(),
-        reply: future_tx,
-    });
+    let mut ready_rx = park_waiter(&mut engine, 4, 5);
+    let mut future_rx = park_waiter(&mut engine, 5, 6);
 
     engine.try_resolve_waiters();
 
@@ -766,24 +731,8 @@ fn try_resolve_waiters_resolves_at_exact_hwm_and_keeps_future_waiter() {
 #[test]
 fn fail_waiters_reached_by_fails_only_waiters_at_or_below_target_hwm() {
     let (mut engine, _dir) = build_engine_only(NodeId(1), &[NodeId(1)]);
-    let (ready_tx, mut ready_rx) = oneshot::channel();
-    let (future_tx, mut future_rx) = oneshot::channel();
-    engine.commit_waiters.push(CommitWaiter {
-        base_offset: Offset(4),
-        need_offset: Offset(5),
-        rejection: None,
-        creates: Vec::new(),
-        result: SubmitChangeResult::default(),
-        reply: ready_tx,
-    });
-    engine.commit_waiters.push(CommitWaiter {
-        base_offset: Offset(5),
-        need_offset: Offset(6),
-        rejection: None,
-        creates: Vec::new(),
-        result: SubmitChangeResult::default(),
-        reply: future_tx,
-    });
+    let mut ready_rx = park_waiter(&mut engine, 4, 5);
+    let mut future_rx = park_waiter(&mut engine, 5, 6);
 
     engine.fail_waiters_reached_by(Offset(5), "test hwm stall");
 

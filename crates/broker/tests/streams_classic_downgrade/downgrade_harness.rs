@@ -11,15 +11,11 @@
 use std::sync::Arc;
 
 use assert2::assert;
-use krabka_broker::{BootstrapMode, Broker, BrokerConfig};
+use krabka_broker::{BootstrapMode, BrokerConfig};
 use krabka_client_core::Client;
 use krabka_protocol::{
-    owned::{
-        create_topics_request::{CreatableTopic, CreateTopicsRequest},
-        offset_commit_request::{
-            OffsetCommitRequest, OffsetCommitRequestPartition, OffsetCommitRequestTopic,
-        },
-        update_features_request::{FeatureUpdateKey, UpdateFeaturesRequest},
+    owned::offset_commit_request::{
+        OffsetCommitRequest, OffsetCommitRequestPartition, OffsetCommitRequestTopic,
     },
     primitives::uuid::Uuid as WireUuid,
 };
@@ -27,71 +23,22 @@ use krabka_protocol::{
 use crate::ERR_NONE;
 
 pub(crate) async fn boot() -> (krabka_broker::BrokerHandle, String, tempfile::TempDir) {
-    let dir = tempfile::TempDir::new().unwrap();
-    let broker = Broker::start(BrokerConfig::for_tests(dir.path().to_path_buf()))
-        .await
-        .unwrap();
-    // A streams or classic group needs `__consumer_offsets`. No broker creates
-    // it at startup, so create it as a client's first lookup does.
-    broker.wait_until_group_coordinator_ready().await;
-    // CreateTopics places replicas only on a broker whose first heartbeat has
-    // unfenced it, which can trail the coordinator load on a slow runner.
-    broker.wait_until_broker_electable(broker.node_id()).await;
-    let bootstrap = broker.listen_addr().to_string();
-    (broker, bootstrap, dir)
+    crate::support::streams::boot(true).await
 }
 
 pub(crate) async fn connect(bootstrap: &str) -> Arc<Client> {
-    Arc::new(
-        Client::builder()
-            .bootstrap(bootstrap)
-            .client_id("c1")
-            .build()
-            .await
-            .unwrap(),
-    )
+    crate::support::client::connect(bootstrap, "c1").await
 }
 
 pub(crate) async fn create_topic(client: &Client, topic: &str, partitions: i32) {
-    let resp = client
-        .send(CreateTopicsRequest {
-            topics: vec![CreatableTopic {
-                name: topic.into(),
-                num_partitions: partitions,
-                replication_factor: 1,
-                ..Default::default()
-            }],
-            timeout_ms: 5_000,
-            ..Default::default()
-        })
-        .await
-        .expect("CreateTopics");
-    assert!(
-        resp.topics[0].error_code == 0,
-        "topic create failed: {resp:?}"
-    );
+    crate::support::client::create_topic(client, topic, partitions).await;
 }
 
 /// Finalizes `streams.version` at level 1, so that the heartbeat and describe
 /// handlers stop returning `UNSUPPORTED_VERSION`. `upgrade_type: 1` is
 /// UPGRADE.
 pub(crate) async fn finalize_streams_version(client: &Client) {
-    let resp = client
-        .send(UpdateFeaturesRequest {
-            feature_updates: vec![FeatureUpdateKey {
-                feature: "streams.version".into(),
-                max_version_level: 1,
-                upgrade_type: 1,
-                ..Default::default()
-            }],
-            ..Default::default()
-        })
-        .await
-        .expect("UpdateFeatures");
-    assert!(
-        resp.error_code == 0,
-        "streams.version finalize failed: {resp:?}"
-    );
+    crate::support::streams::finalize_streams_version(client).await;
 }
 
 pub(crate) use crate::support::topic_id_for;

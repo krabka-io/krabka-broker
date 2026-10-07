@@ -1,10 +1,10 @@
-(* #"/workspace/crates/verified/src/uniform_assignor/select_least_loaded.rs" 49 0 54 8 *)
+(* #"/workspace/crates/verified/src/uniform_assignor/select_least_loaded.rs" 50 0 55 8 *)
 
-let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
-let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
-let%span swell_founded = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/well_founded.rs" 43 8 43 33
-let%span sselect_least_loaded = "/workspace/crates/verified/src/uniform_assignor/select_least_loaded.rs" 48 10 48 15
-let%span sselect_least_loaded'0 = "/workspace/crates/verified/src/uniform_assignor/select_least_loaded.rs" 38 16 38 89
+let%span sord = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sord'0 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span swell_founded = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/well_founded.rs" 43 8 43 33
+let%span sselect_least_loaded = "/workspace/crates/verified/src/uniform_assignor/select_least_loaded.rs" 49 10 49 15
+let%span sselect_least_loaded'0 = "/workspace/crates/verified/src/uniform_assignor/select_least_loaded.rs" 39 16 39 89
 
 use creusot.int.UInt64
 use seq.Seq
@@ -23,7 +23,7 @@ predicate well_founded_relation_Int [@inline:trivial] (self: int) (other: int) =
 
 meta "rewrite_def" predicate well_founded_relation_Int
 
-predicate keeps_extra_quota [#"/workspace/crates/verified/src/uniform_assignor/select_least_loaded.rs" 32 0 37 9] (minimum_quota: int) (extras_left: int) (owned: int) (members_left: int) =
+predicate keeps_extra_quota [#"/workspace/crates/verified/src/uniform_assignor/select_least_loaded.rs" 33 0 38 9] (minimum_quota: int) (extras_left: int) (owned: int) (members_left: int) =
   [%#sselect_least_loaded'0] gt_log_Int extras_left 0 /\ (gt_log_Int owned minimum_quota \/ members_left <= extras_left)
 
 meta "compute_max_steps" 1000000
@@ -38,7 +38,7 @@ constant owned : Seq.seq UInt64.t
 
 constant index : int
 
-function extras_left_before [#"/workspace/crates/verified/src/uniform_assignor/select_least_loaded.rs" 49 0 54 8] (minimum_quota: int) (extra_quotas: int) (owned: Seq.seq UInt64.t) (index: int) : int
+function extras_left_before [#"/workspace/crates/verified/src/uniform_assignor/select_least_loaded.rs" 50 0 55 8] (minimum_quota: int) (extra_quotas: int) (owned: Seq.seq UInt64.t) (index: int) : int
 
 goal vc_extras_left_before: if index <= 0 then
     true

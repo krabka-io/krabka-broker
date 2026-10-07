@@ -1,17 +1,17 @@
-(* #"/workspace/crates/verified/src/transaction/producer_identity.rs" 59 0 66 35 *)
+(* #"/workspace/crates/verified/src/transaction/producer_identity.rs" 60 0 67 35 *)
 
-let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sord = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sproducer_identity = "/workspace/crates/verified/src/transaction/producer_identity.rs" 68 22 68 24
+let%span sproducer_identity'0 = "/workspace/crates/verified/src/transaction/producer_identity.rs" 71 19 72 81
+let%span sproducer_identity'1 = "/workspace/crates/verified/src/transaction/producer_identity.rs" 72 56 72 80
+let%span sproducer_identity'2 = "/workspace/crates/verified/src/transaction/producer_identity.rs" 72 11 72 81
+let%span sproducer_identity'3 = "/workspace/crates/verified/src/transaction/producer_identity.rs" 39 10 40 27
+let%span sproducer_identity'4 = "/workspace/crates/verified/src/transaction/producer_identity.rs" 41 10 44 42
+let%span sproducer_identity'5 = "/workspace/crates/verified/src/transaction/producer_identity.rs" 45 10 51 41
+let%span sproducer_identity'6 = "/workspace/crates/verified/src/transaction/producer_identity.rs" 52 10 58 51
 let%span stransaction = "/workspace/crates/verified/src/transaction.rs" 226 53 226 54
 let%span stransaction'0 = "/workspace/crates/verified/src/transaction.rs" 226 42 226 50
 let%span stransaction'1 = "/workspace/crates/verified/src/transaction.rs" 226 42 226 54
-let%span sproducer_identity = "/workspace/crates/verified/src/transaction/producer_identity.rs" 67 22 67 24
-let%span sproducer_identity'0 = "/workspace/crates/verified/src/transaction/producer_identity.rs" 70 19 71 81
-let%span sproducer_identity'1 = "/workspace/crates/verified/src/transaction/producer_identity.rs" 71 56 71 80
-let%span sproducer_identity'2 = "/workspace/crates/verified/src/transaction/producer_identity.rs" 71 11 71 81
-let%span sproducer_identity'3 = "/workspace/crates/verified/src/transaction/producer_identity.rs" 38 10 39 27
-let%span sproducer_identity'4 = "/workspace/crates/verified/src/transaction/producer_identity.rs" 40 10 43 42
-let%span sproducer_identity'5 = "/workspace/crates/verified/src/transaction/producer_identity.rs" 44 10 50 41
-let%span sproducer_identity'6 = "/workspace/crates/verified/src/transaction/producer_identity.rs" 51 10 57 51
 
 use creusot.int.Int64
 use creusot.int.Int16
@@ -45,7 +45,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let init_producer_id_identity_decision [#"/workspace/crates/verified/src/transaction/producer_identity.rs" 59 0 66 35]
+let init_producer_id_identity_decision [#"/workspace/crates/verified/src/transaction/producer_identity.rs" 60 0 67 35]
   (entry_pid: Int64.t) (entry_epoch: Int16.t) (last_epoch: Int16.t) (prev_pid: Int64.t) (request_pid: Int64.t)
   (request_epoch: Int16.t) (return (x: t_InitProducerIdIdentityDecision)) = (! set_EXHAUSTED_PRODUCER_EPOCH
     (bb0

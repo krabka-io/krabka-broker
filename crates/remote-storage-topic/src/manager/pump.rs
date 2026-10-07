@@ -121,17 +121,11 @@ mod tests {
         let log: Arc<dyn MetadataEventLog> = InProcessMetadataEventLog::new(4);
         {
             let m = start_manager_all(log.clone()).await;
-            for (id, start, end) in [(10u128, 0, 99), (11, 100, 199), (12, 200, 299)] {
-                let m2 = m.clone();
-                on_blocking(move || {
-                    m2.add_remote_log_segment_metadata(started(id, start, end))
-                        .unwrap();
-                })
-                .await;
-                let m2 = m.clone();
-                on_blocking(move || m2.update_remote_log_segment_metadata(finish(id)).unwrap())
-                    .await;
-            }
+            crate::manager::test_support::seed_finished(
+                &m,
+                &[(10, 0, 99), (11, 100, 199), (12, 200, 299)],
+            )
+            .await;
             m.shutdown();
         }
 

@@ -8,31 +8,15 @@
 //! group lives here too, because it reads the same two representations.
 
 use std::{
-    collections::{BTreeMap, BTreeSet, HashMap, HashSet},
-    time::{Duration, Instant},
+    collections::{BTreeMap, BTreeSet},
+    time::Instant,
 };
 
-use krabka_protocol::primitives::uuid::Uuid;
-
-use super::{
-    TOPIC, TOPIC_NAME,
-    state::{MemberProj, ReconState},
+use super::state::{MemberProj, ReconState};
+use crate::coordinator::unified::{
+    actor::reconciliation_model_support::{insert_modeled_member, modeled_member, parts_of},
+    consumer_state::GroupState,
 };
-use crate::coordinator::unified::consumer_state::{GroupState, MemberState};
-
-fn parts_of(map: Option<&HashMap<Uuid, Vec<i32>>>) -> Vec<i32> {
-    let mut v: Vec<i32> = map.and_then(|m| m.get(&TOPIC)).cloned().unwrap_or_default();
-    v.sort_unstable();
-    v
-}
-
-fn to_map(parts: &[i32]) -> HashMap<Uuid, Vec<i32>> {
-    if parts.is_empty() {
-        HashMap::new()
-    } else {
-        [(TOPIC, parts.to_vec())].into()
-    }
-}
 
 /// Rebuilds a real `GroupState` from the projection, so that the next real
 /// call behaves exactly as it does in a live run.
@@ -47,31 +31,15 @@ pub(super) fn rebuild_group(s: &ReconState) -> GroupState {
     g.target.epoch = s.target_epoch;
     let now = Instant::now();
     for m in &s.members {
-        let mut subs = HashSet::new();
-        subs.insert(TOPIC_NAME.to_string());
-        let ms = MemberState {
-            member_id: m.id.clone(),
-            instance_id: None,
-            rack_id: None,
-            client_id: String::new(),
-            client_host: String::new(),
-            subscribed_topic_names: subs,
-            subscribed_topic_regex: None,
-            server_assignor: None,
-            rebalance_timeout: Duration::from_mins(1),
-            member_epoch: m.member_epoch,
-            previous_member_epoch: 0,
-            assignment_state: m.assignment_state,
-            assigned_partitions: to_map(&m.assigned),
-            partitions_pending_revocation: to_map(&m.pending_revocation),
-            assignment_epochs: HashMap::new(),
-            last_seen: now,
-            classic: None,
-        };
-        g.members.insert(m.id.clone(), ms);
-        if !m.target.is_empty() {
-            g.target.per_member.insert(m.id.clone(), to_map(&m.target));
-        }
+        let ms = modeled_member(
+            &m.id,
+            m.member_epoch,
+            m.assignment_state,
+            &m.assigned,
+            &m.pending_revocation,
+            now,
+        );
+        insert_modeled_member(&mut g, ms, &m.target);
     }
     g
 }

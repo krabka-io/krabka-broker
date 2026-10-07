@@ -63,53 +63,21 @@ async fn producer_byte_rate_throttles_produce() {
     seed_alice_write_acl(&handle, "throttle-produce").await;
 
     // Set low producer quota for alice.
-    let alter_resp = drive_alter_client_quotas_sasl(
+    kafka_wire::quotas::set_user_quota(
+        CLIENT_ID,
+        &handle,
         addr,
-        "admin",
-        "admin-secret",
-        vec![(
-            vec![("user".into(), Some("alice".into()))],
-            vec![("producer_byte_rate".into(), 128.0, false)],
-        )],
-        false,
+        ("admin", "admin-secret"),
+        "alice",
+        "producer_byte_rate",
+        128.0,
     )
     .await;
-    assert!(alter_resp[0].1 == 0, "alter quota must succeed");
-
-    // Wait for the quota to appear in the image before producing.
-    handle
-        .wait_for_image(|img| {
-            let key: krabka_metadata::EntityKey = vec![("user".into(), Some("alice".into()))];
-            img.client_quotas()
-                .get(&key)
-                .and_then(|cfgs| cfgs.get("producer_byte_rate"))
-                == Some(&128.0)
-        })
-        .await;
 
     // Alice produces 8 KB (8 records of 1 KB each). Rate = 128 bytes/sec.
     // Retry loop: TOPIC_AUTHORIZATION_FAILED (29) can fire if the alice ACL
     // hasn't propagated yet to the image snapshot used by the handler.
-    let deadline = Instant::now() + Duration::from_secs(15);
-    let resp = loop {
-        let r =
-            drive_produce_sasl(addr, "alice", b"alice-secret", "throttle-produce", 1024, 8).await;
-        let ec = r
-            .responses
-            .first()
-            .and_then(|t| t.partition_responses.first())
-            .map_or(-1, |p| p.error_code);
-        if ec != 29 {
-            // Not TOPIC_AUTHORIZATION_FAILED — this is the response we want.
-            break r;
-        }
-        assert!(
-            Instant::now() <= deadline,
-            "ACL still not applied after 15s; error_code=29"
-        );
-        // real-time wait (not a progress poll): retry cadence between network produce attempts (ACL propagation), deadline-guarded
-        tokio::time::sleep(Duration::from_millis(100)).await;
-    };
+    let resp = produce_when_acl_applied(addr, "throttle-produce", 1024, 8).await;
 
     let part = &resp.responses[0].partition_responses[0];
     assert!(
@@ -153,50 +121,20 @@ async fn request_percentage_throttles_produce() {
     seed_alice_write_acl(&handle, "throttle-request").await;
 
     // Set a tiny request_percentage for alice (no byte-rate quota).
-    let alter_resp = drive_alter_client_quotas_sasl(
+    kafka_wire::quotas::set_user_quota(
+        CLIENT_ID,
+        &handle,
         addr,
-        "admin",
-        "admin-secret",
-        vec![(
-            vec![("user".into(), Some("alice".into()))],
-            vec![("request_percentage".into(), 0.001, false)],
-        )],
-        false,
+        ("admin", "admin-secret"),
+        "alice",
+        "request_percentage",
+        0.001,
     )
     .await;
-    assert!(alter_resp[0].1 == 0, "alter quota must succeed");
-
-    // Wait for the quota to appear in the image before producing.
-    handle
-        .wait_for_image(|img| {
-            let key: krabka_metadata::EntityKey = vec![("user".into(), Some("alice".into()))];
-            img.client_quotas()
-                .get(&key)
-                .and_then(|cfgs| cfgs.get("request_percentage"))
-                == Some(&0.001)
-        })
-        .await;
 
     // Alice produces a single small record. Retry past TOPIC_AUTHORIZATION_FAILED
     // (29) while the alice Write ACL propagates to the handler's image snapshot.
-    let deadline = Instant::now() + Duration::from_secs(15);
-    let resp = loop {
-        let r = drive_produce_sasl(addr, "alice", b"alice-secret", "throttle-request", 16, 1).await;
-        let ec = r
-            .responses
-            .first()
-            .and_then(|t| t.partition_responses.first())
-            .map_or(-1, |p| p.error_code);
-        if ec != 29 {
-            break r;
-        }
-        assert!(
-            Instant::now() <= deadline,
-            "ACL still not applied after 15s; error_code=29"
-        );
-        // real-time wait (not a progress poll): retry cadence between network produce attempts (ACL propagation), deadline-guarded
-        tokio::time::sleep(Duration::from_millis(100)).await;
-    };
+    let resp = produce_when_acl_applied(addr, "throttle-request", 16, 1).await;
 
     let part = &resp.responses[0].partition_responses[0];
     assert!(
@@ -222,18 +160,7 @@ async fn request_percentage_throttles_produce() {
 /// `Family` emits nothing until it has an entry, and "never observed" and
 /// "observed only zeroes" mean the same thing to the assertions below.
 async fn metric_value(handle: &krabka_broker::BrokerHandle, series: &str) -> f64 {
-    let mut rendered = String::new();
-    {
-        let registry = handle.metrics().registry.lock().await;
-        prometheus_client::encoding::text::encode(&mut rendered, &registry)
-            .expect("encode registry");
-    }
-    rendered
-        .lines()
-        .find(|line| line.starts_with(series))
-        .and_then(|line| line.rsplit(' ').next())
-        .and_then(|value| value.parse().ok())
-        .unwrap_or(0.0)
+    crate::support::client::metric_value(handle, series).await
 }
 
 /// A throttled produce must move the throttle series, attributed to the quota
@@ -259,50 +186,20 @@ async fn producer_byte_rate_throttle_moves_the_throttle_metrics() {
     wait_partition_exists(&handle, "throttle-metrics", 0).await;
     seed_alice_write_acl(&handle, "throttle-metrics").await;
 
-    let alter_resp = drive_alter_client_quotas_sasl(
+    kafka_wire::quotas::set_user_quota(
+        CLIENT_ID,
+        &handle,
         addr,
-        "admin",
-        "admin-secret",
-        vec![(
-            vec![("user".into(), Some("alice".into()))],
-            vec![("producer_byte_rate".into(), 128.0, false)],
-        )],
-        false,
+        ("admin", "admin-secret"),
+        "alice",
+        "producer_byte_rate",
+        128.0,
     )
     .await;
-    assert!(alter_resp[0].1 == 0, "alter quota must succeed");
-
-    handle
-        .wait_for_image(|img| {
-            let key: krabka_metadata::EntityKey = vec![("user".into(), Some("alice".into()))];
-            img.client_quotas()
-                .get(&key)
-                .and_then(|cfgs| cfgs.get("producer_byte_rate"))
-                == Some(&128.0)
-        })
-        .await;
 
     // Alice produces 8 KB against a 128 B/s quota. Retry past
     // TOPIC_AUTHORIZATION_FAILED (29) while the Write ACL propagates.
-    let deadline = Instant::now() + Duration::from_secs(15);
-    let resp = loop {
-        let r =
-            drive_produce_sasl(addr, "alice", b"alice-secret", "throttle-metrics", 1024, 8).await;
-        let ec = r
-            .responses
-            .first()
-            .and_then(|t| t.partition_responses.first())
-            .map_or(-1, |p| p.error_code);
-        if ec != 29 {
-            break r;
-        }
-        assert!(
-            Instant::now() <= deadline,
-            "ACL still not applied after 15s; error_code=29"
-        );
-        // real-time wait (not a progress poll): retry cadence between network produce attempts (ACL propagation), deadline-guarded
-        tokio::time::sleep(Duration::from_millis(100)).await;
-    };
+    let resp = produce_when_acl_applied(addr, "throttle-metrics", 1024, 8).await;
     assert!(
         resp.throttle_time_ms > 0,
         "expected throttle_time_ms > 0, got {}",
@@ -511,25 +408,7 @@ async fn user_client_tuple_overrides_user_specific() {
 
     // Alice produces 8 KB with `krabka-quota-test`. The 128-byte tuple quota
     // throttles it; the 8192-byte user-only quota would fit in the burst window.
-    let deadline = Instant::now() + Duration::from_secs(15);
-    let resp = loop {
-        let r =
-            drive_produce_sasl(addr, "alice", b"alice-secret", "precedence-topic", 1024, 8).await;
-        let ec = r
-            .responses
-            .first()
-            .and_then(|t| t.partition_responses.first())
-            .map_or(-1, |p| p.error_code);
-        if ec != 29 {
-            break r;
-        }
-        assert!(
-            Instant::now() <= deadline,
-            "ACL still not applied after 15s; error_code=29"
-        );
-        // real-time wait (not a progress poll): retry cadence between network produce attempts (ACL propagation), deadline-guarded
-        tokio::time::sleep(Duration::from_millis(100)).await;
-    };
+    let resp = produce_when_acl_applied(addr, "precedence-topic", 1024, 8).await;
 
     let part = &resp.responses[0].partition_responses[0];
     assert!(
@@ -585,28 +464,16 @@ async fn request_percentage_throttle_is_echoed_on_a_patched_api() {
         baseline.throttle_time_ms
     );
 
-    let alter_resp = drive_alter_client_quotas_sasl(
+    kafka_wire::quotas::set_user_quota(
+        CLIENT_ID,
+        &handle,
         addr,
-        "admin",
-        "admin-secret",
-        vec![(
-            vec![("user".into(), Some("alice".into()))],
-            vec![("request_percentage".into(), 0.001, false)],
-        )],
-        false,
+        ("admin", "admin-secret"),
+        "alice",
+        "request_percentage",
+        0.001,
     )
     .await;
-    assert!(alter_resp[0].1 == 0, "alter quota must succeed");
-
-    handle
-        .wait_for_image(|img| {
-            let key: krabka_metadata::EntityKey = vec![("user".into(), Some("alice".into()))];
-            img.client_quotas()
-                .get(&key)
-                .and_then(|cfgs| cfgs.get("request_percentage"))
-                == Some(&0.001)
-        })
-        .await;
 
     // Drive the same request until the request bucket runs dry. Each request
     // charges its own handler time, so the first one over budget is throttled.
@@ -714,28 +581,16 @@ async fn request_percentage_throttle_is_reported_on_api_versions() {
         baseline.throttle_time_ms
     );
 
-    let alter_resp = drive_alter_client_quotas_sasl(
+    kafka_wire::quotas::set_user_quota(
+        CLIENT_ID,
+        &handle,
         addr,
-        "admin",
-        "admin-secret",
-        vec![(
-            vec![("user".into(), Some("alice".into()))],
-            vec![("request_percentage".into(), 0.001, false)],
-        )],
-        false,
+        ("admin", "admin-secret"),
+        "alice",
+        "request_percentage",
+        0.001,
     )
     .await;
-    assert!(alter_resp[0].1 == 0, "alter quota must succeed");
-
-    handle
-        .wait_for_image(|img| {
-            let key: krabka_metadata::EntityKey = vec![("user".into(), Some("alice".into()))];
-            img.client_quotas()
-                .get(&key)
-                .and_then(|cfgs| cfgs.get("request_percentage"))
-                == Some(&0.001)
-        })
-        .await;
 
     let deadline = Instant::now() + Duration::from_secs(15);
     let mut corr_id = 11;
@@ -772,4 +627,29 @@ async fn request_percentage_throttle_is_reported_on_api_versions() {
     );
 
     handle.shutdown().await;
+}
+
+async fn produce_when_acl_applied(
+    addr: std::net::SocketAddr,
+    topic: &str,
+    bytes: usize,
+    records: usize,
+) -> krabka_protocol::owned::produce_response::ProduceResponse {
+    let deadline = Instant::now() + Duration::from_secs(15);
+    loop {
+        let r = drive_produce_sasl(addr, "alice", b"alice-secret", topic, bytes, records).await;
+        let code = r
+            .responses
+            .first()
+            .and_then(|t| t.partition_responses.first())
+            .map_or(-1, |p| p.error_code);
+        if code != 29 {
+            return r;
+        }
+        assert!(
+            Instant::now() <= deadline,
+            "ACL still not applied after 15s; error_code=29"
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
 }

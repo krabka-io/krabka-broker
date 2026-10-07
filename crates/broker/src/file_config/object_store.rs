@@ -87,29 +87,11 @@ pub struct FileRemoteStorageS3Config {
 /// `service_account_key`, `application_credentials_path`) selects GKE
 /// Workload Identity / Application Default Credentials (keyless) — the
 /// primary production path.
+#[krabka_macros::gcs_fields(file)]
 #[krabka_macros::human_units]
 #[derive(Clone, Deserialize, JsonSchema, PartialEq, derive_more::Debug)]
 #[serde(deny_unknown_fields)]
 pub struct FileRemoteStorageGcsConfig {
-    /// GCS bucket name.
-    pub bucket: String,
-    /// Optional key prefix inside the bucket (lets multiple clusters
-    /// share a bucket).
-    pub prefix: Option<String>,
-    /// Path to a service-account JSON key file. Omit (along with the
-    /// other credential fields) to use Workload Identity / ADC.
-    #[debug("{:?}", service_account_path.as_ref().map(|_| "***"))]
-    pub service_account_path: Option<String>,
-    /// Inline service-account JSON key. Omit (along with the other
-    /// credential fields) to use Workload Identity / ADC.
-    #[debug("{:?}", service_account_key.as_ref().map(|_| "***"))]
-    pub service_account_key: Option<String>,
-    /// Path to an Application Default Credentials JSON file. Omit (along
-    /// with the other credential fields) to use Workload Identity / ADC.
-    #[debug("{:?}", application_credentials_path.as_ref().map(|_| "***"))]
-    pub application_credentials_path: Option<String>,
-    /// Optional custom GCS API base URL (for emulators / fakes).
-    pub endpoint: Option<String>,
     /// Allow plaintext HTTP (off-by-default; required by emulators
     /// running without TLS).
     #[serde(default)]

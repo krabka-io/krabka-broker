@@ -11,7 +11,7 @@ use crate::jvm_acceptance::{
     KAFKA_IMAGE_TXN, broker0_advertised, docker_run_kafka_tool_with_image_and_mount,
     nc_check_connectivity, plain_jaas, start_three_broker_sasl_plaintext_jvm_cluster,
     wait_jvm_isr_contains, wait_jvm_partition_any_leader, wait_jvm_partition_leader,
-    wait_three_brokers_registered, write_client_props,
+    wait_three_brokers_registered,
 };
 
 /// JVM acceptance test for `kafka-leader-election --election-type preferred`.
@@ -48,12 +48,7 @@ async fn jvm_kafka_leader_election_preferred() {
     // Wait for all three brokers to register in the metadata image.
     wait_three_brokers_registered(&h1, &h2, &h3, 3).await;
 
-    let admin_props = write_client_props(&format!(
-        "security.protocol=SASL_PLAINTEXT\n\
-         sasl.mechanism=PLAIN\n\
-         sasl.jaas.config={}\n",
-        plain_jaas(ADMIN, ADMIN_PASS),
-    ));
+    let admin_props = crate::jvm_acceptance::write_plain_props(ADMIN, ADMIN_PASS);
     let admin_mount = admin_props.mount_str();
 
     // Create rf=2 topic as super-user via the 7.5 JVM image.
@@ -154,14 +149,10 @@ async fn jvm_kafka_leader_election_preferred() {
     // kafka-leader-election is NOT present in cp-kafka:6.1.1 (Kafka 2.7).
     // cp-kafka:7.5.0 (Kafka 3.5) ships it. The tool sends `ElectLeaders`
     // (api_key 43) which the Rust broker now handles via T4/T5.
-    let out = std::process::Command::new("docker")
-        .args([
-            "run",
-            "--rm",
-            "-v",
-            &admin_mount,
-            "--add-host=host.docker.internal:host-gateway",
-            KAFKA_IMAGE_TXN,
+    let out = crate::support::jvm_docker_command(
+        KAFKA_IMAGE_TXN,
+        &[&admin_mount],
+        &[
             "kafka-leader-election",
             "--election-type",
             "preferred",
@@ -173,9 +164,11 @@ async fn jvm_kafka_leader_election_preferred() {
             broker0_advertised(),
             "--admin.config",
             "/client.properties",
-        ])
-        .output()
-        .expect("spawn kafka-leader-election");
+        ],
+        false,
+    )
+    .output()
+    .expect("spawn kafka-leader-election");
 
     let election_stdout = String::from_utf8_lossy(&out.stdout);
     let election_stderr = String::from_utf8_lossy(&out.stderr);

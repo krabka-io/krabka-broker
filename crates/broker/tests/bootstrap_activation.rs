@@ -21,10 +21,8 @@
 use std::{net::SocketAddr, path::PathBuf, time::Duration};
 
 use assert2::{assert, check};
-use bytes::Bytes;
 use futures_util::future::join_all;
 use krabka_broker::{BootstrapMode, Broker, BrokerConfig, BrokerHandle, NodeId, config::NodeRole};
-use krabka_client_core::{Connection, ConnectionOptions};
 use krabka_metadata::{
     BrokerConfigRecord, DEFAULT_BROKER_CONFIG_NODE_ID, MetadataImage, MetadataRecord,
     metadata_version::ELR_VERSION_FEATURE,
@@ -191,32 +189,8 @@ enum Batch {
 /// listener at `controller`, with each value decoded against the image that
 /// the values before it produce.
 async fn committed_batches(controller: SocketAddr) -> Vec<Batch> {
-    let connection = Connection::connect(
-        controller,
-        ConnectionOptions {
-            client_id: "bootstrap-activation-test".to_owned(),
-            ..ConnectionOptions::default()
-        },
-    )
-    .await
-    .expect("dial the controller listener");
-    let mut body = Vec::new();
-    krabka_raft::KrabkaMetadataFetchRequest {
-        fetch_offset: 0,
-        max_bytes: 4 << 20,
-        replica_id: -1,
-        replica_directory_id: uuid::Uuid::nil(),
-    }
-    .encode_v0(&mut body);
-    let raw = connection
-        .raw_request(krabka_raft::API_KEY_METADATA_FETCH, 0, Bytes::from(body))
-        .await
-        .expect("metadata fetch");
-    connection.close();
-    let mut cursor: &[u8] = &raw;
-    let response = krabka_raft::KrabkaMetadataFetchResponse::decode_v0(&mut cursor)
-        .expect("decode the metadata fetch response");
-    assert!(response.error_code == 0, "the controller served the fetch");
+    let response =
+        crate::support::client::metadata_fetch(controller, "bootstrap-activation-test", 0).await;
 
     let mut image = MetadataImage::new(uuid::Uuid::nil());
     let mut bytes: &[u8] = &response.records;

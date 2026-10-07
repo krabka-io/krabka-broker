@@ -5,6 +5,8 @@ use moxy::{
     token::{Spanner, TokenStream},
 };
 
+use crate::meta::{field_ident, named_fields};
+
 /// The expression inside a field's `#[default(...)]`.
 struct DefaultExpr(TokenStream);
 
@@ -25,12 +27,7 @@ impl moxy::ast::FromMeta for DefaultExpr {
 /// `name: <value>` for `field`: its `#[default(...)]` expression, or
 /// `Default::default()`.
 fn initializer(field: &Field) -> Result<TokenStream, ParseError> {
-    let Some(ident) = &field.ident else {
-        return Err(ParseError::new(
-            field.span(),
-            "`FieldDefaults` needs named fields",
-        ));
-    };
+    let ident = field_ident(field, "FieldDefaults")?;
     let value = field.parse_meta::<DefaultExpr>("default")?.map_or_else(
         || moxy::template! { ::core::default::Default::default() },
         |DefaultExpr(value)| value,
@@ -40,19 +37,12 @@ fn initializer(field: &Field) -> Result<TokenStream, ParseError> {
 
 /// Expands `#[derive(FieldDefaults)]` on `item`.
 pub(crate) fn expand(item: ItemStruct) -> Result<TokenStream, ParseError> {
-    let ident = item.ident;
-    let Some(named) = item.fields.as_named() else {
-        return Err(ParseError::new(
-            ident.span(),
-            "`FieldDefaults` needs a struct with named fields",
-        ));
-    };
-    let initializers = named
-        .fields
+    let initializers = named_fields(&item, "FieldDefaults")?
         .iter()
         .map(initializer)
         .collect::<Result<Vec<_>, _>>()?;
 
+    let ident = item.ident;
     let (impl_generics, type_generics, where_clause) = item.generics.split();
     Ok(moxy::template! {
         impl {{ impl_generics }} ::core::default::Default

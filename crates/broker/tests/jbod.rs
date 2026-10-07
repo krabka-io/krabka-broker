@@ -12,83 +12,43 @@
 
 mod kafka_wire;
 
-use std::{io, net::SocketAddr};
+mod support;
+
+use std::net::SocketAddr;
 
 use assert2::assert;
-use bytes::BytesMut;
-use krabka_broker::{Broker, BrokerConfig, BrokerHandle};
-use krabka_protocol::{
-    Decode, Encode,
-    owned::{
-        create_topics_request::{CreatableTopic, CreateTopicsRequest},
-        create_topics_response::CreateTopicsResponse,
-        describe_log_dirs_request::DescribeLogDirsRequest,
-        describe_log_dirs_response::DescribeLogDirsResponse,
-    },
+use krabka_broker::BrokerHandle;
+use krabka_protocol::owned::{
+    describe_log_dirs_request::DescribeLogDirsRequest,
+    describe_log_dirs_response::DescribeLogDirsResponse,
 };
-use tempfile::TempDir;
 use tokio::net::TcpStream;
+
+use crate::support::storage::start_two_dir_broker;
 
 const CLIENT_ID: &str = "krabka-jbod-test";
 
-/// One length-prefixed request/response exchange on correlation id 1, with
-/// flexible headers because every API this suite sends is flexible; see
-/// [`kafka_wire::round_trip`].
-async fn round_trip(
-    stream: &mut TcpStream,
-    api_key: i16,
-    api_version: i16,
-    body: &[u8],
-) -> io::Result<Vec<u8>> {
-    kafka_wire::round_trip(stream, api_key, api_version, 1, CLIENT_ID, true, body).await
-}
-
-fn start_two_dir_broker()
--> impl std::future::Future<Output = (BrokerHandle, TempDir, TempDir, SocketAddr)> {
-    let primary = tempfile::tempdir().unwrap();
-    let extra = tempfile::tempdir().unwrap();
-    let mut cfg = BrokerConfig::for_tests(primary.path().to_path_buf());
-    cfg.extra_log_dirs = vec![extra.path().to_path_buf()];
-    Box::pin(async move {
-        let handle = Broker::start(cfg).await.expect("broker start");
-        let addr = handle.listen_addr();
-        (handle, primary, extra, addr)
-    })
-}
-
 async fn create_topic(addr: SocketAddr, topic: &str, partitions: i32) {
-    let req = CreateTopicsRequest {
-        topics: vec![CreatableTopic {
-            name: topic.to_string(),
-            num_partitions: partitions,
-            replication_factor: 1,
-            ..Default::default()
-        }],
-        timeout_ms: 5_000,
-        ..Default::default()
-    };
-    let version: i16 = 7;
-    let mut stream = TcpStream::connect(addr).await.unwrap();
-    let mut body = BytesMut::new();
-    req.encode(&mut body, version).unwrap();
-    let resp_bytes = round_trip(&mut stream, 19, version, &body).await.unwrap();
-    let mut cur: &[u8] = &resp_bytes;
-    let resp = CreateTopicsResponse::decode(&mut cur, version).unwrap();
-    assert!(resp.topics[0].error_code == 0, "CreateTopics must succeed");
+    kafka_wire::create_topic_plaintext(addr, CLIENT_ID, kafka_wire::topic(topic, partitions, 1))
+        .await;
 }
 
 async fn describe_log_dirs(addr: SocketAddr) -> DescribeLogDirsResponse {
-    let req = DescribeLogDirsRequest {
-        topics: None,
-        ..Default::default()
-    };
-    let version: i16 = 4;
     let mut stream = TcpStream::connect(addr).await.unwrap();
-    let mut body = BytesMut::new();
-    req.encode(&mut body, version).unwrap();
-    let resp_bytes = round_trip(&mut stream, 35, version, &body).await.unwrap();
-    let mut cur: &[u8] = &resp_bytes;
-    DescribeLogDirsResponse::decode(&mut cur, version).unwrap()
+    kafka_wire::exchange(
+        &mut stream,
+        &DescribeLogDirsRequest {
+            topics: None,
+            ..Default::default()
+        },
+        35,
+        4,
+        1,
+        CLIENT_ID,
+        true,
+    )
+    .await
+    .unwrap()
 }
 
 async fn wait_all_partitions(handle: &BrokerHandle, topic: &str, n: i32) {

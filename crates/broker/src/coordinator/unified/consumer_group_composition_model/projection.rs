@@ -7,32 +7,21 @@
 //! one file is what makes it easy to see that they are inverses.
 
 use std::{
-    collections::{BTreeMap, BTreeSet, HashMap, HashSet},
-    time::{Duration, Instant},
+    collections::{BTreeMap, BTreeSet, HashMap},
+    time::Instant,
 };
 
 use krabka_log::Offset;
 use krabka_protocol::primitives::uuid::Uuid;
 
 use super::{
-    TOPIC, TOPIC_NAME,
+    TOPIC,
     state::{CgcState, MemberProj},
 };
-use crate::coordinator::unified::consumer_state::{GroupState, MemberState};
-
-fn parts_of(map: Option<&HashMap<Uuid, Vec<i32>>>) -> Vec<i32> {
-    let mut v: Vec<i32> = map.and_then(|m| m.get(&TOPIC)).cloned().unwrap_or_default();
-    v.sort_unstable();
-    v
-}
-
-fn to_map(parts: &[i32]) -> HashMap<Uuid, Vec<i32>> {
-    if parts.is_empty() {
-        HashMap::new()
-    } else {
-        [(TOPIC, parts.to_vec())].into()
-    }
-}
+use crate::coordinator::unified::{
+    actor::reconciliation_model_support::{insert_modeled_member, modeled_member, parts_of},
+    consumer_state::GroupState,
+};
 
 fn epochs_of(map: &HashMap<Uuid, HashMap<i32, i32>>) -> Vec<(i32, i32)> {
     let mut v: Vec<(i32, i32)> = map
@@ -58,31 +47,16 @@ pub(super) fn rebuild_group(s: &CgcState) -> GroupState {
     g.target.epoch = s.target_epoch;
     let now = Instant::now();
     for m in &s.members {
-        let mut subs = HashSet::new();
-        subs.insert(TOPIC_NAME.to_string());
-        let ms = MemberState {
-            member_id: m.id.clone(),
-            instance_id: None,
-            rack_id: None,
-            client_id: String::new(),
-            client_host: String::new(),
-            subscribed_topic_names: subs,
-            subscribed_topic_regex: None,
-            server_assignor: None,
-            rebalance_timeout: Duration::from_mins(1),
-            member_epoch: m.member_epoch,
-            previous_member_epoch: 0,
-            assignment_state: m.assignment_state,
-            assigned_partitions: to_map(&m.assigned),
-            partitions_pending_revocation: to_map(&m.pending_revocation),
-            assignment_epochs: epochs_to_map(&m.assignment_epochs),
-            last_seen: now,
-            classic: None,
-        };
-        g.members.insert(m.id.clone(), ms);
-        if !m.target.is_empty() {
-            g.target.per_member.insert(m.id.clone(), to_map(&m.target));
-        }
+        let mut ms = modeled_member(
+            &m.id,
+            m.member_epoch,
+            m.assignment_state,
+            &m.assigned,
+            &m.pending_revocation,
+            now,
+        );
+        ms.assignment_epochs = epochs_to_map(&m.assignment_epochs);
+        insert_modeled_member(&mut g, ms, &m.target);
     }
     g
 }

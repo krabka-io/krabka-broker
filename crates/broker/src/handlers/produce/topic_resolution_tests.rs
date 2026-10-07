@@ -14,7 +14,6 @@ use assert2::assert;
 use bytes::Bytes;
 use krabka_protocol::{
     owned::{
-        create_topics_request::{CreatableTopic, CreateTopicsRequest},
         produce_request::{PartitionProduceData, ProduceRequest, TopicProduceData},
         produce_response::{PartitionProduceResponse, ProduceResponse, TopicProduceResponse},
     },
@@ -110,27 +109,7 @@ async fn start(authorizer: Arc<dyn Authorizer>) -> (BrokerHandle, tempfile::Temp
 }
 
 async fn create_topic(broker: &BrokerHandle, name: &str) {
-    let client = krabka_client_core::Client::builder()
-        .bootstrap(broker.listen_addr().to_string())
-        .client_id("produce-resolution-test")
-        .build()
-        .await
-        .expect("client build");
-    let response = client
-        .send(CreateTopicsRequest {
-            topics: vec![CreatableTopic {
-                name: name.to_string(),
-                num_partitions: 1,
-                replication_factor: 1,
-                ..Default::default()
-            }],
-            timeout_ms: 5_000,
-            ..Default::default()
-        })
-        .await
-        .expect("CreateTopics");
-    assert!(response.topics[0].error_code == codes::NONE, "{response:?}");
-    broker.wait_until_partition_present(name, 0).await;
+    crate::handlers::test_support::create_topic(broker, "produce-resolution-test", name, 1).await;
 }
 
 /// Send one single-row `Produce` at `case.version` for `case.topic`. Return
@@ -290,13 +269,9 @@ async fn unresolved_id_answers_before_topic_authorization() {
     ];
     let (broker, _dir) = start(Arc::new(DenyAll)).await;
 
-    let mut actual = Vec::with_capacity(cases.len());
-    let mut expected = Vec::with_capacity(cases.len());
-    for case in cases {
-        let (got, want) = drive(&broker, None, case).await;
-        actual.push(got);
-        expected.push(want);
-    }
-    assert!(actual == expected);
+    crate::handlers::test_support::check_cases(cases, async |case| {
+        drive(&broker, None, case).await
+    })
+    .await;
     broker.shutdown().await;
 }

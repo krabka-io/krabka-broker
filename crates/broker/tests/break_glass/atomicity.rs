@@ -7,9 +7,7 @@
 //! a second append would show.
 
 use assert2::{assert, check};
-use bytes::Bytes;
 use krabka_broker::{BrokerHandle, NodeId, codes};
-use krabka_client_core::{Connection, ConnectionOptions};
 use krabka_metadata::{
     BreakGlassProposalRecord, MetadataImage, MetadataRecord, UnregisterBrokerRecord,
 };
@@ -33,33 +31,9 @@ async fn metadata_batches(
     from: i64,
     image: &MetadataImage,
 ) -> Vec<Vec<MetadataRecord>> {
-    let connection = Connection::connect(
-        broker.controller_addr(),
-        ConnectionOptions {
-            client_id: "break-glass-test".to_owned(),
-            ..ConnectionOptions::default()
-        },
-    )
-    .await
-    .expect("dial the controller listener");
-    let mut body = Vec::new();
-    krabka_raft::KrabkaMetadataFetchRequest {
-        fetch_offset: from,
-        max_bytes: 4 << 20,
-        replica_id: -1,
-        replica_directory_id: uuid::Uuid::nil(),
-    }
-    .encode_v0(&mut body);
-    let raw = connection
-        .raw_request(krabka_raft::API_KEY_METADATA_FETCH, 0, Bytes::from(body))
-        .await
-        .expect("metadata fetch");
-    connection.close();
-
-    let mut cursor: &[u8] = &raw;
-    let response = krabka_raft::KrabkaMetadataFetchResponse::decode_v0(&mut cursor)
-        .expect("decode the metadata fetch response");
-    assert!(response.error_code == 0, "the controller served the fetch");
+    let response =
+        crate::support::client::metadata_fetch(broker.controller_addr(), "break-glass-test", from)
+            .await;
 
     let mut bytes: &[u8] = &response.records;
     let mut batches = Vec::new();

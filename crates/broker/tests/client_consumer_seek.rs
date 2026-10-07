@@ -6,6 +6,8 @@
 //! post-assignment prime, that it drops no pre-seek records, and that it skips
 //! none above the sought offset.
 
+mod support;
+
 use krabka_broker::{Broker, BrokerConfig};
 use krabka_client_consumer::{AutoOffsetReset, Consumer};
 use krabka_client_core::Client;
@@ -47,20 +49,7 @@ async fn seek_before_first_poll_resumes_from_sought_offset() {
         .build()
         .await
         .unwrap();
-    let ct = admin
-        .send(CreateTopicsRequest {
-            topics: vec![CreatableTopic {
-                name: "s".into(),
-                num_partitions: 1,
-                replication_factor: 1,
-                ..Default::default()
-            }],
-            timeout_ms: 5_000,
-            ..Default::default()
-        })
-        .await
-        .unwrap();
-    assert2::assert!(ct.topics[0].error_code == 0);
+    crate::support::client::create_topic(&admin, "s", 1).await;
 
     // Offsets 0..=4 on partition 0.
     produce_n(&bootstrap, "s", 5).await;

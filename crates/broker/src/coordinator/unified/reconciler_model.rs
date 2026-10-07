@@ -26,17 +26,15 @@
 //! and the two tests that run the checker. Each child holds one concern:
 //! `config` the bounded model shape and the metadata and coordinator config the
 //! driven code needs, `state` the enumerated state and actions, `projection`
-//! the two-way mapping onto the real `GroupState`, `heartbeat` the request and
-//! advertised-assignment wire helpers, `properties` the stateright
+//! the two-way mapping onto the real `GroupState`, `properties` the stateright
 //! [`Model`](stateright::Model) implementation, and `runner` the checker
-//! bounds.
+//! bounds. `reconciliation_model_support` provides the shared wire requests
+//! and ownership oracles.
 
 // Each child is declared with an explicit `#[path]`, because this root is
 // itself reached through a `#[path]` and so owns its declaring directory.
 #[path = "reconciler_model/config.rs"]
 mod config;
-#[path = "reconciler_model/heartbeat.rs"]
-mod heartbeat;
 #[path = "reconciler_model/projection.rs"]
 mod projection;
 #[path = "reconciler_model/properties.rs"]
@@ -46,15 +44,10 @@ mod runner;
 #[path = "reconciler_model/state.rs"]
 mod state;
 
-use krabka_protocol::primitives::uuid::Uuid;
-
 use self::{
     config::ReconModel,
     runner::{PINNED_UNIQUE_STATES_BASIC, PINNED_UNIQUE_STATES_WIDE, run},
 };
-
-const TOPIC: Uuid = Uuid([7; 16]);
-const TOPIC_NAME: &str = "t";
 
 #[test]
 fn recon_basic() {

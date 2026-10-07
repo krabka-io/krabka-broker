@@ -8,7 +8,6 @@
 use std::sync::Arc;
 
 use assert2::assert;
-use bytes::Bytes;
 use krabka_ids::LeaderEpoch;
 use krabka_remote_storage::{
     CustomMetadata, RemoteLogMetadataManager, RemoteLogSegmentId, RemoteLogSegmentMetadata,
@@ -20,10 +19,7 @@ use uuid::Uuid;
 use super::TopicBasedRemoteLogMetadataManager;
 use crate::{
     error::MetadataLogError,
-    log::{
-        AssignmentHandle, InProcessMetadataEventLog, MetadataEventLog, MetadataEventStream,
-        PartitionStart,
-    },
+    log::{InProcessMetadataEventLog, MetadataEventLog},
 };
 
 /// Test double that delegates to an inner [`InProcessMetadataEventLog`]
@@ -48,20 +44,9 @@ impl HwmFlakyLog {
     }
 }
 
+#[krabka_macros::metadata_log_delegate(crate)]
 #[async_trait::async_trait]
 impl MetadataEventLog for HwmFlakyLog {
-    fn partition_count(&self) -> i32 {
-        self.inner.partition_count()
-    }
-    async fn publish(&self, partition: i32, event: Bytes) -> Result<i64, MetadataLogError> {
-        self.inner.publish(partition, event).await
-    }
-    fn subscribe(
-        &self,
-        assignment: Vec<PartitionStart>,
-    ) -> (MetadataEventStream, Arc<dyn AssignmentHandle>) {
-        self.inner.subscribe(assignment)
-    }
     async fn high_water_marks(&self) -> Result<Vec<i64>, MetadataLogError> {
         if self.fail_hwm.load(std::sync::atomic::Ordering::SeqCst) {
             return Err(MetadataLogError::Other("injected HWM failure".into()));
@@ -179,4 +164,26 @@ pub async fn start_manager_all(
         tokio::task::yield_now().await;
     }
     m
+}
+
+pub async fn seed_finished(
+    manager: &Arc<TopicBasedRemoteLogMetadataManager>,
+    segments: &[(u128, i64, i64)],
+) {
+    for &(id, start, end) in segments {
+        let m = manager.clone();
+        on_blocking(move || {
+            m.add_remote_log_segment_metadata(started(id, start, end))
+                .unwrap();
+        })
+        .await;
+        let m = manager.clone();
+        on_blocking(move || m.update_remote_log_segment_metadata(finish(id)).unwrap()).await;
+    }
+}
+
+pub async fn seed_log(log: Arc<dyn MetadataEventLog>) {
+    let manager = start_manager_all(log).await;
+    seed_finished(&manager, &[(10, 0, 99)]).await;
+    manager.shutdown();
 }

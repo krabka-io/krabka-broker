@@ -21,9 +21,8 @@ use std::{sync::Arc, time::Duration};
 use assert2::assert;
 use bytes::Bytes;
 use krabka_log::Offset;
-use krabka_metadata::{AclOperation, MetadataRecord, PartitionRecord, ResourceType, TopicRecord};
+use krabka_metadata::{AclOperation, ResourceType};
 use krabka_protocol::{
-    Decode,
     owned::{
         fetch_request::{FetchPartition, FetchRequest, FetchTopic, ReplicaState},
         fetch_response::{FetchResponse, FetchableTopicResponse, PartitionData},
@@ -32,7 +31,7 @@ use krabka_protocol::{
     records::{Record, RecordBatch, RecordsPayload},
 };
 
-use super::{FIRST_TOPIC_ID_VERSION, encode_fetch_response, handle};
+use super::FIRST_TOPIC_ID_VERSION;
 use crate::{
     authorizer::{AclSource, AuthorizationRequest, AuthorizationResult, Authorizer},
     broker::BrokerHandle,
@@ -40,7 +39,7 @@ use crate::{
     fetch_session::{FINAL_EPOCH, INVALID_SESSION_ID},
     handlers::acl_wire::CLUSTER_RESOURCE_NAME,
     partition::Partition,
-    test_support::{encode_request, peer, principal, request_context, start_broker_no_audit_with},
+    test_support::start_broker_no_audit_with,
 };
 
 /// The node id of the follower that the fetches claim to be. The broker under
@@ -166,30 +165,7 @@ async fn replicated_partition(
     topic: &str,
     topic_id: u128,
 ) -> (Arc<Partition>, RecordBatch) {
-    broker
-        .submit_metadata_record_for_test(MetadataRecord::V1Topic(TopicRecord {
-            name: topic.to_owned(),
-            topic_id: uuid::Uuid::from_u128(topic_id),
-            partitions: 1,
-            replication_factor: 2,
-        }))
-        .await
-        .expect("submit topic record");
-    broker
-        .submit_metadata_record_for_test(MetadataRecord::V1Partition(PartitionRecord {
-            topic: topic.to_owned(),
-            partition: 0,
-            leader: krabka_audit::NodeId(1),
-            replicas: vec![krabka_audit::NodeId(1), krabka_audit::NodeId(2)],
-            isr: vec![krabka_audit::NodeId(1), krabka_audit::NodeId(2)],
-            leader_epoch: krabka_metadata::LeaderEpoch(0),
-            adding_replicas: Vec::new(),
-            removing_replicas: Vec::new(),
-            directories: vec![uuid::Uuid::nil(); 2],
-            partition_epoch: 0,
-        }))
-        .await
-        .expect("submit partition record");
+    crate::handlers::test_support::seed_replicated_topic(broker, topic, topic_id, 1).await;
 
     let shared = broker.broker_arc_for_test();
     let follower = krabka_raft::NodeId(2);
@@ -295,19 +271,7 @@ async fn fetch(
     caller: Caller,
     request: &FetchRequest,
 ) -> FetchResponse {
-    let shared = broker.broker_arc_for_test();
-    let user = principal(caller.name());
-    let address = peer();
-    let ctx = request_context(&user, &address, "fetch-client");
-    let request_bytes = encode_request(request, version);
-    let (response, response_version) = handle(&shared, version, 7, &request_bytes, &ctx)
-        .await
-        .expect("handle fetch");
-    let wire = encode_fetch_response(response, response_version).expect("encode response");
-    let mut cursor: &[u8] = wire.as_ref();
-    let decoded = FetchResponse::decode(&mut cursor, version).expect("decode response");
-    assert!(cursor.is_empty(), "the decoder consumed every byte");
-    decoded
+    super::test_support::fetch_wire(broker, version, caller.name(), "fetch-client", request).await
 }
 
 /// The one-row response of `case` for partition 0 of `topic`.

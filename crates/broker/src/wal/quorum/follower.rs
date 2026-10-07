@@ -233,6 +233,21 @@ mod tests {
         }
     }
 
+    fn leader_registry(
+        shard: ShardId,
+        leader: &Arc<Mutex<Log>>,
+        epoch: i32,
+    ) -> (WalShardRegistry, Arc<WalShardEngine>) {
+        let registry = WalShardRegistry::new(NodeId(1));
+        let engine = Arc::new(WalShardEngine::new_distributed(Arc::clone(leader), 3).unwrap());
+        registry.insert(shard, Arc::clone(&engine));
+        registry.replace_placements(&maplit::hashmap! {shard => WalPlacement {
+            voters: vec![NodeId(1), NodeId(2), NodeId(3)],
+            leader_epoch: epoch,
+        }});
+        (registry, engine)
+    }
+
     #[tokio::test]
     async fn follower_run_retries_until_cancelled() {
         let dir = tempfile::tempdir().unwrap();
@@ -382,13 +397,7 @@ mod tests {
             topic_id: uuid::Uuid::from_u128(100),
             partition: PartitionIndex(0),
         };
-        let registry = WalShardRegistry::new(NodeId(1));
-        let engine = Arc::new(WalShardEngine::new_distributed(Arc::clone(&leader), 3).unwrap());
-        registry.insert(shard, Arc::clone(&engine));
-        registry.replace_placements(&maplit::hashmap! {shard => WalPlacement {
-            voters: vec![NodeId(1), NodeId(2), NodeId(3)],
-            leader_epoch: 1,
-        }});
+        let (registry, engine) = leader_registry(shard, &leader, 1);
 
         let response = registry
             .route_fetch_request(
@@ -496,13 +505,7 @@ mod tests {
             topic_id: uuid::Uuid::from_u128(101),
             partition: PartitionIndex(0),
         };
-        let registry = WalShardRegistry::new(NodeId(1));
-        let engine = Arc::new(WalShardEngine::new_distributed(Arc::clone(&leader), 3).unwrap());
-        registry.insert(shard, Arc::clone(&engine));
-        registry.replace_placements(&maplit::hashmap! {shard => WalPlacement {
-            voters: vec![NodeId(1), NodeId(2), NodeId(3)],
-            leader_epoch: 2,
-        }});
+        let (registry, _engine) = leader_registry(shard, &leader, 2);
         let fetch = |follower: &FollowerLog| {
             let response = registry
                 .route_fetch_request(

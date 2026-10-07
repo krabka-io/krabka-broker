@@ -5,7 +5,7 @@
 //! complete the handshake and exchange one `ApiVersions` request, and nothing
 //! else in the suite proves that in isolation.
 
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 
 use assert2::assert;
 
@@ -43,26 +43,22 @@ async fn jvm_ssl_handshake_succeeds() {
     let props_tmp = write_client_props(props);
     let ts_mount = format!("{}:/truststore.jks:ro", truststore_path.display());
 
-    let out = Command::new("docker")
-        .args([
-            "run",
-            "--rm",
-            "-v",
-            &props_tmp.mount_str(),
-            "-v",
-            &ts_mount,
-            "--add-host=host.docker.internal:host-gateway",
-            KAFKA_IMAGE,
+    let out = crate::support::jvm_docker_command(
+        KAFKA_IMAGE,
+        &[&props_tmp.mount_str(), &ts_mount],
+        &[
             "kafka-broker-api-versions",
             "--bootstrap-server",
             broker0_advertised(),
             "--command-config",
             "/client.properties",
-        ])
-        .stderr(Stdio::piped())
-        .stdout(Stdio::piped())
-        .output()
-        .expect("spawn kafka-broker-api-versions");
+        ],
+        false,
+    )
+    .stderr(Stdio::piped())
+    .stdout(Stdio::piped())
+    .output()
+    .expect("spawn kafka-broker-api-versions");
     eprintln!(
         "KRABKA[test] ssl api-versions status={} stdout={} stderr={}",
         out.status,

@@ -723,15 +723,7 @@ mod tests {
             ),
         ];
         for (label, overrides, want) in cases {
-            let mut img = image_with_topic("t", &[1]);
-            let mut map = BTreeMap::new();
-            for (key, value) in overrides {
-                map.insert(key.to_string(), value.to_string());
-            }
-            img.apply(&MetadataRecord::V1TopicConfig(TopicConfigRecord {
-                topic: "t".into(),
-                overrides: map,
-            }));
+            let img = crate::handlers::produce::test_support::image_with_overrides("t", &overrides);
             check!(
                 resolve_timestamp_policy(&img, "t", kafka_stock_broker_default()) == want,
                 "{label}"
@@ -772,15 +764,7 @@ mod tests {
             ),
         ];
         for (label, overrides, want) in cases {
-            let mut img = image_with_topic("t", &[1]);
-            let mut map = BTreeMap::new();
-            for (key, value) in overrides {
-                map.insert(key.to_string(), value.to_string());
-            }
-            img.apply(&MetadataRecord::V1TopicConfig(TopicConfigRecord {
-                topic: "t".into(),
-                overrides: map,
-            }));
+            let img = crate::handlers::produce::test_support::image_with_overrides("t", &overrides);
             let resolved = resolve_timestamp_policy(&img, "t", kafka_stock_broker_default());
             check!(resolved == want, "{label}");
             check!(
@@ -839,15 +823,7 @@ mod tests {
             ),
         ];
         for (label, overrides, want) in cases {
-            let mut img = image_with_topic("t", &[1]);
-            let mut map = BTreeMap::new();
-            for (key, value) in overrides {
-                map.insert(key.to_string(), value.to_string());
-            }
-            img.apply(&MetadataRecord::V1TopicConfig(TopicConfigRecord {
-                topic: "t".into(),
-                overrides: map,
-            }));
+            let img = crate::handlers::produce::test_support::image_with_overrides("t", &overrides);
             check!(
                 resolve_timestamp_policy(&img, "t", strict_broker_default) == want,
                 "{label}"

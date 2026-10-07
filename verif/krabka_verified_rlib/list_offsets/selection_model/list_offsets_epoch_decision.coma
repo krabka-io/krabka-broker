@@ -1,13 +1,13 @@
-(* #"/workspace/crates/verified/src/list_offsets/selection_model.rs" 47 0 50 29 *)
+(* #"/workspace/crates/verified/src/list_offsets/selection_model.rs" 48 0 51 29 *)
 
-let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
-let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
-let%span sselection_model = "/workspace/crates/verified/src/list_offsets/selection_model.rs" 51 23 51 24
-let%span sselection_model'0 = "/workspace/crates/verified/src/list_offsets/selection_model.rs" 53 33 53 35
-let%span sselection_model'1 = "/workspace/crates/verified/src/list_offsets/selection_model.rs" 40 10 40 87
-let%span sselection_model'2 = "/workspace/crates/verified/src/list_offsets/selection_model.rs" 41 10 42 70
-let%span sselection_model'3 = "/workspace/crates/verified/src/list_offsets/selection_model.rs" 43 10 44 67
-let%span sselection_model'4 = "/workspace/crates/verified/src/list_offsets/selection_model.rs" 45 10 46 41
+let%span sord = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sord'0 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span sselection_model = "/workspace/crates/verified/src/list_offsets/selection_model.rs" 52 23 52 24
+let%span sselection_model'0 = "/workspace/crates/verified/src/list_offsets/selection_model.rs" 54 33 54 35
+let%span sselection_model'1 = "/workspace/crates/verified/src/list_offsets/selection_model.rs" 41 10 41 87
+let%span sselection_model'2 = "/workspace/crates/verified/src/list_offsets/selection_model.rs" 42 10 43 70
+let%span sselection_model'3 = "/workspace/crates/verified/src/list_offsets/selection_model.rs" 44 10 45 67
+let%span sselection_model'4 = "/workspace/crates/verified/src/list_offsets/selection_model.rs" 46 10 47 41
 
 use creusot.int.Int32
 use creusot.prelude.Any
@@ -27,7 +27,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let list_offsets_epoch_decision [#"/workspace/crates/verified/src/list_offsets/selection_model.rs" 47 0 50 29]
+let list_offsets_epoch_decision [#"/workspace/crates/verified/src/list_offsets/selection_model.rs" 48 0 51 29]
   (requested_epoch: Int32.t) (current_epoch: Int32.t) (return (x: t_ListOffsetsEpochDecision)) = (! bb0
   [ bb0 = s0
     [ s0 = [ &_14 <- Int32.lt current_epoch ([%#sselection_model] (0: Int32.t)) ] s1

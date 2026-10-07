@@ -1,40 +1,40 @@
-(* #"/workspace/crates/verified/src/composition/wal_recovery.rs" 121 0 129 41 *)
+(* #"/workspace/crates/verified/src/composition/wal_recovery.rs" 122 0 130 41 *)
 
-let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
-let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
-let%span strim_admission = "/workspace/crates/verified/src/broker/trim_admission.rs" 100 4 106 6
-let%span sops = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/ops.rs" 688 18 691 9
-let%span sops'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/ops.rs" 702 25 702 33
-let%span sops'1 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/ops.rs" 701 18 701 32
-let%span sfuture_log_swap_admission = "/workspace/crates/verified/src/storage/future_log_swap_admission.rs" 107 10 107 30
-let%span sfuture_log_swap_admission'0 = "/workspace/crates/verified/src/storage/future_log_swap_admission.rs" 108 10 108 29
-let%span sfuture_log_swap_admission'1 = "/workspace/crates/verified/src/storage/future_log_swap_admission.rs" 109 10 109 53
-let%span smetadata_record_offset_deltas = "/workspace/crates/verified/src/raft/metadata_record_offset_deltas.rs" 123 28 123 73
-let%span swal_recovery = "/workspace/crates/verified/src/composition/wal_recovery.rs" 130 17 130 58
-let%span swal_recovery'0 = "/workspace/crates/verified/src/composition/wal_recovery.rs" 131 22 131 87
-let%span swal_recovery'1 = "/workspace/crates/verified/src/composition/wal_recovery.rs" 137 59 137 60
-let%span swal_recovery'2 = "/workspace/crates/verified/src/composition/wal_recovery.rs" 142 24 151 5
-let%span swal_recovery'3 = "/workspace/crates/verified/src/composition/wal_recovery.rs" 142 24 151 6
-let%span swal_recovery'4 = "/workspace/crates/verified/src/composition/wal_recovery.rs" 157 8 157 59
-let%span swal_recovery'5 = "/workspace/crates/verified/src/composition/wal_recovery.rs" 94 11 94 87
-let%span swal_recovery'6 = "/workspace/crates/verified/src/composition/wal_recovery.rs" 95 11 95 52
-let%span swal_recovery'7 = "/workspace/crates/verified/src/composition/wal_recovery.rs" 96 11 97 51
-let%span swal_recovery'8 = "/workspace/crates/verified/src/composition/wal_recovery.rs" 98 11 98 67
-let%span swal_recovery'9 = "/workspace/crates/verified/src/composition/wal_recovery.rs" 99 11 99 62
-let%span swal_recovery'10 = "/workspace/crates/verified/src/composition/wal_recovery.rs" 100 11 100 83
-let%span swal_recovery'11 = "/workspace/crates/verified/src/composition/wal_recovery.rs" 101 11 101 94
-let%span swal_recovery'12 = "/workspace/crates/verified/src/composition/wal_recovery.rs" 102 11 103 36
-let%span swal_recovery'13 = "/workspace/crates/verified/src/composition/wal_recovery.rs" 104 11 104 65
-let%span swal_recovery'14 = "/workspace/crates/verified/src/composition/wal_recovery.rs" 105 11 106 72
-let%span swal_recovery'15 = "/workspace/crates/verified/src/composition/wal_recovery.rs" 107 10 107 57
-let%span swal_recovery'16 = "/workspace/crates/verified/src/composition/wal_recovery.rs" 108 10 120 1
-let%span swal_recovery'17 = "/workspace/crates/verified/src/composition/wal_recovery.rs" 13 11 13 66
-let%span swal_recovery'18 = "/workspace/crates/verified/src/composition/wal_recovery.rs" 14 11 14 83
-let%span swal_recovery'19 = "/workspace/crates/verified/src/composition/wal_recovery.rs" 15 11 15 94
-let%span swal_recovery'20 = "/workspace/crates/verified/src/composition/wal_recovery.rs" 16 11 16 37
-let%span swal_recovery'21 = "/workspace/crates/verified/src/composition/wal_recovery.rs" 17 11 18 36
-let%span swal_recovery'22 = "/workspace/crates/verified/src/composition/wal_recovery.rs" 19 10 23 1
-let%span swal_recovery'23 = "/workspace/crates/verified/src/composition/wal_recovery.rs" 24 10 33 1
+let%span sord = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sord'0 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span strim_admission = "/workspace/crates/verified/src/broker/trim_admission.rs" 101 4 107 6
+let%span sops = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/ops.rs" 688 18 691 9
+let%span sops'0 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/ops.rs" 702 25 702 33
+let%span sops'1 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/ops.rs" 701 18 701 32
+let%span sfuture_log_swap_admission = "/workspace/crates/verified/src/storage/future_log_swap_admission.rs" 108 10 108 30
+let%span sfuture_log_swap_admission'0 = "/workspace/crates/verified/src/storage/future_log_swap_admission.rs" 109 10 109 29
+let%span sfuture_log_swap_admission'1 = "/workspace/crates/verified/src/storage/future_log_swap_admission.rs" 110 10 110 53
+let%span smetadata_record_offset_deltas = "/workspace/crates/verified/src/raft/metadata_record_offset_deltas.rs" 124 28 124 73
+let%span swal_recovery = "/workspace/crates/verified/src/composition/wal_recovery.rs" 131 17 131 58
+let%span swal_recovery'0 = "/workspace/crates/verified/src/composition/wal_recovery.rs" 132 22 132 87
+let%span swal_recovery'1 = "/workspace/crates/verified/src/composition/wal_recovery.rs" 138 59 138 60
+let%span swal_recovery'2 = "/workspace/crates/verified/src/composition/wal_recovery.rs" 143 24 152 5
+let%span swal_recovery'3 = "/workspace/crates/verified/src/composition/wal_recovery.rs" 143 24 152 6
+let%span swal_recovery'4 = "/workspace/crates/verified/src/composition/wal_recovery.rs" 158 8 158 59
+let%span swal_recovery'5 = "/workspace/crates/verified/src/composition/wal_recovery.rs" 95 11 95 87
+let%span swal_recovery'6 = "/workspace/crates/verified/src/composition/wal_recovery.rs" 96 11 96 52
+let%span swal_recovery'7 = "/workspace/crates/verified/src/composition/wal_recovery.rs" 97 11 98 51
+let%span swal_recovery'8 = "/workspace/crates/verified/src/composition/wal_recovery.rs" 99 11 99 67
+let%span swal_recovery'9 = "/workspace/crates/verified/src/composition/wal_recovery.rs" 100 11 100 62
+let%span swal_recovery'10 = "/workspace/crates/verified/src/composition/wal_recovery.rs" 101 11 101 83
+let%span swal_recovery'11 = "/workspace/crates/verified/src/composition/wal_recovery.rs" 102 11 102 94
+let%span swal_recovery'12 = "/workspace/crates/verified/src/composition/wal_recovery.rs" 103 11 104 36
+let%span swal_recovery'13 = "/workspace/crates/verified/src/composition/wal_recovery.rs" 105 11 105 65
+let%span swal_recovery'14 = "/workspace/crates/verified/src/composition/wal_recovery.rs" 106 11 107 72
+let%span swal_recovery'15 = "/workspace/crates/verified/src/composition/wal_recovery.rs" 108 10 108 57
+let%span swal_recovery'16 = "/workspace/crates/verified/src/composition/wal_recovery.rs" 109 10 121 1
+let%span swal_recovery'17 = "/workspace/crates/verified/src/composition/wal_recovery.rs" 14 11 14 66
+let%span swal_recovery'18 = "/workspace/crates/verified/src/composition/wal_recovery.rs" 15 11 15 83
+let%span swal_recovery'19 = "/workspace/crates/verified/src/composition/wal_recovery.rs" 16 11 16 94
+let%span swal_recovery'20 = "/workspace/crates/verified/src/composition/wal_recovery.rs" 17 11 17 37
+let%span swal_recovery'21 = "/workspace/crates/verified/src/composition/wal_recovery.rs" 18 11 19 36
+let%span swal_recovery'22 = "/workspace/crates/verified/src/composition/wal_recovery.rs" 20 10 24 1
+let%span swal_recovery'23 = "/workspace/crates/verified/src/composition/wal_recovery.rs" 25 10 34 1
 
 use creusot.int.Int64
 use creusot.int.UInt8
@@ -257,7 +257,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let published_trim_bounds_recovery [#"/workspace/crates/verified/src/composition/wal_recovery.rs" 121 0 129 41]
+let published_trim_bounds_recovery [#"/workspace/crates/verified/src/composition/wal_recovery.rs" 122 0 130 41]
   (ends: Slice64.slice Int64.t) (physical_start: Int64.t) (w: t_FetchWatermarks) (prior_end: Int64.t)
   (requested: Int64.t) (phase: tup2_u8_i64) (probe: Int64.t) (return (x: t_Option_tup5_i64_i64_usize_i64_bool)) =
 {[@stop_split] [@expl:published_trim_bounds_recovery requires] ([@stop_split] [@expl:published_trim_bounds_recovery requires #0] [%#swal_recovery'5] ge_log_Int (Int64.to_int w.log_start) 0

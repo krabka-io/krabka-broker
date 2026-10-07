@@ -8,11 +8,9 @@
 
 use std::sync::Arc;
 
-use assert2::assert;
 use krabka_broker::{Broker, BrokerConfig};
 use krabka_client_core::Client;
 use krabka_protocol::owned::{
-    create_topics_request::{CreatableTopic, CreateTopicsRequest},
     share_group_describe_request::ShareGroupDescribeRequest,
     share_group_heartbeat_request::ShareGroupHeartbeatRequest,
 };
@@ -48,34 +46,11 @@ pub async fn boot() -> (krabka_broker::BrokerHandle, String, tempfile::TempDir) 
 }
 
 pub async fn connect(bootstrap: &str) -> Arc<Client> {
-    Arc::new(
-        Client::builder()
-            .bootstrap(bootstrap)
-            .client_id("c1")
-            .build()
-            .await
-            .unwrap(),
-    )
+    crate::support::client::connect(bootstrap, "c1").await
 }
 
 pub async fn create_topic(client: &Client, topic: &str, partitions: i32) {
-    let resp = client
-        .send(CreateTopicsRequest {
-            topics: vec![CreatableTopic {
-                name: topic.into(),
-                num_partitions: partitions,
-                replication_factor: 1,
-                ..Default::default()
-            }],
-            timeout_ms: 5_000,
-            ..Default::default()
-        })
-        .await
-        .expect("CreateTopics");
-    assert!(
-        resp.topics[0].error_code == 0,
-        "topic create failed: {resp:?}"
-    );
+    crate::support::client::create_topic(client, topic, partitions).await;
 }
 
 pub fn heartbeat(group: &str, member_id: &str, epoch: i32) -> ShareGroupHeartbeatRequest {

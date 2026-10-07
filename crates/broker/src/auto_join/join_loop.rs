@@ -264,57 +264,23 @@ mod tests {
         // RemoveRaftVoter frame has been read.
         let (key_tx, key_rx) = tokio::sync::oneshot::channel::<i16>();
         tokio::spawn(async move {
-            use tokio::io::{AsyncReadExt, AsyncWriteExt};
+            use crate::auto_join::test_support::{negotiate_versions, read_frame};
             if let Ok((mut socket, _)) = listener.accept().await {
-                // Read ApiVersions request frame
-                let mut len_buf = [0u8; 4];
-                if socket.read_exact(&mut len_buf).await.is_ok() {
-                    let frame_len = u32::from_be_bytes(len_buf) as usize;
-                    let mut frame = vec![0u8; frame_len];
-                    if socket.read_exact(&mut frame).await.is_ok() {
-                        let correlation_id = [frame[4], frame[5], frame[6], frame[7]];
-
-                        // Reply to ApiVersions
-                        let resp = krabka_protocol::owned::api_versions_response::ApiVersionsResponse {
-                            error_code: 0,
-                            api_keys: vec![
-                                krabka_protocol::owned::api_versions_response::ApiVersion {
-                                    api_key: krabka_protocol::owned::remove_raft_voter_request::API_KEY,
-                                    min_version: 0,
-                                    max_version: krabka_protocol::owned::remove_raft_voter_request::MAX_VERSION,
-                                    ..Default::default()
-                                },
-                                krabka_protocol::owned::api_versions_response::ApiVersion {
-                                    api_key: krabka_protocol::owned::add_raft_voter_request::API_KEY,
-                                    min_version: 0,
-                                    max_version: krabka_protocol::owned::add_raft_voter_request::MAX_VERSION,
-                                    ..Default::default()
-                                },
-                            ],
-                            ..Default::default()
-                        };
-                        let mut body = bytes::BytesMut::new();
-                        krabka_protocol::Encode::encode(&resp, &mut body, 0).expect("encode");
-                        let resp_len = u32::try_from(4 + body.len())
-                            .expect("response frame length fits in u32");
-                        let mut resp_frame = Vec::new();
-                        resp_frame.extend_from_slice(&resp_len.to_be_bytes());
-                        resp_frame.extend_from_slice(&correlation_id);
-                        resp_frame.extend_from_slice(&body);
-                        let _ = socket.write_all(&resp_frame).await;
-
-                        // Read the subsequent request frame
-                        if socket.read_exact(&mut len_buf).await.is_ok() {
-                            let req_len = u32::from_be_bytes(len_buf) as usize;
-                            let mut req_frame = vec![0u8; req_len];
-                            if socket.read_exact(&mut req_frame).await.is_ok()
-                                && req_frame.len() >= 2
-                            {
-                                let _ =
-                                    key_tx.send(i16::from_be_bytes([req_frame[0], req_frame[1]]));
-                            }
-                        }
-                    }
+                let apis = [
+                    (
+                        krabka_protocol::owned::remove_raft_voter_request::API_KEY,
+                        krabka_protocol::owned::remove_raft_voter_request::MAX_VERSION,
+                    ),
+                    (
+                        krabka_protocol::owned::add_raft_voter_request::API_KEY,
+                        krabka_protocol::owned::add_raft_voter_request::MAX_VERSION,
+                    ),
+                ];
+                if negotiate_versions(&mut socket, &apis).await.is_ok()
+                    && let Ok(frame) = read_frame(&mut socket).await
+                    && frame.len() >= 2
+                {
+                    let _ = key_tx.send(i16::from_be_bytes([frame[0], frame[1]]));
                 }
             }
         });

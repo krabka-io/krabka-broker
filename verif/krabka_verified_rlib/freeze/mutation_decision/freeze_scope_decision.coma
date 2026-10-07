@@ -1,8 +1,8 @@
-(* #"/workspace/crates/verified/src/freeze/mutation_decision.rs" 115 0 118 24 *)
+(* #"/workspace/crates/verified/src/freeze/mutation_decision.rs" 116 0 119 24 *)
 
-let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
-let%span smutation_decision = "/workspace/crates/verified/src/freeze/mutation_decision.rs" 119 10 119 30
-let%span smutation_decision'0 = "/workspace/crates/verified/src/freeze/mutation_decision.rs" 105 10 113 1
+let%span sord = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span smutation_decision = "/workspace/crates/verified/src/freeze/mutation_decision.rs" 120 10 120 30
+let%span smutation_decision'0 = "/workspace/crates/verified/src/freeze/mutation_decision.rs" 106 10 114 1
 
 use creusot.int.UInt64
 use creusot.prelude.Any
@@ -30,7 +30,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let freeze_scope_decision [#"/workspace/crates/verified/src/freeze/mutation_decision.rs" 115 0 118 24]
+let freeze_scope_decision [#"/workspace/crates/verified/src/freeze/mutation_decision.rs" 116 0 119 24]
   (current': t_FreezeScopeRank) (candidate: t_FreezeScopeRank) (return (x: t_FreezeScopeDecision)) = (! bb0
   [ bb0 = s0
     [ s0 = [ &_6 <- { f0 = current'; f1 = candidate } ] s1

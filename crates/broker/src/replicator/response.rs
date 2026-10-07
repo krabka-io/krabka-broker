@@ -947,6 +947,28 @@ mod tests {
         assert!(part.log_end_offset() == Offset(2));
     }
 
+    fn one_batch_response(cfg: &Config, offset: i64, raw: bool) -> FetchResponse {
+        let mut batch = one_record_batch(offset);
+        batch.partition_leader_epoch = cfg.leader_epoch.0;
+        let records = if raw {
+            let mut encoded = BytesMut::new();
+            batch.encode(&mut encoded).unwrap();
+            RecordsPayload::Raw(encoded.freeze())
+        } else {
+            RecordsPayload::V2(vec![batch])
+        };
+        fetch_response(
+            TOPIC,
+            WIRE_TOPIC_ID,
+            PartitionData {
+                partition_index: PARTITION,
+                error_code: codes::NONE,
+                records: Some(records),
+                ..PartitionData::default()
+            },
+        )
+    }
+
     /// A disk that refuses every write to a segment's `.log` file.
     #[derive(Debug)]
     struct LogWritesFail;
@@ -982,25 +1004,7 @@ mod tests {
                 .lock()
                 .unwrap()
                 .test_set_io(Arc::new(LogWritesFail));
-            let mut batch = one_record_batch(0);
-            batch.partition_leader_epoch = cfg.leader_epoch.0;
-            let records = if raw {
-                let mut encoded = BytesMut::new();
-                batch.encode(&mut encoded).unwrap();
-                RecordsPayload::Raw(encoded.freeze())
-            } else {
-                RecordsPayload::V2(vec![batch])
-            };
-            let response = fetch_response(
-                TOPIC,
-                WIRE_TOPIC_ID,
-                PartitionData {
-                    partition_index: PARTITION,
-                    error_code: codes::NONE,
-                    records: Some(records),
-                    ..PartitionData::default()
-                },
-            );
+            let response = one_batch_response(&cfg, 0, raw);
 
             let action = handle_response(response, &cfg, cfg.leader_epoch.0).await;
 
@@ -1034,25 +1038,7 @@ mod tests {
 
             // Offsets 1 to 4 were compacted away on the leader.
             for base_offset in [0, 5] {
-                let mut batch = one_record_batch(base_offset);
-                batch.partition_leader_epoch = cfg.leader_epoch.0;
-                let records = if raw {
-                    let mut encoded = BytesMut::new();
-                    batch.encode(&mut encoded).unwrap();
-                    RecordsPayload::Raw(encoded.freeze())
-                } else {
-                    RecordsPayload::V2(vec![batch])
-                };
-                let response = fetch_response(
-                    TOPIC,
-                    WIRE_TOPIC_ID,
-                    PartitionData {
-                        partition_index: PARTITION,
-                        error_code: codes::NONE,
-                        records: Some(records),
-                        ..PartitionData::default()
-                    },
-                );
+                let response = one_batch_response(&cfg, base_offset, raw);
                 assert!(
                     handle_response(response, &cfg, cfg.leader_epoch.0).await
                         == RowAction::Continue

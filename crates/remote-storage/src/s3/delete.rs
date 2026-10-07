@@ -9,8 +9,8 @@ use krabka_object_store::{ObjectOps, ObjectStoreError};
 
 use super::S3RemoteStorage;
 use crate::{
-    error::RemoteStorageError, metadata::RemoteLogSegmentMetadata, storage_manager::IndexType,
-    worm::WormError,
+    error::RemoteStorageError, metadata::RemoteLogSegmentMetadata,
+    storage_manager::segment_suffixes, worm::WormError,
 };
 
 impl S3RemoteStorage {
@@ -28,14 +28,7 @@ impl S3RemoteStorage {
                 key: self.log_key(metadata).to_string(),
             }));
         }
-        for key in [
-            self.log_key(metadata),
-            self.index_key(metadata, IndexType::Offset),
-            self.index_key(metadata, IndexType::Timestamp),
-            self.index_key(metadata, IndexType::ProducerSnapshot),
-            self.index_key(metadata, IndexType::LeaderEpoch),
-            self.index_key(metadata, IndexType::Transaction),
-        ] {
+        for key in segment_suffixes().map(|suffix| self.segment_key(metadata, suffix)) {
             match Self::block_os(self.ops.delete(&key)) {
                 // Idempotent: deleting an absent object succeeds.
                 Ok(()) | Err(ObjectStoreError::NotFound(_)) => {}
@@ -55,13 +48,13 @@ mod tests {
     use object_store::memory::InMemory;
     use tempfile::TempDir;
 
-    use super::{IndexType, ObjectOps, RemoteStorageError, S3RemoteStorage, WormError};
+    use super::{ObjectOps, RemoteStorageError, S3RemoteStorage, WormError};
     use crate::{
         s3::test_support::{
             counting_rsm, rsm, sample_data, sample_metadata, seeded_blocking, stamped_metadata,
             worm_rsm,
         },
-        storage_manager::RemoteStorageManager,
+        storage_manager::{IndexType, RemoteStorageManager},
         worm::ChainHead,
     };
 

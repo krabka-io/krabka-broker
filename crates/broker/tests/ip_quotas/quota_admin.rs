@@ -8,23 +8,7 @@
 
 use std::net::SocketAddr;
 
-use assert2::assert;
-use bytes::BytesMut;
-use krabka_protocol::{
-    Decode, Encode,
-    owned::{
-        alter_client_quotas_request::{AlterClientQuotasRequest, EntityData, EntryData, OpData},
-        alter_client_quotas_response::AlterClientQuotasResponse,
-        describe_client_quotas_request::{ComponentData, DescribeClientQuotasRequest},
-        describe_client_quotas_response::DescribeClientQuotasResponse,
-    },
-};
-
-use crate::{CLIENT_ID, kafka_wire};
-
-pub(crate) type QuotaEntity = Vec<(String, Option<String>)>;
-pub(crate) type QuotaOperations = Vec<(String, f64, bool)>;
-pub(crate) type QuotaEntries = Vec<(QuotaEntity, QuotaOperations)>;
+use crate::{CLIENT_ID, kafka_wire, kafka_wire::quotas::QuotaEntries};
 
 /// Drives `AlterClientQuotas` (`api_key=49`) over a SASL/PLAIN connection.
 pub(crate) async fn drive_alter_client_quotas_sasl(
@@ -34,60 +18,15 @@ pub(crate) async fn drive_alter_client_quotas_sasl(
     entries: QuotaEntries,
     validate_only: bool,
 ) -> Vec<(Vec<(String, Option<String>)>, i16)> {
-    let req = AlterClientQuotasRequest {
-        entries: entries
-            .into_iter()
-            .map(|(entity_parts, ops)| EntryData {
-                entity: entity_parts
-                    .into_iter()
-                    .map(|(entity_type, entity_name)| EntityData {
-                        entity_type,
-                        entity_name,
-                        ..Default::default()
-                    })
-                    .collect(),
-                ops: ops
-                    .into_iter()
-                    .map(|(key, value, remove)| OpData {
-                        key,
-                        value,
-                        remove,
-                        ..Default::default()
-                    })
-                    .collect(),
-                ..Default::default()
-            })
-            .collect(),
+    kafka_wire::quotas::drive_alter_client_quotas_sasl(
+        addr,
+        CLIENT_ID,
+        user,
+        pass,
+        entries,
         validate_only,
-        ..Default::default()
-    };
-
-    let version: i16 = 1; // flexible
-
-    let mut stream = kafka_wire::sasl_plain_authenticate(addr, CLIENT_ID, user, pass.as_bytes())
-        .await
-        .expect("SASL authenticate for AlterClientQuotas");
-    let mut body = BytesMut::new();
-    req.encode(&mut body, version)
-        .expect("encode AlterClientQuotas");
-    let resp_bytes = kafka_wire::round_trip(&mut stream, 49, version, 1, CLIENT_ID, true, &body)
-        .await
-        .expect("AlterClientQuotas round-trip");
-    let mut cur: &[u8] = &resp_bytes;
-    let resp = AlterClientQuotasResponse::decode(&mut cur, version)
-        .expect("decode AlterClientQuotasResponse");
-
-    resp.entries
-        .into_iter()
-        .map(|e| {
-            let entity = e
-                .entity
-                .into_iter()
-                .map(|ed| (ed.entity_type, ed.entity_name))
-                .collect();
-            (entity, e.error_code)
-        })
-        .collect()
+    )
+    .await
 }
 
 /// Drives `DescribeClientQuotas` (`api_key=48`) over a SASL/PLAIN
@@ -102,48 +41,8 @@ pub(crate) async fn drive_describe_client_quotas_sasl(
     components: Vec<(String, i8, Option<String>)>,
     strict: bool,
 ) -> Vec<(Vec<(String, Option<String>)>, Vec<(String, f64)>)> {
-    let req = DescribeClientQuotasRequest {
-        components: components
-            .into_iter()
-            .map(|(entity_type, match_type, match_)| ComponentData {
-                entity_type,
-                match_type,
-                match_,
-                ..Default::default()
-            })
-            .collect(),
-        strict,
-        ..Default::default()
-    };
-
-    let version: i16 = 1; // flexible
-
-    let mut stream = kafka_wire::sasl_plain_authenticate(addr, CLIENT_ID, user, pass.as_bytes())
-        .await
-        .expect("SASL authenticate for DescribeClientQuotas");
-    let mut body = BytesMut::new();
-    req.encode(&mut body, version)
-        .expect("encode DescribeClientQuotas");
-    let resp_bytes = kafka_wire::round_trip(&mut stream, 48, version, 1, CLIENT_ID, true, &body)
-        .await
-        .expect("DescribeClientQuotas round-trip");
-    let mut cur: &[u8] = &resp_bytes;
-    let resp = DescribeClientQuotasResponse::decode(&mut cur, version)
-        .expect("decode DescribeClientQuotasResponse");
-
-    assert!(resp.error_code == 0, "DescribeClientQuotas top-level error");
-
-    resp.entries
-        .unwrap_or_default()
-        .into_iter()
-        .map(|e| {
-            let entity = e
-                .entity
-                .into_iter()
-                .map(|ed| (ed.entity_type, ed.entity_name))
-                .collect();
-            let values = e.values.into_iter().map(|v| (v.key, v.value)).collect();
-            (entity, values)
-        })
-        .collect()
+    kafka_wire::quotas::drive_describe_client_quotas_sasl(
+        addr, CLIENT_ID, user, pass, components, strict,
+    )
+    .await
 }

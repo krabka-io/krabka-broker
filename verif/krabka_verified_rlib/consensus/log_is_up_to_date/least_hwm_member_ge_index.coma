@@ -1,26 +1,26 @@
-(* #"/workspace/crates/verified/src/consensus/log_is_up_to_date.rs" 57 0 63 8 *)
+(* #"/workspace/crates/verified/src/consensus/log_is_up_to_date.rs" 58 0 64 8 *)
 
-let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
-let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
-let%span swell_founded = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/well_founded.rs" 43 8 43 33
-let%span slog_is_up_to_date = "/workspace/crates/verified/src/consensus/log_is_up_to_date.rs" 56 10 56 15
-let%span slog_is_up_to_date'0 = "/workspace/crates/verified/src/consensus/log_is_up_to_date.rs" 50 11 50 44
-let%span slog_is_up_to_date'1 = "/workspace/crates/verified/src/consensus/log_is_up_to_date.rs" 51 11 51 68
-let%span slog_is_up_to_date'2 = "/workspace/crates/verified/src/consensus/log_is_up_to_date.rs" 52 10 52 39
-let%span slog_is_up_to_date'3 = "/workspace/crates/verified/src/consensus/log_is_up_to_date.rs" 53 10 53 48
-let%span slog_is_up_to_date'4 = "/workspace/crates/verified/src/consensus/log_is_up_to_date.rs" 54 10 55 59
-let%span slog_is_up_to_date'5 = "/workspace/crates/verified/src/consensus/log_is_up_to_date.rs" 9 11 9 45
-let%span slog_is_up_to_date'6 = "/workspace/crates/verified/src/consensus/log_is_up_to_date.rs" 10 11 10 22
-let%span slog_is_up_to_date'7 = "/workspace/crates/verified/src/consensus/log_is_up_to_date.rs" 11 10 12 62
-let%span slog_is_up_to_date'8 = "/workspace/crates/verified/src/consensus/log_is_up_to_date.rs" 31 11 31 45
-let%span slog_is_up_to_date'9 = "/workspace/crates/verified/src/consensus/log_is_up_to_date.rs" 32 10 32 67
-let%span slog_is_up_to_date'10 = "/workspace/crates/verified/src/consensus/log_is_up_to_date.rs" 13 10 13 15
-let%span slog_is_up_to_date'11 = "/workspace/crates/verified/src/consensus/log_is_up_to_date.rs" 22 4 24 5
-let%span slog_is_up_to_date'12 = "/workspace/crates/verified/src/consensus/log_is_up_to_date.rs" 33 10 33 15
-let%span slog_is_up_to_date'13 = "/workspace/crates/verified/src/consensus/log_is_up_to_date.rs" 41 4 43 5
-let%span sfailover = "/workspace/crates/verified/src/consensus/failover.rs" 185 10 185 15
-let%span sfailover'0 = "/workspace/crates/verified/src/consensus/failover.rs" 188 8 194 9
-let%span sfailover'1 = "/workspace/crates/verified/src/consensus/failover.rs" 177 8 177 48
+let%span sord = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sord'0 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span swell_founded = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/well_founded.rs" 43 8 43 33
+let%span sfailover = "/workspace/crates/verified/src/consensus/failover.rs" 186 10 186 15
+let%span sfailover'0 = "/workspace/crates/verified/src/consensus/failover.rs" 189 8 195 9
+let%span sfailover'1 = "/workspace/crates/verified/src/consensus/failover.rs" 178 8 178 48
+let%span slog_is_up_to_date = "/workspace/crates/verified/src/consensus/log_is_up_to_date.rs" 57 10 57 15
+let%span slog_is_up_to_date'0 = "/workspace/crates/verified/src/consensus/log_is_up_to_date.rs" 51 11 51 44
+let%span slog_is_up_to_date'1 = "/workspace/crates/verified/src/consensus/log_is_up_to_date.rs" 52 11 52 68
+let%span slog_is_up_to_date'2 = "/workspace/crates/verified/src/consensus/log_is_up_to_date.rs" 53 10 53 39
+let%span slog_is_up_to_date'3 = "/workspace/crates/verified/src/consensus/log_is_up_to_date.rs" 54 10 54 48
+let%span slog_is_up_to_date'4 = "/workspace/crates/verified/src/consensus/log_is_up_to_date.rs" 55 10 56 59
+let%span slog_is_up_to_date'5 = "/workspace/crates/verified/src/consensus/log_is_up_to_date.rs" 10 11 10 45
+let%span slog_is_up_to_date'6 = "/workspace/crates/verified/src/consensus/log_is_up_to_date.rs" 11 11 11 22
+let%span slog_is_up_to_date'7 = "/workspace/crates/verified/src/consensus/log_is_up_to_date.rs" 12 10 13 62
+let%span slog_is_up_to_date'8 = "/workspace/crates/verified/src/consensus/log_is_up_to_date.rs" 32 11 32 45
+let%span slog_is_up_to_date'9 = "/workspace/crates/verified/src/consensus/log_is_up_to_date.rs" 33 10 33 67
+let%span slog_is_up_to_date'10 = "/workspace/crates/verified/src/consensus/log_is_up_to_date.rs" 14 10 14 15
+let%span slog_is_up_to_date'11 = "/workspace/crates/verified/src/consensus/log_is_up_to_date.rs" 23 4 25 5
+let%span slog_is_up_to_date'12 = "/workspace/crates/verified/src/consensus/log_is_up_to_date.rs" 34 10 34 15
+let%span slog_is_up_to_date'13 = "/workspace/crates/verified/src/consensus/log_is_up_to_date.rs" 42 4 44 5
 
 use creusot.int.Int64
 use seq.Seq
@@ -34,10 +34,10 @@ predicate gt_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord'0] oth
 
 meta "rewrite_def" predicate gt_log_Int
 
-function hwm_member_at [#"/workspace/crates/verified/src/consensus/failover.rs" 175 0 175 62] (log_end: int) (s: Seq.seq Int64.t) (k: int) : int
+function hwm_member_at [#"/workspace/crates/verified/src/consensus/failover.rs" 176 0 176 62] (log_end: int) (s: Seq.seq Int64.t) (k: int) : int
  = [%#sfailover'1] if k = 0 then log_end else Int64.to_int (Seq.get s (k - 1))
 
-function count_ge_prefix [#"/workspace/crates/verified/src/consensus/failover.rs" 186 0 186 97] (log_end: int) (s: Seq.seq Int64.t) (v: int) (limit: int) (leader_counts: bool) : int
+function count_ge_prefix [#"/workspace/crates/verified/src/consensus/failover.rs" 187 0 187 97] (log_end: int) (s: Seq.seq Int64.t) (v: int) (limit: int) (leader_counts: bool) : int
 
 axiom count_ge_prefix_def:
   forall log_end: int, s: Seq.seq Int64.t, v: int, limit: int, leader_counts: bool [count_ge_prefix log_end s v limit leader_counts]. count_ge_prefix log_end s v limit leader_counts
@@ -53,7 +53,7 @@ predicate well_founded_relation_Int [@inline:trivial] (self: int) (other: int) =
 
 meta "rewrite_def" predicate well_founded_relation_Int
 
-function lemma_count_ge_prefix_monotone [#"/workspace/crates/verified/src/consensus/log_is_up_to_date.rs" 14 0 21 1] (log_end: int) (s: Seq.seq Int64.t) (low: int) (high: int) (limit: int) (leader_counts: bool) : ()
+function lemma_count_ge_prefix_monotone [#"/workspace/crates/verified/src/consensus/log_is_up_to_date.rs" 15 0 22 1] (log_end: int) (s: Seq.seq Int64.t) (low: int) (high: int) (limit: int) (leader_counts: bool) : ()
 
 axiom lemma_count_ge_prefix_monotone_def:
   forall log_end: int, s: Seq.seq Int64.t, low: int, high: int, limit: int, leader_counts: bool [lemma_count_ge_prefix_monotone log_end s low high limit leader_counts]. ([%#slog_is_up_to_date'5] 0
@@ -74,7 +74,7 @@ axiom lemma_count_ge_prefix_monotone_spec:
     -> ([%#slog_is_up_to_date'6] low <= high)
     -> ([%#slog_is_up_to_date'7] ge_log_Int (count_ge_prefix log_end s low limit leader_counts) (count_ge_prefix log_end s high limit leader_counts))
 
-function lemma_count_ge_prefix_nonnegative [#"/workspace/crates/verified/src/consensus/log_is_up_to_date.rs" 34 0 40 1] (log_end: int) (s: Seq.seq Int64.t) (v: int) (limit: int) (leader_counts: bool) : ()
+function lemma_count_ge_prefix_nonnegative [#"/workspace/crates/verified/src/consensus/log_is_up_to_date.rs" 35 0 41 1] (log_end: int) (s: Seq.seq Int64.t) (v: int) (limit: int) (leader_counts: bool) : ()
 
 axiom lemma_count_ge_prefix_nonnegative_def:
   forall log_end: int, s: Seq.seq Int64.t, v: int, limit: int, leader_counts: bool [lemma_count_ge_prefix_nonnegative log_end s v limit leader_counts]. ([%#slog_is_up_to_date'8] 0
@@ -106,7 +106,7 @@ constant limit : int
 
 constant leader_counts : bool
 
-function least_hwm_member_ge_index [#"/workspace/crates/verified/src/consensus/log_is_up_to_date.rs" 57 0 63 8] (log_end: int) (s: Seq.seq Int64.t) (v: int) (limit: int) (leader_counts: bool) : int
+function least_hwm_member_ge_index [#"/workspace/crates/verified/src/consensus/log_is_up_to_date.rs" 58 0 64 8] (log_end: int) (s: Seq.seq Int64.t) (v: int) (limit: int) (leader_counts: bool) : int
 
 goal vc_least_hwm_member_ge_index: ([%#slog_is_up_to_date'0] 0 < limit /\ limit <= Seq.length s + 1)
   -> ([%#slog_is_up_to_date'1] ge_log_Int (count_ge_prefix log_end s v limit leader_counts) 1)

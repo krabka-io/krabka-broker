@@ -20,9 +20,8 @@ use tokio::net::TcpStream;
 use tokio_rustls::{
     TlsConnector,
     rustls::{
-        ClientConfig, DigitallySignedStruct, SignatureScheme,
-        client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier},
-        pki_types::{CertificateDer, ServerName, UnixTime, pem::PemObject},
+        ClientConfig,
+        pki_types::{CertificateDer, ServerName, pem::PemObject as _},
     },
 };
 
@@ -82,59 +81,6 @@ async fn start_broker(
     (handle, log_dir, pem_dir, addr)
 }
 
-/// `ServerCertVerifier` that accepts exactly the dev fixture certificate.
-///
-/// The fixture is self-issued with `CA:TRUE`, which rustls's webpki verifier
-/// refuses as an end-entity, and this suite proves an authorization outcome
-/// rather than a chain-validation one.
-#[derive(Debug)]
-struct PinnedDevCertVerifier {
-    pinned: CertificateDer<'static>,
-}
-
-impl ServerCertVerifier for PinnedDevCertVerifier {
-    fn verify_server_cert(
-        &self,
-        end_entity: &CertificateDer<'_>,
-        _intermediates: &[CertificateDer<'_>],
-        _server_name: &ServerName<'_>,
-        _ocsp_response: &[u8],
-        _now: UnixTime,
-    ) -> Result<ServerCertVerified, tokio_rustls::rustls::Error> {
-        if end_entity.as_ref() == self.pinned.as_ref() {
-            Ok(ServerCertVerified::assertion())
-        } else {
-            Err(tokio_rustls::rustls::Error::General(
-                "presented cert does not match pinned dev cert".into(),
-            ))
-        }
-    }
-
-    fn verify_tls12_signature(
-        &self,
-        _message: &[u8],
-        _cert: &CertificateDer<'_>,
-        _dss: &DigitallySignedStruct,
-    ) -> Result<HandshakeSignatureValid, tokio_rustls::rustls::Error> {
-        Ok(HandshakeSignatureValid::assertion())
-    }
-
-    fn verify_tls13_signature(
-        &self,
-        _message: &[u8],
-        _cert: &CertificateDer<'_>,
-        _dss: &DigitallySignedStruct,
-    ) -> Result<HandshakeSignatureValid, tokio_rustls::rustls::Error> {
-        Ok(HandshakeSignatureValid::assertion())
-    }
-
-    fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
-        tokio_rustls::rustls::crypto::ring::default_provider()
-            .signature_verification_algorithms
-            .supported_schemes()
-    }
-}
-
 /// Opens a one-way TLS session — no client certificate — to `addr`.
 async fn tls_connect_without_client_cert(
     addr: SocketAddr,
@@ -145,7 +91,13 @@ async fn tls_connect_without_client_cert(
         .expect("dev cert parses");
     let client_cfg = ClientConfig::builder()
         .dangerous()
-        .with_custom_certificate_verifier(Arc::new(PinnedDevCertVerifier { pinned }))
+        .with_custom_certificate_verifier(Arc::new(crate::support::tls::PinnedCertVerifier {
+            pinned,
+            schemes: tokio_rustls::rustls::crypto::ring::default_provider()
+                .signature_verification_algorithms
+                .supported_schemes(),
+            mismatch: "presented cert does not match pinned dev cert",
+        }))
         .with_no_client_auth();
     let tcp = TcpStream::connect(addr).await.expect("TCP connect");
     TlsConnector::from(Arc::new(client_cfg))

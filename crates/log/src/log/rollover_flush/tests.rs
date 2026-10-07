@@ -19,6 +19,23 @@ use crate::{
     name, producer_snapshot,
 };
 
+fn check_boundary_snapshot(
+    log: &Log,
+    directory: &std::path::Path,
+    expected: &[crate::producer_snapshot::ProducerSnapshotEntry],
+) {
+    let copy = tempdir().unwrap();
+    std::fs::copy(
+        name::producer_snapshot_path(directory, 1),
+        name::producer_snapshot_path(copy.path(), 1),
+    )
+    .unwrap();
+    let (_, state) = producer_snapshot::reload(copy.path(), log.producer_reload_range(Offset(1)))
+        .unwrap()
+        .unwrap();
+    assert!(state.into_values().collect::<Vec<_>>() == expected);
+}
+
 #[derive(Debug)]
 struct GatedIo {
     started: Mutex<Option<mpsc::Sender<std::thread::ThreadId>>>,
@@ -120,16 +137,7 @@ fn buffered_rollovers_allow_appends_reads_and_idle_maintenance_during_disk_sync(
     assert!(unpublished, "the snapshot must wait for its record flush");
     assert!(untierable, "tiering must wait for the boundary snapshot");
     log.sync().unwrap();
-    let copy = tempdir().unwrap();
-    std::fs::copy(
-        name::producer_snapshot_path(dir.path(), 1),
-        name::producer_snapshot_path(copy.path(), 1),
-    )
-    .unwrap();
-    let (_, state) = producer_snapshot::reload(copy.path(), log.producer_reload_range(Offset(1)))
-        .unwrap()
-        .unwrap();
-    assert!(state.into_values().collect::<Vec<_>>() == first_state);
+    check_boundary_snapshot(&log, dir.path(), &first_state);
     assert!(
         log.producer_state_entry(ProducerId(41))
             .unwrap()
@@ -420,17 +428,7 @@ fn sealed_segment_flush_survives_each_post_roll_setup_failure() {
         // Flush even when setup failed before there was a new active segment.
         log.rollover_flusher.finish().unwrap();
         assert!(matches!(result, Err(LogError::Io(_))), "{extension}");
-        let copy = tempdir().unwrap();
-        std::fs::copy(
-            name::producer_snapshot_path(dir.path(), 1),
-            name::producer_snapshot_path(copy.path(), 1),
-        )
-        .unwrap();
-        let (_, state) =
-            producer_snapshot::reload(copy.path(), log.producer_reload_range(Offset(1)))
-                .unwrap()
-                .unwrap();
-        assert!(state.into_values().collect::<Vec<_>>() == first_state);
+        check_boundary_snapshot(&log, dir.path(), &first_state);
         if extension == "stampindex" {
             assert!(log.tierable_segments().len() == 1);
             std::fs::remove_dir(&blocked).unwrap();

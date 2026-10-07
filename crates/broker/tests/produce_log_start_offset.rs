@@ -47,11 +47,10 @@ use krabka_protocol::{
             DeleteRecordsPartition, DeleteRecordsRequest, DeleteRecordsTopic,
         },
         delete_records_response::DeleteRecordsPartitionResult,
-        produce_request::{PartitionProduceData, ProduceRequest, TopicProduceData},
         produce_response::{LeaderIdAndEpoch, PartitionProduceResponse},
     },
     primitives::uuid::Uuid as WireUuid,
-    records::{Record, RecordBatch, RecordsPayload},
+    records::{Record, RecordBatch},
 };
 
 mod support;
@@ -203,25 +202,7 @@ async fn produce_as(
         }],
         ..RecordBatch::default()
     };
-    let response = client
-        .send(ProduceRequest {
-            acks: 1,
-            timeout_ms: 5_000,
-            topic_data: vec![TopicProduceData {
-                name: topic.to_owned(),
-                topic_id,
-                partition_data: vec![PartitionProduceData {
-                    index: 0,
-                    records: Some(RecordsPayload::V2(vec![batch])),
-                    ..Default::default()
-                }],
-                ..Default::default()
-            }],
-            ..Default::default()
-        })
-        .await
-        .expect("Produce");
-    response.responses[0].partition_responses[0].clone()
+    crate::support::client::produce_batch(client, topic, topic_id, batch, 1, 5_000).await
 }
 
 /// Trim partition 0 of `topic` to `offset` and hand back the whole row.

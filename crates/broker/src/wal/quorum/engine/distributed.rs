@@ -226,7 +226,17 @@ mod tests {
     use krabka_log::{Log, LogConfig};
 
     use super::*;
-    use crate::wal::quorum::test_support::batch;
+    use crate::wal::quorum::test_support::{batch, distributed_engine, source_log};
+
+    fn unfsynced_three_voter_engine(
+        records: i32,
+    ) -> (tempfile::TempDir, Arc<Mutex<Log>>, WalShardEngine) {
+        let dir = tempfile::tempdir().unwrap();
+        let source = source_log(dir.path());
+        let engine = distributed_engine(&source, 3, &[NodeId(1), NodeId(2), NodeId(3)]);
+        source.lock().unwrap().append(&mut batch(records)).unwrap();
+        (dir, source, engine)
+    }
 
     #[test]
     fn bounds_verified_watermark_inputs_to_the_leader_end() {
@@ -255,13 +265,7 @@ mod tests {
     /// second follower's); the leader's log end is not a vote.
     #[tokio::test(flavor = "multi_thread")]
     async fn leader_log_end_does_not_vote_before_the_leader_fsyncs() {
-        let dir = tempfile::tempdir().unwrap();
-        let source = Arc::new(Mutex::new(
-            Log::open(dir.path().join("source"), LogConfig::default()).unwrap(),
-        ));
-        let engine = WalShardEngine::new_distributed(Arc::clone(&source), 3).unwrap();
-        engine.configure_distributed(NodeId(1), &[NodeId(1), NodeId(2), NodeId(3)]);
-        source.lock().unwrap().append(&mut batch(3)).unwrap();
+        let (_dir, source, engine) = unfsynced_three_voter_engine(3);
 
         assert!(!engine.record_follower_ack(NodeId(2), Offset(3)));
         assert!(engine.durable_watermark() == Offset(0));
@@ -274,13 +278,7 @@ mod tests {
 
     #[test]
     fn two_follower_fsyncs_commit_without_the_leader() {
-        let dir = tempfile::tempdir().unwrap();
-        let source = Arc::new(Mutex::new(
-            Log::open(dir.path().join("source"), LogConfig::default()).unwrap(),
-        ));
-        let engine = WalShardEngine::new_distributed(Arc::clone(&source), 3).unwrap();
-        engine.configure_distributed(NodeId(1), &[NodeId(1), NodeId(2), NodeId(3)]);
-        source.lock().unwrap().append(&mut batch(3)).unwrap();
+        let (_dir, _source, engine) = unfsynced_three_voter_engine(3);
 
         assert!(!engine.record_follower_ack(NodeId(2), Offset(3)));
         assert!(engine.record_follower_ack(NodeId(3), Offset(3)));
@@ -294,11 +292,8 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn a_placement_that_arrives_after_the_append_commits_its_fsync() {
         let dir = tempfile::tempdir().unwrap();
-        let source = Arc::new(Mutex::new(
-            Log::open(dir.path().join("source"), LogConfig::default()).unwrap(),
-        ));
-        let engine = WalShardEngine::new_distributed(Arc::clone(&source), 1).unwrap();
-        engine.configure_distributed(NodeId(1), &[]);
+        let source = source_log(dir.path());
+        let engine = distributed_engine(&source, 1, &[]);
         source.lock().unwrap().append(&mut batch(3)).unwrap();
 
         let refused = engine.replicate_and_sync(&source, Offset(3)).await;

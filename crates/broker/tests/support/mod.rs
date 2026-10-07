@@ -40,14 +40,23 @@ use std::time::{Duration, Instant};
 
 use assert2::assert;
 
+pub mod acl;
 mod audit;
+pub mod classic;
+pub mod client;
 mod cluster;
 mod cluster_boot;
 mod containers;
 mod coordinator;
+pub mod durability;
 mod operator_keys;
 mod ports;
+pub mod sasl;
+pub mod share;
 mod single_broker;
+pub mod storage;
+pub mod streams;
+pub mod tls;
 // A cut-and-heal TCP relay for partition tests. Declared here so every suite
 // that pulls in `support` can reach it as `support::relay`.
 pub mod relay;
@@ -64,16 +73,22 @@ pub use self::{
         broker_config, start_n_node, start_n_node_with_retry, start_reusing_addrs,
         wait_for_all_brokers_registered,
     },
-    containers::{JvmListeners, fixture_cache_dir, free_port, manifest_dir, unique_container_name},
+    containers::{
+        JvmListeners, bridge_gateway, docker, docker_output, fixture_cache_dir, free_port,
+        init_jvm_tracing, jvm_broker_config, jvm_client_addr, jvm_docker_command, jvm_docker_run,
+        jvm_finalized_level, jvm_listeners, jvm_single_broker_config, jvm_stdin_output,
+        manifest_dir, start_jvm_cluster, start_jvm_single, unique_container_name,
+    },
     coordinator::{KEY_TYPE_GROUP, KEY_TYPE_SHARE, KEY_TYPE_TRANSACTION, find_coordinator},
     operator_keys::{
         ANONYMOUS, OperatorKey, mint_operator_key, sasl_client, sasl_plain_security,
         start_with_operator_key, start_with_operator_keys, start_with_operator_keys_sasl,
     },
     ports::{bind_and_drop_ports, bind_and_hold_ports},
+    sasl::{sasl_plaintext_config, sasl_plaintext_with_users, start_broker},
     single_broker::{
         InProcess, start, start_configured, start_legacy, start_with_audit_key,
-        start_with_deny_all_authz, start_with_dir,
+        start_with_bound_listeners, start_with_deny_all_authz, start_with_dir,
     },
 };
 

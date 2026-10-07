@@ -1,32 +1,32 @@
-(* #"/workspace/crates/verified/src/composition/append.rs" 100 0 104 47 *)
+(* #"/workspace/crates/verified/src/composition/append.rs" 101 0 105 47 *)
 
-let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
-let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
-let%span sconvert = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/convert.rs" 274 26 274 51
-let%span sops = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/ops.rs" 688 18 691 9
-let%span sops'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/ops.rs" 702 25 702 33
-let%span sops'1 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/ops.rs" 701 18 701 32
-let%span sappend = "/workspace/crates/verified/src/composition/append.rs" 105 21 105 22
-let%span sappend'0 = "/workspace/crates/verified/src/composition/append.rs" 105 41 105 42
-let%span sappend'1 = "/workspace/crates/verified/src/composition/append.rs" 110 8 110 30
-let%span sappend'2 = "/workspace/crates/verified/src/composition/append.rs" 110 33 110 34
-let%span sappend'3 = "/workspace/crates/verified/src/composition/append.rs" 110 8 110 34
-let%span sappend'4 = "/workspace/crates/verified/src/composition/append.rs" 111 8 111 31
-let%span sappend'5 = "/workspace/crates/verified/src/composition/append.rs" 111 34 111 35
-let%span sappend'6 = "/workspace/crates/verified/src/composition/append.rs" 111 8 111 35
-let%span sappend'7 = "/workspace/crates/verified/src/composition/append.rs" 108 27 112 5
-let%span sappend'8 = "/workspace/crates/verified/src/composition/append.rs" 108 27 112 6
-let%span sappend'9 = "/workspace/crates/verified/src/composition/append.rs" 113 16 113 57
-let%span sappend'10 = "/workspace/crates/verified/src/composition/append.rs" 113 16 113 58
-let%span sappend'11 = "/workspace/crates/verified/src/composition/append.rs" 114 17 114 60
-let%span sappend'12 = "/workspace/crates/verified/src/composition/append.rs" 114 17 114 61
-let%span sappend'13 = "/workspace/crates/verified/src/composition/append.rs" 115 18 115 82
-let%span sappend'14 = "/workspace/crates/verified/src/composition/append.rs" 80 10 82 65
-let%span sappend'15 = "/workspace/crates/verified/src/composition/append.rs" 83 10 99 1
-let%span sappend'16 = "/workspace/crates/verified/src/composition/append.rs" 52 10 54 61
-let%span sappend'17 = "/workspace/crates/verified/src/composition/append.rs" 55 10 63 1
-let%span sappend'18 = "/workspace/crates/verified/src/composition/append.rs" 20 10 21 69
-let%span sappend'19 = "/workspace/crates/verified/src/composition/append.rs" 22 10 33 1
+let%span sord = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sord'0 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span sconvert = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/convert.rs" 274 26 274 51
+let%span sops = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/ops.rs" 688 18 691 9
+let%span sops'0 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/ops.rs" 702 25 702 33
+let%span sops'1 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/ops.rs" 701 18 701 32
+let%span sappend = "/workspace/crates/verified/src/composition/append.rs" 106 21 106 22
+let%span sappend'0 = "/workspace/crates/verified/src/composition/append.rs" 106 41 106 42
+let%span sappend'1 = "/workspace/crates/verified/src/composition/append.rs" 111 8 111 30
+let%span sappend'2 = "/workspace/crates/verified/src/composition/append.rs" 111 33 111 34
+let%span sappend'3 = "/workspace/crates/verified/src/composition/append.rs" 111 8 111 34
+let%span sappend'4 = "/workspace/crates/verified/src/composition/append.rs" 112 8 112 31
+let%span sappend'5 = "/workspace/crates/verified/src/composition/append.rs" 112 34 112 35
+let%span sappend'6 = "/workspace/crates/verified/src/composition/append.rs" 112 8 112 35
+let%span sappend'7 = "/workspace/crates/verified/src/composition/append.rs" 109 27 113 5
+let%span sappend'8 = "/workspace/crates/verified/src/composition/append.rs" 109 27 113 6
+let%span sappend'9 = "/workspace/crates/verified/src/composition/append.rs" 114 16 114 57
+let%span sappend'10 = "/workspace/crates/verified/src/composition/append.rs" 114 16 114 58
+let%span sappend'11 = "/workspace/crates/verified/src/composition/append.rs" 115 17 115 60
+let%span sappend'12 = "/workspace/crates/verified/src/composition/append.rs" 115 17 115 61
+let%span sappend'13 = "/workspace/crates/verified/src/composition/append.rs" 116 18 116 82
+let%span sappend'14 = "/workspace/crates/verified/src/composition/append.rs" 81 10 83 65
+let%span sappend'15 = "/workspace/crates/verified/src/composition/append.rs" 84 10 100 1
+let%span sappend'16 = "/workspace/crates/verified/src/composition/append.rs" 53 10 55 61
+let%span sappend'17 = "/workspace/crates/verified/src/composition/append.rs" 56 10 64 1
+let%span sappend'18 = "/workspace/crates/verified/src/composition/append.rs" 21 10 22 69
+let%span sappend'19 = "/workspace/crates/verified/src/composition/append.rs" 23 10 34 1
 
 use creusot.int.Int32
 use creusot.int.Int64
@@ -212,7 +212,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let reserved_pair_preserves_recovery_and_ack_order [#"/workspace/crates/verified/src/composition/append.rs" 100 0 104 47]
+let reserved_pair_preserves_recovery_and_ack_order [#"/workspace/crates/verified/src/composition/append.rs" 101 0 105 47]
   (base: Int64.t) (first_delta: Int32.t) (second_delta: Int32.t)
   (return (x: t_Option_tup2_AppendFrontiers_AppendFrontiers)) = (! bb0
   [ bb0 = s0

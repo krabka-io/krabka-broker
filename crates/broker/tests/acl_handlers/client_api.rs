@@ -19,48 +19,16 @@ use krabka_protocol::{
         join_group_response::JoinGroupResponse,
         metadata_request::MetadataRequest,
         metadata_response::MetadataResponse,
-        produce_request::{PartitionProduceData, ProduceRequest, TopicProduceData},
+        produce_request::ProduceRequest,
         produce_response::ProduceResponse,
     },
-    records::{Record, RecordBatch},
 };
 
+pub use crate::kafka_wire::single_record_produce_request;
 use crate::{
     FETCH_VERSION, INIT_PRODUCER_ID_VERSION, JOIN_GROUP_VERSION, METADATA_VERSION, PRODUCE_VERSION,
     framing::{round_trip, sasl_plain_authenticate},
 };
-
-/// Build a `ProduceRequest` carrying a single record (`value`) for
-/// `(topic, partition)`. `acks=-1`, which is all-ISR, matches the JVM client's
-/// default for durable producers.
-pub fn single_record_produce_request(topic: &str, partition: i32, value: &[u8]) -> ProduceRequest {
-    ProduceRequest {
-        transactional_id: None,
-        acks: -1,
-        timeout_ms: 5_000,
-        topic_data: vec![TopicProduceData {
-            name: topic.to_string(),
-            partition_data: vec![PartitionProduceData {
-                index: partition,
-                records: Some(
-                    RecordBatch {
-                        last_offset_delta: 0,
-                        records: vec![Record {
-                            offset_delta: 0,
-                            value: Some(bytes::Bytes::copy_from_slice(value)),
-                            ..Default::default()
-                        }],
-                        ..Default::default()
-                    }
-                    .into(),
-                ),
-                ..Default::default()
-            }],
-            ..Default::default()
-        }],
-        ..Default::default()
-    }
-}
 
 pub async fn drive_produce_as_plain(
     addr: SocketAddr,

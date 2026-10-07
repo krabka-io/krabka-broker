@@ -1,16 +1,16 @@
 (* #"/workspace/crates/verified/src/producer/completion.rs" 57 0 62 23 *)
 
-let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
-let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
-let%span sconvert = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/convert.rs" 274 26 274 51
-let%span snum = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 347 20 348 51
-let%span snum'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 351 26 351 83
-let%span snum'1 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 352 26 352 83
-let%span swell_founded = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/well_founded.rs" 43 8 43 33
-let%span sslice = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 331 18 331 22
-let%span svec = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 104 18 104 36
-let%span svec'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 18 14 18 41
-let%span svec'1 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 118 18 118 48
+let%span sord = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span sord'0 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span snum = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 347 20 348 51
+let%span snum'0 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 351 26 351 83
+let%span snum'1 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 352 26 352 83
+let%span sconvert = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/convert.rs" 274 26 274 51
+let%span swell_founded = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/well_founded.rs" 43 8 43 33
+let%span sslice = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 331 18 331 22
+let%span svec = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 108 18 108 36
+let%span svec'0 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 18 14 18 41
+let%span svec'1 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 118 18 118 48
 let%span scompletion = "/workspace/crates/verified/src/producer/completion.rs" 63 16 63 26
 let%span scompletion'0 = "/workspace/crates/verified/src/producer/completion.rs" 66 16 66 21
 let%span scompletion'1 = "/workspace/crates/verified/src/producer/completion.rs" 70 16 70 20
@@ -30,52 +30,53 @@ let%span scompletion'14 = "/workspace/crates/verified/src/producer/completion.rs
 let%span scompletion'15 = "/workspace/crates/verified/src/producer/completion.rs" 81 17 81 71
 let%span scompletion'16 = "/workspace/crates/verified/src/producer/completion.rs" 82 38 82 39
 let%span scompletion'17 = "/workspace/crates/verified/src/producer/completion.rs" 82 16 82 40
-let%span scompletion'18 = "/workspace/crates/verified/src/producer/completion.rs" 83 35 83 45
-let%span scompletion'19 = "/workspace/crates/verified/src/producer/completion.rs" 90 14 90 32
-let%span scompletion'20 = "/workspace/crates/verified/src/producer/completion.rs" 86 16 89 27
-let%span scompletion'21 = "/workspace/crates/verified/src/producer/completion.rs" 85 16 85 97
-let%span scompletion'22 = "/workspace/crates/verified/src/producer/completion.rs" 95 22 95 23
-let%span scompletion'23 = "/workspace/crates/verified/src/producer/completion.rs" 95 12 95 23
-let%span scompletion'24 = "/workspace/crates/verified/src/producer/completion.rs" 99 8 99 29
-let%span scompletion'25 = "/workspace/crates/verified/src/producer/completion.rs" 100 19 100 20
-let%span scompletion'26 = "/workspace/crates/verified/src/producer/completion.rs" 100 8 100 20
-let%span scompletion'27 = "/workspace/crates/verified/src/producer/completion.rs" 115 18 115 87
-let%span scompletion'28 = "/workspace/crates/verified/src/producer/completion.rs" 116 18 117 54
-let%span scompletion'29 = "/workspace/crates/verified/src/producer/completion.rs" 118 18 120 77
-let%span scompletion'30 = "/workspace/crates/verified/src/producer/completion.rs" 122 18 122 96
-let%span scompletion'31 = "/workspace/crates/verified/src/producer/completion.rs" 107 22 108 84
-let%span scompletion'32 = "/workspace/crates/verified/src/producer/completion.rs" 110 22 110 64
-let%span scompletion'33 = "/workspace/crates/verified/src/producer/completion.rs" 111 22 112 109
-let%span scompletion'34 = "/workspace/crates/verified/src/producer/completion.rs" 103 22 103 69
-let%span scompletion'35 = "/workspace/crates/verified/src/producer/completion.rs" 30 11 30 27
-let%span scompletion'36 = "/workspace/crates/verified/src/producer/completion.rs" 31 11 31 47
-let%span scompletion'37 = "/workspace/crates/verified/src/producer/completion.rs" 32 11 32 94
-let%span scompletion'38 = "/workspace/crates/verified/src/producer/completion.rs" 33 10 33 87
-let%span scompletion'39 = "/workspace/crates/verified/src/producer/completion.rs" 34 10 34 68
-let%span scompletion'40 = "/workspace/crates/verified/src/producer/completion.rs" 35 10 41 98
-let%span scompletion'41 = "/workspace/crates/verified/src/producer/completion.rs" 42 10 44 59
-let%span scompletion'42 = "/workspace/crates/verified/src/producer/completion.rs" 45 10 49 74
-let%span scompletion'43 = "/workspace/crates/verified/src/producer/completion.rs" 50 10 53 74
-let%span scompletion'44 = "/workspace/crates/verified/src/producer/completion.rs" 54 10 55 72
-let%span scompletion'45 = "/workspace/crates/verified/src/producer/completion.rs" 11 16 11 74
-let%span scompletion'46 = "/workspace/crates/verified/src/producer/completion.rs" 19 10 19 91
-let%span scompletion'47 = "/workspace/crates/verified/src/producer/completion.rs" 21 16 21 85
+let%span scompletion'18 = "/workspace/crates/verified/src/producer/completion.rs" 83 54 83 68
+let%span scompletion'19 = "/workspace/crates/verified/src/producer/completion.rs" 83 35 83 69
+let%span scompletion'20 = "/workspace/crates/verified/src/producer/completion.rs" 90 14 90 32
+let%span scompletion'21 = "/workspace/crates/verified/src/producer/completion.rs" 86 16 89 27
+let%span scompletion'22 = "/workspace/crates/verified/src/producer/completion.rs" 85 16 85 97
+let%span scompletion'23 = "/workspace/crates/verified/src/producer/completion.rs" 95 22 95 23
+let%span scompletion'24 = "/workspace/crates/verified/src/producer/completion.rs" 95 12 95 23
+let%span scompletion'25 = "/workspace/crates/verified/src/producer/completion.rs" 99 8 99 29
+let%span scompletion'26 = "/workspace/crates/verified/src/producer/completion.rs" 100 19 100 20
+let%span scompletion'27 = "/workspace/crates/verified/src/producer/completion.rs" 100 8 100 20
+let%span scompletion'28 = "/workspace/crates/verified/src/producer/completion.rs" 118 18 118 87
+let%span scompletion'29 = "/workspace/crates/verified/src/producer/completion.rs" 119 18 120 54
+let%span scompletion'30 = "/workspace/crates/verified/src/producer/completion.rs" 121 18 123 77
+let%span scompletion'31 = "/workspace/crates/verified/src/producer/completion.rs" 125 18 125 96
+let%span scompletion'32 = "/workspace/crates/verified/src/producer/completion.rs" 107 22 108 84
+let%span scompletion'33 = "/workspace/crates/verified/src/producer/completion.rs" 110 22 110 64
+let%span scompletion'34 = "/workspace/crates/verified/src/producer/completion.rs" 112 22 113 56
+let%span scompletion'35 = "/workspace/crates/verified/src/producer/completion.rs" 114 22 115 109
+let%span scompletion'36 = "/workspace/crates/verified/src/producer/completion.rs" 103 22 103 69
+let%span scompletion'37 = "/workspace/crates/verified/src/producer/completion.rs" 30 11 30 27
+let%span scompletion'38 = "/workspace/crates/verified/src/producer/completion.rs" 31 11 31 47
+let%span scompletion'39 = "/workspace/crates/verified/src/producer/completion.rs" 32 11 32 94
+let%span scompletion'40 = "/workspace/crates/verified/src/producer/completion.rs" 33 10 33 87
+let%span scompletion'41 = "/workspace/crates/verified/src/producer/completion.rs" 34 10 34 68
+let%span scompletion'42 = "/workspace/crates/verified/src/producer/completion.rs" 35 10 41 98
+let%span scompletion'43 = "/workspace/crates/verified/src/producer/completion.rs" 42 10 44 59
+let%span scompletion'44 = "/workspace/crates/verified/src/producer/completion.rs" 45 10 49 74
+let%span scompletion'45 = "/workspace/crates/verified/src/producer/completion.rs" 50 10 53 74
+let%span scompletion'46 = "/workspace/crates/verified/src/producer/completion.rs" 54 10 55 72
+let%span scompletion'47 = "/workspace/crates/verified/src/producer/completion.rs" 19 10 19 91
+let%span scompletion'48 = "/workspace/crates/verified/src/producer/completion.rs" 21 16 21 85
+let%span scompletion'49 = "/workspace/crates/verified/src/producer/completion.rs" 11 16 11 74
 let%span scoverage = "/workspace/crates/verified/src/producer/completion/coverage.rs" 30 11 30 69
 let%span scoverage'0 = "/workspace/crates/verified/src/producer/completion/coverage.rs" 31 11 31 55
 let%span scoverage'1 = "/workspace/crates/verified/src/producer/completion/coverage.rs" 32 11 32 51
-let%span scoverage'2 = "/workspace/crates/verified/src/producer/completion/coverage.rs" 33 11 33 91
-let%span scoverage'3 = "/workspace/crates/verified/src/producer/completion/coverage.rs" 34 11 34 73
-let%span scoverage'4 = "/workspace/crates/verified/src/producer/completion/coverage.rs" 35 11 35 82
-let%span scoverage'5 = "/workspace/crates/verified/src/producer/completion/coverage.rs" 36 11 38 69
-let%span scoverage'6 = "/workspace/crates/verified/src/producer/completion/coverage.rs" 39 10 39 16
-let%span scoverage'7 = "/workspace/crates/verified/src/producer/completion/coverage.rs" 40 10 40 62
-let%span scoverage'8 = "/workspace/crates/verified/src/producer/completion/coverage.rs" 41 10 41 97
-let%span scoverage'9 = "/workspace/crates/verified/src/producer/completion/coverage.rs" 42 10 43 102
-let%span scoverage'10 = "/workspace/crates/verified/src/producer/completion/coverage.rs" 44 10 47 72
-let%span scoverage'11 = "/workspace/crates/verified/src/producer/completion/coverage.rs" 48 10 51 73
-let%span scoverage'12 = "/workspace/crates/verified/src/producer/completion/coverage.rs" 14 11 14 76
-let%span scoverage'13 = "/workspace/crates/verified/src/producer/completion/coverage.rs" 15 10 15 16
-let%span scoverage'14 = "/workspace/crates/verified/src/producer/completion/coverage.rs" 16 10 17 69
+let%span scoverage'2 = "/workspace/crates/verified/src/producer/completion/coverage.rs" 33 11 33 61
+let%span scoverage'3 = "/workspace/crates/verified/src/producer/completion/coverage.rs" 34 11 36 69
+let%span scoverage'4 = "/workspace/crates/verified/src/producer/completion/coverage.rs" 37 10 37 16
+let%span scoverage'5 = "/workspace/crates/verified/src/producer/completion/coverage.rs" 38 10 38 62
+let%span scoverage'6 = "/workspace/crates/verified/src/producer/completion/coverage.rs" 39 10 39 97
+let%span scoverage'7 = "/workspace/crates/verified/src/producer/completion/coverage.rs" 40 10 41 102
+let%span scoverage'8 = "/workspace/crates/verified/src/producer/completion/coverage.rs" 42 10 45 72
+let%span scoverage'9 = "/workspace/crates/verified/src/producer/completion/coverage.rs" 46 10 49 73
+let%span scoverage'10 = "/workspace/crates/verified/src/producer/completion/coverage.rs" 14 11 14 76
+let%span scoverage'11 = "/workspace/crates/verified/src/producer/completion/coverage.rs" 15 10 15 16
+let%span scoverage'12 = "/workspace/crates/verified/src/producer/completion/coverage.rs" 16 10 17 69
+let%span sorder = "/workspace/crates/verified/src/producer/completion/coverage/order.rs" 20 8 22 84
 
 use creusot.slice.Slice64
 use creusot.int.Int64
@@ -142,9 +143,9 @@ axiom view_Vec_usize_Global_spec:
   forall self: t_Vec_usize_Global [view_Vec_usize_Global self]. [%#svec'0] Seq.length (view_Vec_usize_Global self)
     <= UInt64.t'int const_MAX
 
-let new_usize (return (x: t_Vec_usize_Global)) = any
+let with_capacity_usize (capacity: UInt64.t) (return (x: t_Vec_usize_Global)) = any
   [ return (result: t_Vec_usize_Global) ->
-  {[@stop_split] [@expl:new ensures] [%#svec] Seq.length (view_Vec_usize_Global result) = 0}
+  {[@stop_split] [@expl:with_capacity ensures] [%#svec] Seq.length (view_Vec_usize_Global result) = 0}
     (! return {result}) ]
 
 let push_usize (self_: MutBorrow.t t_Vec_usize_Global) (v: UInt64.t) (return (x: ())) = any
@@ -152,10 +153,16 @@ let push_usize (self_: MutBorrow.t t_Vec_usize_Global) (v: UInt64.t) (return (x:
     = Seq.snoc (view_Vec_usize_Global self_.current) v}
     (! return {result}) ]
 
-function completion_offset [#"/workspace/crates/verified/src/producer/completion.rs" 10 0 10 74] (ends: Seq.seq Int64.t) (incoming: Int64.t) (index: int) : int
- = [%#scompletion'45] if index = Seq.length ends then Int64.to_int incoming else Int64.to_int (Seq.get ends index)
+predicate insertion_ordered [#"/workspace/crates/verified/src/producer/completion/coverage/order.rs" 18 0 18 85] (ends: Seq.seq Int64.t) (incoming: Int64.t) (position: int) =
+  [%#sorder] (forall i: int, j: int. 0 <= i /\ i < j /\ j < Seq.length ends
+      -> Int64.to_int (Seq.get ends i) < Int64.to_int (Seq.get ends j))
+  /\ (forall i: int. 0 <= i /\ i < position -> Int64.to_int (Seq.get ends i) < Int64.to_int incoming)
+  /\ (forall i: int. position <= i /\ i < Seq.length ends -> Int64.to_int incoming < Int64.to_int (Seq.get ends i))
 
-predicate lemma_inserted_window [#"/workspace/crates/verified/src/producer/completion/coverage.rs" 52 0 58 9] (ends: Seq.seq Int64.t) (incoming: Int64.t) (position: int) (first: int) (selected: Seq.seq UInt64.t)
+function completion_offset [#"/workspace/crates/verified/src/producer/completion.rs" 10 0 10 74] (ends: Seq.seq Int64.t) (incoming: Int64.t) (index: int) : int
+ = [%#scompletion'49] if index = Seq.length ends then Int64.to_int incoming else Int64.to_int (Seq.get ends index)
+
+predicate lemma_inserted_window [#"/workspace/crates/verified/src/producer/completion/coverage.rs" 50 0 56 9] (ends: Seq.seq Int64.t) (incoming: Int64.t) (position: int) (first: int) (selected: Seq.seq UInt64.t)
 
 axiom lemma_inserted_window_spec:
   forall ends: Seq.seq Int64.t, incoming: Int64.t, position: int, first: int, selected: Seq.seq UInt64.t [lemma_inserted_window ends incoming position first selected]. ([%#scoverage] Seq.length ends
@@ -163,18 +170,14 @@ axiom lemma_inserted_window_spec:
       /\ 0 <= position /\ position <= Seq.length ends)
     -> ([%#scoverage'0] first = (if Seq.length ends = 5 then 1 else 0))
     -> ([%#scoverage'1] Seq.length selected = Seq.length ends + 1 - first)
-    -> ([%#scoverage'2] forall i: int, j: int. 0 <= i /\ i < j /\ j < Seq.length ends
-        -> Int64.to_int (Seq.get ends i) < Int64.to_int (Seq.get ends j))
-    -> ([%#scoverage'3] forall i: int. 0 <= i /\ i < position -> Int64.to_int (Seq.get ends i) < Int64.to_int incoming)
-    -> ([%#scoverage'4] forall i: int. position <= i /\ i < Seq.length ends
-        -> Int64.to_int incoming < Int64.to_int (Seq.get ends i))
-    -> ([%#scoverage'5] forall j: int. 0 <= j /\ j < Seq.length selected
+    -> ([%#scoverage'2] insertion_ordered ends incoming position)
+    -> ([%#scoverage'3] forall j: int. 0 <= j /\ j < Seq.length selected
         -> UInt64.t'int (Seq.get selected j)
         = (if first + j = position then
           Seq.length ends
         else
           if gt_log_Int (first + j) position then first + j - 1 else first + j
-        )) -> ([%#scoverage'6] lemma_inserted_window ends incoming position first selected)
+        )) -> ([%#scoverage'4] lemma_inserted_window ends incoming position first selected)
 
 axiom lemma_inserted_window_spec'0:
   forall ends: Seq.seq Int64.t, incoming: Int64.t, position: int, first: int, selected: Seq.seq UInt64.t [lemma_inserted_window ends incoming position first selected]. ([%#scoverage] Seq.length ends
@@ -182,19 +185,15 @@ axiom lemma_inserted_window_spec'0:
       /\ 0 <= position /\ position <= Seq.length ends)
     -> ([%#scoverage'0] first = (if Seq.length ends = 5 then 1 else 0))
     -> ([%#scoverage'1] Seq.length selected = Seq.length ends + 1 - first)
-    -> ([%#scoverage'2] forall i: int, j: int. 0 <= i /\ i < j /\ j < Seq.length ends
-        -> Int64.to_int (Seq.get ends i) < Int64.to_int (Seq.get ends j))
-    -> ([%#scoverage'3] forall i: int. 0 <= i /\ i < position -> Int64.to_int (Seq.get ends i) < Int64.to_int incoming)
-    -> ([%#scoverage'4] forall i: int. position <= i /\ i < Seq.length ends
-        -> Int64.to_int incoming < Int64.to_int (Seq.get ends i))
-    -> ([%#scoverage'5] forall j: int. 0 <= j /\ j < Seq.length selected
+    -> ([%#scoverage'2] insertion_ordered ends incoming position)
+    -> ([%#scoverage'3] forall j: int. 0 <= j /\ j < Seq.length selected
         -> UInt64.t'int (Seq.get selected j)
         = (if first + j = position then
           Seq.length ends
         else
           if gt_log_Int (first + j) position then first + j - 1 else first + j
         ))
-    -> ([%#scoverage'7] lemma_inserted_window ends incoming position first selected
+    -> ([%#scoverage'5] lemma_inserted_window ends incoming position first selected
     -> gt_log_Int (Seq.length selected) 0 /\ Seq.length selected <= 5)
 
 axiom lemma_inserted_window_spec'1:
@@ -203,19 +202,15 @@ axiom lemma_inserted_window_spec'1:
       /\ 0 <= position /\ position <= Seq.length ends)
     -> ([%#scoverage'0] first = (if Seq.length ends = 5 then 1 else 0))
     -> ([%#scoverage'1] Seq.length selected = Seq.length ends + 1 - first)
-    -> ([%#scoverage'2] forall i: int, j: int. 0 <= i /\ i < j /\ j < Seq.length ends
-        -> Int64.to_int (Seq.get ends i) < Int64.to_int (Seq.get ends j))
-    -> ([%#scoverage'3] forall i: int. 0 <= i /\ i < position -> Int64.to_int (Seq.get ends i) < Int64.to_int incoming)
-    -> ([%#scoverage'4] forall i: int. position <= i /\ i < Seq.length ends
-        -> Int64.to_int incoming < Int64.to_int (Seq.get ends i))
-    -> ([%#scoverage'5] forall j: int. 0 <= j /\ j < Seq.length selected
+    -> ([%#scoverage'2] insertion_ordered ends incoming position)
+    -> ([%#scoverage'3] forall j: int. 0 <= j /\ j < Seq.length selected
         -> UInt64.t'int (Seq.get selected j)
         = (if first + j = position then
           Seq.length ends
         else
           if gt_log_Int (first + j) position then first + j - 1 else first + j
         ))
-    -> ([%#scoverage'8] lemma_inserted_window ends incoming position first selected
+    -> ([%#scoverage'6] lemma_inserted_window ends incoming position first selected
     -> (forall j: int. 0 <= j /\ j < Seq.length selected -> UInt64.t'int (Seq.get selected j) <= Seq.length ends))
 
 axiom lemma_inserted_window_spec'2:
@@ -224,19 +219,15 @@ axiom lemma_inserted_window_spec'2:
       /\ 0 <= position /\ position <= Seq.length ends)
     -> ([%#scoverage'0] first = (if Seq.length ends = 5 then 1 else 0))
     -> ([%#scoverage'1] Seq.length selected = Seq.length ends + 1 - first)
-    -> ([%#scoverage'2] forall i: int, j: int. 0 <= i /\ i < j /\ j < Seq.length ends
-        -> Int64.to_int (Seq.get ends i) < Int64.to_int (Seq.get ends j))
-    -> ([%#scoverage'3] forall i: int. 0 <= i /\ i < position -> Int64.to_int (Seq.get ends i) < Int64.to_int incoming)
-    -> ([%#scoverage'4] forall i: int. position <= i /\ i < Seq.length ends
-        -> Int64.to_int incoming < Int64.to_int (Seq.get ends i))
-    -> ([%#scoverage'5] forall j: int. 0 <= j /\ j < Seq.length selected
+    -> ([%#scoverage'2] insertion_ordered ends incoming position)
+    -> ([%#scoverage'3] forall j: int. 0 <= j /\ j < Seq.length selected
         -> UInt64.t'int (Seq.get selected j)
         = (if first + j = position then
           Seq.length ends
         else
           if gt_log_Int (first + j) position then first + j - 1 else first + j
         ))
-    -> ([%#scoverage'9] lemma_inserted_window ends incoming position first selected
+    -> ([%#scoverage'7] lemma_inserted_window ends incoming position first selected
     -> (forall i: int, j: int. 0 <= i /\ i < j /\ j < Seq.length selected
       -> completion_offset ends incoming (UInt64.t'int (Seq.get selected i))
       < completion_offset ends incoming (UInt64.t'int (Seq.get selected j))))
@@ -247,19 +238,15 @@ axiom lemma_inserted_window_spec'3:
       /\ 0 <= position /\ position <= Seq.length ends)
     -> ([%#scoverage'0] first = (if Seq.length ends = 5 then 1 else 0))
     -> ([%#scoverage'1] Seq.length selected = Seq.length ends + 1 - first)
-    -> ([%#scoverage'2] forall i: int, j: int. 0 <= i /\ i < j /\ j < Seq.length ends
-        -> Int64.to_int (Seq.get ends i) < Int64.to_int (Seq.get ends j))
-    -> ([%#scoverage'3] forall i: int. 0 <= i /\ i < position -> Int64.to_int (Seq.get ends i) < Int64.to_int incoming)
-    -> ([%#scoverage'4] forall i: int. position <= i /\ i < Seq.length ends
-        -> Int64.to_int incoming < Int64.to_int (Seq.get ends i))
-    -> ([%#scoverage'5] forall j: int. 0 <= j /\ j < Seq.length selected
+    -> ([%#scoverage'2] insertion_ordered ends incoming position)
+    -> ([%#scoverage'3] forall j: int. 0 <= j /\ j < Seq.length selected
         -> UInt64.t'int (Seq.get selected j)
         = (if first + j = position then
           Seq.length ends
         else
           if gt_log_Int (first + j) position then first + j - 1 else first + j
         ))
-    -> ([%#scoverage'10] lemma_inserted_window ends incoming position first selected
+    -> ([%#scoverage'8] lemma_inserted_window ends incoming position first selected
     -> (forall i: int. 0 <= i
         /\ i < Seq.length ends
         /\ not (exists j: int. 0 <= j /\ j < Seq.length selected /\ UInt64.t'int (Seq.get selected j) = i)
@@ -273,19 +260,15 @@ axiom lemma_inserted_window_spec'4:
       /\ 0 <= position /\ position <= Seq.length ends)
     -> ([%#scoverage'0] first = (if Seq.length ends = 5 then 1 else 0))
     -> ([%#scoverage'1] Seq.length selected = Seq.length ends + 1 - first)
-    -> ([%#scoverage'2] forall i: int, j: int. 0 <= i /\ i < j /\ j < Seq.length ends
-        -> Int64.to_int (Seq.get ends i) < Int64.to_int (Seq.get ends j))
-    -> ([%#scoverage'3] forall i: int. 0 <= i /\ i < position -> Int64.to_int (Seq.get ends i) < Int64.to_int incoming)
-    -> ([%#scoverage'4] forall i: int. position <= i /\ i < Seq.length ends
-        -> Int64.to_int incoming < Int64.to_int (Seq.get ends i))
-    -> ([%#scoverage'5] forall j: int. 0 <= j /\ j < Seq.length selected
+    -> ([%#scoverage'2] insertion_ordered ends incoming position)
+    -> ([%#scoverage'3] forall j: int. 0 <= j /\ j < Seq.length selected
         -> UInt64.t'int (Seq.get selected j)
         = (if first + j = position then
           Seq.length ends
         else
           if gt_log_Int (first + j) position then first + j - 1 else first + j
         ))
-    -> ([%#scoverage'11] lemma_inserted_window ends incoming position first selected
+    -> ([%#scoverage'9] lemma_inserted_window ends incoming position first selected
     -> not (exists j: int. 0 <= j
         /\ j < Seq.length selected
         /\ completion_offset ends incoming (UInt64.t'int (Seq.get selected j)) = Int64.to_int incoming)
@@ -298,22 +281,22 @@ type tup2_bool_Vec_usize_Global = { f0: bool; f1: t_Vec_usize_Global }
 predicate lemma_identity_window [#"/workspace/crates/verified/src/producer/completion/coverage.rs" 18 0 18 65] (selected: Seq.seq UInt64.t)
 
 axiom lemma_identity_window_spec:
-  forall selected: Seq.seq UInt64.t [lemma_identity_window selected]. ([%#scoverage'12] forall j: int. 0 <= j
+  forall selected: Seq.seq UInt64.t [lemma_identity_window selected]. ([%#scoverage'10] forall j: int. 0 <= j
           /\ j < Seq.length selected -> UInt64.t'int (Seq.get selected j) = j)
-    -> ([%#scoverage'13] lemma_identity_window selected)
+    -> ([%#scoverage'11] lemma_identity_window selected)
 
 axiom lemma_identity_window_spec'0:
-  forall selected: Seq.seq UInt64.t [lemma_identity_window selected]. ([%#scoverage'12] forall j: int. 0 <= j
+  forall selected: Seq.seq UInt64.t [lemma_identity_window selected]. ([%#scoverage'10] forall j: int. 0 <= j
           /\ j < Seq.length selected -> UInt64.t'int (Seq.get selected j) = j)
-    -> ([%#scoverage'14] lemma_identity_window selected
+    -> ([%#scoverage'12] lemma_identity_window selected
     -> (forall i: int. 0 <= i /\ i < Seq.length selected
       -> (exists j: int. 0 <= j /\ j < Seq.length selected /\ UInt64.t'int (Seq.get selected j) = i)))
 
 predicate completion_source_selected [#"/workspace/crates/verified/src/producer/completion.rs" 20 0 20 76] (selected: Seq.seq UInt64.t) (source: int) =
-  [%#scompletion'47] exists j: int. 0 <= j /\ j < Seq.length selected /\ UInt64.t'int (Seq.get selected j) = source
+  [%#scompletion'48] exists j: int. 0 <= j /\ j < Seq.length selected /\ UInt64.t'int (Seq.get selected j) = source
 
 axiom completion_source_selected_spec:
-  forall selected: Seq.seq UInt64.t, source: int [completion_source_selected selected source]. [%#scompletion'46] completion_source_selected selected source
+  forall selected: Seq.seq UInt64.t, source: int [completion_source_selected selected source]. [%#scompletion'47] completion_source_selected selected source
     = (exists j: int. 0 <= j /\ j < Seq.length selected /\ UInt64.t'int (Seq.get selected j) = source)
 
 meta "compute_max_steps" 1000000
@@ -323,11 +306,11 @@ meta "select_lsinst" "all"
 let producer_completion_window [#"/workspace/crates/verified/src/producer/completion.rs" 57 0 62 23]
   (current': t_Option_i16) (epoch: Int16.t) (ends: Slice64.slice Int64.t) (incoming: Int64.t)
   (return (x: tup2_bool_Vec_usize_Global)) =
-{[@stop_split] [@expl:producer_completion_window requires] ([@stop_split] [@expl:producer_completion_window requires #0] [%#scompletion'35] Seq.length (Slice64.view ends)
+{[@stop_split] [@expl:producer_completion_window requires] ([@stop_split] [@expl:producer_completion_window requires #0] [%#scompletion'37] Seq.length (Slice64.view ends)
     <= 5)
-  /\ ([@stop_split] [@expl:producer_completion_window requires #1] [%#scompletion'36] current' = None
+  /\ ([@stop_split] [@expl:producer_completion_window requires #1] [%#scompletion'38] current' = None
     -> Seq.length (Slice64.view ends) = 0)
-  /\ ([@stop_split] [@expl:producer_completion_window requires #2] [%#scompletion'37] forall i: int, j: int. 0 <= i
+  /\ ([@stop_split] [@expl:producer_completion_window requires #2] [%#scompletion'39] forall i: int, j: int. 0 <= i
       /\ i < j /\ j < Seq.length (Slice64.view ends)
     -> Int64.to_int (Seq.get (Slice64.view ends) i) < Int64.to_int (Seq.get (Slice64.view ends) j))}
   (! bb0
@@ -394,17 +377,18 @@ let producer_completion_window [#"/workspace/crates/verified/src/producer/comple
     | s1 = UInt64.add [%#scompletion'15] {_88} {_90} (fun (_x: UInt64.t) -> [ &length <- _x ] s2)
     | s2 = saturating_sub [%#scompletion'17] {length} {[%#scompletion'16] (5: UInt64.t)}
         (fun (_x: UInt64.t) -> [ &first <- _x ] s3)
-    | s3 = new_usize [%#scompletion'18] (fun (_x: t_Vec_usize_Global) -> [ &selected <- _x ] s4)
-    | s4 = [ &ordinal <- first ] s5
-    | s5 = bb35 ]
+    | s3 = UInt64.sub [%#scompletion'18] {length} {first} (fun (_x: UInt64.t) -> [ &_95 <- _x ] s4)
+    | s4 = with_capacity_usize [%#scompletion'19] {_95} (fun (_x: t_Vec_usize_Global) -> [ &selected <- _x ] s5)
+    | s5 = [ &ordinal <- first ] s6
+    | s6 = bb35 ]
   | bb35 = bb35invariant
-    [ bb35 = {[@expl:loop variant] well_founded_relation_Int variant_old_bb35 ([%#scompletion'19] UInt64.t'int length
+    [ bb35 = {[@expl:loop variant] well_founded_relation_Int variant_old_bb35 ([%#scompletion'20] UInt64.t'int length
       - UInt64.t'int ordinal)}
       bb35invariant
-    | bb35invariant = {[@expl:loop invariant #0] [%#scompletion'21] UInt64.t'int first <= UInt64.t'int ordinal
+    | bb35invariant = {[@expl:loop invariant #0] [%#scompletion'22] UInt64.t'int first <= UInt64.t'int ordinal
       /\ UInt64.t'int ordinal <= UInt64.t'int length
       /\ Seq.length (view_Vec_usize_Global selected) = UInt64.t'int ordinal - UInt64.t'int first}
-      {[@expl:loop invariant #1] [%#scompletion'20] forall j: int. 0 <= j
+      {[@expl:loop invariant #1] [%#scompletion'21] forall j: int. 0 <= j
           /\ j < Seq.length (view_Vec_usize_Global selected)
         -> UInt64.t'int (Seq.get (view_Vec_usize_Global selected) j)
         = (if not keep_old \/ insert /\ UInt64.t'int first + j = UInt64.t'int position then
@@ -416,41 +400,41 @@ let producer_completion_window [#"/workspace/crates/verified/src/producer/comple
             UInt64.t'int first + j
 
         )}
-      (! [ &variant_old_bb35 <- [%#scompletion'19] UInt64.t'int length - UInt64.t'int ordinal ] s0)
-      [ s0 = [ &_113 <- UInt64.lt ordinal length ] s1
-      | s1 = any [ br0 -> {_113 = false} (! bb51) | br1 -> {_113} (! bb37) ] ]
+      (! [ &variant_old_bb35 <- [%#scompletion'20] UInt64.t'int length - UInt64.t'int ordinal ] s0)
+      [ s0 = [ &_116 <- UInt64.lt ordinal length ] s1
+      | s1 = any [ br0 -> {_116 = false} (! bb51) | br1 -> {_116} (! bb37) ] ]
       [ bb37 = any [ br0 -> {keep_old = false} (! bb41) | br1 -> {keep_old} (! bb38) ]
       | bb38 = any [ br0 -> {insert = false} (! bb43) | br1 -> {insert} (! bb39) ]
       | bb39 = s0
-        [ s0 = [ &_119 <- ordinal = position ] s1
-        | s1 = any [ br0 -> {_119 = false} (! bb43) | br1 -> {_119} (! bb41) ] ]
+        [ s0 = [ &_122 <- ordinal = position ] s1
+        | s1 = any [ br0 -> {_122 = false} (! bb43) | br1 -> {_122} (! bb41) ] ]
       | bb43 = any [ br0 -> {insert = false} (! bb47) | br1 -> {insert} (! bb44) ]
       | bb44 = s0
-        [ s0 = [ &_123 <- UInt64.gt ordinal position ] s1
-        | s1 = any [ br0 -> {_123 = false} (! bb47) | br1 -> {_123} (! bb45) ] ]
+        [ s0 = [ &_126 <- UInt64.gt ordinal position ] s1
+        | s1 = any [ br0 -> {_126 = false} (! bb47) | br1 -> {_126} (! bb45) ] ]
       | bb45 = s0
-        [ s0 = UInt64.sub [%#scompletion'23] {ordinal} {[%#scompletion'22] (1: UInt64.t)}
+        [ s0 = UInt64.sub [%#scompletion'24] {ordinal} {[%#scompletion'23] (1: UInt64.t)}
             (fun (_x: UInt64.t) -> [ &source <- _x ] s1)
         | s1 = bb49 ]
       | bb47 = s0 [ s0 = [ &source <- ordinal ] s1 | s1 = bb49 ]
       | bb41 = s0 [ s0 = [ &source <- count ] s1 | s1 = bb49 ]
       | bb49 = s0
         [ s0 = MutBorrow.borrow_mut <t_Vec_usize_Global> {selected}
-            (fun (_bor: MutBorrow.t t_Vec_usize_Global) -> [ &_128 <- _bor ] [ &selected <- _bor.final ] s1)
-        | s1 = push_usize [%#scompletion'24] {_128} {source} (fun (_x: ()) -> [ &_127 <- _x ] s2)
-        | s2 = UInt64.add [%#scompletion'26] {ordinal} {[%#scompletion'25] (1: UInt64.t)}
+            (fun (_bor: MutBorrow.t t_Vec_usize_Global) -> [ &_131 <- _bor ] [ &selected <- _bor.final ] s1)
+        | s1 = push_usize [%#scompletion'25] {_131} {source} (fun (_x: ()) -> [ &_130 <- _x ] s2)
+        | s2 = UInt64.add [%#scompletion'27] {ordinal} {[%#scompletion'26] (1: UInt64.t)}
             (fun (_x: UInt64.t) -> [ &ordinal <- _x ] s3)
         | s3 = bb35 ] ] ]
   | bb51 = any [ br0 -> {keep_old = false} (! bb53) | br1 -> {keep_old} (! bb52) ]
   | bb52 = any [ br0 -> {insert = false} (! bb56) | br1 -> {insert} (! bb55) ]
   | bb55 = s0
-    [ s0 = {[@expl:assertion] [%#scompletion'27] forall i: int. UInt64.t'int position <= i /\ i < UInt64.t'int count
+    [ s0 = {[@expl:assertion] [%#scompletion'28] forall i: int. UInt64.t'int position <= i /\ i < UInt64.t'int count
         -> Int64.to_int incoming < Int64.to_int (Seq.get (Slice64.view ends) i)}
       s1
-    | s1 = {[@expl:assertion] [%#scompletion'28] UInt64.t'int first = (if UInt64.t'int count = 5 then 1 else 0)
+    | s1 = {[@expl:assertion] [%#scompletion'29] UInt64.t'int first = (if UInt64.t'int count = 5 then 1 else 0)
       /\ Seq.length (view_Vec_usize_Global selected) = Seq.length (Slice64.view ends) + 1 - UInt64.t'int first}
       s2
-    | s2 = {[@expl:assertion] [%#scompletion'29] forall j: int. 0 <= j
+    | s2 = {[@expl:assertion] [%#scompletion'30] forall j: int. 0 <= j
           /\ j < Seq.length (view_Vec_usize_Global selected)
         -> UInt64.t'int (Seq.get (view_Vec_usize_Global selected) j)
         = (if UInt64.t'int first + j = UInt64.t'int position then
@@ -464,26 +448,30 @@ let producer_completion_window [#"/workspace/crates/verified/src/producer/comple
         )}
       s3
     | s3 =
-      {[@expl:assertion] [%#scompletion'30] lemma_inserted_window (Slice64.view ends) incoming (UInt64.t'int position) (UInt64.t'int first) (view_Vec_usize_Global selected)}
+      {[@expl:assertion] [%#scompletion'31] lemma_inserted_window (Slice64.view ends) incoming (UInt64.t'int position) (UInt64.t'int first) (view_Vec_usize_Global selected)}
       s4
     | s4 = [ &_ret <- { f0 = accepted; f1 = selected } ] s5
     | s5 = return {_ret} ]
   | bb56 = s0
-    [ s0 = {[@expl:assertion] [%#scompletion'31] Seq.length (view_Vec_usize_Global selected)
+    [ s0 = {[@expl:assertion] [%#scompletion'32] Seq.length (view_Vec_usize_Global selected)
         = Seq.length (Slice64.view ends)
       /\ (forall j: int. 0 <= j /\ j < Seq.length (view_Vec_usize_Global selected)
         -> UInt64.t'int (Seq.get (view_Vec_usize_Global selected) j) = j)}
       s1
-    | s1 = {[@expl:assertion] [%#scompletion'32] lemma_identity_window (view_Vec_usize_Global selected)} s2
-    | s2 = {[@expl:assertion] [%#scompletion'33] accepted
+    | s1 = {[@expl:assertion] [%#scompletion'33] lemma_identity_window (view_Vec_usize_Global selected)} s2
+    | s2 = {[@expl:assertion] [%#scompletion'34] forall i: int. 0 <= i
+          /\ i < Seq.length (view_Vec_usize_Global selected)
+        -> completion_source_selected (view_Vec_usize_Global selected) i}
+      s3
+    | s3 = {[@expl:assertion] [%#scompletion'35] accepted
       -> UInt64.t'int position < Seq.length (view_Vec_usize_Global selected)
       /\ UInt64.t'int (Seq.get (view_Vec_usize_Global selected) (UInt64.t'int position)) = UInt64.t'int position
       /\ Seq.get (Slice64.view ends) (UInt64.t'int position) = incoming}
-      s3
-    | s3 = [ &_ret <- { f0 = accepted; f1 = selected } ] s4
-    | s4 = return {_ret} ]
+      s4
+    | s4 = [ &_ret <- { f0 = accepted; f1 = selected } ] s5
+    | s5 = return {_ret} ]
   | bb53 = s0
-    [ s0 = {[@expl:assertion] [%#scompletion'34] Seq.length (view_Vec_usize_Global selected) = 1
+    [ s0 = {[@expl:assertion] [%#scompletion'36] Seq.length (view_Vec_usize_Global selected) = 1
       /\ UInt64.t'int (Seq.get (view_Vec_usize_Global selected) 0) = UInt64.t'int count}
       s1
     | s1 = [ &_ret <- { f0 = accepted; f1 = selected } ] s2
@@ -516,25 +504,26 @@ let producer_completion_window [#"/workspace/crates/verified/src/producer/comple
   | & _90: UInt64.t = Any.any_l ()
   | & first: UInt64.t = Any.any_l ()
   | & selected: t_Vec_usize_Global = Any.any_l ()
+  | & _95: UInt64.t = Any.any_l ()
   | & ordinal: UInt64.t = Any.any_l ()
-  | & _113: bool = Any.any_l ()
+  | & _116: bool = Any.any_l ()
   | & source: UInt64.t = Any.any_l ()
-  | & _119: bool = Any.any_l ()
-  | & _123: bool = Any.any_l ()
-  | & _127: () = Any.any_l ()
-  | & _128: MutBorrow.t t_Vec_usize_Global = Any.any_l ()
+  | & _122: bool = Any.any_l ()
+  | & _126: bool = Any.any_l ()
+  | & _130: () = Any.any_l ()
+  | & _131: MutBorrow.t t_Vec_usize_Global = Any.any_l ()
   | & variant_old_bb12: int = Any.any_l ()
   | & variant_old_bb35: int = Any.any_l () ])
   [ return (result: tup2_bool_Vec_usize_Global) ->
-  {[@stop_split] [@expl:producer_completion_window ensures] ([@stop_split] [@expl:producer_completion_window ensures #0] [%#scompletion'38] result.f0
+  {[@stop_split] [@expl:producer_completion_window ensures] ([@stop_split] [@expl:producer_completion_window ensures #0] [%#scompletion'40] result.f0
       = match current' with
         | None -> true
         | Some value -> Int16.to_int value <= Int16.to_int epoch
         end)
-    /\ ([@stop_split] [@expl:producer_completion_window ensures #1] [%#scompletion'39] Seq.length (view_Vec_usize_Global result.f1)
+    /\ ([@stop_split] [@expl:producer_completion_window ensures #1] [%#scompletion'41] Seq.length (view_Vec_usize_Global result.f1)
         <= 5
       /\ (result.f0 -> gt_log_Int (Seq.length (view_Vec_usize_Global result.f1)) 0))
-    /\ ([@stop_split] [@expl:producer_completion_window ensures #2] [%#scompletion'40] forall j: int. 0 <= j
+    /\ ([@stop_split] [@expl:producer_completion_window ensures #2] [%#scompletion'42] forall j: int. 0 <= j
           /\ j < Seq.length (view_Vec_usize_Global result.f1)
         -> UInt64.t'int (Seq.get (view_Vec_usize_Global result.f1) j) <= Seq.length (Slice64.view ends)
         /\ (UInt64.t'int (Seq.get (view_Vec_usize_Global result.f1) j) < Seq.length (Slice64.view ends)
@@ -550,11 +539,11 @@ let producer_completion_window [#"/workspace/crates/verified/src/producer/comple
           /\ (exists i: int. 0 <= i /\ i < Seq.length (Slice64.view ends) /\ Seq.get (Slice64.view ends) i = incoming)
           | None -> false
           end))
-    /\ ([@stop_split] [@expl:producer_completion_window ensures #3] [%#scompletion'41] forall i: int, j: int. 0 <= i
+    /\ ([@stop_split] [@expl:producer_completion_window ensures #3] [%#scompletion'43] forall i: int, j: int. 0 <= i
           /\ i < j /\ j < Seq.length (view_Vec_usize_Global result.f1)
         -> completion_offset (Slice64.view ends) incoming (UInt64.t'int (Seq.get (view_Vec_usize_Global result.f1) i))
         < completion_offset (Slice64.view ends) incoming (UInt64.t'int (Seq.get (view_Vec_usize_Global result.f1) j)))
-    /\ ([@stop_split] [@expl:producer_completion_window ensures #4] [%#scompletion'42] forall i: int. 0 <= i
+    /\ ([@stop_split] [@expl:producer_completion_window ensures #4] [%#scompletion'44] forall i: int. 0 <= i
           /\ i < Seq.length (Slice64.view ends)
           /\ match current' with
               | Some value -> Int16.to_int epoch <= Int16.to_int value
@@ -565,7 +554,7 @@ let producer_completion_window [#"/workspace/crates/verified/src/producer/comple
         /\ (forall j: int. 0 <= j /\ j < Seq.length (view_Vec_usize_Global result.f1)
           -> Int64.to_int (Seq.get (Slice64.view ends) i)
           < completion_offset (Slice64.view ends) incoming (UInt64.t'int (Seq.get (view_Vec_usize_Global result.f1) j))))
-    /\ ([@stop_split] [@expl:producer_completion_window ensures #5] [%#scompletion'43] result.f0
+    /\ ([@stop_split] [@expl:producer_completion_window ensures #5] [%#scompletion'45] result.f0
         /\ not (exists j: int. 0 <= j
           /\ j < Seq.length (view_Vec_usize_Global result.f1)
           /\ completion_offset (Slice64.view ends) incoming (UInt64.t'int (Seq.get (view_Vec_usize_Global result.f1) j))
@@ -574,7 +563,7 @@ let producer_completion_window [#"/workspace/crates/verified/src/producer/comple
       /\ (forall j: int. 0 <= j /\ j < Seq.length (view_Vec_usize_Global result.f1)
         -> Int64.to_int incoming
         < completion_offset (Slice64.view ends) incoming (UInt64.t'int (Seq.get (view_Vec_usize_Global result.f1) j))))
-    /\ ([@stop_split] [@expl:producer_completion_window ensures #6] [%#scompletion'44] not result.f0
+    /\ ([@stop_split] [@expl:producer_completion_window ensures #6] [%#scompletion'46] not result.f0
     -> Seq.length (view_Vec_usize_Global result.f1) = Seq.length (Slice64.view ends)
     /\ (forall j: int. 0 <= j /\ j < Seq.length (Slice64.view ends)
       -> UInt64.t'int (Seq.get (view_Vec_usize_Global result.f1) j) = j))}

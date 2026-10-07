@@ -2,6 +2,8 @@ use creusot_std::prelude::*;
 
 use super::constructed_voter_reconfiguration;
 #[cfg(creusot)]
+use super::spec::single_change_shape;
+#[cfg(creusot)]
 use super::spec::{
     adjacent_majorities_exceed_union, expected_member, grant_count, has_node, membership_coherent,
     valid_old,
@@ -52,10 +54,7 @@ type QuorumOverlap = Option<(
         && exists<j: Int> 0 <= j && j < next@.len() && next@[j] == id },
 })]
 #[ensures(match result { None => true, Some((_, next, _, _, _)) =>
-    old@.len() - 1 <= next@.len() && next@.len() <= old@.len() + 1
-    && (forall<id: u64> has_node(next@, next@.len(), id)
-        == expected_member(old@, old@.len(), request.kind, node, id))
-    && (forall<i: Int, j: Int> 0 <= i && i < j && j < next@.len() ==> next@[i] != next@[j]),
+    single_change_shape(old@, next@, request.kind, node),
 })]
 pub(crate) fn reconfigured_majorities_overlap(
     old: &[u64],

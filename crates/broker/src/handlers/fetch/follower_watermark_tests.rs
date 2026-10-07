@@ -21,7 +21,6 @@ use std::{sync::Arc, time::Duration};
 use assert2::assert;
 use bytes::Bytes;
 use krabka_log::Offset;
-use krabka_metadata::{MetadataRecord, PartitionRecord, TopicRecord};
 use krabka_protocol::{
     Decode,
     owned::{
@@ -109,30 +108,7 @@ fn batch(value: &'static [u8]) -> RecordBatch {
 /// Create `topic` with replicas 1 and 2, led by this broker, wait until node
 /// 2 is in the ISR, and append two batches.
 async fn partition(broker: &BrokerHandle, topic: &str, topic_id: u128) -> Arc<Partition> {
-    broker
-        .submit_metadata_record_for_test(MetadataRecord::V1Topic(TopicRecord {
-            name: topic.to_owned(),
-            topic_id: uuid::Uuid::from_u128(topic_id),
-            partitions: 1,
-            replication_factor: 2,
-        }))
-        .await
-        .expect("submit topic record");
-    broker
-        .submit_metadata_record_for_test(MetadataRecord::V1Partition(PartitionRecord {
-            topic: topic.to_owned(),
-            partition: 0,
-            leader: krabka_audit::NodeId(1),
-            replicas: vec![krabka_audit::NodeId(1), krabka_audit::NodeId(FOLLOWER)],
-            isr: vec![krabka_audit::NodeId(1), krabka_audit::NodeId(FOLLOWER)],
-            leader_epoch: krabka_metadata::LeaderEpoch(0),
-            adding_replicas: Vec::new(),
-            removing_replicas: Vec::new(),
-            directories: vec![uuid::Uuid::nil(); 2],
-            partition_epoch: 0,
-        }))
-        .await
-        .expect("submit partition record");
+    crate::handlers::test_support::seed_replicated_topic(broker, topic, topic_id, 1).await;
 
     let shared = broker.broker_arc_for_test();
     let partition = tokio::time::timeout(Duration::from_secs(10), async {

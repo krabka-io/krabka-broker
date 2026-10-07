@@ -191,10 +191,6 @@ mod tests {
 
     use assert2::assert;
     use krabka_metadata::ScramCredentialRecord;
-    use krabka_protocol::{
-        UnknownTaggedFields,
-        owned::alter_user_scram_credentials_response::AlterUserScramCredentialsResponse,
-    };
     use krabka_security::scram::MIN_SCRAM_ITERATIONS;
 
     use super::*;
@@ -261,15 +257,14 @@ mod tests {
 
         let resp = answer(&broker, req, &ctx).await;
 
-        let expected = AlterUserScramCredentialsResponse {
-            throttle_time_ms: 0,
-            results: vec![expected_result(
-                "alice",
-                KAFKA_DUPLICATE_RESOURCE,
-                Some("A user credential cannot be altered twice in the same request"),
-            )],
-            unknown_tagged_fields: UnknownTaggedFields(Vec::new()),
-        };
+        let expected =
+            crate::handlers::alter_user_scram_credentials::test_support::expected_response(vec![
+                expected_result(
+                    "alice",
+                    KAFKA_DUPLICATE_RESOURCE,
+                    Some("A user credential cannot be altered twice in the same request"),
+                ),
+            ]);
         assert!(resp == expected);
         let image = broker.controller.current_image();
         assert!(
@@ -313,31 +308,19 @@ mod tests {
             })
             .await;
         test_ctx!(ctx, "admin");
-        let req = AlterUserScramCredentialsRequest {
-            deletions: vec![ScramCredentialDeletion {
-                name: "alice".into(),
-                mechanism: 2,
-                ..Default::default()
-            }],
-            upsertions: vec![valid_upsertion_for_mechanism(
-                "alice",
-                1,
-                SaslMechanism::ScramSha256,
-            )],
-            ..Default::default()
-        };
+        let req =
+            crate::handlers::alter_user_scram_credentials::test_support::mixed_mechanisms("alice");
 
         let resp = answer(&broker, req, &ctx).await;
 
-        let expected = AlterUserScramCredentialsResponse {
-            throttle_time_ms: 0,
-            results: vec![expected_result(
-                "alice",
-                KAFKA_DUPLICATE_RESOURCE,
-                Some("A user credential cannot be altered twice in the same request"),
-            )],
-            unknown_tagged_fields: UnknownTaggedFields(Vec::new()),
-        };
+        let expected =
+            crate::handlers::alter_user_scram_credentials::test_support::expected_response(vec![
+                expected_result(
+                    "alice",
+                    KAFKA_DUPLICATE_RESOURCE,
+                    Some("A user credential cannot be altered twice in the same request"),
+                ),
+            ]);
         assert!(resp == expected);
         let image = broker.controller.current_image();
         assert!(
@@ -360,31 +343,19 @@ mod tests {
         let broker = broker_handle.broker_arc_for_test();
         crate::test_support::wait_for_controller_leader(&broker).await;
         test_ctx!(ctx, "admin");
-        let req = AlterUserScramCredentialsRequest {
-            deletions: vec![ScramCredentialDeletion {
-                name: "alice".into(),
-                mechanism: 2,
-                ..Default::default()
-            }],
-            upsertions: vec![valid_upsertion_for_mechanism(
-                "alice",
-                1,
-                SaslMechanism::ScramSha256,
-            )],
-            ..Default::default()
-        };
+        let req =
+            crate::handlers::alter_user_scram_credentials::test_support::mixed_mechanisms("alice");
 
         let resp = answer(&broker, req, &ctx).await;
 
-        let expected = AlterUserScramCredentialsResponse {
-            throttle_time_ms: 0,
-            results: vec![expected_result(
-                "alice",
-                codes::RESOURCE_NOT_FOUND,
-                Some("Attempt to delete a user credential that does not exist"),
-            )],
-            unknown_tagged_fields: UnknownTaggedFields(Vec::new()),
-        };
+        let expected =
+            crate::handlers::alter_user_scram_credentials::test_support::expected_response(vec![
+                expected_result(
+                    "alice",
+                    codes::RESOURCE_NOT_FOUND,
+                    Some("Attempt to delete a user credential that does not exist"),
+                ),
+            ]);
         assert!(resp == expected);
         let image = broker.controller.current_image();
         assert!(

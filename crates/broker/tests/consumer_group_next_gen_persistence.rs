@@ -1,6 +1,8 @@
 //! A broker restart preserves the next-gen group state, through
 //! `__consumer_offsets` replay.
 
+mod support;
+
 use std::sync::Arc;
 
 use assert2::assert;
@@ -47,19 +49,7 @@ async fn replay_preserves_group_epoch_and_members() {
     let member_id;
     let initial_epoch;
     {
-        let broker = Broker::start(BrokerConfig::for_tests(log_dir.clone()))
-            .await
-            .unwrap();
-        broker.wait_until_group_coordinator_ready().await;
-        let bootstrap = broker.listen_addr().to_string();
-        let client = Arc::new(
-            Client::builder()
-                .bootstrap(bootstrap.as_str())
-                .client_id("c")
-                .build()
-                .await
-                .unwrap(),
-        );
+        let (broker, client) = boot(log_dir.clone()).await;
         create_topic(&client, "tp", 2).await;
         let req = ConsumerGroupHeartbeatRequest {
             group_id: "gp".into(),
@@ -112,19 +102,7 @@ async fn next_gen_state_cleared_after_leave_then_restart() {
 
     let member_id;
     {
-        let broker = Broker::start(BrokerConfig::for_tests(log_dir.clone()))
-            .await
-            .unwrap();
-        broker.wait_until_group_coordinator_ready().await;
-        let bootstrap = broker.listen_addr().to_string();
-        let client = Arc::new(
-            Client::builder()
-                .bootstrap(bootstrap.as_str())
-                .client_id("c")
-                .build()
-                .await
-                .unwrap(),
-        );
+        let (broker, client) = boot(log_dir.clone()).await;
         create_topic(&client, "tp2", 1).await;
         let join = ConsumerGroupHeartbeatRequest {
             group_id: "gpx".into(),
@@ -200,19 +178,7 @@ async fn replay_keeps_the_topics_a_regex_resolved_to_and_finds_new_ones() {
     let member_id;
     let initial_epoch;
     {
-        let broker = Broker::start(BrokerConfig::for_tests(log_dir.clone()))
-            .await
-            .unwrap();
-        broker.wait_until_group_coordinator_ready().await;
-        let bootstrap = broker.listen_addr().to_string();
-        let client = Arc::new(
-            Client::builder()
-                .bootstrap(bootstrap.as_str())
-                .client_id("c")
-                .build()
-                .await
-                .unwrap(),
-        );
+        let (broker, client) = boot(log_dir.clone()).await;
         create_topic(&client, "orders-eu", 2).await;
         let resp = client
             .send(ConsumerGroupHeartbeatRequest {
@@ -284,4 +250,13 @@ async fn replay_keeps_the_topics_a_regex_resolved_to_and_finds_new_ones() {
         held.len()
     );
     broker.shutdown().await;
+}
+
+async fn boot(log_dir: std::path::PathBuf) -> (krabka_broker::BrokerHandle, Arc<Client>) {
+    let broker = Broker::start(BrokerConfig::for_tests(log_dir))
+        .await
+        .unwrap();
+    broker.wait_until_group_coordinator_ready().await;
+    let client = crate::support::client::connect(&broker.listen_addr().to_string(), "c").await;
+    (broker, client)
 }

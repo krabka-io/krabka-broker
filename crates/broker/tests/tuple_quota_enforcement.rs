@@ -28,6 +28,7 @@
 // `tuple_quota_enforcement/` directory, which keeps the parts out of `tests/`
 // where every `.rs` file would become another test binary.
 mod kafka_wire;
+mod support;
 #[path = "tuple_quota_enforcement/tuple_quota_cluster.rs"]
 mod tuple_quota_cluster;
 #[path = "tuple_quota_enforcement/tuple_quota_drivers.rs"]

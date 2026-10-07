@@ -3,10 +3,8 @@
 use std::time::{Duration, SystemTime};
 
 use assert2::check;
-use bytes::Bytes;
 use krabka_ids::Offset;
 use krabka_log::{DeliveryAdvance, DeliveryPolicy, Log, LogConfig};
-use krabka_protocol::records::{Record, RecordBatch};
 use krabka_units::prelude::{ByteSize, ByteSizeExt as _, bytes, gibibytes, millis};
 use tempfile::tempdir;
 
@@ -30,24 +28,9 @@ fn scheduled_config(segment_size: ByteSize) -> LogConfig {
     }
 }
 
-/// A two-record batch whose activation time is `ts`.
-fn batch_at(ts: i64) -> RecordBatch {
-    let mut batch = RecordBatch {
-        base_timestamp: ts,
-        max_timestamp: ts,
-        last_offset_delta: 1,
-        ..RecordBatch::default()
-    };
-    for delta in 0..2 {
-        batch.records.push(Record {
-            offset_delta: delta,
-            key: Some(Bytes::from(format!("k{delta}"))),
-            value: Some(Bytes::from(vec![b'v'; 96])),
-            ..Record::default()
-        });
-    }
-    batch
-}
+#[path = "support/scheduled.rs"]
+mod scheduled;
+use scheduled::batch_at;
 
 fn log_of(config: LogConfig, activations: &[i64]) -> (tempfile::TempDir, Log) {
     let dir = tempdir().unwrap();

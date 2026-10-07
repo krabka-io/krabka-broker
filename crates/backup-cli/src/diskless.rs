@@ -118,8 +118,7 @@ mod tests {
         CapturedWalRange, DisklessPartitionCapture, WalFlushRecord, WalIndexEntry, WalIndexKey,
     };
     use krabka_remote_storage_topic::{
-        AssignmentHandle, InProcessMetadataEventLog, MetadataEventRecord, MetadataEventStream,
-        PartitionStart, RangeVisitor,
+        InProcessMetadataEventLog, MetadataEventRecord, RangeVisitor,
     };
 
     use super::*;
@@ -160,23 +159,9 @@ mod tests {
         }
     }
 
+    #[krabka_macros::metadata_log_delegate(krabka_remote_storage_topic)]
     #[async_trait]
     impl MetadataEventLog for ScriptedLog {
-        fn partition_count(&self) -> i32 {
-            self.inner.partition_count()
-        }
-
-        async fn publish(&self, partition: i32, event: Bytes) -> Result<i64, MetadataLogError> {
-            self.inner.publish(partition, event).await
-        }
-
-        fn subscribe(
-            &self,
-            assignment: Vec<PartitionStart>,
-        ) -> (MetadataEventStream, Arc<dyn AssignmentHandle>) {
-            self.inner.subscribe(assignment)
-        }
-
         async fn high_water_marks(&self) -> Result<Vec<i64>, MetadataLogError> {
             let mut marks = self.inner.high_water_marks().await?;
             match self.fault {

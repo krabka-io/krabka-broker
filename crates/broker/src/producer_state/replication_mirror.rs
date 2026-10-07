@@ -11,15 +11,11 @@
 //! marker fenced could be accepted, and an empty tracker accepts any first
 //! sequence, not only 0.
 
-use std::sync::Arc;
-
 use assert2::assert;
-use bytes::Bytes;
 use krabka_ids::PartitionIndex;
-use krabka_log::{Log, LogConfig, ProducerId};
-use krabka_protocol::records::{Attributes, Record, RecordBatch};
+use krabka_log::ProducerId;
 
-use super::{Decision, ProducerState};
+use super::Decision;
 use crate::txn::marker::{MarkerType, build_marker_batch};
 
 const TOPIC: &str = "orders";
@@ -28,42 +24,14 @@ const PRODUCER_ID: i64 = 42;
 
 #[tokio::test]
 async fn a_replicated_marker_bumps_the_tracked_epoch() {
-    let directory = tempfile::tempdir().expect("tempdir");
-    let state = Arc::new(ProducerState::new());
-    let log = Log::open(directory.path(), LogConfig::default()).expect("open log");
-    let partition = crate::broker::spawn_partition(
-        TOPIC.to_string(),
-        PARTITION,
-        directory.path().to_path_buf(),
-        log,
-        crate::log_dir_status::LogDirRegistry::default(),
-        Arc::clone(&state),
-        false,
-    );
+    let (_directory, state, partition) = super::restart_agreement::producer_partition();
 
     // A follower replicates the leader's data batch at epoch 3, then its
     // transaction-version-2 commit marker at the bumped epoch 4. Neither
     // append goes through `Partition::produce_batch`: this is exactly the
     // `WriterMessage::Replicate` path a follower's Fetch loop drives.
     partition
-        .replicate_batch(RecordBatch {
-            base_offset: 0,
-            attributes: Attributes::default().with_transactional(true),
-            last_offset_delta: 2,
-            base_timestamp: 1_700_000_000_000,
-            max_timestamp: 1_700_000_000_000,
-            producer_id: PRODUCER_ID,
-            producer_epoch: 3,
-            base_sequence: 0,
-            records: (0..3)
-                .map(|offset_delta| Record {
-                    offset_delta,
-                    value: Some(Bytes::from_static(b"v")),
-                    ..Record::default()
-                })
-                .collect(),
-            ..RecordBatch::default()
-        })
+        .replicate_batch(super::restart_agreement::data_batch(3, 0, 3, true))
         .await
         .expect("replicate data batch");
 

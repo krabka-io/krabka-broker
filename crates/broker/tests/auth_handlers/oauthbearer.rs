@@ -89,17 +89,7 @@ pub fn start_oauthbearer_broker_with_cap(
     validator: krabka_security::OAuthBearerValidator,
     max_reauth: Option<krabka_units::Time>,
 ) -> impl std::future::Future<Output = krabka_broker::BrokerHandle> {
-    let mut cfg = BrokerConfig::for_tests(log_dir.to_path_buf());
-    cfg.listeners = vec![ListenerSpec {
-        name: "SASL_PLAINTEXT".to_string(),
-        bind_addr: "127.0.0.1:0".parse().unwrap(),
-        advertised: "127.0.0.1:0".to_string(),
-        protocol: ListenerProtocol::SaslPlaintext,
-        tls_config: None,
-        sasl_mechanisms: None,
-        principal_mapper: krabka_broker::SslPrincipalMapper::default(),
-    }];
-    cfg.inter_broker_listener_name = "SASL_PLAINTEXT".to_string();
+    let mut cfg = crate::support::sasl_plaintext_config(log_dir.to_path_buf());
     cfg.enabled_sasl_mechanisms = vec![SaslMechanism::OAuthBearer];
     cfg.oauthbearer_validator = validator;
     cfg.connections_max_reauth = max_reauth;

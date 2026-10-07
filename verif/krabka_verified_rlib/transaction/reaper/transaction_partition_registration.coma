@@ -1,13 +1,13 @@
-(* #"/workspace/crates/verified/src/transaction/reaper.rs" 207 0 209 36 *)
+(* #"/workspace/crates/verified/src/transaction/reaper.rs" 208 0 210 36 *)
 
-let%span sreaper = "/workspace/crates/verified/src/transaction/reaper.rs" 148 10 149 38
-let%span sreaper'0 = "/workspace/crates/verified/src/transaction/reaper.rs" 150 10 154 66
-let%span sreaper'1 = "/workspace/crates/verified/src/transaction/reaper.rs" 155 10 160 45
-let%span sreaper'2 = "/workspace/crates/verified/src/transaction/reaper.rs" 161 10 167 56
-let%span sreaper'3 = "/workspace/crates/verified/src/transaction/reaper.rs" 168 10 175 59
-let%span sreaper'4 = "/workspace/crates/verified/src/transaction/reaper.rs" 176 10 184 50
-let%span sreaper'5 = "/workspace/crates/verified/src/transaction/reaper.rs" 185 10 195 51
-let%span sreaper'6 = "/workspace/crates/verified/src/transaction/reaper.rs" 196 10 205 86
+let%span sreaper = "/workspace/crates/verified/src/transaction/reaper.rs" 149 10 150 38
+let%span sreaper'0 = "/workspace/crates/verified/src/transaction/reaper.rs" 151 10 155 66
+let%span sreaper'1 = "/workspace/crates/verified/src/transaction/reaper.rs" 156 10 161 45
+let%span sreaper'2 = "/workspace/crates/verified/src/transaction/reaper.rs" 162 10 168 56
+let%span sreaper'3 = "/workspace/crates/verified/src/transaction/reaper.rs" 169 10 176 59
+let%span sreaper'4 = "/workspace/crates/verified/src/transaction/reaper.rs" 177 10 185 50
+let%span sreaper'5 = "/workspace/crates/verified/src/transaction/reaper.rs" 186 10 196 51
+let%span sreaper'6 = "/workspace/crates/verified/src/transaction/reaper.rs" 197 10 206 86
 
 use creusot.prelude.Any
 
@@ -46,7 +46,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let transaction_partition_registration [#"/workspace/crates/verified/src/transaction/reaper.rs" 207 0 209 36]
+let transaction_partition_registration [#"/workspace/crates/verified/src/transaction/reaper.rs" 208 0 210 36]
   (facts: t_TransactionRegistrationFacts) (return (x: t_TransactionRegistrationDecision)) = (! bb0
   [ bb0 = any
     [ br0 -> {facts.ownership.is_coordinator = false} (! bb1) | br1 -> {facts.ownership.is_coordinator} (! bb2) ]

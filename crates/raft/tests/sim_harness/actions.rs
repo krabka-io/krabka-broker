@@ -2,147 +2,31 @@
 //! updates, and log bookkeeping, plus the replication the harness performs on a
 //! follower's behalf. This is where the core's outputs become the peers' inputs.
 
-use krabka_raft::kraft::{
-    action::{Action, TimerKind},
-    event::Event,
-    types::{Epoch, NodeId},
-};
+use krabka_raft::kraft::{event::Event, types::NodeId};
 
 use super::{cluster::Sim, node::Message, node_log::SimNodeLog};
 
 impl<L: SimNodeLog> Sim<L> {
-    /// Broadcasts a vote or pre-vote request from `id` to every other voter.
-    fn broadcast_vote_request(&mut self, id: NodeId, epoch: Epoch, pre_vote: bool) {
-        let cand_log = self.nodes[&id].log.log_end();
-        for peer in self.voter_ids.clone() {
-            if peer != id {
-                self.send(
-                    id,
-                    peer,
-                    Event::ReceiveVoteRequest {
-                        from: id,
-                        cluster_id: None,
-                        voter_id: peer,
-                        voter_directory_id: uuid::Uuid::nil(),
-                        candidate_epoch: epoch,
-                        candidate: id,
-                        candidate_directory_id: uuid::Uuid::nil(),
-                        candidate_log_end: cand_log,
-                        pre_vote,
-                    },
-                );
-            }
-        }
-    }
+    // Broadcasts a vote or pre-vote request from `id` to every other voter.
+    krabka_macros::simulation_actions!(krabka_kraft_core);
 
-    /// Translates a single emitted `Action` from node `id` into bus messages,
-    /// timer updates, and log and HWM bookkeeping.
-    pub(super) fn apply_action(&mut self, id: NodeId, action: Action) {
-        match action {
-            Action::SendVoteRequest { epoch, pre_vote } => {
-                self.broadcast_vote_request(id, epoch, pre_vote);
+    fn advance_simulated_watermark(&mut self, id: NodeId, hwm: i64) {
+        let node = self.nodes.get_mut(&id).unwrap();
+        node.high_watermark = hwm;
+        node.log.advance_hwm(hwm);
+        // In KRaft the new high watermark rides along on the leader's
+        // next fetch response, so every follower eventually learns it —
+        // including a caught-up follower that is long-polling and would
+        // otherwise never re-fetch. Model that by pushing the committed
+        // boundary to every peer's log now (each `advance_hwm` is
+        // monotonic and clamped to that peer's own replicated log end, so
+        // a lagging follower only commits what it actually holds).
+        for peer in self.all_node_ids() {
+            if peer != id && !self.partitioned.contains(&peer) {
+                let p = self.nodes.get_mut(&peer).unwrap();
+                p.log.advance_hwm(hwm);
+                p.high_watermark = hwm.min(p.log.end_offset());
             }
-            Action::ReplyVote { to, epoch, granted } => {
-                self.send(
-                    id,
-                    to,
-                    Event::ReceiveVoteResponse {
-                        from: id,
-                        epoch,
-                        vote_granted: granted,
-                    },
-                );
-            }
-            Action::SendBeginQuorumEpoch { epoch } => {
-                for peer in self.all_node_ids() {
-                    if peer != id {
-                        self.send(
-                            id,
-                            peer,
-                            Event::ReceiveBeginQuorumEpoch {
-                                leader_id: id,
-                                leader_epoch: epoch,
-                            },
-                        );
-                    }
-                }
-            }
-            Action::SendEndQuorumEpoch { epoch, .. } => {
-                for peer in self.all_node_ids() {
-                    if peer != id {
-                        self.send(
-                            id,
-                            peer,
-                            Event::ReceiveEndQuorumEpoch {
-                                leader_id: id,
-                                leader_epoch: epoch,
-                                successor_rank: krabka_raft::kraft::event::SuccessorRank::default(),
-                            },
-                        );
-                    }
-                }
-            }
-            Action::SendFetch { leader_id } => {
-                // The follower fetches from the leader. Model replication first:
-                // copy any leader log entries this follower is missing, then send
-                // the fetch carrying the follower's (now-advanced) tip so the
-                // leader can advance its HWM.
-                self.replicate_from_leader(id, leader_id);
-                let (fetch_epoch, fetch_offset) = {
-                    let log = &self.nodes[&id].log;
-                    (log.last_epoch(), log.end_offset())
-                };
-                self.send(
-                    id,
-                    leader_id,
-                    Event::ReceiveFetch {
-                        from: id,
-                        fetch_epoch,
-                        fetch_offset,
-                    },
-                );
-            }
-            Action::AppendLeaderChange { epoch } => {
-                // The new leader appends one control record in its current epoch.
-                let node = self.nodes.get_mut(&id).unwrap();
-                node.log.append_in_epoch(epoch, 1);
-            }
-            Action::AdvanceHighWatermark(hwm) => {
-                let node = self.nodes.get_mut(&id).unwrap();
-                node.high_watermark = hwm;
-                node.log.advance_hwm(hwm);
-                // In KRaft the new high watermark rides along on the leader's
-                // next fetch response, so every follower eventually learns it —
-                // including a caught-up follower that is long-polling and would
-                // otherwise never re-fetch. Model that by pushing the committed
-                // boundary to every peer's log now (each `advance_hwm` is
-                // monotonic and clamped to that peer's own replicated log end, so
-                // a lagging follower only commits what it actually holds).
-                for peer in self.all_node_ids() {
-                    if peer != id && !self.partitioned.contains(&peer) {
-                        let p = self.nodes.get_mut(&peer).unwrap();
-                        p.log.advance_hwm(hwm);
-                        p.high_watermark = hwm.min(p.log.end_offset());
-                    }
-                }
-            }
-            Action::TruncateTo(point) => {
-                let node = self.nodes.get_mut(&id).unwrap();
-                node.log.truncate_to(point.offset);
-            }
-            Action::ResetTimer { kind, deadline } => {
-                let node = self.nodes.get_mut(&id).unwrap();
-                match kind {
-                    TimerKind::Election => node.election_deadline = Some(deadline),
-                    TimerKind::Fetch => node.fetch_deadline = Some(deadline),
-                    TimerKind::CheckQuorum => node.check_quorum_deadline = Some(deadline),
-                }
-            }
-            // Pure bookkeeping signals with no cross-node effect in the sim.
-            Action::TransitionedTo(_)
-            | Action::PersistQuorumState
-            // Carried in the fetch response built when the leader serves it.
-            | Action::ReplyDivergingEpoch(_) => {}
         }
     }
 

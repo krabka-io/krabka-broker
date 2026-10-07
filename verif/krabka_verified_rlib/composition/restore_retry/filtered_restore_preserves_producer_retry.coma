@@ -1,24 +1,27 @@
 (* #"/workspace/crates/verified/src/composition/restore_retry.rs" 39 0 44 57 *)
 
-let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
-let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
-let%span swell_founded = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/well_founded.rs" 43 8 43 33
-let%span sslice = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 151 20 151 37
-let%span sslice'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 156 20 156 37
-let%span soption = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/option.rs" 127 19 127 23
-let%span soption'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/option.rs" 128 34 128 38
-let%span svec = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 114 18 114 40
-let%span svec'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 104 18 104 36
-let%span svec'1 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 18 14 18 41
-let%span svec'2 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 195 19 195 38
-let%span svec'3 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 196 18 196 46
-let%span svec'4 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 118 18 118 48
-let%span sproducer_replay = "/workspace/crates/verified/src/composition/producer_replay.rs" 14 10 21 65
-let%span sproducer_replay'0 = "/workspace/crates/verified/src/composition/producer_replay.rs" 22 10 34 1
-let%span ssequence_decision = "/workspace/crates/verified/src/producer/sequence_decision.rs" 19 10 19 65
-let%span ssequence_decision'0 = "/workspace/crates/verified/src/producer/sequence_decision.rs" 10 16 10 47
-let%span srecord_coordinates = "/workspace/crates/verified/src/restore/record_coordinates.rs" 160 8 163 9
-let%span srecord_coordinates'0 = "/workspace/crates/verified/src/restore/record_coordinates.rs" 175 8 180 65
+let%span sord = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sord'0 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span soption = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/option.rs" 127 19 127 23
+let%span soption'0 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/option.rs" 128 34 128 38
+let%span swell_founded = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/well_founded.rs" 43 8 43 33
+let%span sslice = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 151 20 151 37
+let%span sslice'0 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 156 20 156 37
+let%span svec = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 114 18 114 40
+let%span svec'0 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 104 18 104 36
+let%span svec'1 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 18 14 18 41
+let%span svec'2 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 195 19 195 38
+let%span svec'3 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 196 18 196 46
+let%span svec'4 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 118 18 118 48
+let%span sproducer_replay = "/workspace/crates/verified/src/composition/producer_replay.rs" 15 10 22 65
+let%span sproducer_replay'0 = "/workspace/crates/verified/src/composition/producer_replay.rs" 23 10 35 1
+let%span ssequence_decision = "/workspace/crates/verified/src/producer/sequence_decision.rs" 20 10 20 65
+let%span ssequence_decision'0 = "/workspace/crates/verified/src/producer/sequence_decision.rs" 11 16 11 47
+let%span srestore_selection = "/workspace/crates/verified/src/composition/restore_selection.rs" 54 10 71 1
+let%span srestore_selection'0 = "/workspace/crates/verified/src/composition/restore_selection.rs" 17 16 20 73
+let%span srestore_selection'1 = "/workspace/crates/verified/src/composition/restore_selection.rs" 34 8 36 89
+let%span srecord_coordinates = "/workspace/crates/verified/src/restore/record_coordinates.rs" 161 8 164 9
+let%span srecord_coordinates'0 = "/workspace/crates/verified/src/restore/record_coordinates.rs" 176 8 181 65
 let%span srestore_retry = "/workspace/crates/verified/src/composition/restore_retry.rs" 46 8 46 83
 let%span srestore_retry'0 = "/workspace/crates/verified/src/composition/restore_retry.rs" 47 20 47 49
 let%span srestore_retry'1 = "/workspace/crates/verified/src/composition/restore_retry.rs" 46 8 47 50
@@ -65,15 +68,12 @@ let%span srestore_retry'41 = "/workspace/crates/verified/src/composition/restore
 let%span srestore_retry'42 = "/workspace/crates/verified/src/composition/restore_retry.rs" 27 10 27 72
 let%span srestore_retry'43 = "/workspace/crates/verified/src/composition/restore_retry.rs" 28 10 28 96
 let%span srestore_retry'44 = "/workspace/crates/verified/src/composition/restore_retry.rs" 29 10 38 79
-let%span srestore_selection = "/workspace/crates/verified/src/composition/restore_selection.rs" 42 10 59 1
-let%span srestore_selection'0 = "/workspace/crates/verified/src/composition/restore_selection.rs" 16 16 19 73
-let%span srestore_selection'1 = "/workspace/crates/verified/src/composition/restore_selection.rs" 33 8 35 89
-let%span srewritten_record = "/workspace/crates/verified/src/restore/rewritten_record.rs" 75 10 80 1
-let%span srewritten_record'0 = "/workspace/crates/verified/src/restore/rewritten_record.rs" 143 10 148 1
-let%span srewritten_record'1 = "/workspace/crates/verified/src/restore/rewritten_record.rs" 65 8 69 79
-let%span srewritten_record'2 = "/workspace/crates/verified/src/restore/rewritten_record.rs" 24 8 35 9
-let%span srewritten_record'3 = "/workspace/crates/verified/src/restore/rewritten_record.rs" 132 8 137 76
-let%span srewritten_record'4 = "/workspace/crates/verified/src/restore/rewritten_record.rs" 46 8 49 44
+let%span srewritten_record = "/workspace/crates/verified/src/restore/rewritten_record.rs" 76 10 81 1
+let%span srewritten_record'0 = "/workspace/crates/verified/src/restore/rewritten_record.rs" 144 10 149 1
+let%span srewritten_record'1 = "/workspace/crates/verified/src/restore/rewritten_record.rs" 66 8 70 79
+let%span srewritten_record'2 = "/workspace/crates/verified/src/restore/rewritten_record.rs" 25 8 36 9
+let%span srewritten_record'3 = "/workspace/crates/verified/src/restore/rewritten_record.rs" 133 8 138 76
+let%span srewritten_record'4 = "/workspace/crates/verified/src/restore/rewritten_record.rs" 47 8 50 44
 
 use creusot.int.Int64
 use creusot.int.Int32
@@ -126,7 +126,7 @@ meta "rewrite_def" predicate ge_log_Int
 
 constant const_MAX: Int64.t = (9223372036854775807: Int64.t)
 
-function kafka_record_timestamp [#"/workspace/crates/verified/src/restore/record_coordinates.rs" 158 0 158 91] (frame: t_RestoreBatchFrame) (record: t_RestoreRecordDeltas) : int
+function kafka_record_timestamp [#"/workspace/crates/verified/src/restore/record_coordinates.rs" 159 0 159 91] (frame: t_RestoreBatchFrame) (record: t_RestoreRecordDeltas) : int
  = [%#srecord_coordinates] match frame.timestamp_type with
     | CreateTime -> Int64.to_int frame.base_timestamp + Int64.to_int record.timestamp_delta
     | LogAppendTime -> Int64.to_int frame.max_timestamp
@@ -134,7 +134,7 @@ function kafka_record_timestamp [#"/workspace/crates/verified/src/restore/record
 
 constant const_MIN: Int64.t = (-9223372036854775808: Int64.t)
 
-predicate restore_record_placeable [#"/workspace/crates/verified/src/restore/record_coordinates.rs" 173 0 173 94] (frame: t_RestoreBatchFrame) (record: t_RestoreRecordDeltas) =
+predicate restore_record_placeable [#"/workspace/crates/verified/src/restore/record_coordinates.rs" 174 0 174 94] (frame: t_RestoreBatchFrame) (record: t_RestoreRecordDeltas) =
   [%#srecord_coordinates'0] ge_log_Int (Int32.to_int frame.last_offset_delta) 0
   /\ ge_log_Int (Int32.to_int record.offset_delta) 0
   /\ Int32.to_int record.offset_delta <= Int32.to_int frame.last_offset_delta
@@ -142,7 +142,7 @@ predicate restore_record_placeable [#"/workspace/crates/verified/src/restore/rec
   /\ ge_log_Int (kafka_record_timestamp frame record) (Int64.to_int const_MIN)
   /\ kafka_record_timestamp frame record <= Int64.to_int const_MAX
 
-predicate selection_input_valid [#"/workspace/crates/verified/src/composition/restore_selection.rs" 12 0 15 9] (frame: t_RestoreBatchFrame) (records: Seq.seq tup2_RestoreRecordDeltas_RestoreExclusions) =
+predicate selection_input_valid [#"/workspace/crates/verified/src/composition/restore_selection.rs" 13 0 16 9] (frame: t_RestoreBatchFrame) (records: Seq.seq tup2_RestoreRecordDeltas_RestoreExclusions) =
   [%#srestore_selection'0] ge_log_Int (Int64.to_int frame.base_offset) 0
   /\ ge_log_Int (Int32.to_int frame.last_offset_delta) 0
   /\ Int64.to_int frame.base_offset + Int32.to_int frame.last_offset_delta + 1 <= Int64.to_int const_MAX
@@ -156,7 +156,7 @@ axiom view_Vec_usize_Global_spec:
   forall self: t_Vec_usize_Global [view_Vec_usize_Global self]. [%#svec'1] Seq.length (view_Vec_usize_Global self)
     <= UInt64.t'int const_MAX'0
 
-predicate restore_source_selected [#"/workspace/crates/verified/src/composition/restore_selection.rs" 26 0 31 9] (frame: t_RestoreBatchFrame) (row: tup2_RestoreRecordDeltas_RestoreExclusions) (offset_bound: t_Option_i64) (timestamp_bound: t_Option_i64) =
+predicate restore_source_selected [#"/workspace/crates/verified/src/composition/restore_selection.rs" 27 0 32 9] (frame: t_RestoreBatchFrame) (row: tup2_RestoreRecordDeltas_RestoreExclusions) (offset_bound: t_Option_i64) (timestamp_bound: t_Option_i64) =
   [%#srestore_selection'1] match offset_bound with
       | Some bound -> Int64.to_int frame.base_offset + Int32.to_int row.f0.offset_delta <= Int64.to_int bound
       | None -> true
@@ -228,19 +228,19 @@ type t_RestoreProducer = {
   producer_epoch: Int16.t;
   base_sequence: Int32.t }
 
-predicate legal_header [#"/workspace/crates/verified/src/restore/rewritten_record.rs" 63 0 63 65] (layout: t_RestoreLayout) (control'0: bool) =
+predicate legal_header [#"/workspace/crates/verified/src/restore/rewritten_record.rs" 64 0 64 65] (layout: t_RestoreLayout) (control'0: bool) =
   [%#srewritten_record'1] ge_log_Int (Int64.to_int layout.base_offset'0) 0
   /\ ge_log_Int (Int32.to_int layout.last_offset_delta'0) 0
   /\ ge_log_Int (Int32.to_int layout.records_count'0) 0
   /\ (control'0 -> Int32.to_int layout.last_offset_delta'0 = 0 /\ Int32.to_int layout.records_count'0 <= 1)
   /\ Int64.to_int layout.base_offset'0 + Int32.to_int layout.last_offset_delta'0 + 1 <= Int64.to_int const_MAX
 
-predicate non_idempotent_producer [#"/workspace/crates/verified/src/restore/rewritten_record.rs" 44 0 44 65] (producer'0: t_RestoreProducer) =
+predicate non_idempotent_producer [#"/workspace/crates/verified/src/restore/rewritten_record.rs" 45 0 45 65] (producer'0: t_RestoreProducer) =
   [%#srewritten_record'4] not producer'0.transactional
   /\ Int64.to_int producer'0.producer_id = - 1
   /\ Int16.to_int producer'0.producer_epoch = - 1 /\ Int32.to_int producer'0.base_sequence = - 1
 
-predicate legal_producer [#"/workspace/crates/verified/src/restore/rewritten_record.rs" 22 0 22 56] (producer'0: t_RestoreProducer) =
+predicate legal_producer [#"/workspace/crates/verified/src/restore/rewritten_record.rs" 23 0 23 56] (producer'0: t_RestoreProducer) =
   [%#srewritten_record'2] if producer'0.control then
     non_idempotent_producer producer'0
     \/ producer'0.transactional
@@ -316,7 +316,7 @@ type tup2_i64_i64 = { f0'4: Int64.t; f1'4: Int64.t }
 
 type t_Option_tup2_i64_i64 = None'2 | Some'2 tup2_i64_i64
 
-predicate restore_rewrite_record_legal [#"/workspace/crates/verified/src/restore/rewritten_record.rs" 126 0 130 9] (previous_offset_delta: t_Option_i32) (frame: t_RestoreBatchFrame) (record: t_RestoreRecordDeltas) =
+predicate restore_rewrite_record_legal [#"/workspace/crates/verified/src/restore/rewritten_record.rs" 127 0 131 9] (previous_offset_delta: t_Option_i32) (frame: t_RestoreBatchFrame) (record: t_RestoreRecordDeltas) =
   [%#srewritten_record'3] restore_record_placeable frame record
   /\ match previous_offset_delta with
       | Some'1 previous -> Int32.to_int previous < Int32.to_int record.offset_delta
@@ -347,7 +347,7 @@ let push_tup3_usize_i64_i64 (self_: MutBorrow.t t_Vec_tup3_usize_i64_i64_Global)
     = Seq.snoc (view_Vec_tup3_usize_i64_i64_Global self_.current) v}
     (! return {result}) ]
 
-function sequence_modulo_2_31 [#"/workspace/crates/verified/src/producer/sequence_decision.rs" 9 0 9 49] (sequence: int) : int
+function sequence_modulo_2_31 [#"/workspace/crates/verified/src/producer/sequence_decision.rs" 10 0 10 49] (sequence: int) : int
  = [%#ssequence_decision'0] EuclideanDivision.mod sequence 2147483648
 
 let increment_sequence (sequence: Int32.t) (increment: Int32.t) (return (x: Int32.t)) = any

@@ -64,7 +64,7 @@ mod throttle;
 mod topic_settings;
 
 #[cfg(test)]
-mod test_support;
+pub(crate) mod test_support;
 
 #[cfg(test)]
 mod broker_default_tests;

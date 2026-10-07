@@ -7,8 +7,8 @@
 
 use std::net::SocketAddr;
 
-use krabka_broker::{Broker, BrokerConfig, BrokerHandle, config::ListenerSpec};
-use krabka_security::{ListenerProtocol, SaslMechanism, SecretBytes};
+use krabka_broker::{Broker, BrokerHandle};
+use krabka_security::{SaslMechanism, SecretBytes};
 use tempfile::TempDir;
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -25,17 +25,7 @@ use tempfile::TempDir;
 ///     the four delegation-token RPCs and the SCRAM token-fallback lookup
 pub(crate) async fn start_broker() -> (BrokerHandle, TempDir, SocketAddr) {
     let log_dir = tempfile::tempdir().unwrap();
-    let mut cfg = BrokerConfig::for_tests(log_dir.path().to_path_buf());
-    cfg.listeners = vec![ListenerSpec {
-        name: "SASL_PLAINTEXT".to_string(),
-        bind_addr: "127.0.0.1:0".parse().unwrap(),
-        advertised: "127.0.0.1:0".to_string(),
-        protocol: ListenerProtocol::SaslPlaintext,
-        tls_config: None,
-        sasl_mechanisms: None,
-        principal_mapper: krabka_broker::SslPrincipalMapper::default(),
-    }];
-    cfg.inter_broker_listener_name = "SASL_PLAINTEXT".to_string();
+    let mut cfg = crate::support::sasl_plaintext_config(log_dir.path().to_path_buf());
     cfg.enabled_sasl_mechanisms = vec![SaslMechanism::Plain, SaslMechanism::ScramSha256];
     cfg.plain_credentials
         .insert("alice".to_string(), "wonderland".to_string());
@@ -81,17 +71,7 @@ pub(crate) fn start_broker_with_super_users(
     super_users: &[&str],
 ) -> impl std::future::Future<Output = (BrokerHandle, TempDir, SocketAddr)> {
     let log_dir = tempfile::tempdir().unwrap();
-    let mut cfg = BrokerConfig::for_tests(log_dir.path().to_path_buf());
-    cfg.listeners = vec![ListenerSpec {
-        name: "SASL_PLAINTEXT".to_string(),
-        bind_addr: "127.0.0.1:0".parse().unwrap(),
-        advertised: "127.0.0.1:0".to_string(),
-        protocol: ListenerProtocol::SaslPlaintext,
-        tls_config: None,
-        sasl_mechanisms: None,
-        principal_mapper: krabka_broker::SslPrincipalMapper::default(),
-    }];
-    cfg.inter_broker_listener_name = "SASL_PLAINTEXT".to_string();
+    let mut cfg = crate::support::sasl_plaintext_config(log_dir.path().to_path_buf());
     cfg.enabled_sasl_mechanisms = vec![SaslMechanism::Plain, SaslMechanism::ScramSha256];
     for (user, password) in plain_creds {
         cfg.plain_credentials

@@ -1,91 +1,91 @@
-(* #"/workspace/crates/verified/src/composition/quorum_fetch.rs" 90 0 97 28 *)
+(* #"/workspace/crates/verified/src/composition/quorum_fetch.rs" 91 0 98 28 *)
 
-let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
-let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
-let%span snum = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 27 28 27 33
-let%span swell_founded = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/well_founded.rs" 43 8 43 33
-let%span sslice = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 331 18 331 22
-let%span sslice'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 151 20 151 37
-let%span sslice'1 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 156 20 156 37
-let%span scmp = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 76 26 76 66
-let%span scmp'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 77 26 77 63
-let%span scmp'1 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 78 36 78 40
-let%span scmp'2 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 79 26 79 79
-let%span scmp'3 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 80 26 80 77
-let%span scmp'4 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 66 26 66 66
-let%span scmp'5 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 67 26 67 63
-let%span scmp'6 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 68 36 68 40
-let%span scmp'7 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 69 26 69 30
-let%span scmp'8 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 70 75 70 79
-let%span squorum_fetch = "/workspace/crates/verified/src/composition/quorum_fetch.rs" 98 7 98 19
-let%span squorum_fetch'0 = "/workspace/crates/verified/src/composition/quorum_fetch.rs" 98 23 98 37
-let%span squorum_fetch'1 = "/workspace/crates/verified/src/composition/quorum_fetch.rs" 98 42 98 91
-let%span squorum_fetch'2 = "/workspace/crates/verified/src/composition/quorum_fetch.rs" 101 29 101 39
-let%span squorum_fetch'3 = "/workspace/crates/verified/src/composition/quorum_fetch.rs" 102 16 102 22
-let%span squorum_fetch'4 = "/workspace/crates/verified/src/composition/quorum_fetch.rs" 106 14 106 32
-let%span squorum_fetch'5 = "/workspace/crates/verified/src/composition/quorum_fetch.rs" 107 14 107 26
-let%span squorum_fetch'6 = "/workspace/crates/verified/src/composition/quorum_fetch.rs" 104 16 105 54
-let%span squorum_fetch'7 = "/workspace/crates/verified/src/composition/quorum_fetch.rs" 103 16 103 56
-let%span squorum_fetch'8 = "/workspace/crates/verified/src/composition/quorum_fetch.rs" 108 18 108 29
-let%span squorum_fetch'9 = "/workspace/crates/verified/src/composition/quorum_fetch.rs" 108 18 108 44
-let%span squorum_fetch'10 = "/workspace/crates/verified/src/composition/quorum_fetch.rs" 108 8 108 45
-let%span squorum_fetch'11 = "/workspace/crates/verified/src/composition/quorum_fetch.rs" 109 13 109 14
-let%span squorum_fetch'12 = "/workspace/crates/verified/src/composition/quorum_fetch.rs" 109 8 109 14
-let%span squorum_fetch'13 = "/workspace/crates/verified/src/composition/quorum_fetch.rs" 112 18 118 5
-let%span squorum_fetch'14 = "/workspace/crates/verified/src/composition/quorum_fetch.rs" 119 16 119 40
-let%span squorum_fetch'15 = "/workspace/crates/verified/src/composition/quorum_fetch.rs" 120 51 120 63
-let%span squorum_fetch'16 = "/workspace/crates/verified/src/composition/quorum_fetch.rs" 120 19 120 64
-let%span squorum_fetch'17 = "/workspace/crates/verified/src/composition/quorum_fetch.rs" 121 49 121 54
-let%span squorum_fetch'18 = "/workspace/crates/verified/src/composition/quorum_fetch.rs" 121 80 121 85
-let%span squorum_fetch'19 = "/workspace/crates/verified/src/composition/quorum_fetch.rs" 121 22 121 89
-let%span squorum_fetch'20 = "/workspace/crates/verified/src/composition/quorum_fetch.rs" 122 42 122 52
-let%span squorum_fetch'21 = "/workspace/crates/verified/src/composition/quorum_fetch.rs" 123 8 123 9
-let%span squorum_fetch'22 = "/workspace/crates/verified/src/composition/quorum_fetch.rs" 134 14 134 32
-let%span squorum_fetch'23 = "/workspace/crates/verified/src/composition/quorum_fetch.rs" 135 14 135 26
-let%span squorum_fetch'24 = "/workspace/crates/verified/src/composition/quorum_fetch.rs" 132 16 133 48
-let%span squorum_fetch'25 = "/workspace/crates/verified/src/composition/quorum_fetch.rs" 128 16 131 81
-let%span squorum_fetch'26 = "/workspace/crates/verified/src/composition/quorum_fetch.rs" 126 16 127 86
-let%span squorum_fetch'27 = "/workspace/crates/verified/src/composition/quorum_fetch.rs" 125 16 125 39
-let%span squorum_fetch'28 = "/workspace/crates/verified/src/composition/quorum_fetch.rs" 124 16 124 35
-let%span squorum_fetch'29 = "/workspace/crates/verified/src/composition/quorum_fetch.rs" 136 15 136 18
-let%span squorum_fetch'30 = "/workspace/crates/verified/src/composition/quorum_fetch.rs" 137 29 137 38
-let%span squorum_fetch'31 = "/workspace/crates/verified/src/composition/quorum_fetch.rs" 137 44 137 47
-let%span squorum_fetch'32 = "/workspace/crates/verified/src/composition/quorum_fetch.rs" 137 12 137 49
-let%span squorum_fetch'33 = "/workspace/crates/verified/src/composition/quorum_fetch.rs" 139 13 139 14
-let%span squorum_fetch'34 = "/workspace/crates/verified/src/composition/quorum_fetch.rs" 139 8 139 14
-let%span squorum_fetch'35 = "/workspace/crates/verified/src/composition/quorum_fetch.rs" 54 11 54 63
-let%span squorum_fetch'36 = "/workspace/crates/verified/src/composition/quorum_fetch.rs" 55 10 59 41
-let%span squorum_fetch'37 = "/workspace/crates/verified/src/composition/quorum_fetch.rs" 60 10 64 1
-let%span squorum_fetch'38 = "/workspace/crates/verified/src/composition/quorum_fetch.rs" 65 10 70 1
-let%span squorum_fetch'39 = "/workspace/crates/verified/src/composition/quorum_fetch.rs" 71 10 78 1
-let%span squorum_fetch'40 = "/workspace/crates/verified/src/composition/quorum_fetch.rs" 79 10 83 1
-let%span squorum_fetch'41 = "/workspace/crates/verified/src/composition/quorum_fetch.rs" 84 10 89 1
-let%span squorum_fetch'42 = "/workspace/crates/verified/src/composition/quorum_fetch.rs" 6 29 6 80
-let%span squorum_fetch'43 = "/workspace/crates/verified/src/composition/quorum_fetch.rs" 7 29 7 75
-let%span squorum_fetch'44 = "/workspace/crates/verified/src/composition/quorum_fetch.rs" 8 29 8 51
-let%span squorum_fetch'45 = "/workspace/crates/verified/src/composition/quorum_fetch.rs" 9 29 10 36
-let%span squorum_fetch'46 = "/workspace/crates/verified/src/composition/quorum_fetch.rs" 11 28 11 76
-let%span squorum_fetch'47 = "/workspace/crates/verified/src/composition/quorum_fetch.rs" 12 28 12 50
-let%span squorum_fetch'48 = "/workspace/crates/verified/src/composition/quorum_fetch.rs" 13 28 13 82
-let%span squorum_fetch'49 = "/workspace/crates/verified/src/composition/quorum_fetch.rs" 14 28 16 22
-let%span squorum_fetch'50 = "/workspace/crates/verified/src/composition/quorum_fetch.rs" 17 28 18 93
-let%span sfailover = "/workspace/crates/verified/src/consensus/failover.rs" 216 10 216 15
-let%span sfailover'0 = "/workspace/crates/verified/src/consensus/failover.rs" 211 11 211 76
-let%span sfailover'1 = "/workspace/crates/verified/src/consensus/failover.rs" 212 11 213 59
-let%span sfailover'2 = "/workspace/crates/verified/src/consensus/failover.rs" 214 10 215 63
-let%span sfailover'3 = "/workspace/crates/verified/src/consensus/failover.rs" 202 10 202 17
-let%span sfailover'4 = "/workspace/crates/verified/src/consensus/failover.rs" 204 16 204 74
-let%span sfailover'5 = "/workspace/crates/verified/src/consensus/failover.rs" 5 10 5 41
-let%span sfailover'6 = "/workspace/crates/verified/src/consensus/failover.rs" 185 10 185 15
-let%span sfailover'7 = "/workspace/crates/verified/src/consensus/failover.rs" 188 8 194 9
-let%span sfailover'8 = "/workspace/crates/verified/src/consensus/failover.rs" 177 8 177 48
-let%span sselect_wal_voters = "/workspace/crates/verified/src/wal/select_wal_voters.rs" 99 10 102 37
-let%span svec = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 104 18 104 36
-let%span svec'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 18 14 18 41
-let%span svec'1 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 118 18 118 48
-let%span svec'2 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 202 18 202 34
-let%span svec'3 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 195 19 195 38
-let%span svec'4 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 196 18 196 46
+let%span sord = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sord'0 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span snum = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 27 28 27 33
+let%span scmp = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 76 26 76 66
+let%span scmp'0 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 77 26 77 63
+let%span scmp'1 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 78 36 78 40
+let%span scmp'2 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 79 26 79 79
+let%span scmp'3 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 80 26 80 77
+let%span scmp'4 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 66 26 66 66
+let%span scmp'5 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 67 26 67 63
+let%span scmp'6 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 68 36 68 40
+let%span scmp'7 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 69 26 69 30
+let%span scmp'8 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 70 75 70 79
+let%span swell_founded = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/well_founded.rs" 43 8 43 33
+let%span sslice = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 331 18 331 22
+let%span sslice'0 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 151 20 151 37
+let%span sslice'1 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 156 20 156 37
+let%span svec = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 104 18 104 36
+let%span svec'0 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 18 14 18 41
+let%span svec'1 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 118 18 118 48
+let%span svec'2 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 202 18 202 34
+let%span svec'3 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 195 19 195 38
+let%span svec'4 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 196 18 196 46
+let%span sselect_wal_voters = "/workspace/crates/verified/src/wal/select_wal_voters.rs" 100 10 103 37
+let%span sfailover = "/workspace/crates/verified/src/consensus/failover.rs" 217 10 217 15
+let%span sfailover'0 = "/workspace/crates/verified/src/consensus/failover.rs" 212 11 212 76
+let%span sfailover'1 = "/workspace/crates/verified/src/consensus/failover.rs" 213 11 214 59
+let%span sfailover'2 = "/workspace/crates/verified/src/consensus/failover.rs" 215 10 216 63
+let%span sfailover'3 = "/workspace/crates/verified/src/consensus/failover.rs" 203 10 203 17
+let%span sfailover'4 = "/workspace/crates/verified/src/consensus/failover.rs" 205 16 205 74
+let%span sfailover'5 = "/workspace/crates/verified/src/consensus/failover.rs" 6 10 6 41
+let%span sfailover'6 = "/workspace/crates/verified/src/consensus/failover.rs" 186 10 186 15
+let%span sfailover'7 = "/workspace/crates/verified/src/consensus/failover.rs" 189 8 195 9
+let%span sfailover'8 = "/workspace/crates/verified/src/consensus/failover.rs" 178 8 178 48
+let%span squorum_fetch = "/workspace/crates/verified/src/composition/quorum_fetch.rs" 99 7 99 19
+let%span squorum_fetch'0 = "/workspace/crates/verified/src/composition/quorum_fetch.rs" 99 23 99 37
+let%span squorum_fetch'1 = "/workspace/crates/verified/src/composition/quorum_fetch.rs" 99 42 99 91
+let%span squorum_fetch'2 = "/workspace/crates/verified/src/composition/quorum_fetch.rs" 102 29 102 39
+let%span squorum_fetch'3 = "/workspace/crates/verified/src/composition/quorum_fetch.rs" 103 16 103 22
+let%span squorum_fetch'4 = "/workspace/crates/verified/src/composition/quorum_fetch.rs" 107 14 107 32
+let%span squorum_fetch'5 = "/workspace/crates/verified/src/composition/quorum_fetch.rs" 108 14 108 26
+let%span squorum_fetch'6 = "/workspace/crates/verified/src/composition/quorum_fetch.rs" 105 16 106 54
+let%span squorum_fetch'7 = "/workspace/crates/verified/src/composition/quorum_fetch.rs" 104 16 104 56
+let%span squorum_fetch'8 = "/workspace/crates/verified/src/composition/quorum_fetch.rs" 109 18 109 29
+let%span squorum_fetch'9 = "/workspace/crates/verified/src/composition/quorum_fetch.rs" 109 18 109 44
+let%span squorum_fetch'10 = "/workspace/crates/verified/src/composition/quorum_fetch.rs" 109 8 109 45
+let%span squorum_fetch'11 = "/workspace/crates/verified/src/composition/quorum_fetch.rs" 110 13 110 14
+let%span squorum_fetch'12 = "/workspace/crates/verified/src/composition/quorum_fetch.rs" 110 8 110 14
+let%span squorum_fetch'13 = "/workspace/crates/verified/src/composition/quorum_fetch.rs" 113 18 119 5
+let%span squorum_fetch'14 = "/workspace/crates/verified/src/composition/quorum_fetch.rs" 120 16 120 40
+let%span squorum_fetch'15 = "/workspace/crates/verified/src/composition/quorum_fetch.rs" 121 51 121 63
+let%span squorum_fetch'16 = "/workspace/crates/verified/src/composition/quorum_fetch.rs" 121 19 121 64
+let%span squorum_fetch'17 = "/workspace/crates/verified/src/composition/quorum_fetch.rs" 122 49 122 54
+let%span squorum_fetch'18 = "/workspace/crates/verified/src/composition/quorum_fetch.rs" 122 80 122 85
+let%span squorum_fetch'19 = "/workspace/crates/verified/src/composition/quorum_fetch.rs" 122 22 122 89
+let%span squorum_fetch'20 = "/workspace/crates/verified/src/composition/quorum_fetch.rs" 123 42 123 52
+let%span squorum_fetch'21 = "/workspace/crates/verified/src/composition/quorum_fetch.rs" 124 8 124 9
+let%span squorum_fetch'22 = "/workspace/crates/verified/src/composition/quorum_fetch.rs" 135 14 135 32
+let%span squorum_fetch'23 = "/workspace/crates/verified/src/composition/quorum_fetch.rs" 136 14 136 26
+let%span squorum_fetch'24 = "/workspace/crates/verified/src/composition/quorum_fetch.rs" 133 16 134 48
+let%span squorum_fetch'25 = "/workspace/crates/verified/src/composition/quorum_fetch.rs" 129 16 132 81
+let%span squorum_fetch'26 = "/workspace/crates/verified/src/composition/quorum_fetch.rs" 127 16 128 86
+let%span squorum_fetch'27 = "/workspace/crates/verified/src/composition/quorum_fetch.rs" 126 16 126 39
+let%span squorum_fetch'28 = "/workspace/crates/verified/src/composition/quorum_fetch.rs" 125 16 125 35
+let%span squorum_fetch'29 = "/workspace/crates/verified/src/composition/quorum_fetch.rs" 137 15 137 18
+let%span squorum_fetch'30 = "/workspace/crates/verified/src/composition/quorum_fetch.rs" 138 29 138 38
+let%span squorum_fetch'31 = "/workspace/crates/verified/src/composition/quorum_fetch.rs" 138 44 138 47
+let%span squorum_fetch'32 = "/workspace/crates/verified/src/composition/quorum_fetch.rs" 138 12 138 49
+let%span squorum_fetch'33 = "/workspace/crates/verified/src/composition/quorum_fetch.rs" 140 13 140 14
+let%span squorum_fetch'34 = "/workspace/crates/verified/src/composition/quorum_fetch.rs" 140 8 140 14
+let%span squorum_fetch'35 = "/workspace/crates/verified/src/composition/quorum_fetch.rs" 55 11 55 63
+let%span squorum_fetch'36 = "/workspace/crates/verified/src/composition/quorum_fetch.rs" 56 10 60 41
+let%span squorum_fetch'37 = "/workspace/crates/verified/src/composition/quorum_fetch.rs" 61 10 65 1
+let%span squorum_fetch'38 = "/workspace/crates/verified/src/composition/quorum_fetch.rs" 66 10 71 1
+let%span squorum_fetch'39 = "/workspace/crates/verified/src/composition/quorum_fetch.rs" 72 10 79 1
+let%span squorum_fetch'40 = "/workspace/crates/verified/src/composition/quorum_fetch.rs" 80 10 84 1
+let%span squorum_fetch'41 = "/workspace/crates/verified/src/composition/quorum_fetch.rs" 85 10 90 1
+let%span squorum_fetch'42 = "/workspace/crates/verified/src/composition/quorum_fetch.rs" 7 29 7 80
+let%span squorum_fetch'43 = "/workspace/crates/verified/src/composition/quorum_fetch.rs" 8 29 8 75
+let%span squorum_fetch'44 = "/workspace/crates/verified/src/composition/quorum_fetch.rs" 9 29 9 51
+let%span squorum_fetch'45 = "/workspace/crates/verified/src/composition/quorum_fetch.rs" 10 29 11 36
+let%span squorum_fetch'46 = "/workspace/crates/verified/src/composition/quorum_fetch.rs" 12 28 12 76
+let%span squorum_fetch'47 = "/workspace/crates/verified/src/composition/quorum_fetch.rs" 13 28 13 50
+let%span squorum_fetch'48 = "/workspace/crates/verified/src/composition/quorum_fetch.rs" 14 28 14 82
+let%span squorum_fetch'49 = "/workspace/crates/verified/src/composition/quorum_fetch.rs" 15 28 17 22
+let%span squorum_fetch'50 = "/workspace/crates/verified/src/composition/quorum_fetch.rs" 18 28 19 93
 
 use creusot.slice.Slice64
 use creusot.int.UInt64
@@ -166,10 +166,10 @@ let push_i64 (self_: MutBorrow.t t_Vec_i64_Global) (v: Int64.t) (return (x: ()))
     = Seq.snoc (view_Vec_i64_Global self_.current) v}
     (! return {result}) ]
 
-function hwm_member_at [#"/workspace/crates/verified/src/consensus/failover.rs" 175 0 175 62] (log_end'0: int) (s: Seq.seq Int64.t) (k: int) : int
+function hwm_member_at [#"/workspace/crates/verified/src/consensus/failover.rs" 176 0 176 62] (log_end'0: int) (s: Seq.seq Int64.t) (k: int) : int
  = [%#sfailover'8] if k = 0 then log_end'0 else Int64.to_int (Seq.get s (k - 1))
 
-function count_ge_prefix [#"/workspace/crates/verified/src/consensus/failover.rs" 186 0 186 97] (log_end'0: int) (s: Seq.seq Int64.t) (v: int) (limit: int) (leader_counts: bool) : int
+function count_ge_prefix [#"/workspace/crates/verified/src/consensus/failover.rs" 187 0 187 97] (log_end'0: int) (s: Seq.seq Int64.t) (v: int) (limit: int) (leader_counts: bool) : int
 
 axiom count_ge_prefix_def:
   forall log_end'0: int, s: Seq.seq Int64.t, v: int, limit: int, leader_counts: bool [count_ge_prefix log_end'0 s v limit leader_counts]. count_ge_prefix log_end'0 s v limit leader_counts
@@ -180,7 +180,7 @@ axiom count_ge_prefix_def:
       + (if (leader_counts \/ gt_log_Int limit 1) /\ ge_log_Int (hwm_member_at log_end'0 s (limit - 1)) v then 1 else 0)
     )
 
-function lemma_explicit_vote_count_equal [#"/workspace/crates/verified/src/consensus/failover.rs" 217 0 223 1] (log_end'0: int) (left: Seq.seq Int64.t) (right: Seq.seq Int64.t) (threshold: int) (limit: int) : ()
+function lemma_explicit_vote_count_equal [#"/workspace/crates/verified/src/consensus/failover.rs" 218 0 224 1] (log_end'0: int) (left: Seq.seq Int64.t) (right: Seq.seq Int64.t) (threshold: int) (limit: int) : ()
 
 axiom lemma_explicit_vote_count_equal_spec:
   forall log_end'0: int, left: Seq.seq Int64.t, right: Seq.seq Int64.t, threshold: int, limit: int. ([%#sfailover'0] 0
@@ -191,7 +191,7 @@ axiom lemma_explicit_vote_count_equal_spec:
     -> ([%#sfailover'2] count_ge_prefix log_end'0 left threshold limit false
     = count_ge_prefix log_end'0 right threshold limit false)
 
-function count_ge [#"/workspace/crates/verified/src/consensus/failover.rs" 203 0 203 78] (log_end'0: int) (s: Seq.seq Int64.t) (v: int) (leader_counts: bool) : int
+function count_ge [#"/workspace/crates/verified/src/consensus/failover.rs" 204 0 204 78] (log_end'0: int) (s: Seq.seq Int64.t) (v: int) (leader_counts: bool) : int
 
 axiom count_ge_def:
   forall log_end'0: int, s: Seq.seq Int64.t, v: int, leader_counts: bool [count_ge log_end'0 s v leader_counts]. count_ge log_end'0 s v leader_counts
@@ -291,7 +291,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let installed_wal_quorum_bounds_fetch [#"/workspace/crates/verified/src/composition/quorum_fetch.rs" 90 0 97 28]
+let installed_wal_quorum_bounds_fetch [#"/workspace/crates/verified/src/composition/quorum_fetch.rs" 91 0 98 28]
   (voters: Slice64.slice UInt64.t) (reported: Slice64.slice Int64.t) (local_node: UInt64.t) (expected: UInt64.t)
   (current': Int64.t) (w: t_FetchWatermarks) (return (x: t_Option_tup3_i64_i64_Vec_tup2_u64_i64_Global)) =
 {[@stop_split] [@expl:installed_wal_quorum_bounds_fetch requires] [%#squorum_fetch'35] Int64.to_int w.log_start

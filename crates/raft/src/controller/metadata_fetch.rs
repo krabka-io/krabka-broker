@@ -101,11 +101,7 @@ mod tests {
         },
     };
 
-    #[tokio::test]
-    async fn metadata_records_serves_committed_topic() {
-        use krabka_metadata::{MetadataImage, MetadataRecord, TopicRecord, from_kraft_value};
-        use krabka_protocol::records::RecordBatch;
-
+    async fn committed_topic(name: &str, label: &str) -> (TempDir, ControllerHandle) {
         let dir = TempDir::new().unwrap();
         let cfg = ControllerConfig {
             bootstrap_mode: BootstrapMode::Bootstrap,
@@ -115,16 +111,27 @@ mod tests {
         wait_for_leader(&ctrl).await;
         submit_change_with_timeout(
             &ctrl,
-            vec![MetadataRecord::V1Topic(TopicRecord {
-                name: "t".into(),
-                topic_id: Uuid::new_v4(),
-                partitions: 1,
-                replication_factor: 1,
-            })],
-            "metadata_records seed",
+            vec![krabka_metadata::MetadataRecord::V1Topic(
+                krabka_metadata::TopicRecord {
+                    name: name.into(),
+                    topic_id: Uuid::new_v4(),
+                    partitions: 1,
+                    replication_factor: 1,
+                },
+            )],
+            label,
         )
         .await
         .expect("submit");
+        (dir, ctrl)
+    }
+
+    #[tokio::test]
+    async fn metadata_records_serves_committed_topic() {
+        use krabka_metadata::{MetadataImage, MetadataRecord, from_kraft_value};
+        use krabka_protocol::records::RecordBatch;
+
+        let (_dir, ctrl) = committed_topic("t", "metadata_records seed").await;
 
         let slice = tokio::time::timeout(
             TEST_OP_TIMEOUT.to_std(),
@@ -158,28 +165,10 @@ mod tests {
 
     #[tokio::test]
     async fn fetch_metadata_from_returns_committed_records() {
-        use krabka_metadata::{MetadataImage, MetadataRecord, TopicRecord, from_kraft_value};
+        use krabka_metadata::{MetadataImage, MetadataRecord, from_kraft_value};
         use krabka_protocol::records::RecordBatch;
 
-        let dir = TempDir::new().unwrap();
-        let cfg = ControllerConfig {
-            bootstrap_mode: BootstrapMode::Bootstrap,
-            ..ControllerConfig::for_tests(NodeId(1), dir.path().to_path_buf())
-        };
-        let ctrl = Controller::start(cfg).await.expect("bootstrap");
-        wait_for_leader(&ctrl).await;
-        submit_change_with_timeout(
-            &ctrl,
-            vec![MetadataRecord::V1Topic(TopicRecord {
-                name: "fetched".into(),
-                topic_id: Uuid::new_v4(),
-                partitions: 1,
-                replication_factor: 1,
-            })],
-            "fetch_metadata seed",
-        )
-        .await
-        .expect("submit");
+        let (_dir, ctrl) = committed_topic("fetched", "fetch_metadata seed").await;
 
         let addr = ctrl.controller_bound_addr();
         let resp = tokio::time::timeout(

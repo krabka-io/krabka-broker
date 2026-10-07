@@ -12,11 +12,10 @@ use krabka_protocol::primitives::uuid::Uuid as WireUuid;
 use tempfile::TempDir;
 
 use crate::{
-    NODE_A, NODE_B, NODE_C, TOPIC, WITNESS,
-    produce::{client_at, create_topic},
+    NODE_A, NODE_B, NODE_C,
     profile::{apply_stretch_config, wait_for_stretch_metadata},
-    support::{self, relay::SiteLink},
-    view::wait_for_leader_and_isr,
+    support,
+    support::relay::SiteLink,
     within,
 };
 
@@ -160,20 +159,13 @@ impl LinkedCluster {
 /// Bring a relayed cluster up with the topic and all three replicas in sync.
 pub async fn linked_cluster_with_topic() -> (LinkedCluster, WireUuid) {
     let cluster = LinkedCluster::start().await;
-    let client = client_at(&cluster.addr(NODE_A)).await;
-    let topic_id = create_topic(&client).await;
-    for index in [NODE_A, NODE_B, NODE_C] {
-        within(
-            "the partition reaches every node",
-            cluster.handle(index).wait_until_partition_present(TOPIC, 0),
-        )
-        .await;
-    }
-    wait_for_leader_and_isr(
-        cluster.handle(NODE_A),
-        "the initial three-replica ISR",
-        1,
-        &[1, 2, WITNESS],
+    let topic_id = crate::produce::initialize_topic(
+        &cluster.addr(NODE_A),
+        [
+            cluster.handle(NODE_A),
+            cluster.handle(NODE_B),
+            cluster.handle(NODE_C),
+        ],
     )
     .await;
     (cluster, topic_id)

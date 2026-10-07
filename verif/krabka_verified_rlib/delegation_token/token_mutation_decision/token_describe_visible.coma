@@ -1,8 +1,8 @@
-(* #"/workspace/crates/verified/src/delegation_token/token_mutation_decision.rs" 62 0 68 9 *)
+(* #"/workspace/crates/verified/src/delegation_token/token_mutation_decision.rs" 63 0 69 9 *)
 
-let%span stoken_mutation_decision = "/workspace/crates/verified/src/delegation_token/token_mutation_decision.rs" 70 11 70 86
-let%span stoken_mutation_decision'0 = "/workspace/crates/verified/src/delegation_token/token_mutation_decision.rs" 69 4 70 86
-let%span stoken_mutation_decision'1 = "/workspace/crates/verified/src/delegation_token/token_mutation_decision.rs" 55 10 56 83
+let%span stoken_mutation_decision = "/workspace/crates/verified/src/delegation_token/token_mutation_decision.rs" 71 11 71 86
+let%span stoken_mutation_decision'0 = "/workspace/crates/verified/src/delegation_token/token_mutation_decision.rs" 70 4 71 86
+let%span stoken_mutation_decision'1 = "/workspace/crates/verified/src/delegation_token/token_mutation_decision.rs" 56 10 57 83
 
 use creusot.prelude.Any
 
@@ -10,7 +10,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let token_describe_visible [#"/workspace/crates/verified/src/delegation_token/token_mutation_decision.rs" 62 0 68 9]
+let token_describe_visible [#"/workspace/crates/verified/src/delegation_token/token_mutation_decision.rs" 63 0 69 9]
   (owner_filter_matches: bool) (caller_is_owner: bool) (caller_is_requester: bool) (caller_is_renewer: bool)
   (acl_allows: bool) (return (x: bool)) = (! bb0
   [ bb0 = any [ br0 -> {owner_filter_matches = false} (! bb2) | br1 -> {owner_filter_matches} (! bb1) ]

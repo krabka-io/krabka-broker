@@ -218,7 +218,7 @@ mod tests {
 
     use super::*;
     use crate::replicator_supervisor::test_support::{
-        image_with, partition_record, supervisor_fixture, topic_record,
+        follower_promotion_images, image_with, partition_record, supervisor_fixture, topic_record,
     };
 
     #[tokio::test]
@@ -255,13 +255,7 @@ mod tests {
     /// no-op) on a reconcile that changes nothing.
     #[tokio::test]
     async fn reconcile_records_a_promoted_leader_epoch_at_the_log_end() {
-        let replicas = vec![NodeId(1), NodeId(2)];
-        let topic = topic_record("t", 1);
-        let as_follower = image_with(&[
-            topic.clone(),
-            partition_record("t", 0, NodeId(1), replicas.clone(), 3),
-        ]);
-        let as_leader = image_with(&[topic, partition_record("t", 0, NodeId(2), replicas, 7)]);
+        let (as_follower, as_leader) = follower_promotion_images();
         let (supervisor, partitions, _reporter, _dir) = supervisor_fixture(as_follower.clone());
         supervisor.reconcile(&as_follower).await;
         let part = partitions
@@ -326,13 +320,7 @@ mod tests {
     /// published, and the heartbeat reports the directory to the controller.
     #[tokio::test]
     async fn a_promotion_that_cannot_record_its_epoch_takes_the_log_directory_offline() {
-        let replicas = vec![NodeId(1), NodeId(2)];
-        let topic = topic_record("t", 1);
-        let as_follower = image_with(&[
-            topic.clone(),
-            partition_record("t", 0, NodeId(1), replicas.clone(), 3),
-        ]);
-        let as_leader = image_with(&[topic, partition_record("t", 0, NodeId(2), replicas, 7)]);
+        let (as_follower, as_leader) = follower_promotion_images();
         let (supervisor, partitions, _reporter, dir) = supervisor_fixture(as_follower.clone());
         supervisor.reconcile(&as_follower).await;
         let part = partitions

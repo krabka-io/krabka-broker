@@ -1,5 +1,7 @@
 use creusot_std::prelude::*;
 
+#[cfg(creusot)]
+use super::restore_selection::selection_ordered;
 use super::{
     FetchWatermarks, RestoreAbortedTxn, RestoreSegmentExtent, aborted_transaction_interval,
     aborted_transaction_overlaps, fetch_visibility, restore_txn_index_entry_valid,
@@ -65,9 +67,7 @@ pub(super) fn restored_aborts_remain_bounded_when_fetch_shrinks(
     #[invariant(i@ <= entries@.len() && selected@.len() <= i@)]
     #[invariant(previous_last == if i@ == 0 { None } else { Some(entries@[i@ - 1].last_offset) })]
     #[invariant(restored_abort_index_valid(entries@.subsequence(0, i@), segment))]
-    #[invariant(forall<j: Int> 0 <= j && j < selected@.len() ==> selected@[j]@ < i@)]
-    #[invariant(forall<j: Int, k: Int> 0 <= j && j < k && k < selected@.len()
-        ==> selected@[j]@ < selected@[k]@)]
+    #[invariant(selection_ordered(selected@, i@))]
     #[invariant(forall<j: Int> 0 <= j && j < i@
         ==> (exists<k: Int> 0 <= k && k < selected@.len() && selected@[k]@ == j)
             == abort_intersects_fetch(entries@[j], fetch_start@, narrowed@))]

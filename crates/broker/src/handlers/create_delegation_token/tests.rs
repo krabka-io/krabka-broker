@@ -15,11 +15,11 @@ use krabka_security::{KafkaPrincipal, SecretBytes};
 use tempfile::TempDir;
 
 use super::{
-    test_support::{
-        RENEW_24H_MS, anonymous, authed, authed_with_token, empty_super_users, super_users_with,
-        test_controller, token_acl,
-    },
+    test_support::{empty_super_users, super_users_with, token_acl},
     *,
+};
+use crate::handlers::delegation_token_test_support::{
+    DAY_MS as RENEW_24H_MS, anonymous, authed, authed_with_token, test_controller,
 };
 
 fn principal(principal_type: &str, name: &str) -> KafkaPrincipal {

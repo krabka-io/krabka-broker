@@ -3558,6 +3558,7 @@ dependencies = [
  "bytes",
  "codspeed-criterion-compat",
  "krabka-log",
+ "krabka-macros",
  "krabka-protocol",
  "krabka-units",
  "memmap2",

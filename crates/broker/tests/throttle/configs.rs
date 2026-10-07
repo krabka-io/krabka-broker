@@ -27,53 +27,10 @@ pub async fn drive_incremental_alter_configs(
     pass: &str,
     resources: ConfigResources,
 ) -> i16 {
-    const VERSION: i16 = 1;
-
-    use krabka_protocol::owned::{
-        incremental_alter_configs_request::{
-            AlterConfigsResource, AlterableConfig, IncrementalAlterConfigsRequest,
-        },
-        incremental_alter_configs_response::IncrementalAlterConfigsResponse,
-    };
-
-    let req = IncrementalAlterConfigsRequest {
-        resources: resources
-            .into_iter()
-            .map(
-                |(resource_type, resource_name, configs)| AlterConfigsResource {
-                    resource_type,
-                    resource_name,
-                    configs: configs
-                        .into_iter()
-                        .map(|(name, value, config_operation)| AlterableConfig {
-                            name,
-                            config_operation,
-                            value,
-                            ..Default::default()
-                        })
-                        .collect(),
-                    ..Default::default()
-                },
-            )
-            .collect(),
-        validate_only: false,
-        ..Default::default()
-    };
-
     let mut stream = kafka_wire::sasl_plain_authenticate(addr, CLIENT_ID, user, pass.as_bytes())
         .await
         .expect("SASL authenticate for IncrementalAlterConfigs");
-    let mut body = BytesMut::new();
-    req.encode(&mut body, VERSION)
-        .expect("encode IncrementalAlterConfigs");
-    let resp_bytes = kafka_wire::round_trip(&mut stream, 44, VERSION, 1, CLIENT_ID, true, &body)
-        .await
-        .expect("IncrementalAlterConfigs round-trip");
-    let mut cur: &[u8] = &resp_bytes;
-    let resp = IncrementalAlterConfigsResponse::decode(&mut cur, VERSION)
-        .expect("decode IncrementalAlterConfigsResponse");
-
-    resp.responses.first().map_or(0, |r| r.error_code)
+    incremental_alter_configs_on(&mut stream, resources).await
 }
 
 /// Drive `IncrementalAlterConfigs` (`api_key=44`) over a PLAINTEXT connection.
@@ -82,51 +39,8 @@ pub async fn drive_incremental_alter_configs_plaintext(
     addr: SocketAddr,
     resources: ConfigResources,
 ) -> i16 {
-    const VERSION: i16 = 1;
-
-    use krabka_protocol::owned::{
-        incremental_alter_configs_request::{
-            AlterConfigsResource, AlterableConfig, IncrementalAlterConfigsRequest,
-        },
-        incremental_alter_configs_response::IncrementalAlterConfigsResponse,
-    };
-
-    let req = IncrementalAlterConfigsRequest {
-        resources: resources
-            .into_iter()
-            .map(
-                |(resource_type, resource_name, configs)| AlterConfigsResource {
-                    resource_type,
-                    resource_name,
-                    configs: configs
-                        .into_iter()
-                        .map(|(name, value, config_operation)| AlterableConfig {
-                            name,
-                            config_operation,
-                            value,
-                            ..Default::default()
-                        })
-                        .collect(),
-                    ..Default::default()
-                },
-            )
-            .collect(),
-        validate_only: false,
-        ..Default::default()
-    };
-
     let mut stream = TcpStream::connect(addr).await.expect("connect");
-    let mut body = BytesMut::new();
-    req.encode(&mut body, VERSION)
-        .expect("encode IncrementalAlterConfigs");
-    let resp_bytes = kafka_wire::round_trip(&mut stream, 44, VERSION, 1, CLIENT_ID, true, &body)
-        .await
-        .expect("IncrementalAlterConfigs round-trip");
-    let mut cur: &[u8] = &resp_bytes;
-    let resp = IncrementalAlterConfigsResponse::decode(&mut cur, VERSION)
-        .expect("decode IncrementalAlterConfigsResponse");
-
-    resp.responses.first().map_or(0, |r| r.error_code)
+    incremental_alter_configs_on(&mut stream, resources).await
 }
 
 /// Drive `DescribeConfigs` (`api_key=32`, version=1) over a SASL/PLAIN connection.
@@ -184,4 +98,46 @@ pub async fn drive_describe_configs(
             (r.error_code, configs)
         })
         .collect()
+}
+
+async fn incremental_alter_configs_on(stream: &mut TcpStream, resources: ConfigResources) -> i16 {
+    const VERSION: i16 = 1;
+
+    use krabka_protocol::owned::{
+        incremental_alter_configs_request::{
+            AlterConfigsResource, AlterableConfig, IncrementalAlterConfigsRequest,
+        },
+        incremental_alter_configs_response::IncrementalAlterConfigsResponse,
+    };
+
+    let req = IncrementalAlterConfigsRequest {
+        resources: resources
+            .into_iter()
+            .map(
+                |(resource_type, resource_name, configs)| AlterConfigsResource {
+                    resource_type,
+                    resource_name,
+                    configs: configs
+                        .into_iter()
+                        .map(|(name, value, config_operation)| AlterableConfig {
+                            name,
+                            config_operation,
+                            value,
+                            ..Default::default()
+                        })
+                        .collect(),
+                    ..Default::default()
+                },
+            )
+            .collect(),
+        validate_only: false,
+        ..Default::default()
+    };
+
+    let resp: IncrementalAlterConfigsResponse =
+        kafka_wire::exchange(stream, &req, 44, VERSION, 1, CLIENT_ID, true)
+            .await
+            .expect("IncrementalAlterConfigs round-trip");
+
+    resp.responses.first().map_or(0, |r| r.error_code)
 }

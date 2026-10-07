@@ -5,6 +5,24 @@ use crate::{
     storage::{truncation_batch_retained, truncation_frontier},
 };
 
+// cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
+#[cfg(creusot)]
+#[cfg_attr(test, mutants::skip)]
+#[logic(open)]
+pub(super) fn physical_truncation_input_valid(
+    ends: Seq<i64>,
+    start: Int,
+    cut: Int,
+    hwm: Int,
+) -> bool {
+    pearlite! {
+        0 <= start && start <= cut
+        && (forall<i: Int> 0 <= i && i < ends.len() ==> start < ends[i]@)
+        && (forall<i: Int, j: Int> 0 <= i && i < j && j < ends.len() ==> ends[i]@ < ends[j]@)
+        && 0 <= hwm && hwm <= if ends.len() == 0 { start } else { ends[ends.len() - 1]@ }
+    }
+}
+
 // Retained batches, actual end, HWM, retained/committed history lengths,
 // pending target still present, pending target committed.
 type TruncatedControls = (usize, i64, i64, usize, usize, bool, bool);
@@ -14,10 +32,7 @@ type TruncatedControls = (usize, i64, i64, usize, usize, bool, bool);
 /// carry a snapshot/genesis baseline before `physical_start`. Complete decoded
 /// batch ends and ordered history offsets are host facts. Cuts below the first
 /// local offset use reset-to and are outside this retained-prefix composition.
-#[requires(0 <= physical_start@ && physical_start@ <= cut@)]
-#[requires(forall<i: Int> 0 <= i && i < ends@.len() ==> physical_start@ < ends@[i]@)]
-#[requires(forall<i: Int, j: Int> 0 <= i && i < j && j < ends@.len() ==> ends@[i]@ < ends@[j]@)]
-#[requires(0 <= previous_hwm@ && previous_hwm@ <= if ends@.len() == 0 { physical_start@ } else { ends@[ends@.len() - 1]@ })]
+#[requires(physical_truncation_input_valid(ends@, physical_start@, cut@, previous_hwm@))]
 #[requires(forall<i: Int, j: Int> 0 <= i && i < j && j < history@.len() ==> history@[i]@ < history@[j]@)]
 #[requires(0 <= pending_end@)]
 #[ensures((result.0@ <= ends@.len())

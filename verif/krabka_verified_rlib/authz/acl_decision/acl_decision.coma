@@ -1,6 +1,6 @@
-(* #"/workspace/crates/verified/src/authz/acl_decision.rs" 132 0 132 51 *)
+(* #"/workspace/crates/verified/src/authz/acl_decision.rs" 133 0 133 51 *)
 
-let%span sacl_decision = "/workspace/crates/verified/src/authz/acl_decision.rs" 122 10 130 1
+let%span sacl_decision = "/workspace/crates/verified/src/authz/acl_decision.rs" 123 10 131 1
 
 use creusot.prelude.Any
 
@@ -14,8 +14,8 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let acl_decision [#"/workspace/crates/verified/src/authz/acl_decision.rs" 132 0 132 51]
-  (facts: t_AclFacts) (return (x: t_AclDecision)) = (! bb0
+let acl_decision [#"/workspace/crates/verified/src/authz/acl_decision.rs" 133 0 133 51] (facts: t_AclFacts)
+  (return (x: t_AclDecision)) = (! bb0
   [ bb0 = any [ br0 -> {facts.super_user = false} (! bb2) | br1 -> {facts.super_user} (! bb1) ]
   | bb1 = s0 [ s0 = [ &_ret <- AllowSuperuser ] s1 | s1 = return {_ret} ]
   | bb2 = any [ br0 -> {facts.saw_deny = false} (! bb4) | br1 -> {facts.saw_deny} (! bb3) ]

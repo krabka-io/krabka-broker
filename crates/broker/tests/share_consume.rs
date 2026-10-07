@@ -28,6 +28,8 @@
 //! acquisition-lock lifetime, the share-session state machine, and
 //! `read_committed` isolation.
 
+mod support;
+
 #[path = "share_consume/acknowledgements.rs"]
 mod acknowledgements;
 #[path = "share_consume/dead_letter_queue.rs"]

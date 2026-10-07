@@ -21,7 +21,7 @@ use std::{
 use arc_swap::ArcSwap;
 use krabka_log::Log;
 
-use super::storage::{lock_log, run_log_mutation};
+use super::storage::maintain_log;
 use crate::{log_dir_status::LogDirRegistry, replica_state::ReplicaState};
 
 pub(super) async fn handle_retention(
@@ -29,26 +29,19 @@ pub(super) async fn handle_retention(
     replica_state: &tokio::sync::Mutex<ReplicaState>,
     ack: tokio::sync::oneshot::Sender<Result<(), crate::error::BrokerError>>,
 ) {
-    let (log, log_dir, log_dir_status) = storage;
     // Every eviction reason is bounded at the high watermark, the same as
     // `handle_compact`'s read of it: a record above the watermark can still
     // be truncated away by a leader election, and this is the only task that
     // moves the log, so nothing can append or truncate between this read and
     // the sweep below.
-    let high_watermark = replica_state.lock().await.hw;
-    let now = std::time::SystemTime::now();
-    let log_for_blocking = Arc::clone(log);
-    let result = run_log_mutation(
-        move || {
-            lock_log(&log_for_blocking)
-                .tick(now, high_watermark)
-                .map_err(crate::error::BrokerError::from)
-        },
+    maintain_log(
+        storage,
+        replica_state,
+        ack,
         "retention task panicked",
-        (log_dir, log_dir_status),
+        krabka_log::Log::tick,
     )
     .await;
-    let _ = ack.send(result);
 }
 
 #[cfg(test)]

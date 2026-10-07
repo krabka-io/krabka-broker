@@ -224,6 +224,8 @@ mod tests {
         }
     }
 
+    krabka_macros::remote_segment_check!(check_finished_segment);
+
     #[test]
     fn add_finish_query_round_trip() {
         let m = InmemoryRemoteLogMetadataManager::new();
@@ -231,13 +233,7 @@ mod tests {
             .unwrap();
         m.update_remote_log_segment_metadata(finish(10)).unwrap();
 
-        let got = m
-            .remote_log_segment_metadata(&tp(), LeaderEpoch(0), 42)
-            .unwrap()
-            .expect("segment found");
-        check!(got.remote_log_segment_id().id == Uuid::from_u128(10));
-        check!(got.custom_metadata() == Some(&CustomMetadata(vec![7])));
-        check!(m.highest_offset_for_epoch(&tp(), LeaderEpoch(0)).unwrap() == Some(99));
+        check_finished_segment(&m, &tp());
     }
 
     #[test]

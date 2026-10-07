@@ -246,37 +246,32 @@ mod tests {
         use super::*;
         use crate::network::fetch_writer::{resolve_records_sendfile, test_support::file_payload};
 
+        fn sequence_records(count: u32) -> Bytes {
+            Bytes::from((0..count).flat_map(u32::to_le_bytes).collect::<Vec<_>>())
+        }
+
+        async fn receive_records(
+            len: usize,
+        ) -> (tokio::net::TcpStream, tokio::task::JoinHandle<Vec<u8>>) {
+            use tokio::io::AsyncReadExt;
+            let (server, mut client) = crate::network::test_support::tcp_pair().await;
+            let reader = tokio::spawn(async move {
+                let mut got = vec![0u8; len];
+                client.read_exact(&mut got).await.unwrap();
+                got
+            });
+            (server, reader)
+        }
+
         /// End-to-end `sendfile` over a real loopback TCP socket: the bytes
         /// the client reads must equal the file region. The test drives the
         /// real readiness and partial-write loop in `write_fetch_plan`.
         #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
         async fn sendfile_roundtrip_over_tcp_is_byte_exact() {
-            use tokio::{
-                io::AsyncReadExt,
-                net::{TcpListener, TcpStream},
-            };
-
-            // A payload comfortably larger than a typical socket buffer so the
-            // sendfile loop must iterate across several partial writes.
-            let mut records = Vec::new();
-            for i in 0..4000u32 {
-                records.extend_from_slice(&i.to_le_bytes());
-            }
-            let records = Bytes::from(records);
+            // Larger than the deliberately small send buffer to exercise partial writes.
+            let records = sequence_records(4000);
             let (_tf, payload) = file_payload(&records);
-
-            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-            let addr = listener.local_addr().unwrap();
-
-            let expected = records.clone();
-            let client = tokio::spawn(async move {
-                let mut stream = TcpStream::connect(addr).await.unwrap();
-                let mut got = vec![0u8; expected.len()];
-                stream.read_exact(&mut got).await.unwrap();
-                assert2::assert!((got) == (&expected[..]), "sendfile'd bytes must match file");
-            });
-
-            let (mut server, _) = listener.accept().await.unwrap();
+            let (mut server, client) = receive_records(records.len()).await;
             // Shrink the send buffer to force partial sendfile writes.
             {
                 use socket2::SockRef;
@@ -288,7 +283,10 @@ mod tests {
             let metrics = BrokerMetrics::new();
             write_fetch_plan(&mut server, ops, &metrics).await.unwrap();
             drop(server); // EOF for the client's read_exact tail
-            client.await.unwrap();
+            assert2::assert!(
+                (client.await.unwrap()) == (&records[..]),
+                "sendfile'd bytes must match file"
+            );
 
             // Byte equality alone cannot tell the kernel drain apart from the
             // copy that produces the same bytes. The counter can, and it is
@@ -304,30 +302,10 @@ mod tests {
         /// is exactly why it is a separate label.
         #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
         async fn pread_fallback_is_byte_exact_and_counts_as_its_own_path() {
-            use tokio::{
-                io::AsyncReadExt,
-                net::{TcpListener, TcpStream},
-            };
-
-            let mut records = Vec::new();
-            for i in 0..2000u32 {
-                records.extend_from_slice(&i.to_le_bytes());
-            }
-            let records = Bytes::from(records);
+            // Larger than the deliberately small send buffer to exercise partial writes.
+            let records = sequence_records(2000);
             let (_tf, payload) = file_payload(&records);
-
-            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-            let addr = listener.local_addr().unwrap();
-
-            let expected = records.clone();
-            let client = tokio::spawn(async move {
-                let mut stream = TcpStream::connect(addr).await.unwrap();
-                let mut got = vec![0u8; expected.len()];
-                stream.read_exact(&mut got).await.unwrap();
-                got
-            });
-
-            let (server, _) = listener.accept().await.unwrap();
+            let (server, client) = receive_records(records.len()).await;
             let mut server = NoSendfileStream(server);
             let ops = resolve_records_sendfile(&payload).unwrap();
             assert2::assert!(ops.iter().any(|o| matches!(o, WriteOp::File(_))));

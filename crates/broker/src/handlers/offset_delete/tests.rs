@@ -3,13 +3,12 @@
 
 use std::{collections::HashMap, sync::Arc, time::Duration};
 
-use assert2::{assert, check};
+use assert2::check;
 use bytes::{BufMut as _, Bytes};
 use krabka_protocol::{
     Encode as _,
     owned::{
         consumer_protocol_subscription::ConsumerProtocolSubscription,
-        create_topics_request::{CreatableTopic, CreateTopicsRequest},
         offset_delete_response::{self, OffsetDeleteResponse},
     },
 };
@@ -33,27 +32,7 @@ use crate::{
 };
 
 async fn create_topic(broker: &BrokerHandle, name: &str) {
-    let client = krabka_client_core::Client::builder()
-        .bootstrap(broker.listen_addr().to_string())
-        .client_id("offset-delete-test")
-        .build()
-        .await
-        .expect("client build");
-    let response = client
-        .send(CreateTopicsRequest {
-            topics: vec![CreatableTopic {
-                name: name.to_string(),
-                num_partitions: 1,
-                replication_factor: 1,
-                ..Default::default()
-            }],
-            timeout_ms: 5_000,
-            ..Default::default()
-        })
-        .await
-        .expect("CreateTopics");
-    assert!(response.topics[0].error_code == codes::NONE, "{response:?}");
-    broker.wait_until_partition_present(name, 0).await;
+    crate::handlers::test_support::create_topic(broker, "offset-delete-test", name, 1).await;
 }
 
 /// A classic `ConsumerProtocolSubscription` blob: the `i16` version, then the

@@ -7,11 +7,11 @@
 
 use std::net::SocketAddr;
 
-use krabka_broker::{Broker, BrokerHandle, authorizer::SimpleAclAuthorizer, config::ListenerSpec};
+use krabka_broker::{Broker, BrokerHandle, authorizer::SimpleAclAuthorizer};
 use krabka_metadata::{
     AclEntry, AclOperation, MetadataRecord, PatternType, PermissionType, ResourceType,
 };
-use krabka_security::{ListenerProtocol, SaslMechanism};
+use krabka_security::SaslMechanism;
 use tempfile::TempDir;
 
 pub(crate) fn admin_test_password() -> String {
@@ -44,17 +44,7 @@ pub(crate) fn start_single_broker_sasl_plaintext_with_acl_authorizer(
     users: &[(&str, &str)],
 ) -> BrokerStartup {
     let log_dir = tempfile::tempdir().unwrap();
-    let mut cfg = krabka_broker::BrokerConfig::for_tests(log_dir.path().to_path_buf());
-    cfg.listeners = vec![ListenerSpec {
-        name: "SASL_PLAINTEXT".to_string(),
-        bind_addr: "127.0.0.1:0".parse().unwrap(),
-        advertised: "127.0.0.1:0".to_string(),
-        protocol: ListenerProtocol::SaslPlaintext,
-        tls_config: None,
-        sasl_mechanisms: None,
-        principal_mapper: krabka_broker::SslPrincipalMapper::default(),
-    }];
-    cfg.inter_broker_listener_name = "SASL_PLAINTEXT".to_string();
+    let mut cfg = crate::support::sasl_plaintext_config(log_dir.path().to_path_buf());
     cfg.enabled_sasl_mechanisms = vec![SaslMechanism::Plain];
     for (name, pass) in users {
         cfg.plain_credentials

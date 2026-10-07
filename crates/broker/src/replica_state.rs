@@ -496,6 +496,10 @@ mod tests {
     use std::time::{Duration, Instant};
 
     use assert2::{assert, check};
+    use krabka_metadata::{
+        BrokerConfigRecord, BrokerRegistrationRecord, DEFAULT_BROKER_CONFIG_NODE_ID, MetadataImage,
+        MetadataRecord, PartitionRecord, TopicConfigRecord, TopicRecord,
+    };
 
     use super::*;
 
@@ -506,6 +510,13 @@ mod tests {
 
     fn fresh() -> ReplicaState {
         ReplicaState::new()
+    }
+
+    fn fresh_with_isr(nodes: &[u64], at: Instant) -> ReplicaState {
+        let mut state = fresh();
+        let nodes: Vec<_> = nodes.iter().copied().map(NodeId).collect();
+        state.install_isr(&nodes, &nodes, NodeId(1), at);
+        state
     }
 
     fn now() -> Instant {
@@ -580,13 +591,7 @@ mod tests {
 
     #[test]
     fn install_isr_idempotent_preserves_follower_progress() {
-        let mut s = fresh();
-        s.install_isr(
-            &[NodeId(1), NodeId(2), NodeId(3)],
-            &[NodeId(1), NodeId(2), NodeId(3)],
-            NodeId(1),
-            now(),
-        );
+        let mut s = fresh_with_isr(&[1, 2, 3], now());
         s.update_follower_leo(NodeId(2), o(50), o(100), now());
         s.update_follower_leo(NodeId(3), o(75), o(100), now());
         s.install_isr(
@@ -605,13 +610,7 @@ mod tests {
     #[test]
     fn follower_progress_reports_the_log_end_and_the_last_caught_up_time() {
         let t0 = now();
-        let mut s = fresh();
-        s.install_isr(
-            &[NodeId(1), NodeId(2), NodeId(3)],
-            &[NodeId(1), NodeId(2), NodeId(3)],
-            NodeId(1),
-            t0,
-        );
+        let mut s = fresh_with_isr(&[1, 2, 3], t0);
         let t1 = t0 + Duration::from_secs(1);
         s.update_follower_leo(NodeId(2), o(100), o(100), t1);
 
@@ -623,13 +622,7 @@ mod tests {
     fn install_isr_drops_stale_follower_leo_for_removed_replicas() {
         // Node 3 leaves the *replica set* entirely (e.g. reassignment) →
         // its progress entry is dropped.
-        let mut s = fresh();
-        s.install_isr(
-            &[NodeId(1), NodeId(2), NodeId(3)],
-            &[NodeId(1), NodeId(2), NodeId(3)],
-            NodeId(1),
-            now(),
-        );
+        let mut s = fresh_with_isr(&[1, 2, 3], now());
         s.update_follower_leo(NodeId(3), o(75), o(100), now());
         s.install_isr(
             &[NodeId(1), NodeId(2)],
@@ -645,13 +638,7 @@ mod tests {
         // Node 3 is shrunk out of the ISR but stays a replica (it's
         // catching back up). Its fetch-driven progress must survive an
         // ISR reinstall so isr_maintenance can later expand it back in.
-        let mut s = fresh();
-        s.install_isr(
-            &[NodeId(1), NodeId(2), NodeId(3)],
-            &[NodeId(1), NodeId(2), NodeId(3)],
-            NodeId(1),
-            now(),
-        );
+        let mut s = fresh_with_isr(&[1, 2, 3], now());
         s.update_follower_leo(NodeId(3), o(75), o(100), now());
         // Committed ISR shrinks to {1,2}; replica set is still {1,2,3}.
         s.install_isr(
@@ -669,13 +656,7 @@ mod tests {
 
     #[test]
     fn hw_advances_when_trailing_follower_catches_up() {
-        let mut s = fresh();
-        s.install_isr(
-            &[NodeId(1), NodeId(2), NodeId(3)],
-            &[NodeId(1), NodeId(2), NodeId(3)],
-            NodeId(1),
-            now(),
-        );
+        let mut s = fresh_with_isr(&[1, 2, 3], now());
         // Ordered steps over shared state: (follower, follower_leo, expected_hw).
         let steps = [(2, 50, 0), (3, 75, 50), (2, 80, 75)];
         for (follower, leo, expected_hw) in steps {
@@ -686,13 +667,7 @@ mod tests {
 
     #[test]
     fn hw_pins_at_slowest_isr_follower() {
-        let mut s = fresh();
-        s.install_isr(
-            &[NodeId(1), NodeId(2), NodeId(3)],
-            &[NodeId(1), NodeId(2), NodeId(3)],
-            NodeId(1),
-            now(),
-        );
+        let mut s = fresh_with_isr(&[1, 2, 3], now());
         s.update_follower_leo(NodeId(2), o(100), o(100), now());
         s.update_follower_leo(NodeId(3), o(30), o(100), now());
         assert!(s.hw == o(30));
@@ -700,13 +675,7 @@ mod tests {
 
     #[test]
     fn non_isr_follower_leo_update_uses_leader_path() {
-        let mut s = fresh();
-        s.install_isr(
-            &[NodeId(1), NodeId(2)],
-            &[NodeId(1), NodeId(2)],
-            NodeId(1),
-            now(),
-        );
+        let mut s = fresh_with_isr(&[1, 2], now());
         // Node 3 is not in ISR. Its progress is tracked for possible
         // re-admission, but it is excluded from HW; follower 2 has not
         // fetched from this leader, so HW stays where it was.
@@ -717,29 +686,21 @@ mod tests {
 
     #[test]
     fn single_replica_isr_hw_equals_leader_leo() {
-        let mut s = fresh();
-        s.install_isr(&[NodeId(1)], &[NodeId(1)], NodeId(1), now());
+        let mut s = fresh_with_isr(&[1], now());
         let hw = s.recompute_hw_for_leader_append(o(42));
         assert!(hw == o(42));
     }
 
     #[test]
     fn wal_durable_advances_hw_to_durable_offset_for_singleton_isr() {
-        let mut s = fresh();
-        s.install_isr(&[NodeId(1)], &[NodeId(1)], NodeId(1), now());
+        let mut s = fresh_with_isr(&[1], now());
         let hw = s.recompute_hw_for_wal_durable(o(5));
         assert!(hw == o(5));
     }
 
     #[test]
     fn wal_durable_hw_is_independent_of_partition_isr_progress() {
-        let mut s = fresh();
-        s.install_isr(
-            &[NodeId(1), NodeId(2), NodeId(3)],
-            &[NodeId(1), NodeId(2), NodeId(3)],
-            NodeId(1),
-            now(),
-        );
+        let mut s = fresh_with_isr(&[1, 2, 3], now());
 
         let hw = s.recompute_hw_for_wal_durable(o(5));
 
@@ -758,13 +719,7 @@ mod tests {
 
     #[test]
     fn follower_overshoot_clamps_to_leader_leo() {
-        let mut s = fresh();
-        s.install_isr(
-            &[NodeId(1), NodeId(2)],
-            &[NodeId(1), NodeId(2)],
-            NodeId(1),
-            now(),
-        );
+        let mut s = fresh_with_isr(&[1, 2], now());
         let hw = s.update_follower_leo(NodeId(2), o(200), o(100), now());
         assert!(hw == o(100));
         assert!(s.per_follower.get(&NodeId(2)).map(|f| f.leo) == Some(o(100)));
@@ -779,13 +734,7 @@ mod tests {
 
     #[test]
     fn missing_isr_replica_progress_pins_high_watermark() {
-        let mut s = fresh();
-        s.install_isr(
-            &[NodeId(1), NodeId(2), NodeId(3)],
-            &[NodeId(1), NodeId(2), NodeId(3)],
-            NodeId(1),
-            now(),
-        );
+        let mut s = fresh_with_isr(&[1, 2, 3], now());
         s.update_follower_leo(NodeId(2), o(30), o(100), now());
         s.per_follower.remove(&NodeId(3));
 
@@ -798,13 +747,7 @@ mod tests {
     /// only ever raises it.
     #[test]
     fn leadership_change_gap_pins_high_watermark() {
-        let mut s = fresh();
-        s.install_isr(
-            &[NodeId(1), NodeId(2)],
-            &[NodeId(1), NodeId(2)],
-            NodeId(1),
-            now(),
-        );
+        let mut s = fresh_with_isr(&[1, 2], now());
         s.update_follower_leo(NodeId(2), o(30), o(100), now());
 
         s.reset_for_leader(NodeId(2));
@@ -828,13 +771,7 @@ mod tests {
             broker_epoch: None,
             fetched_since_isr_exit: true,
         };
-        let mut s = fresh();
-        s.install_isr(
-            &[NodeId(1), NodeId(2)],
-            &[NodeId(1), NodeId(2)],
-            NodeId(1),
-            t0,
-        );
+        let mut s = fresh_with_isr(&[1, 2], t0);
         let steps = [
             (
                 "the first fetch cannot credit a fetch this leader never saw",
@@ -952,13 +889,7 @@ mod tests {
                 50,
             ),
         ] {
-            let mut s = fresh();
-            s.install_isr(
-                &[NodeId(1), NodeId(2), NodeId(3)],
-                &[NodeId(1), NodeId(2), NodeId(3)],
-                NodeId(1),
-                now(),
-            );
+            let mut s = fresh_with_isr(&[1, 2, 3], now());
             for (follower, log_start) in reported {
                 s.record_follower_log_start(NodeId(follower), o(log_start));
             }
@@ -1109,13 +1040,7 @@ mod tests {
     /// A leader's own broker epoch is never recorded as a follower's.
     #[test]
     fn a_fetch_epoch_is_recorded_for_followers_only() {
-        let mut s = fresh();
-        s.install_isr(
-            &[NodeId(1), NodeId(2)],
-            &[NodeId(1), NodeId(2)],
-            NodeId(1),
-            now(),
-        );
+        let mut s = fresh_with_isr(&[1, 2], now());
         s.set_policy(policy(1));
         s.record_follower_broker_epoch(NodeId(1), 7);
         s.record_follower_broker_epoch(NodeId(2), 7);
@@ -1131,15 +1056,33 @@ mod tests {
         );
     }
 
+    fn policy_partition(replicas: &[u64]) -> PartitionRecord {
+        PartitionRecord {
+            topic: "t".into(),
+            partition: 0,
+            leader: NodeId(1),
+            replicas: replicas.iter().copied().map(NodeId).collect(),
+            isr: replicas.iter().copied().map(NodeId).collect(),
+            ..Default::default()
+        }
+    }
+
+    fn policy_image() -> MetadataImage {
+        let mut image = MetadataImage::new(uuid::Uuid::nil());
+        image.apply(&MetadataRecord::V1Topic(TopicRecord {
+            name: "t".into(),
+            topic_id: uuid::Uuid::from_u128(1),
+            partitions: 1,
+            replication_factor: 3,
+        }));
+        image
+    }
+
     /// The policy the ISR scan reads out of the metadata image: the topic's
     /// `min.insync.replicas` capped by the replica count, and each replica's
     /// fencing and registered epoch.
     #[test]
     fn a_policy_reads_min_isr_and_broker_standing_from_the_image() {
-        use krabka_metadata::{
-            BrokerRegistrationRecord, MetadataImage, MetadataRecord, PartitionRecord,
-            TopicConfigRecord, TopicRecord,
-        };
         let register = |node: u64, broker_epoch: i64, fenced: bool, in_controlled_shutdown| {
             MetadataRecord::V1BrokerRegistration(BrokerRegistrationRecord {
                 fenced,
@@ -1149,21 +1092,7 @@ mod tests {
                 ..crate::test_support::broker_registration(node)
             })
         };
-        let record = |replicas: &[u64]| PartitionRecord {
-            topic: "t".into(),
-            partition: 0,
-            leader: NodeId(1),
-            replicas: replicas.iter().copied().map(NodeId).collect(),
-            isr: replicas.iter().copied().map(NodeId).collect(),
-            ..Default::default()
-        };
-        let mut image = MetadataImage::new(uuid::Uuid::nil());
-        image.apply(&MetadataRecord::V1Topic(TopicRecord {
-            name: "t".into(),
-            topic_id: uuid::Uuid::from_u128(1),
-            partitions: 1,
-            replication_factor: 3,
-        }));
+        let mut image = policy_image();
         image.apply(&MetadataRecord::V1TopicConfig(TopicConfigRecord {
             topic: "t".into(),
             overrides: [(
@@ -1183,7 +1112,7 @@ mod tests {
         };
         let lag = Duration::from_secs(30);
         check!(
-            LeaderPolicy::from_image(&image, NodeId(1), &record(&[1, 2, 3, 4]), lag, 1)
+            LeaderPolicy::from_image(&image, NodeId(1), &policy_partition(&[1, 2, 3, 4]), lag, 1)
                 == LeaderPolicy {
                     effective_min_isr: 2,
                     replica_lag_time_max: lag,
@@ -1198,7 +1127,8 @@ mod tests {
                 }
         );
         check!(
-            LeaderPolicy::from_image(&image, NodeId(1), &record(&[1]), lag, 1).effective_min_isr
+            LeaderPolicy::from_image(&image, NodeId(1), &policy_partition(&[1]), lag, 1)
+                .effective_min_isr
                 == 1,
             "a single replica caps min ISR at one"
         );
@@ -1209,26 +1139,17 @@ mod tests {
     /// count, as the produce gate resolves it.
     #[test]
     fn a_policy_falls_back_to_the_static_min_isr() {
-        use krabka_metadata::{MetadataImage, MetadataRecord, PartitionRecord, TopicRecord};
-        let record = |replicas: &[u64]| PartitionRecord {
-            topic: "t".into(),
-            partition: 0,
-            leader: NodeId(1),
-            replicas: replicas.iter().copied().map(NodeId).collect(),
-            isr: replicas.iter().copied().map(NodeId).collect(),
-            ..Default::default()
-        };
-        let mut image = MetadataImage::new(uuid::Uuid::nil());
-        image.apply(&MetadataRecord::V1Topic(TopicRecord {
-            name: "t".into(),
-            topic_id: uuid::Uuid::from_u128(1),
-            partitions: 1,
-            replication_factor: 3,
-        }));
+        let image = policy_image();
         let lag = Duration::from_secs(30);
         let min_isr = |replicas: &[u64], static_default| {
-            LeaderPolicy::from_image(&image, NodeId(1), &record(replicas), lag, static_default)
-                .effective_min_isr
+            LeaderPolicy::from_image(
+                &image,
+                NodeId(1),
+                &policy_partition(replicas),
+                lag,
+                static_default,
+            )
+            .effective_min_isr
         };
         check!(min_isr(&[1, 2, 3], 2) == 2);
         check!(min_isr(&[1, 2, 3], 1) == 1);
@@ -1240,10 +1161,6 @@ mod tests {
     /// `DynamicLogConfig` gives each broker its partitions' `LogConfig`.
     #[test]
     fn a_policy_reads_the_leaders_own_dynamic_min_isr() {
-        use krabka_metadata::{
-            BrokerConfigRecord, DEFAULT_BROKER_CONFIG_NODE_ID, MetadataImage, MetadataRecord,
-            PartitionRecord,
-        };
         let record = PartitionRecord {
             topic: "t".into(),
             partition: 0,

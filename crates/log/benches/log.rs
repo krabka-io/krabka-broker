@@ -16,11 +16,10 @@ use std::{
     time::Instant,
 };
 
-use bytes::Bytes;
 use criterion::{Criterion, black_box, criterion_group, criterion_main};
 use krabka_ids::{LeaderEpoch, Offset, ProducerId};
 use krabka_log::{Log, LogConfig, VerbatimBatch};
-use krabka_protocol::records::{Record, RecordBatch};
+use krabka_protocol::records::RecordBatch;
 use krabka_units::prelude::{ByteSize, gibibytes, kibibytes, mebibytes};
 use tempfile::tempdir;
 
@@ -28,21 +27,7 @@ use tempfile::tempdir;
 /// case never clips.
 const UNBOUNDED: ByteSize = gibibytes(4);
 
-fn make_batch(n: i32, payload_size: usize) -> RecordBatch {
-    let mut b = RecordBatch {
-        last_offset_delta: (n - 1).max(0),
-        ..RecordBatch::default()
-    };
-    for i in 0..n {
-        b.records.push(Record {
-            offset_delta: i,
-            key: Some(Bytes::from(format!("k{i:08}"))),
-            value: Some(Bytes::from(vec![0xABu8; payload_size])),
-            ..Default::default()
-        });
-    }
-    b
-}
+krabka_macros::record_batch_fixture!(make_batch);
 
 fn make_verbatim_batch(n: i32, payload_size: usize) -> VerbatimBatch {
     make_verbatim_from_batch(&make_batch(n, payload_size))
@@ -66,6 +51,21 @@ fn make_verbatim_from_batch(batch: &RecordBatch) -> VerbatimBatch {
 // ---------------------------------------------------------------------------
 // Append benchmarks
 // ---------------------------------------------------------------------------
+
+fn async_verbatim_fixture() -> (
+    tempfile::TempDir,
+    Arc<Mutex<Log>>,
+    VerbatimBatch,
+    tokio::runtime::Runtime,
+) {
+    let dir = tempdir().unwrap();
+    let log = Arc::new(Mutex::new(
+        Log::open(dir.path(), LogConfig::default()).unwrap(),
+    ));
+    let batch = make_verbatim_batch(1, 100 * 1024);
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    (dir, log, batch, runtime)
+}
 
 fn bench_append_record_sizes(c: &mut Criterion) {
     let mut group = c.benchmark_group("log/append");
@@ -142,12 +142,7 @@ fn bench_append_handoff(c: &mut Criterion) {
     });
 
     group.bench_function("spawn_blocking_mutex_verbatim_1rec_100KiB", |b| {
-        let dir = tempdir().unwrap();
-        let log = Arc::new(Mutex::new(
-            Log::open(dir.path(), LogConfig::default()).unwrap(),
-        ));
-        let batch = make_verbatim_batch(1, 100 * 1024);
-        let rt = tokio::runtime::Runtime::new().unwrap();
+        let (_dir, log, batch, rt) = async_verbatim_fixture();
         b.iter_custom(|iters| {
             rt.block_on(async {
                 let start = Instant::now();
@@ -166,12 +161,7 @@ fn bench_append_handoff(c: &mut Criterion) {
     });
 
     group.bench_function("block_in_place_mutex_verbatim_1rec_100KiB", |b| {
-        let dir = tempdir().unwrap();
-        let log = Arc::new(Mutex::new(
-            Log::open(dir.path(), LogConfig::default()).unwrap(),
-        ));
-        let batch = make_verbatim_batch(1, 100 * 1024);
-        let rt = tokio::runtime::Runtime::new().unwrap();
+        let (_dir, log, batch, rt) = async_verbatim_fixture();
         b.iter_custom(|iters| {
             rt.block_on(async {
                 let start = Instant::now();

@@ -5,18 +5,14 @@
 //! This is the leader-to-follower direction of the cross-implementation goal,
 //! and it needs no KIP-853 dynamic voters.
 
-use std::{net::SocketAddr, process::Command, time::Duration};
+use std::{process::Command, time::Duration};
 
 use assert2::check;
-use krabka_broker::{Broker, BrokerHandle};
 use tempfile::TempDir;
 use uuid::Uuid;
 
 use crate::{
-    static_quorum_harness::{
-        KAFKA_IMAGE, docker_rm, format_at_kafka_4_0, kafka_cluster_id_string,
-        krabka_controller_config,
-    },
+    static_quorum_harness::{KAFKA_IMAGE, docker_rm, kafka_cluster_id_string},
     support,
 };
 
@@ -34,55 +30,10 @@ async fn static_mixed_jvm_krabka_quorum() {
     eprintln!("shared cluster_id uuid={cluster_id} kafka_str={cid_str}");
 
     // ── pre-bind 3 controller ports on the host ────────────────────────────
-    let (client_addrs, controller_addrs) = support::bind_and_drop_ports(3).await;
-    let p1 = controller_addrs[0].port();
-    let p2 = controller_addrs[1].port();
-    let p3 = controller_addrs[2].port();
+    let endpoints = crate::static_quorum_harness::MixedQuorum::allocate().await;
+    let [p1, p2, p3] = endpoints.ports;
+    let ([c1, c2], [_dir1, _dir2]) = endpoints.start_pair(cluster_id, None).await;
 
-    // Krabka voters bind 0.0.0.0 so the JVM container can reach them through
-    // host.docker.internal. The pre-bound addrs are 127.0.0.1:<p>; rewrite to
-    // 0.0.0.0:<p> for the bind, but keep 127.0.0.1 in the voter set Krabka uses
-    // to dial *its own* peers (loopback is reachable in-process).
-    let krabka_ctrl_1: SocketAddr = format!("0.0.0.0:{p1}").parse().unwrap();
-    let krabka_ctrl_2: SocketAddr = format!("0.0.0.0:{p2}").parse().unwrap();
-
-    // Voter set as seen FROM the Krabka side: dial peers on loopback; the JVM
-    // (id 3) is reachable at its published host port.
-    let krabka_voters: Vec<(u64, SocketAddr)> = vec![
-        (1, format!("127.0.0.1:{p1}").parse().unwrap()),
-        (2, format!("127.0.0.1:{p2}").parse().unwrap()),
-        (3, format!("127.0.0.1:{p3}").parse().unwrap()),
-    ];
-
-    // ── start the 2 Krabka controllers ─────────────────────────────────────
-    let dir1 = TempDir::new().unwrap();
-    let dir2 = TempDir::new().unwrap();
-    let cfg1 = krabka_controller_config(
-        0,
-        client_addrs[0],
-        krabka_ctrl_1,
-        &krabka_voters,
-        cluster_id,
-        dir1.path(),
-    );
-    let cfg2 = krabka_controller_config(
-        1,
-        client_addrs[1],
-        krabka_ctrl_2,
-        &krabka_voters,
-        cluster_id,
-        dir2.path(),
-    );
-    format_at_kafka_4_0(dir1.path(), &cfg1).await;
-    format_at_kafka_4_0(dir2.path(), &cfg2).await;
-    let (c1, c2): (BrokerHandle, BrokerHandle) = {
-        let s1 = tokio::spawn(Broker::start(cfg1));
-        let s2 = tokio::spawn(Broker::start(cfg2));
-        (
-            s1.await.unwrap().expect("krabka voter 1 start"),
-            s2.await.unwrap().expect("krabka voter 2 start"),
-        )
-    };
     eprintln!("both Krabka controllers started (2/3 majority should self-elect)");
 
     // ── format + start the JVM controller (id 3) ───────────────────────────

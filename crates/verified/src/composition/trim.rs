@@ -6,6 +6,19 @@ use super::{
     diskless_trim_decision, producer_snapshot_latest_index, producer_snapshot_replay_start,
 };
 
+/// The durable stores have coherent frontiers within the trim visibility bounds.
+// cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
+#[cfg(creusot)]
+#[cfg_attr(test, mutants::skip)]
+#[logic(open)]
+pub fn trim_store_frontiers_valid(facts: DeleteRecordsTrimFacts, wal: Int, local: Int) -> bool {
+    pearlite! {
+        0 <= wal && wal <= facts.high_watermark@ && wal <= facts.log_end@
+            && 0 <= local && local <= facts.high_watermark@ && local <= facts.log_end@
+            && (facts.has_delivery_watermark ==> wal <= facts.delivery_watermark@ && local <= facts.delivery_watermark@)
+    }
+}
+
 /// Fold completed durable steps, including arbitrary pauses/failed attempts.
 /// A true trace entry means the selected store reached the planned frontier;
 /// it does not mean an RPC acknowledged it. I/O/atomic checkpointing are external.

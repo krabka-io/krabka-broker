@@ -7,9 +7,6 @@
 
 use std::net::SocketAddr;
 
-use assert2::assert;
-use bytes::BytesMut;
-use krabka_protocol::{Decode, Encode};
 use tokio::net::TcpStream;
 
 use crate::kafka_wire;
@@ -26,33 +23,11 @@ pub async fn create_topic_plaintext(
     partitions: i32,
     replication_factor: i16,
 ) {
-    use krabka_protocol::owned::{
-        create_topics_request::{CreatableTopic, CreateTopicsRequest},
-        create_topics_response::CreateTopicsResponse,
-    };
-
-    let req = CreateTopicsRequest {
-        topics: vec![CreatableTopic {
-            name: name.to_string(),
-            num_partitions: partitions,
-            replication_factor,
-            ..Default::default()
-        }],
-        timeout_ms: 5_000,
-        ..Default::default()
-    };
     let mut stream = TcpStream::connect(addr).await.expect("connect");
-    let mut body = BytesMut::new();
-    req.encode(&mut body, 7).expect("encode CreateTopics");
-    let resp_bytes = kafka_wire::round_trip(&mut stream, 19, 7, 1, CLIENT_ID, true, &body)
-        .await
-        .expect("CreateTopics round-trip");
-    let mut cur: &[u8] = &resp_bytes;
-    let resp = CreateTopicsResponse::decode(&mut cur, 7).expect("decode CreateTopicsResponse");
-    assert!(resp.topics.len() == 1);
-    assert!(
-        resp.topics[0].error_code == 0,
-        "CreateTopics({name}) must succeed: {:?}",
-        resp.topics[0].error_message
-    );
+    kafka_wire::create_topic_on(
+        &mut stream,
+        CLIENT_ID,
+        kafka_wire::topic(name, partitions, replication_factor),
+    )
+    .await;
 }

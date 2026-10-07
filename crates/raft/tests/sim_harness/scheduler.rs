@@ -2,18 +2,13 @@
 //! and how one event is fed to a node's consensus machine. This is the part of
 //! the harness that makes the simulation deterministic.
 
-use krabka_raft::kraft::{
-    action::Action,
-    event::Event,
-    role::Role,
-    types::{NodeId, SimInstant},
-};
+use krabka_raft::kraft::{action::Action, event::Event, types::NodeId};
 
 use super::{
     cluster::Sim,
     node::Message,
     node_log::SimNodeLog,
-    timers::{HEARTBEAT_MS, SimTimer, consider, election_timeout_ms_of},
+    timers::{HEARTBEAT_MS, SimTimer, election_timeout_ms_of},
 };
 
 impl<L: SimNodeLog> Sim<L> {
@@ -23,21 +18,19 @@ impl<L: SimNodeLog> Sim<L> {
     pub(super) fn fire_next_timer(&mut self) -> bool {
         // Pick the node with the earliest deadline; ties break by node id
         // (BTreeMap iteration is ascending by id, so the first minimum wins).
-        let mut best: Option<(SimInstant, NodeId, SimTimer)> = None;
-        for node in self.nodes.values() {
-            if let Some(d) = node.election_deadline {
-                consider(&mut best, d, node.id, SimTimer::Election);
-            }
-            if let Some(d) = node.fetch_deadline {
-                consider(&mut best, d, node.id, SimTimer::Fetch);
-            }
-            if let Some(d) = node.heartbeat_deadline {
-                consider(&mut best, d, node.id, SimTimer::Heartbeat);
-            }
-            if let Some(d) = node.check_quorum_deadline {
-                consider(&mut best, d, node.id, SimTimer::CheckQuorum);
-            }
-        }
+        let best = krabka_kraft_core::simulation_support::earliest_timer(self.nodes.values().map(
+            |node| {
+                (
+                    node.id,
+                    [
+                        node.election_deadline,
+                        node.fetch_deadline,
+                        node.heartbeat_deadline,
+                        node.check_quorum_deadline,
+                    ],
+                )
+            },
+        ));
         let Some((deadline, id, kind)) = best else {
             return false;
         };
@@ -47,12 +40,13 @@ impl<L: SimNodeLog> Sim<L> {
         // Clear the fired timer; the handler re-arms below / via ResetTimer.
         {
             let node = self.nodes.get_mut(&id).unwrap();
-            match kind {
-                SimTimer::Election => node.election_deadline = None,
-                SimTimer::Fetch => node.fetch_deadline = None,
-                SimTimer::Heartbeat => node.heartbeat_deadline = None,
-                SimTimer::CheckQuorum => node.check_quorum_deadline = None,
-            }
+            krabka_kraft_core::simulation_support::clear_timer(
+                kind,
+                &mut node.election_deadline,
+                &mut node.fetch_deadline,
+                &mut node.heartbeat_deadline,
+                &mut node.check_quorum_deadline,
+            );
         }
         match kind {
             SimTimer::Heartbeat => {
@@ -70,24 +64,20 @@ impl<L: SimNodeLog> Sim<L> {
                 // gone (unreachable / unknown) does the watchdog become a real
                 // `FetchTimeout` that elects. This mirrors `KRaft`, where continuous
                 // polling resets the timer and only sustained silence elects.
-                if let Role::Follower { leader_id, .. }
-                | Role::Observer {
-                    leader_id: Some(leader_id),
-                    ..
-                } = *self.nodes[&id].machine.role()
-                {
-                    let leader_alive = !self.partitioned.contains(&id)
-                        && !self.partitioned.contains(&leader_id)
-                        && self
-                            .nodes
-                            .get(&leader_id)
-                            .is_some_and(|n| n.machine.role().is_leader());
-                    if leader_alive {
-                        let deadline = self.now.saturating_add_ms(election_timeout_ms_of(id));
-                        self.nodes.get_mut(&id).unwrap().fetch_deadline = Some(deadline);
-                        self.apply_action(id, Action::SendFetch { leader_id });
-                        return true;
-                    }
+                if let Some(leader_id) = krabka_kraft_core::simulation_support::reachable_leader(
+                    self.nodes[&id].machine.role(),
+                    id,
+                    &self.partitioned,
+                    |leader| {
+                        self.nodes
+                            .get(&leader)
+                            .is_some_and(|node| node.machine.role().is_leader())
+                    },
+                ) {
+                    let deadline = self.now.saturating_add_ms(election_timeout_ms_of(id));
+                    self.nodes.get_mut(&id).unwrap().fetch_deadline = Some(deadline);
+                    self.apply_action(id, Action::SendFetch { leader_id });
+                    return true;
                 }
                 self.step(id, Event::FetchTimeout);
                 true
@@ -126,61 +116,9 @@ impl<L: SimNodeLog> Sim<L> {
         self.step(msg.dst, msg.event);
     }
 
-    /// Feeds one event to a node and translates the resulting actions into new
-    /// messages, timer arming, and log and HWM bookkeeping.
-    fn step(&mut self, id: NodeId, event: Event) {
-        let now = self.now;
-        // A `ReceiveFetch` is a leader-side request; remember who asked and the
-        // leader epoch so we can synthesize the matching fetch *response* back to
-        // the follower (the core only emits HWM/Truncate, not a response message).
-        let fetch_from = if let Event::ReceiveFetch { from, .. } = &event {
-            Some(*from)
-        } else {
-            None
-        };
-        // Run the machine. We must not hold a mutable borrow of `nodes` while we
-        // re-borrow other nodes during action translation, so collect first.
-        let actions = {
-            let node = self.nodes.get_mut(&id).unwrap();
-            node.machine.on_event(event, &node.log, now)
-        };
-        // If this was a fetch the leader served, reply to the follower (so it can
-        // re-arm its fetch watchdog and truncate on divergence) — but only when
-        // there is something to report: new data to replicate, or a divergence
-        // hint. When the follower is already fully caught up, the leader's
-        // long-poll *parks* with no immediate answer; the follower's watchdog
-        // (re-armed below in `apply_action`) becomes the next event, and a
-        // watchdog firing while the leader is still reachable is modelled as a
-        // re-poll rather than an election (see `fire_next_timer`). This bounds the
-        // steady-state fetch loop deterministically.
-        if let Some(follower) = fetch_from {
-            let diverging = actions.iter().find_map(|a| match a {
-                Action::ReplyDivergingEpoch(point) => Some(*point),
-                _ => None,
-            });
-            let leader_epoch = self.nodes[&id].machine.quorum_state().leader_epoch;
-            if self.nodes[&id].machine.role().is_leader() {
-                let leader_end = self.nodes[&id].log.end_offset();
-                let follower_end = self.nodes[&follower].log.end_offset();
-                let has_new_data = follower_end < leader_end;
-                if diverging.is_some() || has_new_data {
-                    self.send(
-                        id,
-                        follower,
-                        Event::ReceiveFetchResponse {
-                            leader_id: id,
-                            leader_epoch,
-                            diverging,
-                        },
-                    );
-                }
-            }
-        }
-        for action in actions {
-            self.apply_action(id, action);
-        }
-        self.reconcile_timers_for_role(id);
-    }
+    // Feeds one event to a node and translates the resulting actions into new
+    // messages, timer arming, and log and HWM bookkeeping.
+    krabka_macros::simulation_step!(krabka_kraft_core);
 
     /// Enforces per-role timer ownership, which the core does not fully manage
     /// through `ResetTimer` actions alone:
@@ -201,29 +139,13 @@ impl<L: SimNodeLog> Sim<L> {
     /// per-role timer model of `KRaft`.
     fn reconcile_timers_for_role(&mut self, id: NodeId) {
         let node = self.nodes.get_mut(&id).unwrap();
-        match node.machine.role() {
-            Role::Leader { .. } => {
-                node.election_deadline = None;
-                node.fetch_deadline = None;
-                // Arm the leader heartbeat if not already running.
-                if node.heartbeat_deadline.is_none() {
-                    node.heartbeat_deadline = Some(self.now.saturating_add_ms(HEARTBEAT_MS));
-                }
-            }
-            Role::Follower { .. } | Role::Observer { .. } => {
-                node.election_deadline = None;
-                node.heartbeat_deadline = None;
-                node.check_quorum_deadline = None;
-            }
-            Role::Unattached { .. }
-            | Role::Voted { .. }
-            | Role::Prospective { .. }
-            | Role::Candidate { .. }
-            | Role::Resigned => {
-                node.fetch_deadline = None;
-                node.heartbeat_deadline = None;
-                node.check_quorum_deadline = None;
-            }
-        }
+        krabka_kraft_core::simulation_support::reconcile_timers(
+            node.machine.role(),
+            &mut node.election_deadline,
+            &mut node.fetch_deadline,
+            &mut node.heartbeat_deadline,
+            &mut node.check_quorum_deadline,
+            self.now.saturating_add_ms(HEARTBEAT_MS),
+        );
     }
 }

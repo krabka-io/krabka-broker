@@ -3,17 +3,16 @@
 //! towards the watermark, how a voter-set change takes effect, and what a
 //! reopen must not truncate.
 
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use assert2::assert;
 use krabka_ids::{Offset, PartitionIndex};
 use krabka_kraft_core::NodeId;
-use krabka_log::{Log, LogConfig};
 use uuid::Uuid;
 
 use super::{
     QuorumWalStore,
-    test_support::{append_source, batch},
+    test_support::{append_source, batch, distributed_store, open_log, source_log},
 };
 use crate::wal::WalStore;
 
@@ -38,19 +37,8 @@ async fn wait_for_leader_vote(store: &QuorumWalStore, offset: Offset) {
 #[tokio::test]
 async fn distributed_wal_waits_for_a_remote_fsync_ack() {
     let dir = tempfile::tempdir().unwrap();
-    let source = Arc::new(Mutex::new(
-        Log::open(dir.path().join("source"), LogConfig::default()).unwrap(),
-    ));
-    let store = Arc::new(
-        QuorumWalStore::for_distributed_partition(
-            Uuid::from_u128(99),
-            PartitionIndex(0),
-            source,
-            None,
-            3,
-        )
-        .unwrap(),
-    );
+    let source = source_log(dir.path());
+    let store = Arc::new(distributed_store(source, Uuid::from_u128(99), 3));
     let metrics = crate::metrics::BrokerMetrics::new();
     store.engine.attach_observability(
         crate::wal::quorum::registry::ShardId {
@@ -120,19 +108,8 @@ async fn distributed_wal_waits_for_a_remote_fsync_ack() {
 #[tokio::test]
 async fn durable_advance_waits_for_an_offset_strictly_after_the_observation() {
     let dir = tempfile::tempdir().unwrap();
-    let source = Arc::new(Mutex::new(
-        Log::open(dir.path().join("source"), LogConfig::default()).unwrap(),
-    ));
-    let store = Arc::new(
-        QuorumWalStore::for_distributed_partition(
-            Uuid::new_v4(),
-            PartitionIndex(0),
-            source,
-            None,
-            3,
-        )
-        .unwrap(),
-    );
+    let source = source_log(dir.path());
+    let store = Arc::new(distributed_store(source, Uuid::new_v4(), 3));
     store
         .engine
         .configure_distributed(NodeId(1), &[NodeId(1), NodeId(2), NodeId(3)]);
@@ -175,17 +152,8 @@ async fn distributed_wal_rejects_misordered_incomplete_or_duplicate_voter_sets()
         vec![NodeId(1), NodeId(1), NodeId(2)],
     ] {
         let dir = tempfile::tempdir().unwrap();
-        let source = Arc::new(Mutex::new(
-            Log::open(dir.path().join("source"), LogConfig::default()).unwrap(),
-        ));
-        let store = QuorumWalStore::for_distributed_partition(
-            Uuid::new_v4(),
-            PartitionIndex(0),
-            source,
-            None,
-            3,
-        )
-        .unwrap();
+        let source = source_log(dir.path());
+        let store = distributed_store(source, Uuid::new_v4(), 3);
         let (_results, leo) = append_source(&store, 1).await;
 
         store.engine.configure_distributed(NodeId(1), &voters);
@@ -198,17 +166,8 @@ async fn distributed_wal_rejects_misordered_incomplete_or_duplicate_voter_sets()
 #[tokio::test]
 async fn distributed_wal_reconfiguration_replaces_the_remote_voter_set() {
     let dir = tempfile::tempdir().unwrap();
-    let source = Arc::new(Mutex::new(
-        Log::open(dir.path().join("source"), LogConfig::default()).unwrap(),
-    ));
-    let store = QuorumWalStore::for_distributed_partition(
-        Uuid::new_v4(),
-        PartitionIndex(0),
-        source,
-        None,
-        3,
-    )
-    .unwrap();
+    let source = source_log(dir.path());
+    let store = distributed_store(source, Uuid::new_v4(), 3);
     let (_results, leo) = append_source(&store, 1).await;
     store
         .engine
@@ -231,36 +190,18 @@ async fn distributed_wal_reconfiguration_replaces_the_remote_voter_set() {
 async fn distributed_wal_reopens_without_truncating_the_source() {
     let dir = tempfile::tempdir().unwrap();
     let source_dir = dir.path().join("source");
-    let source = Arc::new(Mutex::new(
-        Log::open(&source_dir, LogConfig::default()).unwrap(),
-    ));
+    let source = open_log(&source_dir);
     let mut batch = batch(2);
     source.lock().unwrap().append(&mut batch).unwrap();
     source.lock().unwrap().sync().unwrap();
-    let store = QuorumWalStore::for_distributed_partition(
-        Uuid::from_u128(100),
-        PartitionIndex(0),
-        source.clone(),
-        None,
-        3,
-    )
-    .unwrap();
+    let store = distributed_store(source.clone(), Uuid::from_u128(100), 3);
     assert!(store.engine.durable_watermark() == Offset(0));
     assert!(store.engine.replica_end_offsets() == vec![Offset(2)]);
     drop(store);
     drop(source);
 
-    let source = Arc::new(Mutex::new(
-        Log::open(&source_dir, LogConfig::default()).unwrap(),
-    ));
-    let reopened = QuorumWalStore::for_distributed_partition(
-        Uuid::from_u128(100),
-        PartitionIndex(0),
-        source,
-        None,
-        3,
-    )
-    .unwrap();
+    let source = open_log(&source_dir);
+    let reopened = distributed_store(source, Uuid::from_u128(100), 3);
 
     assert!(reopened.engine.durable_watermark() == Offset(0));
     assert!(reopened.engine.replica_end_offsets() == vec![Offset(2)]);

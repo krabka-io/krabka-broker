@@ -9,7 +9,6 @@
 
 use std::{io, net::SocketAddr};
 
-use assert2::assert;
 use bytes::BytesMut;
 use krabka_protocol::{
     Decode, Encode,
@@ -18,8 +17,6 @@ use krabka_protocol::{
             AlterReplicaLogDir, AlterReplicaLogDirTopic, AlterReplicaLogDirsRequest,
         },
         alter_replica_log_dirs_response::AlterReplicaLogDirsResponse,
-        create_topics_request::{CreatableTopic, CreateTopicsRequest},
-        create_topics_response::CreateTopicsResponse,
         describe_log_dirs_request::DescribeLogDirsRequest,
         describe_log_dirs_response::DescribeLogDirsResponse,
     },
@@ -45,24 +42,8 @@ async fn round_trip(
 }
 
 pub(crate) async fn create_topic(addr: SocketAddr, topic: &str, partitions: i32) {
-    let req = CreateTopicsRequest {
-        topics: vec![CreatableTopic {
-            name: topic.to_string(),
-            num_partitions: partitions,
-            replication_factor: 1,
-            ..Default::default()
-        }],
-        timeout_ms: 5_000,
-        ..Default::default()
-    };
-    let version: i16 = 7;
-    let mut stream = TcpStream::connect(addr).await.unwrap();
-    let mut body = BytesMut::new();
-    req.encode(&mut body, version).unwrap();
-    let resp_bytes = round_trip(&mut stream, 19, version, &body).await.unwrap();
-    let mut cur: &[u8] = &resp_bytes;
-    let resp = CreateTopicsResponse::decode(&mut cur, version).unwrap();
-    assert!(resp.topics[0].error_code == 0, "CreateTopics must succeed");
+    kafka_wire::create_topic_plaintext(addr, CLIENT_ID, kafka_wire::topic(topic, partitions, 1))
+        .await;
 }
 
 pub(crate) async fn alter_replica_log_dirs(

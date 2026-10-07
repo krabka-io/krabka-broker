@@ -204,6 +204,63 @@ mod tests {
         test_support::{api_versions_response_v0, observer_config},
     };
 
+    struct SnapshotFixture {
+        directory: tempfile::TempDir,
+        config: ObserverConfig,
+        image: watch::Sender<Arc<MetadataImage>>,
+        _receiver: watch::Receiver<Arc<MetadataImage>>,
+        store: ObserverStore,
+    }
+
+    impl SnapshotFixture {
+        fn new(cluster_id: Uuid, address: std::net::SocketAddr) -> Self {
+            let directory = tempfile::tempdir().unwrap();
+            let config = ObserverConfig {
+                voters: vec![(NodeId(1), address.to_string())],
+                ..observer_config(cluster_id, directory.path().to_path_buf())
+            };
+            let (image, receiver) = watch::channel(Arc::new(MetadataImage::new(cluster_id)));
+            let store = ObserverStore::open(directory.path(), 0);
+            Self {
+                directory,
+                config,
+                image,
+                _receiver: receiver,
+                store,
+            }
+        }
+
+        async fn fetch(&mut self) -> Option<crate::metadata_observer::fetch::FetchOutcome> {
+            fetch_once(
+                &self.config,
+                &self.config.voters[0].1,
+                NodeId(1),
+                0,
+                &self.image,
+                &mut self.store,
+            )
+            .await
+        }
+    }
+
+    async fn snapshot_broker(
+        snapshot_id: (i64, i32),
+        mut response: impl FnMut(&[u8]) -> Option<PeerResponse> + Send + 'static,
+    ) -> krabka_client_core::MockBroker {
+        krabka_client_core::MockBroker::start(move |api_key, _version, _corr_id, body| {
+            if api_key == api_versions_request::API_KEY {
+                Some(api_versions_response_v0())
+            } else if api_key == krabka_raft::API_KEY_METADATA_FETCH {
+                Some(metadata_fetch_redirect(snapshot_id))
+            } else if api_key == api_key::FETCH_SNAPSHOT {
+                response(body).map(|response| framed(&response.encode()))
+            } else {
+                None
+            }
+        })
+        .await
+    }
+
     /// Prefix every mock response body with the flexible `ResponseHeader` v1
     /// tagged-fields byte the client strips before it sees the body.
     fn framed(body: &bytes::Bytes) -> Vec<u8> {
@@ -270,72 +327,47 @@ mod tests {
         let served = artifact.clone();
         let chunks = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let counted = Arc::clone(&chunks);
-        let mock =
-            krabka_client_core::MockBroker::start(move |api_key, _version, _corr_id, body| {
-                if api_key == api_versions_request::API_KEY {
-                    return Some(api_versions_response_v0());
-                }
-                if api_key == krabka_raft::API_KEY_METADATA_FETCH {
-                    return Some(metadata_fetch_redirect(snapshot_id));
-                }
-                if api_key == api_key::FETCH_SNAPSHOT {
-                    let Some(PeerRequest::FetchSnapshot {
-                        snapshot_id: wanted,
-                        position,
-                        max_bytes,
-                        ..
-                    }) = decode_fetch_snapshot(request_body(body))
-                    else {
-                        return None;
-                    };
-                    counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                    let start = usize::try_from(position).unwrap().min(served.len());
-                    let end = start
-                        .saturating_add(usize::try_from(max_bytes).unwrap())
-                        .min(served.len());
-                    return Some(framed(
-                        &PeerResponse::FetchSnapshot {
-                            snapshot_id: wanted,
-                            size: i64::try_from(served.len()).unwrap(),
-                            position,
-                            bytes: served.slice(start..end),
-                            error_code: 0,
-                        }
-                        .encode(),
-                    ));
-                }
-                None
+        let mock = snapshot_broker(snapshot_id, move |body| {
+            let Some(PeerRequest::FetchSnapshot {
+                snapshot_id: wanted,
+                position,
+                max_bytes,
+                ..
+            }) = decode_fetch_snapshot(request_body(body))
+            else {
+                return None;
+            };
+            counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            let start = usize::try_from(position).unwrap().min(served.len());
+            let end = start
+                .saturating_add(usize::try_from(max_bytes).unwrap())
+                .min(served.len());
+            Some(PeerResponse::FetchSnapshot {
+                snapshot_id: wanted,
+                size: i64::try_from(served.len()).unwrap(),
+                position,
+                bytes: served.slice(start..end),
+                error_code: 0,
             })
-            .await;
+        })
+        .await;
 
-        let dir = tempfile::tempdir().unwrap();
-        let config = ObserverConfig {
-            voters: vec![(NodeId(1), mock.addr.to_string())],
-            ..observer_config(cluster_id, dir.path().to_path_buf())
-        };
-        let (image_tx, _image_rx) = watch::channel(Arc::new(MetadataImage::new(cluster_id)));
-        let mut store = ObserverStore::open(dir.path(), 0);
+        let mut fixture = SnapshotFixture::new(cluster_id, mock.addr);
 
-        let outcome = fetch_once(
-            &config,
-            &mock.addr.to_string(),
-            NodeId(1),
-            0,
-            &image_tx,
-            &mut store,
-        )
-        .await
-        .expect("the redirected fetch installs the snapshot");
+        let outcome = fixture
+            .fetch()
+            .await
+            .expect("the redirected fetch installs the snapshot");
 
         assert!(outcome.next_fetch_offset == 4_096);
         assert!(outcome.log_start_offset == 4_096);
-        assert!(image_tx.borrow().topic("pruned-away").is_some());
+        assert!(fixture.image.borrow().topic("pruned-away").is_some());
         // One range, because the request asks for the whole artifact: a
         // `FetchSnapshot` range cut part-way through a record batch loses the
         // partial batch in the records codec and arrives empty.
         assert!(chunks.load(std::sync::atomic::Ordering::SeqCst) == 1);
 
-        let (restored, fetch_offset) = ObserverStore::open(dir.path(), 0)
+        let (restored, fetch_offset) = ObserverStore::open(fixture.directory.path(), 0)
             .resume(cluster_id)
             .expect("the installed snapshot was persisted");
         assert!(fetch_offset == 4_096);
@@ -386,53 +418,24 @@ mod tests {
     async fn a_range_that_carries_no_bytes_abandons_the_transfer() {
         let cluster_id = Uuid::new_v4();
         let snapshot_id = (4_096_i64, 7_i32);
-        let mock =
-            krabka_client_core::MockBroker::start(move |api_key, _version, _corr_id, _body| {
-                if api_key == api_versions_request::API_KEY {
-                    return Some(api_versions_response_v0());
-                }
-                if api_key == krabka_raft::API_KEY_METADATA_FETCH {
-                    return Some(metadata_fetch_redirect(snapshot_id));
-                }
-                if api_key == api_key::FETCH_SNAPSHOT {
-                    // A non-zero total with an empty range: the shape a records
-                    // field takes when it drops a batch it could not complete.
-                    return Some(framed(
-                        &PeerResponse::FetchSnapshot {
-                            snapshot_id,
-                            size: 512,
-                            position: 0,
-                            bytes: bytes::Bytes::new(),
-                            error_code: 0,
-                        }
-                        .encode(),
-                    ));
-                }
-                None
+        let mock = snapshot_broker(snapshot_id, move |_body| {
+            // A non-zero total with an empty range: the shape a records
+            // field takes when it drops a batch it could not complete.
+            Some(PeerResponse::FetchSnapshot {
+                snapshot_id,
+                size: 512,
+                position: 0,
+                bytes: bytes::Bytes::new(),
+                error_code: 0,
             })
-            .await;
+        })
+        .await;
 
-        let dir = tempfile::tempdir().unwrap();
-        let config = ObserverConfig {
-            voters: vec![(NodeId(1), mock.addr.to_string())],
-            ..observer_config(cluster_id, dir.path().to_path_buf())
-        };
-        let (image_tx, _image_rx) = watch::channel(Arc::new(MetadataImage::new(cluster_id)));
-        let mut store = ObserverStore::open(dir.path(), 0);
+        let mut fixture = SnapshotFixture::new(cluster_id, mock.addr);
 
-        let outcome = tokio::time::timeout(
-            std::time::Duration::from_secs(10),
-            fetch_once(
-                &config,
-                &mock.addr.to_string(),
-                NodeId(1),
-                0,
-                &image_tx,
-                &mut store,
-            ),
-        )
-        .await
-        .expect("the transfer gives up rather than re-asking forever");
+        let outcome = tokio::time::timeout(std::time::Duration::from_secs(10), fixture.fetch())
+            .await
+            .expect("the transfer gives up rather than re-asking forever");
 
         assert!(outcome.is_none());
         mock.stop();
@@ -448,52 +451,25 @@ mod tests {
         let snapshot_id = (4_096_i64, 7_i32);
         let garbage = bytes::Bytes::from_static(b"this is not a KIP-630 checkpoint");
         let served = garbage.clone();
-        let mock =
-            krabka_client_core::MockBroker::start(move |api_key, _version, _corr_id, _body| {
-                if api_key == api_versions_request::API_KEY {
-                    return Some(api_versions_response_v0());
-                }
-                if api_key == krabka_raft::API_KEY_METADATA_FETCH {
-                    return Some(metadata_fetch_redirect(snapshot_id));
-                }
-                if api_key == api_key::FETCH_SNAPSHOT {
-                    return Some(framed(
-                        &PeerResponse::FetchSnapshot {
-                            snapshot_id,
-                            size: i64::try_from(served.len()).unwrap(),
-                            position: 0,
-                            bytes: served.clone(),
-                            error_code: 0,
-                        }
-                        .encode(),
-                    ));
-                }
-                None
+        let mock = snapshot_broker(snapshot_id, move |_body| {
+            Some(PeerResponse::FetchSnapshot {
+                snapshot_id,
+                size: i64::try_from(served.len()).unwrap(),
+                position: 0,
+                bytes: served.clone(),
+                error_code: 0,
             })
-            .await;
-
-        let dir = tempfile::tempdir().unwrap();
-        let config = ObserverConfig {
-            voters: vec![(NodeId(1), mock.addr.to_string())],
-            ..observer_config(cluster_id, dir.path().to_path_buf())
-        };
-        let (image_tx, _image_rx) = watch::channel(Arc::new(MetadataImage::new(cluster_id)));
-        let mut store = ObserverStore::open(dir.path(), 0);
-
-        let outcome = fetch_once(
-            &config,
-            &mock.addr.to_string(),
-            NodeId(1),
-            0,
-            &image_tx,
-            &mut store,
-        )
+        })
         .await;
 
+        let mut fixture = SnapshotFixture::new(cluster_id, mock.addr);
+
+        let outcome = fixture.fetch().await;
+
         assert!(outcome.is_none());
-        assert!(image_tx.borrow().topics().next().is_none());
+        assert!(fixture.image.borrow().topics().next().is_none());
         assert!(
-            ObserverStore::open(dir.path(), 0)
+            ObserverStore::open(fixture.directory.path(), 0)
                 .resume(cluster_id)
                 .is_none()
         );
@@ -510,52 +486,25 @@ mod tests {
     async fn a_refused_snapshot_transfer_leaves_the_fetch_offset_alone() {
         let cluster_id = Uuid::new_v4();
         let snapshot_id = (4_096_i64, 7_i32);
-        let mock =
-            krabka_client_core::MockBroker::start(move |api_key, _version, _corr_id, _body| {
-                if api_key == api_versions_request::API_KEY {
-                    return Some(api_versions_response_v0());
-                }
-                if api_key == krabka_raft::API_KEY_METADATA_FETCH {
-                    return Some(metadata_fetch_redirect(snapshot_id));
-                }
-                if api_key == api_key::FETCH_SNAPSHOT {
-                    return Some(framed(
-                        &PeerResponse::FetchSnapshot {
-                            snapshot_id,
-                            size: 0,
-                            position: 0,
-                            bytes: bytes::Bytes::new(),
-                            // Krabka-internal "snapshot not available".
-                            error_code: 98,
-                        }
-                        .encode(),
-                    ));
-                }
-                None
+        let mock = snapshot_broker(snapshot_id, move |_body| {
+            Some(PeerResponse::FetchSnapshot {
+                snapshot_id,
+                size: 0,
+                position: 0,
+                bytes: bytes::Bytes::new(),
+                // Krabka-internal "snapshot not available".
+                error_code: 98,
             })
-            .await;
-
-        let dir = tempfile::tempdir().unwrap();
-        let config = ObserverConfig {
-            voters: vec![(NodeId(1), mock.addr.to_string())],
-            ..observer_config(cluster_id, dir.path().to_path_buf())
-        };
-        let (image_tx, _image_rx) = watch::channel(Arc::new(MetadataImage::new(cluster_id)));
-        let mut store = ObserverStore::open(dir.path(), 0);
-
-        let outcome = fetch_once(
-            &config,
-            &mock.addr.to_string(),
-            NodeId(1),
-            0,
-            &image_tx,
-            &mut store,
-        )
+        })
         .await;
+
+        let mut fixture = SnapshotFixture::new(cluster_id, mock.addr);
+
+        let outcome = fixture.fetch().await;
 
         assert!(outcome.is_none());
         assert!(
-            ObserverStore::open(dir.path(), 0)
+            ObserverStore::open(fixture.directory.path(), 0)
                 .resume(cluster_id)
                 .is_none()
         );

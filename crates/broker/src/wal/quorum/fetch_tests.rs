@@ -2,32 +2,18 @@
 //! engine, where the high watermark and the log end offset are separate
 //! frontiers, and an empty read is not an out-of-range read.
 
-use std::sync::{Arc, Mutex};
-
 use assert2::assert;
-use krabka_ids::{Offset, PartitionIndex};
-use krabka_log::{Log, LogConfig};
+use krabka_ids::Offset;
 use krabka_units::{ByteSize, convert::ByteSizeExt as _};
 
-use super::{QuorumWalStore, test_support::append_source};
+use super::test_support::{append_source, partition_store, source_log};
 use crate::wal::WalStore;
 
 #[tokio::test]
 async fn wal_fetch_serves_the_uncommitted_tail_with_separate_frontiers() {
     let dir = tempfile::tempdir().unwrap();
-    let source = Arc::new(Mutex::new(
-        Log::open(dir.path().join("source"), LogConfig::default()).unwrap(),
-    ));
-    let store = QuorumWalStore::for_partition(
-        "topic",
-        None,
-        PartitionIndex(0),
-        dir.path(),
-        source,
-        None,
-        3,
-    )
-    .unwrap();
+    let source = source_log(dir.path());
+    let store = partition_store(dir.path(), source, 3);
 
     let (_results, first) = append_source(&store, 1).await;
     let (_results, second) = append_source(&store, 1).await;
@@ -48,19 +34,8 @@ async fn wal_fetch_serves_the_uncommitted_tail_with_separate_frontiers() {
 #[tokio::test]
 async fn wal_fetch_accepts_the_log_end_and_a_zero_byte_limit() {
     let dir = tempfile::tempdir().unwrap();
-    let source = Arc::new(Mutex::new(
-        Log::open(dir.path().join("source"), LogConfig::default()).unwrap(),
-    ));
-    let store = QuorumWalStore::for_partition(
-        "topic",
-        None,
-        PartitionIndex(0),
-        dir.path(),
-        source,
-        None,
-        3,
-    )
-    .unwrap();
+    let source = source_log(dir.path());
+    let store = partition_store(dir.path(), source, 3);
     let (_results, log_end) = append_source(&store, 1).await;
 
     let at_end = store

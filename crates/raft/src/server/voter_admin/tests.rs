@@ -2,7 +2,12 @@
 //! request must carry before the quorum sees it, and what a refusal says.
 
 use assert2::check;
-use krabka_protocol::Decode;
+use krabka_protocol::{
+    Decode,
+    owned::{
+        add_raft_voter_request::AddRaftVoterRequest, add_raft_voter_response::AddRaftVoterResponse,
+    },
+};
 
 use super::*;
 use crate::server::test_support::{decoded, single_voter_engine, wait_for_leader};
@@ -41,6 +46,19 @@ fn wire_listeners_must_be_usable_and_uniquely_named() {
     for (what, listeners, usable) in cases {
         check!(valid_wire_listeners(listeners.clone()) == usable, "{what}");
     }
+}
+
+async fn add_response(
+    request: AddRaftVoterRequest,
+    version: i16,
+    engine: &KraftController,
+) -> AddRaftVoterResponse {
+    let mut body = BytesMut::new();
+    krabka_protocol::Encode::encode(&request, &mut body, version).expect("encode");
+    let response = add_raft_voter_response(version, &body.freeze(), engine)
+        .await
+        .expect("response");
+    decoded::<AddRaftVoterResponse>(&response, version)
 }
 
 /// A reconfiguration request is refused before it reaches the quorum when
@@ -250,12 +268,7 @@ async fn adding_a_voter_needs_an_id_and_a_reachable_listener() {
         listeners: vec![good_listener()],
         ..Default::default()
     };
-    let mut body = BytesMut::new();
-    request.encode(&mut body, version).expect("encode");
-    let bytes = add_raft_voter_response(version, &body.freeze(), &engine)
-        .await
-        .expect("response");
-    let response = decoded::<AddRaftVoterResponse>(&bytes, version);
+    let response = add_response(request, version, &engine).await;
     check!(response.error_code == 104);
 
     // Matching cluster_id is accepted (does not return INVALID_REQUEST)
@@ -266,12 +279,7 @@ async fn adding_a_voter_needs_an_id_and_a_reachable_listener() {
         listeners: vec![good_listener()],
         ..Default::default()
     };
-    let mut body = BytesMut::new();
-    request.encode(&mut body, version).expect("encode");
-    let bytes = add_raft_voter_response(version, &body.freeze(), &engine)
-        .await
-        .expect("response");
-    let response = decoded::<AddRaftVoterResponse>(&bytes, version);
+    let response = add_response(request, version, &engine).await;
     check!(response.error_code != INVALID_REQUEST);
 
     // At kraft.version >= 1, AddRaftVoter probes the candidate listeners.
@@ -284,12 +292,7 @@ async fn adding_a_voter_needs_an_id_and_a_reachable_listener() {
         listeners: vec![good_listener()],
         ..Default::default()
     };
-    let mut body = BytesMut::new();
-    request.encode(&mut body, version).expect("encode");
-    let bytes = add_raft_voter_response(version, &body.freeze(), &engine)
-        .await
-        .expect("response");
-    let response = decoded::<AddRaftVoterResponse>(&bytes, version);
+    let response = add_response(request, version, &engine).await;
     check!(
         response.error_code == 7,
         "ApiVersions probe failed on unreachable candidate"

@@ -375,15 +375,7 @@ mod tests {
         use krabka_metadata::{ClientQuotaRecord, MetadataImage, MetadataRecord, QuotaEntity};
         // `(consumer_byte_rate, response bytes, expected throttle)`. The
         // one-second window gives the bucket a burst of exactly its rate.
-        let cases = [
-            (1024.0, 1024, <Time as TimeExt>::ZERO),
-            (1024.0, 2048, secs(1)),
-            (0.5, 1, secs(1)),
-            (0.5, 100, secs(199)),
-            (0.25, 1, secs(3)),
-            (1.5, 1, <Time as TimeExt>::ZERO),
-            (1.5, 3, secs(1)),
-        ];
+        let cases = crate::quota::test_support::fractional_bandwidth_cases();
         let mut actual = Vec::new();
         let mut expected = Vec::new();
         for (rate, bytes, delay) in cases {

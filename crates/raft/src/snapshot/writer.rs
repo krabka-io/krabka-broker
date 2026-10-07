@@ -189,11 +189,13 @@ impl SnapshotWriter {
 #[cfg(test)]
 mod tests {
     use assert2::check;
-    use krabka_metadata::{LeaderEpoch, NodeId, PartitionRecord, TopicRecord};
+    use krabka_metadata::NodeId;
     use krabka_protocol::owned::voters_record::VotersRecord as WireVotersRecord;
     use uuid::Uuid;
 
     use super::*;
+
+    krabka_macros::snapshot_topic_fixture!(append_snapshot_topic);
 
     fn decode_single_control(batch: &RecordBatch) -> ControlRecord {
         let record = batch.records.first().expect("one control record");
@@ -208,26 +210,7 @@ mod tests {
     fn writer_emits_canonical_header_data_offsets_and_footer() {
         let cid = Uuid::new_v4();
         let mut image = MetadataImage::new(cid);
-        image.apply(&MetadataRecord::V1Topic(TopicRecord {
-            name: "orders".into(),
-            topic_id: Uuid::new_v4(),
-            partitions: 2,
-            replication_factor: 1,
-        }));
-        for p in 0..2 {
-            image.apply(&MetadataRecord::V1Partition(PartitionRecord {
-                topic: "orders".into(),
-                partition: p,
-                leader: NodeId(1),
-                replicas: vec![NodeId(1)],
-                isr: vec![NodeId(1)],
-                leader_epoch: LeaderEpoch(0),
-                adding_replicas: vec![],
-                removing_replicas: vec![],
-                directories: vec![],
-                partition_epoch: 0,
-            }));
-        }
+        append_snapshot_topic(&mut image);
 
         let timestamp = 1_700_000_000_123;
         let bytes = SnapshotWriter::serialize(&image, timestamp).unwrap();

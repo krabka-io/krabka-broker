@@ -317,17 +317,11 @@ mod tests {
             .unwrap();
             m.reconcile_assignment(&(0..log.partition_count()).collect::<Vec<_>>())
                 .await;
-            for (id, start, end) in [(10u128, 0, 99), (11, 100, 199), (12, 200, 299)] {
-                let m2 = m.clone();
-                on_blocking(move || {
-                    m2.add_remote_log_segment_metadata(started(id, start, end))
-                        .unwrap();
-                })
-                .await;
-                let m2 = m.clone();
-                on_blocking(move || m2.update_remote_log_segment_metadata(finish(id)).unwrap())
-                    .await;
-            }
+            crate::manager::test_support::seed_finished(
+                &m,
+                &[(10, 0, 99), (11, 100, 199), (12, 200, 299)],
+            )
+            .await;
             pre_cache = m.list_remote_log_segments(&tp()).unwrap();
             m.shutdown_and_flush().await;
         }

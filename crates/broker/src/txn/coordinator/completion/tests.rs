@@ -2,18 +2,17 @@
 //! decision helpers, and one completion attempt against a coordinator whose
 //! `__transaction_state-0` partition and data partition are real logs.
 
-use std::{path::Path, sync::Arc};
+use std::sync::Arc;
 
 use assert2::{assert, check};
 use krabka_ids::PartitionIndex;
-use krabka_log::{Log, LogConfig, ProducerId};
+use krabka_log::ProducerId;
 use krabka_metadata::{MetadataImage, MetadataRecord, NodeId, PartitionRecord, TopicRecord};
 use tempfile::TempDir;
 use uuid::Uuid;
 
 use super::*;
 use crate::{
-    partition::Partition,
     partition_registry::PartitionRegistry,
     txn::{bootstrap, state::TopicPartition},
 };
@@ -135,20 +134,6 @@ fn image(leader: NodeId, leader_epoch: i32) -> MetadataImage {
     image
 }
 
-fn open_partition(dir: &Path, topic: &str) -> Arc<Partition> {
-    let part_dir = crate::log_dir::partition_dir(dir, topic, 0);
-    std::fs::create_dir_all(&part_dir).expect("create partition dir");
-    crate::broker::spawn_partition(
-        topic.to_owned(),
-        PartitionIndex(0),
-        dir.to_path_buf(),
-        Log::open(&part_dir, LogConfig::default()).expect("open log"),
-        crate::log_dir_status::LogDirRegistry::default(),
-        Arc::new(crate::producer_state::ProducerState::new()),
-        false,
-    )
-}
-
 /// A coordinator that persisted `entry` as the leader of
 /// `__transaction_state-0`, after which `leader` was elected at a higher
 /// leader epoch. `with_data_partition` hosts the data partition locally, so a
@@ -163,10 +148,10 @@ async fn coordinator(
     partitions.insert(
         bootstrap::TOPIC.into(),
         PartitionIndex(0),
-        open_partition(dir.path(), bootstrap::TOPIC),
+        crate::test_support::open_partition(dir.path(), bootstrap::TOPIC, 0),
     );
     if with_data_partition {
-        let data = open_partition(dir.path(), DATA_TOPIC);
+        let data = crate::test_support::open_partition(dir.path(), DATA_TOPIC, 0);
         // The metadata reconcile installs this broker, node 1, as the leader,
         // so the partition takes markers.
         data.install_leader_change(1, 0).await;
@@ -304,9 +289,9 @@ async fn a_client_transaction_version_zero_completion_stays_classic() {
     partitions.insert(
         bootstrap::TOPIC.into(),
         PartitionIndex(0),
-        open_partition(dir.path(), bootstrap::TOPIC),
+        crate::test_support::open_partition(dir.path(), bootstrap::TOPIC, 0),
     );
-    let data = open_partition(dir.path(), DATA_TOPIC);
+    let data = crate::test_support::open_partition(dir.path(), DATA_TOPIC, 0);
     // The metadata reconcile installs this broker, node 1, as the leader.
     data.install_leader_change(1, 0).await;
     partitions.insert(DATA_TOPIC.into(), PartitionIndex(0), data);

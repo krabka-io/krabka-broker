@@ -73,42 +73,28 @@ impl StampIndex {
     /// `Unaligned` byte buffer fails. That invariant cannot be false.
     pub fn open(path: PathBuf) -> Result<Self, LogError> {
         let mut entries = Vec::new();
-        match std::fs::read(&path) {
-            Ok(bytes) => {
-                if !bytes.len().is_multiple_of(ENTRY_BYTES) {
-                    return Err(LogError::Corrupt(format!(
-                        "stampindex {} has length {} not divisible by {}",
-                        path.display(),
-                        bytes.len(),
-                        ENTRY_BYTES,
-                    )));
-                }
-                let raws = <[StampEntryRaw]>::ref_from_bytes(&bytes)
-                    .expect("length is a multiple of ENTRY_BYTES and StampEntryRaw is Unaligned");
-                entries.reserve(raws.len());
-                for raw in raws {
-                    entries.push(StampEntry {
-                        base_offset: Offset(raw.base_offset.get()),
-                        last_offset: Offset(raw.last_offset.get()),
-                        stamp: raw.stamp.get(),
-                    });
-                }
-                entries.sort_unstable_by_key(|entry| {
-                    (entry.base_offset.0, entry.last_offset.0, entry.stamp)
-                });
-                // A write followed by an uncertain sync can be retried and
-                // leave an exact duplicate on disk. Canonicalize that retry,
-                // but reject a duplicate range with a different stamp below.
-                entries.dedup();
-                if !Self::entries_valid(&entries) {
-                    return Err(LogError::Corrupt(format!(
-                        "stampindex {} contains inverted or overlapping ranges",
-                        path.display()
-                    )));
-                }
-            }
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-            Err(e) => return Err(LogError::Io(e)),
+        let bytes = crate::index::read_sidecar(&path, ENTRY_BYTES, "stampindex")?;
+        let raws = <[StampEntryRaw]>::ref_from_bytes(&bytes)
+            .expect("length is a multiple of ENTRY_BYTES and StampEntryRaw is Unaligned");
+        entries.reserve(raws.len());
+        for raw in raws {
+            entries.push(StampEntry {
+                base_offset: Offset(raw.base_offset.get()),
+                last_offset: Offset(raw.last_offset.get()),
+                stamp: raw.stamp.get(),
+            });
+        }
+        entries
+            .sort_unstable_by_key(|entry| (entry.base_offset.0, entry.last_offset.0, entry.stamp));
+        // A write followed by an uncertain sync can be retried and
+        // leave an exact duplicate on disk. Canonicalize that retry,
+        // but reject a duplicate range with a different stamp below.
+        entries.dedup();
+        if !Self::entries_valid(&entries) {
+            return Err(LogError::Corrupt(format!(
+                "stampindex {} contains inverted or overlapping ranges",
+                path.display()
+            )));
         }
         tracing::Span::current().record("entries", entries.len());
         Ok(Self {

@@ -1,7 +1,7 @@
 //! The [`RemoteStorageManager`] SPI: copy / fetch / delete of segment data
 //! and indexes to and from the remote tier.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use bytes::Bytes;
@@ -52,6 +52,11 @@ pub enum IndexType {
 
 /// Filename suffix of a segment's data, as distinct from one of its indexes.
 pub const LOG_FILE_SUFFIX: &str = ".log";
+
+/// Every artifact a segment copy can write, including optional indexes.
+pub fn segment_suffixes() -> impl Iterator<Item = &'static str> {
+    std::iter::once(LOG_FILE_SUFFIX).chain(IndexType::ALL.iter().map(|index| index.suffix()))
+}
 
 /// Character count of a Kafka Base64-rendered UUID.
 ///
@@ -190,6 +195,47 @@ pub struct LogSegmentData {
     pub producer_snapshot_index: Option<PathBuf>,
     /// Serialized leader-epoch index bytes for this segment's offset range.
     pub leader_epoch_index: Bytes,
+}
+
+/// The source of one remote segment artifact.
+pub enum ArtifactBody<'a> {
+    File(&'a Path),
+    Memory(&'a Bytes),
+}
+
+impl LogSegmentData {
+    /// Walk the copy order shared by filesystem and object-store backends.
+    pub(crate) fn artifacts(&self) -> impl Iterator<Item = (&'static str, ArtifactBody<'_>)> {
+        [
+            Some((
+                LOG_FILE_SUFFIX,
+                ArtifactBody::File(self.log_segment.as_path()),
+            )),
+            Some((
+                IndexType::Offset.suffix(),
+                ArtifactBody::File(self.offset_index.as_path()),
+            )),
+            Some((
+                IndexType::Timestamp.suffix(),
+                ArtifactBody::File(self.time_index.as_path()),
+            )),
+            self.producer_snapshot_index.as_deref().map(|path| {
+                (
+                    IndexType::ProducerSnapshot.suffix(),
+                    ArtifactBody::File(path),
+                )
+            }),
+            Some((
+                IndexType::LeaderEpoch.suffix(),
+                ArtifactBody::Memory(&self.leader_epoch_index),
+            )),
+            self.transaction_index
+                .as_deref()
+                .map(|path| (IndexType::Transaction.suffix(), ArtifactBody::File(path))),
+        ]
+        .into_iter()
+        .flatten()
+    }
 }
 
 /// SPI for the remote object store that holds offloaded segment data.

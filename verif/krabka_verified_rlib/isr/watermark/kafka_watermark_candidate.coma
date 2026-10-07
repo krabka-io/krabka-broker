@@ -1,12 +1,12 @@
-(* #"/workspace/crates/verified/src/isr/watermark.rs" 144 0 144 91 *)
+(* #"/workspace/crates/verified/src/isr/watermark.rs" 145 0 145 91 *)
 
-let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
-let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
-let%span swell_founded = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/well_founded.rs" 43 8 43 33
-let%span swatermark = "/workspace/crates/verified/src/isr/watermark.rs" 143 10 143 11
-let%span swatermark'0 = "/workspace/crates/verified/src/isr/watermark.rs" 130 8 132 70
-let%span swatermark'1 = "/workspace/crates/verified/src/isr/watermark.rs" 39 16 39 74
-let%span swatermark'2 = "/workspace/crates/verified/src/isr/watermark.rs" 15 8 22 13
+let%span sord = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sord'0 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span swell_founded = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/well_founded.rs" 43 8 43 33
+let%span swatermark = "/workspace/crates/verified/src/isr/watermark.rs" 144 10 144 11
+let%span swatermark'0 = "/workspace/crates/verified/src/isr/watermark.rs" 131 8 133 70
+let%span swatermark'1 = "/workspace/crates/verified/src/isr/watermark.rs" 40 16 40 74
+let%span swatermark'2 = "/workspace/crates/verified/src/isr/watermark.rs" 16 8 23 13
 
 use creusot.int.Int64
 use seq.Seq
@@ -22,10 +22,10 @@ type t_IsrEligibilityFacts = {
 
 type t_HwmReplica = { log_end: Int64.t; in_isr: bool; caught_up_within_lag: bool; eligibility: t_IsrEligibilityFacts }
 
-predicate kafka_replica_is_caught_up [#"/workspace/crates/verified/src/isr/watermark.rs" 34 0 38 9] (follower_log_end: int) (leader_log_end: int) (caught_up_within_lag'0: bool) =
+predicate kafka_replica_is_caught_up [#"/workspace/crates/verified/src/isr/watermark.rs" 35 0 39 9] (follower_log_end: int) (leader_log_end: int) (caught_up_within_lag'0: bool) =
   [%#swatermark'1] follower_log_end = leader_log_end \/ caught_up_within_lag'0
 
-predicate kafka_is_replica_isr_eligible [#"/workspace/crates/verified/src/isr/watermark.rs" 13 0 13 68] (facts: t_IsrEligibilityFacts) =
+predicate kafka_is_replica_isr_eligible [#"/workspace/crates/verified/src/isr/watermark.rs" 14 0 14 68] (facts: t_IsrEligibilityFacts) =
   [%#swatermark'2] not facts.fenced
   /\ not facts.shutting_down
   /\ match facts.fetch_broker_epoch with
@@ -36,7 +36,7 @@ predicate kafka_is_replica_isr_eligible [#"/workspace/crates/verified/src/isr/wa
     | None -> false
     end
 
-predicate kafka_holds_watermark [#"/workspace/crates/verified/src/isr/watermark.rs" 128 0 128 74] (replica: t_HwmReplica) (leader_log_end: int) =
+predicate kafka_holds_watermark [#"/workspace/crates/verified/src/isr/watermark.rs" 129 0 129 74] (replica: t_HwmReplica) (leader_log_end: int) =
   [%#swatermark'0] replica.in_isr
   \/ kafka_replica_is_caught_up (Int64.to_int replica.log_end) leader_log_end replica.caught_up_within_lag
   /\ kafka_is_replica_isr_eligible replica.eligibility
@@ -64,7 +64,7 @@ constant replicas : Seq.seq t_HwmReplica
 
 constant n : int
 
-function kafka_watermark_candidate [#"/workspace/crates/verified/src/isr/watermark.rs" 144 0 144 91] (leader_log_end: int) (replicas: Seq.seq t_HwmReplica) (n: int) : int
+function kafka_watermark_candidate [#"/workspace/crates/verified/src/isr/watermark.rs" 145 0 145 91] (leader_log_end: int) (replicas: Seq.seq t_HwmReplica) (n: int) : int
 
 goal vc_kafka_watermark_candidate: if n <= 0 then
     true

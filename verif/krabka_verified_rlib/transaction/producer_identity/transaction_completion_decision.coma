@@ -1,11 +1,11 @@
-(* #"/workspace/crates/verified/src/transaction/producer_identity.rs" 107 0 113 34 *)
+(* #"/workspace/crates/verified/src/transaction/producer_identity.rs" 108 0 114 34 *)
 
-let%span smarker = "/workspace/crates/verified/src/transaction/marker.rs" 171 16 171 80
-let%span sproducer_identity = "/workspace/crates/verified/src/transaction/producer_identity.rs" 94 11 94 42
-let%span sproducer_identity'0 = "/workspace/crates/verified/src/transaction/producer_identity.rs" 95 10 96 77
-let%span sproducer_identity'1 = "/workspace/crates/verified/src/transaction/producer_identity.rs" 97 10 99 44
-let%span sproducer_identity'2 = "/workspace/crates/verified/src/transaction/producer_identity.rs" 100 10 103 42
-let%span sproducer_identity'3 = "/workspace/crates/verified/src/transaction/producer_identity.rs" 104 10 105 74
+let%span smarker = "/workspace/crates/verified/src/transaction/marker.rs" 190 16 190 80
+let%span sproducer_identity = "/workspace/crates/verified/src/transaction/producer_identity.rs" 95 11 95 42
+let%span sproducer_identity'0 = "/workspace/crates/verified/src/transaction/producer_identity.rs" 96 10 97 77
+let%span sproducer_identity'1 = "/workspace/crates/verified/src/transaction/producer_identity.rs" 98 10 100 44
+let%span sproducer_identity'2 = "/workspace/crates/verified/src/transaction/producer_identity.rs" 101 10 104 42
+let%span sproducer_identity'3 = "/workspace/crates/verified/src/transaction/producer_identity.rs" 105 10 106 74
 
 use creusot.int.Int64
 use creusot.int.Int16
@@ -18,14 +18,14 @@ type t_TransactionIdentity = { pid'0: Int64.t; epoch'0: Int16.t }
 
 type t_TransactionCompletionDecision = Proceed | AlreadyComplete | RejectStaleIdentity | RejectState
 
-predicate has_identity [#"/workspace/crates/verified/src/transaction/marker.rs" 170 0 170 89] (snapshot: t_TransactionSnapshot) (identity: t_TransactionIdentity) =
+predicate has_identity [#"/workspace/crates/verified/src/transaction/marker.rs" 189 0 189 89] (snapshot: t_TransactionSnapshot) (identity: t_TransactionIdentity) =
   [%#smarker] snapshot.pid = identity.pid'0 /\ snapshot.epoch = identity.epoch'0
 
 meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let transaction_completion_decision [#"/workspace/crates/verified/src/transaction/producer_identity.rs" 107 0 113 34]
+let transaction_completion_decision [#"/workspace/crates/verified/src/transaction/producer_identity.rs" 108 0 114 34]
   (current': t_TransactionSnapshot) (expected: t_TransactionIdentity) (completion: t_TransactionIdentity)
   (prepare_state: Int8.t) (complete_state: Int8.t) (return (x: t_TransactionCompletionDecision)) =
 {[@stop_split] [@expl:transaction_completion_decision requires] [%#sproducer_identity] prepare_state <> complete_state}

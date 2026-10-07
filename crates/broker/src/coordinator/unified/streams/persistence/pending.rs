@@ -126,56 +126,21 @@ mod tests {
         assert!(tombstone.key.is_some());
     }
 
-    /// The keys of the streams records write the group id and the member id
-    /// with an `INT16` length. A string of 32767 bytes encodes, and one of
-    /// 32768 bytes makes the whole batch an error, not a panic in the actor.
-    #[test]
-    fn a_key_string_over_32767_bytes_does_not_encode() {
-        fn every_record() -> PendingStreamsRecords {
-            PendingStreamsRecords {
-                group_metadata: Some(StreamsGroupMetadataValue {
-                    epoch: 1,
-                    metadata_hash: 0,
-                    description: DescriptionEpochs::default(),
-                }),
-                member_metadata: vec![("m".into(), None)],
-                topology: Some(StreamsGroupTopologyValue::default()),
-                target_per_member: vec![("m".into(), None)],
-                current_per_member: vec![("m".into(), None)],
-                ..Default::default()
-            }
-        }
-        type Field = (&'static str, fn(&mut PendingStreamsRecords, String));
-        let fields: [Field; 3] = [
-            ("member id of a member record", |p, s| {
-                p.member_metadata[0].0 = s;
+    // The keys of the streams records write the group id and the member id
+    // with an `INT16` length. A string of 32767 bytes encodes, and one of
+    // 32768 bytes makes the whole batch an error, not a panic in the actor.
+    crate::coordinator::unified::persistence::key_string_boundaries!(PendingStreamsRecords, || {
+        PendingStreamsRecords {
+            group_metadata: Some(StreamsGroupMetadataValue {
+                epoch: 1,
+                metadata_hash: 0,
+                description: DescriptionEpochs::default(),
             }),
-            ("member id of a target assignment", |p, s| {
-                p.target_per_member[0].0 = s;
-            }),
-            ("member id of a current assignment", |p, s| {
-                p.current_per_member[0].0 = s;
-            }),
-        ];
-        let limit = crate::coordinator::unified::persistence::MAX_STRING_BYTES;
-        for (name, set) in fields {
-            for (length, encodes) in [(limit, true), (limit + 1, false)] {
-                let mut pending = every_record();
-                set(&mut pending, "a".repeat(length));
-
-                let outcome = pending.into_batch("g", 0);
-
-                assert!(outcome.is_ok() == encodes, "{name} of {length} bytes");
-                assert!(
-                    encodes || matches!(outcome, Err(BrokerError::Protocol(_))),
-                    "{name} of {length} bytes is a protocol error"
-                );
-            }
+            member_metadata: vec![("m".into(), None)],
+            topology: Some(StreamsGroupTopologyValue::default()),
+            target_per_member: vec![("m".into(), None)],
+            current_per_member: vec![("m".into(), None)],
+            ..Default::default()
         }
-        for (length, encodes) in [(limit, true), (limit + 1, false)] {
-            let outcome = every_record().into_batch(&"g".repeat(length), 0);
-
-            assert!(outcome.is_ok() == encodes, "group id of {length} bytes");
-        }
-    }
+    });
 }

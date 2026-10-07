@@ -1,11 +1,11 @@
-(* #"/workspace/crates/verified/src/broker/trim_admission.rs" 56 0 58 30 *)
+(* #"/workspace/crates/verified/src/broker/trim_admission.rs" 57 0 59 30 *)
 
-let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
-let%span strim_admission = "/workspace/crates/verified/src/broker/trim_admission.rs" 59 25 59 27
-let%span strim_admission'0 = "/workspace/crates/verified/src/broker/trim_admission.rs" 60 33 60 34
-let%span strim_admission'1 = "/workspace/crates/verified/src/broker/trim_admission.rs" 67 26 67 28
-let%span strim_admission'2 = "/workspace/crates/verified/src/broker/trim_admission.rs" 70 41 70 43
-let%span strim_admission'3 = "/workspace/crates/verified/src/broker/trim_admission.rs" 16 4 21 65
+let%span sord = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span strim_admission = "/workspace/crates/verified/src/broker/trim_admission.rs" 60 25 60 27
+let%span strim_admission'0 = "/workspace/crates/verified/src/broker/trim_admission.rs" 61 33 61 34
+let%span strim_admission'1 = "/workspace/crates/verified/src/broker/trim_admission.rs" 68 26 68 28
+let%span strim_admission'2 = "/workspace/crates/verified/src/broker/trim_admission.rs" 71 41 71 43
+let%span strim_admission'3 = "/workspace/crates/verified/src/broker/trim_admission.rs" 17 4 22 65
 
 use creusot.int.Int64
 use creusot.prelude.Any
@@ -29,7 +29,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let delete_records_trim_decision [#"/workspace/crates/verified/src/broker/trim_admission.rs" 56 0 58 30]
+let delete_records_trim_decision [#"/workspace/crates/verified/src/broker/trim_admission.rs" 57 0 59 30]
   (facts: t_DeleteRecordsTrimFacts) (return (x: t_DeleteRecordsTrimDecision)) = (! bb0
   [ bb0 = s0
     [ s0 = [ &_10 <- Int64.lt facts.requested ([%#strim_admission] (-1: Int64.t)) ] s1

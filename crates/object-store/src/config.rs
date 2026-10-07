@@ -51,7 +51,7 @@ pub enum ObjectStoreConfig {
 ///
 /// `Debug` redacts the credential fields, so a stray `{:?}` call or tracing
 /// call never leaks them.
-#[derive(Clone, derive_more::Debug, krabka_macros::FieldDefaults)]
+#[derive(Clone, PartialEq, Eq, derive_more::Debug, krabka_macros::FieldDefaults)]
 pub struct S3Config {
     /// S3 bucket name.
     pub bucket: String,
@@ -113,25 +113,9 @@ pub struct S3Config {
 ///
 /// `Debug` redacts the credential fields, so a stray `{:?}` call or tracing
 /// call never leaks them.
+#[krabka_macros::gcs_fields(runtime)]
 #[derive(Clone, PartialEq, Eq, derive_more::Debug, krabka_macros::FieldDefaults)]
 pub struct GcsConfig {
-    /// GCS bucket name.
-    pub bucket: String,
-    /// Optional key prefix inside the bucket. No leading slash and no trailing
-    /// slash.
-    pub prefix: Option<String>,
-    /// Optional path to a service-account JSON key file.
-    #[debug("{:?}", service_account_path.as_ref().map(|_| "***"))]
-    pub service_account_path: Option<String>,
-    /// Optional inline service-account JSON key. It is mutually exclusive with
-    /// the path.
-    #[debug("{:?}", service_account_key.as_ref().map(|_| "***"))]
-    pub service_account_key: Option<String>,
-    /// Optional path to an application-default-credentials JSON file.
-    #[debug("{:?}", application_credentials_path.as_ref().map(|_| "***"))]
-    pub application_credentials_path: Option<String>,
-    /// Optional custom GCS API base URL, for example `http://fake-gcs:4443`.
-    pub endpoint: Option<String>,
     /// Allow plaintext HTTP. Emulators without TLS require it.
     pub allow_http: bool,
     /// Files of at least this size upload with resumable multipart. Defaults

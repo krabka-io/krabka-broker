@@ -63,53 +63,44 @@ pub(super) fn flatten_for_prometheus(
     for rm in &md.resource_metrics {
         for sm in &rm.scope_metrics {
             for m in &sm.metrics {
+                let point = |point_attributes: &[KeyValue], value, delta_start| DataPoint {
+                    metric: m.name.clone(),
+                    client_instance_id: instance.to_string(),
+                    client_id: client_id.to_string(),
+                    attributes: attributes(&[
+                        rm.resource
+                            .as_ref()
+                            .map_or(&[], |r| r.attributes.as_slice()),
+                        sm.scope.as_ref().map_or(&[], |s| s.attributes.as_slice()),
+                        point_attributes,
+                    ]),
+                    value,
+                    delta_start,
+                };
+                let mut numbers =
+                    |points: &[opentelemetry_proto::tonic::metrics::v1::NumberDataPoint],
+                     monotonic: bool,
+                     delta: bool| {
+                        out.extend(points.iter().filter_map(|dp| {
+                            let value = num(dp.value.as_ref()?);
+                            Some(point(
+                                &dp.attributes,
+                                if monotonic {
+                                    PointValue::Counter(value)
+                                } else {
+                                    PointValue::Gauge(value)
+                                },
+                                delta.then_some(dp.start_time_unix_nano),
+                            ))
+                        }));
+                    };
                 match &m.data {
-                    Some(Data::Gauge(g)) => {
-                        for dp in &g.data_points {
-                            if let Some(v) = &dp.value {
-                                out.push(DataPoint {
-                                    metric: m.name.clone(),
-                                    client_instance_id: instance.to_string(),
-                                    client_id: client_id.to_string(),
-                                    attributes: attributes(&[
-                                        rm.resource
-                                            .as_ref()
-                                            .map_or(&[], |r| r.attributes.as_slice()),
-                                        sm.scope.as_ref().map_or(&[], |s| s.attributes.as_slice()),
-                                        dp.attributes.as_slice(),
-                                    ]),
-                                    value: PointValue::Gauge(num(v)),
-                                    delta_start: None,
-                                });
-                            }
-                        }
-                    }
-                    Some(Data::Sum(s)) => {
-                        for dp in &s.data_points {
-                            if let Some(v) = &dp.value {
-                                out.push(DataPoint {
-                                    metric: m.name.clone(),
-                                    client_instance_id: instance.to_string(),
-                                    client_id: client_id.to_string(),
-                                    attributes: attributes(&[
-                                        rm.resource
-                                            .as_ref()
-                                            .map_or(&[], |r| r.attributes.as_slice()),
-                                        sm.scope.as_ref().map_or(&[], |s| s.attributes.as_slice()),
-                                        dp.attributes.as_slice(),
-                                    ]),
-                                    value: if s.is_monotonic {
-                                        PointValue::Counter(num(v))
-                                    } else {
-                                        PointValue::Gauge(num(v))
-                                    },
-                                    delta_start: (s.aggregation_temporality
-                                        == AggregationTemporality::Delta as i32)
-                                        .then_some(dp.start_time_unix_nano),
-                                });
-                            }
-                        }
-                    }
+                    Some(Data::Gauge(g)) => numbers(&g.data_points, false, false),
+                    Some(Data::Sum(s)) => numbers(
+                        &s.data_points,
+                        s.is_monotonic,
+                        s.aggregation_temporality == AggregationTemporality::Delta as i32,
+                    ),
                     Some(Data::Histogram(h)) => {
                         for dp in &h.data_points {
                             let Some(sum) = dp.sum else {
@@ -124,26 +115,16 @@ pub(super) fn flatten_for_prometheus(
                             if let Some(infinite) = dp.bucket_counts.get(dp.explicit_bounds.len()) {
                                 buckets.push((f64::MAX, *infinite));
                             }
-                            out.push(DataPoint {
-                                metric: m.name.clone(),
-                                client_instance_id: instance.to_string(),
-                                client_id: client_id.to_string(),
-                                attributes: attributes(&[
-                                    rm.resource
-                                        .as_ref()
-                                        .map_or(&[], |r| r.attributes.as_slice()),
-                                    sm.scope.as_ref().map_or(&[], |s| s.attributes.as_slice()),
-                                    dp.attributes.as_slice(),
-                                ]),
-                                value: PointValue::Histogram {
+                            out.push(point(
+                                &dp.attributes,
+                                PointValue::Histogram {
                                     count: dp.count,
                                     sum,
                                     buckets,
                                 },
-                                delta_start: (h.aggregation_temporality
-                                    == AggregationTemporality::Delta as i32)
+                                (h.aggregation_temporality == AggregationTemporality::Delta as i32)
                                     .then_some(dp.start_time_unix_nano),
-                            });
+                            ));
                         }
                     }
                     _ => {}

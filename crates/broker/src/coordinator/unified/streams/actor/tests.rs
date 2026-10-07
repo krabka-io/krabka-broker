@@ -199,15 +199,15 @@ async fn member_limit_rejects_only_new_members() {
         ..Default::default()
     };
 
-    let joined = heartbeat(&handle, request("m1", 0)).await;
-    check!(joined.error_code == codes::NONE);
-
-    let rejected = heartbeat(&handle, request("m2", 0)).await;
-    check!(rejected.error_code == codes::GROUP_MAX_SIZE_REACHED);
-
-    let existing = heartbeat(&handle, request("m1", joined.member_epoch)).await;
-    check!(existing.error_code == codes::NONE);
-    check!(existing.member_epoch == joined.member_epoch);
+    crate::coordinator::unified::test_support::assert_single_member_limit(|id, epoch| {
+        let request = request(id, epoch);
+        let handle = Arc::clone(&handle);
+        async move {
+            let response = heartbeat(&handle, request).await;
+            (response.error_code, response.member_epoch)
+        }
+    })
+    .await;
 }
 
 /// Kafka 4.3.1's `throwIfStreamsGroupIsFull(group)` runs on every join and
@@ -1450,7 +1450,7 @@ async fn the_heartbeat_response_carries_what_kafka_sends() {
         common::{
             streams_group_heartbeat_request::endpoint::Endpoint as RequestEndpoint,
             streams_group_heartbeat_response::{
-                endpoint::Endpoint, task_ids::TaskIds, topic_partition::TopicPartition,
+                endpoint::Endpoint, topic_partition::TopicPartition,
             },
         },
         streams_group_heartbeat_response::EndpointToPartitions,
@@ -1484,26 +1484,7 @@ async fn the_heartbeat_response_carries_what_kafka_sends() {
         standby_partitions: vec![],
         ..Default::default()
     };
-    let config = undelayed();
-    let accepted =
-        |member_id: &str, member_epoch, tasks: Option<Vec<i32>>| StreamsGroupHeartbeatResponse {
-            member_id: member_id.into(),
-            status: Some(vec![]),
-            active_tasks: tasks.as_ref().map(|partitions| {
-                if partitions.is_empty() {
-                    vec![]
-                } else {
-                    vec![TaskIds {
-                        subtopology_id: "0".into(),
-                        partitions: partitions.clone(),
-                        ..Default::default()
-                    }]
-                }
-            }),
-            standby_tasks: tasks.as_ref().map(|_| vec![]),
-            warmup_tasks: tasks.as_ref().map(|_| vec![]),
-            ..super::response::base_resp(codes::NONE, member_epoch, &config)
-        };
+    let accepted = accepted_tasks;
     let rows = [
         (
             "the joining member of a new group gets its endpoint information",
@@ -1512,7 +1493,7 @@ async fn the_heartbeat_response_carries_what_kafka_sends() {
             vec![Beat::Join("m1", Some(1))],
             StreamsGroupHeartbeatResponse {
                 partitions_by_user_endpoint: Some(vec![endpoint(1, &[0])]),
-                ..accepted("m1", 2, Some(vec![0]))
+                ..accepted("m1", 2, Some(&[0]))
             },
         ),
         (
@@ -1523,7 +1504,7 @@ async fn the_heartbeat_response_carries_what_kafka_sends() {
             StreamsGroupHeartbeatResponse {
                 endpoint_information_epoch: 1,
                 partitions_by_user_endpoint: Some(vec![endpoint(1, &[0]), endpoint(2, &[])]),
-                ..accepted("m2", 3, Some(vec![]))
+                ..accepted("m2", 3, Some(&[]))
             },
         ),
         (
@@ -1535,7 +1516,7 @@ async fn the_heartbeat_response_carries_what_kafka_sends() {
                 Beat::Join("m2", None),
                 Beat::Heartbeat("m1", None),
             ],
-            accepted("m1", 2, Some(vec![0])),
+            accepted("m1", 2, Some(&[0])),
         ),
         (
             "a member with an endpoint that must revoke a task",
@@ -1549,7 +1530,7 @@ async fn the_heartbeat_response_carries_what_kafka_sends() {
             StreamsGroupHeartbeatResponse {
                 endpoint_information_epoch: 1,
                 partitions_by_user_endpoint: Some(vec![endpoint(1, &[0])]),
-                ..accepted("m1", 2, Some(vec![0]))
+                ..accepted("m1", 2, Some(&[0]))
             },
         ),
         (
@@ -1654,33 +1635,11 @@ async fn the_heartbeat_response_carries_what_kafka_sends() {
 /// heartbeat of `m1` and then of `m2`.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_member_keeps_its_epoch_until_it_revokes_and_is_fenced_after_its_timeout() {
-    use krabka_protocol::owned::common::{
-        streams_group_heartbeat_request::task_ids::TaskIds as OwnedTaskIds,
-        streams_group_heartbeat_response::task_ids::TaskIds,
-    };
+    use krabka_protocol::owned::common::streams_group_heartbeat_request::task_ids::TaskIds as OwnedTaskIds;
 
     use crate::test_support::FakeMetadataSource;
 
-    let config = undelayed();
-    let accepted =
-        |member_id: &str, member_epoch, tasks: Option<Vec<i32>>| StreamsGroupHeartbeatResponse {
-            member_id: member_id.into(),
-            status: Some(vec![]),
-            active_tasks: tasks.as_ref().map(|partitions| {
-                if partitions.is_empty() {
-                    vec![]
-                } else {
-                    vec![TaskIds {
-                        subtopology_id: "0".into(),
-                        partitions: partitions.clone(),
-                        ..Default::default()
-                    }]
-                }
-            }),
-            standby_tasks: tasks.as_ref().map(|_| vec![]),
-            warmup_tasks: tasks.as_ref().map(|_| vec![]),
-            ..super::response::base_resp(codes::NONE, member_epoch, &config)
-        };
+    let accepted = accepted_tasks;
     // (name, rebalance timeout of m1, m1 revokes task 1, expected last m1 and
     // m2 responses)
     let rows = [
@@ -1689,7 +1648,7 @@ async fn a_member_keeps_its_epoch_until_it_revokes_and_is_fenced_after_its_timeo
             600_000,
             true,
             accepted("m1", 3, None),
-            accepted("m2", 3, Some(vec![1])),
+            accepted("m2", 3, Some(&[1])),
         ),
         (
             "does not revoke, the timeout is not reached",
@@ -1706,7 +1665,7 @@ async fn a_member_keeps_its_epoch_until_it_revokes_and_is_fenced_after_its_timeo
                 codes::UNKNOWN_MEMBER_ID,
                 Some("Member m1 is not a member of group g.".into()),
             ),
-            accepted("m2", 4, Some(vec![0, 1])),
+            accepted("m2", 4, Some(&[0, 1])),
         ),
     ];
 
@@ -1739,11 +1698,11 @@ async fn a_member_keeps_its_epoch_until_it_revokes_and_is_fenced_after_its_timeo
             };
 
         let m1 = heartbeat(&handle, request("m1", 0, Some(&[]))).await;
-        check!(m1 == accepted("m1", 2, Some(vec![0, 1])), "{name}");
+        check!(m1 == accepted("m1", 2, Some(&[0, 1])), "{name}");
         let m2 = heartbeat(&handle, request("m2", 0, Some(&[]))).await;
-        check!(m2 == accepted("m2", 3, Some(vec![])), "{name}");
+        check!(m2 == accepted("m2", 3, Some(&[])), "{name}");
         let m1 = heartbeat(&handle, request("m1", 2, Some(&[0, 1]))).await;
-        check!(m1 == accepted("m1", 2, Some(vec![0])), "{name}");
+        check!(m1 == accepted("m1", 2, Some(&[0])), "{name}");
         if revokes {
             let m1 = heartbeat(&handle, request("m1", 2, Some(&[0]))).await;
             check!(m1 == accepted("m1", 3, None), "{name}");
@@ -2589,5 +2548,32 @@ async fn assignment_waits_for_the_initial_delay_and_the_interval() {
                 "{name}: {member_id} after {advance_ms} ms"
             );
         }
+    }
+}
+
+fn accepted_tasks(
+    member_id: &str,
+    member_epoch: i32,
+    tasks: Option<&[i32]>,
+) -> StreamsGroupHeartbeatResponse {
+    use krabka_protocol::owned::common::streams_group_heartbeat_response::task_ids::TaskIds;
+    let config = undelayed();
+    StreamsGroupHeartbeatResponse {
+        member_id: member_id.into(),
+        status: Some(vec![]),
+        active_tasks: tasks.map(|partitions| {
+            if partitions.is_empty() {
+                vec![]
+            } else {
+                vec![TaskIds {
+                    subtopology_id: "0".into(),
+                    partitions: partitions.to_vec(),
+                    ..Default::default()
+                }]
+            }
+        }),
+        standby_tasks: tasks.map(|_| vec![]),
+        warmup_tasks: tasks.map(|_| vec![]),
+        ..super::response::base_resp(codes::NONE, member_epoch, &config)
     }
 }

@@ -6,6 +6,36 @@ use crate::{
     event::{Event, LogEnd},
 };
 
+/// An election at time 2000 with a fresh, up-to-date epoch-1 log.
+fn start_election(ids: &[NodeId]) -> (QuorumStateMachine, FakeLog) {
+    let mut m = machine(NodeId(1), ids);
+    let log = FakeLog {
+        end: 5,
+        last_epoch: 1,
+    };
+    m.on_event(Event::ElectionTimeout, &log, SimInstant(2000));
+    (m, log)
+}
+
+fn vote_response(
+    m: &mut QuorumStateMachine,
+    log: &dyn LogView,
+    from: NodeId,
+    epoch: Epoch,
+    vote_granted: bool,
+    now: SimInstant,
+) -> Vec<Action> {
+    m.on_event(
+        Event::ReceiveVoteResponse {
+            from,
+            epoch,
+            vote_granted,
+        },
+        log,
+        now,
+    )
+}
+
 /// Only a rejection from a *higher* epoch fences us.
 ///
 /// Each piece of `!granted && epoch > ours` matters: a grant must never
@@ -52,15 +82,7 @@ fn only_a_rejection_from_a_higher_epoch_steps_us_down() {
             "{what}: setup should vote"
         );
 
-        m.on_event(
-            Event::ReceiveVoteResponse {
-                from: NodeId(2),
-                epoch,
-                vote_granted,
-            },
-            &log,
-            SimInstant(0),
-        );
+        vote_response(&mut m, &log, NodeId(2), epoch, vote_granted, SimInstant(0));
         let kept = m.quorum_state().voted_key.is_some();
         check!(kept == keeps_vote, "{what}: vote kept = {kept}");
     }
@@ -85,22 +107,9 @@ fn election_timeout_starts_prevote_prospective() {
 
 #[test]
 fn prevote_majority_promotes_to_candidate_and_bumps_epoch() {
-    let mut m = machine(NodeId(1), &[NodeId(1), NodeId(2), NodeId(3)]);
-    let log = FakeLog {
-        end: 5,
-        last_epoch: 1,
-    };
-    m.on_event(Event::ElectionTimeout, &log, SimInstant(2000)); // Prospective
+    let (mut m, log) = start_election(&[NodeId(1), NodeId(2), NodeId(3)]); // Prospective
     // 1 (self) + grant from 2 = majority of 3
-    let actions = m.on_event(
-        Event::ReceiveVoteResponse {
-            from: NodeId(2),
-            epoch: 0,
-            vote_granted: true,
-        },
-        &log,
-        SimInstant(2001),
-    );
+    let actions = vote_response(&mut m, &log, NodeId(2), 0, true, SimInstant(2001));
     check!(
         (
             matches!(m.role(), Role::Candidate { .. }),
@@ -119,30 +128,9 @@ fn prevote_majority_promotes_to_candidate_and_bumps_epoch() {
 
 #[test]
 fn real_majority_promotes_to_leader_and_appends_leader_change() {
-    let mut m = machine(NodeId(1), &[NodeId(1), NodeId(2), NodeId(3)]);
-    let log = FakeLog {
-        end: 5,
-        last_epoch: 1,
-    };
-    m.on_event(Event::ElectionTimeout, &log, SimInstant(2000));
-    m.on_event(
-        Event::ReceiveVoteResponse {
-            from: NodeId(2),
-            epoch: 0,
-            vote_granted: true,
-        },
-        &log,
-        SimInstant(2001),
-    );
-    let actions = m.on_event(
-        Event::ReceiveVoteResponse {
-            from: NodeId(2),
-            epoch: 1,
-            vote_granted: true,
-        },
-        &log,
-        SimInstant(2002),
-    );
+    let (mut m, log) = start_election(&[NodeId(1), NodeId(2), NodeId(3)]);
+    vote_response(&mut m, &log, NodeId(2), 0, true, SimInstant(2001));
+    let actions = vote_response(&mut m, &log, NodeId(2), 1, true, SimInstant(2002));
     check!(
         (
             m.role().is_leader(),
@@ -178,22 +166,9 @@ fn prospective_counts_grant_with_no_wire_prevote_signal() {
     // A JVM voter's `VoteResponse` carries no pre-vote flag. The candidate
     // must still count the grant as a PRE-VOTE because it is Prospective —
     // this is the KIP-996 interop fix (was dropped by the old echo-tag path).
-    let mut m = machine(NodeId(1), &[NodeId(1), NodeId(2), NodeId(3)]);
-    let log = FakeLog {
-        end: 5,
-        last_epoch: 1,
-    };
-    m.on_event(Event::ElectionTimeout, &log, SimInstant(2000)); // → Prospective, epoch 0
+    let (mut m, log) = start_election(&[NodeId(1), NodeId(2), NodeId(3)]); // → Prospective, epoch 0
     assert2::assert!(matches!(m.role(), Role::Prospective { .. }));
-    let actions = m.on_event(
-        Event::ReceiveVoteResponse {
-            from: NodeId(2),
-            epoch: 0,
-            vote_granted: true,
-        },
-        &log,
-        SimInstant(2001),
-    );
+    let actions = vote_response(&mut m, &log, NodeId(2), 0, true, SimInstant(2001));
     // Pre-vote majority (self + 2) → promote to Candidate and bump the epoch.
     assert2::assert!(matches!(m.role(), Role::Candidate { .. }));
     check!(m.quorum_state().leader_epoch == 1);
@@ -210,32 +185,11 @@ fn prospective_counts_grant_with_no_wire_prevote_signal() {
 fn stale_prevote_grant_ignored_after_promotion() {
     // A late pre-vote grant at the old epoch must not be miscounted toward
     // the real election once we have promoted to Candidate at epoch+1.
-    let mut m = machine(NodeId(1), &[NodeId(1), NodeId(2), NodeId(3)]);
-    let log = FakeLog {
-        end: 5,
-        last_epoch: 1,
-    };
-    m.on_event(Event::ElectionTimeout, &log, SimInstant(2000));
-    m.on_event(
-        Event::ReceiveVoteResponse {
-            from: NodeId(2),
-            epoch: 0,
-            vote_granted: true,
-        },
-        &log,
-        SimInstant(2001),
-    ); // → Candidate @ epoch 1
+    let (mut m, log) = start_election(&[NodeId(1), NodeId(2), NodeId(3)]);
+    vote_response(&mut m, &log, NodeId(2), 0, true, SimInstant(2001)); // → Candidate @ epoch 1
     assert2::assert!(matches!(m.role(), Role::Candidate { .. }));
     // A duplicate/late pre-vote grant still tagged epoch 0 arrives.
-    let actions = m.on_event(
-        Event::ReceiveVoteResponse {
-            from: NodeId(3),
-            epoch: 0,
-            vote_granted: true,
-        },
-        &log,
-        SimInstant(2002),
-    );
+    let actions = vote_response(&mut m, &log, NodeId(3), 0, true, SimInstant(2002));
     // Epoch guard (0 != 1) drops it: we stay Candidate, do NOT become leader.
     check!(
         (
@@ -255,36 +209,12 @@ fn stale_prevote_grant_ignored_after_promotion() {
 
 #[test]
 fn late_grant_from_removed_voter_does_not_count() {
-    let mut m = machine(
-        NodeId(1),
-        &[NodeId(1), NodeId(2), NodeId(3), NodeId(4), NodeId(5)],
-    );
-    let log = FakeLog {
-        end: 5,
-        last_epoch: 1,
-    };
-    m.on_event(Event::ElectionTimeout, &log, SimInstant(2000));
-    m.on_event(
-        Event::ReceiveVoteResponse {
-            from: NodeId(2),
-            epoch: 0,
-            vote_granted: true,
-        },
-        &log,
-        SimInstant(2001),
-    );
+    let (mut m, log) = start_election(&[NodeId(1), NodeId(2), NodeId(3), NodeId(4), NodeId(5)]);
+    vote_response(&mut m, &log, NodeId(2), 0, true, SimInstant(2001));
     assert2::assert!(matches!(m.role(), Role::Prospective { .. }));
 
     m.apply_voter_set(voters(&[NodeId(1), NodeId(4), NodeId(5)]), SimInstant(2002));
-    let actions = m.on_event(
-        Event::ReceiveVoteResponse {
-            from: NodeId(2),
-            epoch: 0,
-            vote_granted: true,
-        },
-        &log,
-        SimInstant(2003),
-    );
+    let actions = vote_response(&mut m, &log, NodeId(2), 0, true, SimInstant(2003));
     check!(
         (
             matches!(m.role(), Role::Prospective { .. }),
@@ -292,49 +222,17 @@ fn late_grant_from_removed_voter_does_not_count() {
         ) == (true, true)
     );
 
-    m.on_event(
-        Event::ReceiveVoteResponse {
-            from: NodeId(4),
-            epoch: 0,
-            vote_granted: true,
-        },
-        &log,
-        SimInstant(2004),
-    );
+    vote_response(&mut m, &log, NodeId(4), 0, true, SimInstant(2004));
     assert2::assert!(matches!(m.role(), Role::Candidate { .. }));
 }
 
 #[test]
 fn removed_voter_response_retallies_retained_grants() {
-    let mut m = machine(
-        NodeId(1),
-        &[NodeId(1), NodeId(2), NodeId(3), NodeId(4), NodeId(5)],
-    );
-    let log = FakeLog {
-        end: 5,
-        last_epoch: 1,
-    };
-    m.on_event(Event::ElectionTimeout, &log, SimInstant(2000));
-    m.on_event(
-        Event::ReceiveVoteResponse {
-            from: NodeId(2),
-            epoch: 0,
-            vote_granted: true,
-        },
-        &log,
-        SimInstant(2001),
-    );
+    let (mut m, log) = start_election(&[NodeId(1), NodeId(2), NodeId(3), NodeId(4), NodeId(5)]);
+    vote_response(&mut m, &log, NodeId(2), 0, true, SimInstant(2001));
 
     m.apply_voter_set(voters(&[NodeId(1), NodeId(2), NodeId(4)]), SimInstant(2002));
-    let actions = m.on_event(
-        Event::ReceiveVoteResponse {
-            from: NodeId(3),
-            epoch: 0,
-            vote_granted: true,
-        },
-        &log,
-        SimInstant(2003),
-    );
+    let actions = vote_response(&mut m, &log, NodeId(3), 0, true, SimInstant(2003));
 
     check!(
         matches!(m.role(), Role::Candidate { .. }),
@@ -351,22 +249,9 @@ fn removed_voter_response_retallies_retained_grants() {
 
 #[test]
 fn prospective_ignores_grant_from_different_epoch() {
-    let mut m = machine(NodeId(1), &[NodeId(1), NodeId(2), NodeId(3)]);
-    let log = FakeLog {
-        end: 5,
-        last_epoch: 1,
-    };
-    m.on_event(Event::ElectionTimeout, &log, SimInstant(2000));
+    let (mut m, log) = start_election(&[NodeId(1), NodeId(2), NodeId(3)]);
     assert2::assert!(matches!(m.role(), Role::Prospective { .. }));
-    let actions = m.on_event(
-        Event::ReceiveVoteResponse {
-            from: NodeId(2),
-            epoch: 5,
-            vote_granted: true,
-        },
-        &log,
-        SimInstant(2001),
-    );
+    let actions = vote_response(&mut m, &log, NodeId(2), 5, true, SimInstant(2001));
     assert2::assert!(matches!(m.role(), Role::Prospective { .. }));
     assert2::assert!(actions.is_empty());
 }

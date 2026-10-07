@@ -20,6 +20,8 @@
 
 mod kafka_wire;
 
+mod support;
+
 use std::sync::Arc;
 
 use assert2::assert;
@@ -37,9 +39,8 @@ use tokio::net::TcpStream;
 use tokio_rustls::{
     TlsConnector,
     rustls::{
-        ClientConfig, DigitallySignedStruct, SignatureScheme,
-        client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier},
-        pki_types::{CertificateDer, PrivateKeyDer, ServerName, UnixTime, pem::PemObject},
+        ClientConfig,
+        pki_types::{CertificateDer, PrivateKeyDer, ServerName, pem::PemObject as _},
     },
 };
 
@@ -82,72 +83,14 @@ fn client_config_with_pinned_server_and_client_cert(
         .expect("parse client private key PEM");
     let cfg = ClientConfig::builder()
         .dangerous()
-        .with_custom_certificate_verifier(Arc::new(PinnedServerVerifier {
+        .with_custom_certificate_verifier(Arc::new(crate::support::tls::PinnedCertVerifier {
             pinned: broker_cert,
+            schemes: crate::support::tls::fixture_signature_schemes(),
+            mismatch: "presented server cert does not match pinned dev cert",
         }))
         .with_client_auth_cert(client_certs, client_key)
         .expect("rustls accepts client cert + key");
     Arc::new(cfg)
-}
-
-/// Test-only `ServerCertVerifier` that pins a single DER blob. It skips the
-/// hostname, validity, signature, and CA-flag checks. It mirrors the
-/// helper in `tests/auth_handlers.rs`. The dev fixture is a self-issued
-/// CA cert, which rustls does not accept as an end-entity by default.
-#[derive(Debug)]
-struct PinnedServerVerifier {
-    pinned: CertificateDer<'static>,
-}
-
-impl ServerCertVerifier for PinnedServerVerifier {
-    fn verify_server_cert(
-        &self,
-        end_entity: &CertificateDer<'_>,
-        _intermediates: &[CertificateDer<'_>],
-        _server_name: &ServerName<'_>,
-        _ocsp_response: &[u8],
-        _now: UnixTime,
-    ) -> Result<ServerCertVerified, tokio_rustls::rustls::Error> {
-        if end_entity.as_ref() == self.pinned.as_ref() {
-            Ok(ServerCertVerified::assertion())
-        } else {
-            Err(tokio_rustls::rustls::Error::General(
-                "presented server cert does not match pinned dev cert".into(),
-            ))
-        }
-    }
-
-    fn verify_tls12_signature(
-        &self,
-        _message: &[u8],
-        _cert: &CertificateDer<'_>,
-        _dss: &DigitallySignedStruct,
-    ) -> Result<HandshakeSignatureValid, tokio_rustls::rustls::Error> {
-        Ok(HandshakeSignatureValid::assertion())
-    }
-
-    fn verify_tls13_signature(
-        &self,
-        _message: &[u8],
-        _cert: &CertificateDer<'_>,
-        _dss: &DigitallySignedStruct,
-    ) -> Result<HandshakeSignatureValid, tokio_rustls::rustls::Error> {
-        Ok(HandshakeSignatureValid::assertion())
-    }
-
-    fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
-        vec![
-            SignatureScheme::ED25519,
-            SignatureScheme::ECDSA_NISTP256_SHA256,
-            SignatureScheme::ECDSA_NISTP384_SHA384,
-            SignatureScheme::RSA_PSS_SHA256,
-            SignatureScheme::RSA_PSS_SHA384,
-            SignatureScheme::RSA_PSS_SHA512,
-            SignatureScheme::RSA_PKCS1_SHA256,
-            SignatureScheme::RSA_PKCS1_SHA384,
-            SignatureScheme::RSA_PKCS1_SHA512,
-        ]
-    }
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -156,30 +99,7 @@ async fn mtls_principal_is_cert_dn_and_super_user_bypass_works() {
     // an earlier installer.
     let _ = rustls::crypto::ring::default_provider().install_default();
 
-    let log_dir = tempfile::tempdir().unwrap();
-    let pem_dir = tempfile::tempdir().unwrap();
-    let server_cert_path = write_fixture(pem_dir.path(), "server.pem", DEV_CERT);
-    let server_key_path = write_fixture(pem_dir.path(), "server.key", DEV_KEY);
-    let client_ca_path = write_fixture(pem_dir.path(), "client_ca.pem", DEV_CLIENT_CA);
-
-    let mut cfg = BrokerConfig::for_tests(log_dir.path().to_path_buf());
-    cfg.listeners = vec![ListenerSpec {
-        name: "SSL".to_string(),
-        bind_addr: "127.0.0.1:0".parse().unwrap(),
-        advertised: "127.0.0.1:0".to_string(),
-        protocol: ListenerProtocol::Ssl,
-        tls_config: None,
-        sasl_mechanisms: None,
-        principal_mapper: krabka_broker::SslPrincipalMapper::default(),
-    }];
-    cfg.inter_broker_listener_name = "SSL".to_string();
-    cfg.tls_config = Some(TlsConfig {
-        cert_chain_path: server_cert_path.clone(),
-        private_key_path: server_key_path,
-        trust_roots_path: None,
-        client_ca_path: Some(client_ca_path),
-        client_auth: ClientAuthMode::Required,
-    });
+    let (_log_dir, _pem_dir, mut cfg) = mtls_fixture(ClientAuthMode::Required);
     // The cert's Subject DN is the principal name. Set it as a
     // super-user so the authorizer permits CreateTopics; with no
     // super-users + no ACLs the compat shim would allow everything
@@ -354,30 +274,7 @@ async fn an_unmappable_certificate_dn_closes_the_connection() {
 async fn a_connection_with_no_certificate_is_served_rather_than_closed() {
     let _ = rustls::crypto::ring::default_provider().install_default();
 
-    let log_dir = tempfile::tempdir().unwrap();
-    let pem_dir = tempfile::tempdir().unwrap();
-    let server_cert_path = write_fixture(pem_dir.path(), "server.pem", DEV_CERT);
-    let server_key_path = write_fixture(pem_dir.path(), "server.key", DEV_KEY);
-    let client_ca_path = write_fixture(pem_dir.path(), "client_ca.pem", DEV_CLIENT_CA);
-
-    let mut cfg = BrokerConfig::for_tests(log_dir.path().to_path_buf());
-    cfg.listeners = vec![ListenerSpec {
-        name: "SSL".to_string(),
-        bind_addr: "127.0.0.1:0".parse().unwrap(),
-        advertised: "127.0.0.1:0".to_string(),
-        protocol: ListenerProtocol::Ssl,
-        tls_config: None,
-        sasl_mechanisms: None,
-        principal_mapper: krabka_broker::SslPrincipalMapper::default(),
-    }];
-    cfg.inter_broker_listener_name = "SSL".to_string();
-    cfg.tls_config = Some(TlsConfig {
-        cert_chain_path: server_cert_path,
-        private_key_path: server_key_path,
-        trust_roots_path: None,
-        client_ca_path: Some(client_ca_path),
-        client_auth: ClientAuthMode::Optional,
-    });
+    let (_log_dir, _pem_dir, mut cfg) = mtls_fixture(ClientAuthMode::Optional);
     cfg.super_users = maplit::hashset! {CLIENT_PRINCIPAL.to_string()};
 
     let handle = Broker::start(cfg).await.expect("broker must start");
@@ -391,8 +288,10 @@ async fn a_connection_with_no_certificate_is_served_rather_than_closed() {
             .clone();
     let client_cfg = ClientConfig::builder()
         .dangerous()
-        .with_custom_certificate_verifier(Arc::new(PinnedServerVerifier {
+        .with_custom_certificate_verifier(Arc::new(crate::support::tls::PinnedCertVerifier {
             pinned: server_cert_der,
+            schemes: crate::support::tls::fixture_signature_schemes(),
+            mismatch: "presented server cert does not match pinned dev cert",
         }))
         .with_no_client_auth();
     let connector = TlsConnector::from(Arc::new(client_cfg));
@@ -438,4 +337,26 @@ async fn a_connection_with_no_certificate_is_served_rather_than_closed() {
     );
 
     handle.shutdown().await;
+}
+
+fn mtls_fixture(
+    client_auth: ClientAuthMode,
+) -> (tempfile::TempDir, tempfile::TempDir, BrokerConfig) {
+    let log_dir = tempfile::tempdir().unwrap();
+    let pem_dir = tempfile::tempdir().unwrap();
+    let server_cert_path = write_fixture(pem_dir.path(), "server.pem", DEV_CERT);
+    let server_key_path = write_fixture(pem_dir.path(), "server.key", DEV_KEY);
+    let client_ca_path = write_fixture(pem_dir.path(), "client_ca.pem", DEV_CLIENT_CA);
+
+    let cfg = crate::support::tls::ssl_config(
+        log_dir.path().to_path_buf(),
+        TlsConfig {
+            cert_chain_path: server_cert_path.clone(),
+            private_key_path: server_key_path,
+            trust_roots_path: None,
+            client_ca_path: Some(client_ca_path),
+            client_auth,
+        },
+    );
+    (log_dir, pem_dir, cfg)
 }

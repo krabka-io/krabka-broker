@@ -6,6 +6,8 @@ pub(crate) mod bootstrap;
 pub(crate) mod completion;
 pub(crate) mod coordinator;
 pub(crate) mod decision;
+#[cfg(test)]
+mod decision_model_support;
 /// Compositional end-to-end model of the exactly-once read guarantee. It
 /// composes the txn-coordinator decision cores with the LSO mechanics and the
 /// `read_committed` fetch-visibility core.

@@ -109,3 +109,25 @@ pub(crate) async fn await_wal_quorum(cluster: &DisklessCluster) -> NodeId {
     .await;
     leader
 }
+
+pub(crate) async fn seed_workload(
+    cluster: &DisklessCluster,
+) -> (Client, WireUuid, NodeId, Vec<bytes::Bytes>, Client) {
+    let admin = support::sasl_client(
+        &cluster.bootstrap_for_node(cluster.node_ids()[0]),
+        crate::CLIENT_PRINCIPAL,
+        crate::PASSWORD,
+    )
+    .await;
+    let topic_id = create_diskless_topic(&admin).await;
+    let leader = await_wal_quorum(cluster).await;
+    let values: Vec<bytes::Bytes> = (0..crate::RECORDS).map(crate::wire::value_at).collect();
+    let producer = support::sasl_client(
+        &cluster.bootstrap_for_node(leader),
+        crate::CLIENT_PRINCIPAL,
+        crate::PASSWORD,
+    )
+    .await;
+    crate::wire::produce_all(&producer, topic_id, &values).await;
+    (admin, topic_id, leader, values, producer)
+}

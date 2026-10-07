@@ -18,6 +18,9 @@ pub(crate) mod ktls_probe;
 pub(crate) mod listener;
 pub(crate) mod request;
 
+#[cfg(test)]
+pub(crate) mod test_support;
+
 /// Whether the response header for `api_key` carries the v1 empty
 /// tagged-fields byte after the correlation id.
 #[must_use]

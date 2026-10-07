@@ -17,6 +17,48 @@ use crate::kraft::{
     transport::NullPeerSender,
 };
 
+fn reopen_single_voter(data_dir: std::path::PathBuf) -> Result<KraftController, RaftError> {
+    KraftController::open(
+        data_dir,
+        NodeId(1),
+        uuid::Uuid::nil(),
+        uuid::Uuid::nil(),
+        voter_set(&[NodeId(1)]),
+        TEST_ELECTION_TIMEOUT,
+        None,
+        ControllerFetchMissLimit::default(),
+        MetadataRaftCommandQueueCapacity::default(),
+        MetadataRaftFetchMax::default(),
+        Arc::new(NullPeerSender),
+        0,
+        krabka_units::prelude::bytes(0),
+        krabka_units::prelude::millis(0),
+        MetadataSnapshotFetchMax::default(),
+        test_metadata_log(),
+        crate::kraft::Activation::default(),
+    )
+}
+
+fn uncheckpointed_downgrade() -> (Engine, tempfile::TempDir) {
+    use krabka_metadata::{FeatureLevelRecord, MetadataRecord};
+    let (mut engine, dir) = build_engine_only(NodeId(1), &[NodeId(1)]);
+    elect_single_voter_engine(&mut engine);
+    let update = |level| {
+        vec![MetadataRecord::V1FeatureLevel(FeatureLevelRecord {
+            name: krabka_metadata::metadata_version::METADATA_VERSION_FEATURE.into(),
+            level,
+        })]
+    };
+    let (reply, mut rx) = oneshot::channel();
+    engine.on_submit_change(&update(25), reply);
+    assert2::assert!(matches!(rx.try_recv(), Ok(Ok(_))));
+    engine.downgrade_snapshot_failures_remaining = usize::MAX;
+    let (reply, mut rx) = oneshot::channel();
+    engine.on_submit_change(&update(16), reply);
+    assert2::assert!(matches!(rx.try_recv(), Ok(Ok(_))));
+    (engine, dir)
+}
+
 #[test]
 fn metadata_version_downgrade_retries_mandatory_snapshot_and_prune() {
     use krabka_metadata::{FeatureLevelRecord, MetadataRecord};
@@ -168,26 +210,8 @@ async fn restart_finishes_downgrade_checkpoint_before_exposing_the_image() {
     assert2::assert!(engine.latest_snapshot_id().is_none());
     drop(engine);
 
-    let controller = KraftController::open(
-        data_dir,
-        NodeId(1),
-        uuid::Uuid::nil(),
-        uuid::Uuid::nil(),
-        voter_set(&[NodeId(1)]),
-        TEST_ELECTION_TIMEOUT,
-        None,
-        ControllerFetchMissLimit::default(),
-        MetadataRaftCommandQueueCapacity::default(),
-        MetadataRaftFetchMax::default(),
-        Arc::new(NullPeerSender),
-        0,
-        krabka_units::prelude::bytes(0),
-        krabka_units::prelude::millis(0),
-        MetadataSnapshotFetchMax::default(),
-        test_metadata_log(),
-        crate::kraft::Activation::default(),
-    )
-    .expect("restart completes mandatory downgrade recovery");
+    let controller =
+        reopen_single_voter(data_dir).expect("restart completes mandatory downgrade recovery");
 
     assert2::assert!(controller.current_image().finalized_metadata_version() == Some(16));
     assert2::assert!(
@@ -216,24 +240,8 @@ async fn restart_finishes_downgrade_checkpoint_before_exposing_the_image() {
 
 #[tokio::test]
 async fn restart_recovers_checkpoint_written_before_downgrade_prune() {
-    use krabka_metadata::{FeatureLevelRecord, MetadataRecord};
-
-    let (mut engine, dir) = build_engine_only(NodeId(1), &[NodeId(1)]);
+    let (engine, dir) = uncheckpointed_downgrade();
     let data_dir = dir.path().to_path_buf();
-    elect_single_voter_engine(&mut engine);
-    let update = |level| {
-        vec![MetadataRecord::V1FeatureLevel(FeatureLevelRecord {
-            name: krabka_metadata::metadata_version::METADATA_VERSION_FEATURE.into(),
-            level,
-        })]
-    };
-    let (reply, mut rx) = oneshot::channel();
-    engine.on_submit_change(&update(25), reply);
-    assert2::assert!(matches!(rx.try_recv(), Ok(Ok(_))));
-    engine.downgrade_snapshot_failures_remaining = usize::MAX;
-    let (reply, mut rx) = oneshot::channel();
-    engine.on_submit_change(&update(16), reply);
-    assert2::assert!(matches!(rx.try_recv(), Ok(Ok(_))));
     let pending = engine
         .downgrade_snapshot_pending
         .clone()
@@ -245,26 +253,8 @@ async fn restart_recovers_checkpoint_written_before_downgrade_prune() {
     assert2::assert!(engine.log.log_start_offset() < pending.end_offset);
     drop(engine);
 
-    let controller = KraftController::open(
-        data_dir,
-        NodeId(1),
-        uuid::Uuid::nil(),
-        uuid::Uuid::nil(),
-        voter_set(&[NodeId(1)]),
-        TEST_ELECTION_TIMEOUT,
-        None,
-        ControllerFetchMissLimit::default(),
-        MetadataRaftCommandQueueCapacity::default(),
-        MetadataRaftFetchMax::default(),
-        Arc::new(NullPeerSender),
-        0,
-        krabka_units::prelude::bytes(0),
-        krabka_units::prelude::millis(0),
-        MetadataSnapshotFetchMax::default(),
-        test_metadata_log(),
-        crate::kraft::Activation::default(),
-    )
-    .expect("restart finishes checkpoint-before-prune recovery");
+    let controller =
+        reopen_single_voter(data_dir).expect("restart finishes checkpoint-before-prune recovery");
     assert2::assert!(controller.current_image().finalized_metadata_version() == Some(16));
     drop(controller);
     let recovered_log = KraftLog::open(dir.path(), &crate::MetadataLogConfig::default())
@@ -274,24 +264,8 @@ async fn restart_recovers_checkpoint_written_before_downgrade_prune() {
 
 #[tokio::test]
 async fn restart_propagates_persistent_downgrade_recovery_error() {
-    use krabka_metadata::{FeatureLevelRecord, MetadataRecord};
-
-    let (mut engine, dir) = build_engine_only(NodeId(1), &[NodeId(1)]);
+    let (engine, dir) = uncheckpointed_downgrade();
     let data_dir = dir.path().to_path_buf();
-    elect_single_voter_engine(&mut engine);
-    let update = |level| {
-        vec![MetadataRecord::V1FeatureLevel(FeatureLevelRecord {
-            name: krabka_metadata::metadata_version::METADATA_VERSION_FEATURE.into(),
-            level,
-        })]
-    };
-    let (reply, mut rx) = oneshot::channel();
-    engine.on_submit_change(&update(25), reply);
-    assert2::assert!(matches!(rx.try_recv(), Ok(Ok(_))));
-    engine.downgrade_snapshot_failures_remaining = usize::MAX;
-    let (reply, mut rx) = oneshot::channel();
-    engine.on_submit_change(&update(16), reply);
-    assert2::assert!(matches!(rx.try_recv(), Ok(Ok(_))));
     let pending = engine
         .downgrade_snapshot_pending
         .clone()
@@ -306,25 +280,7 @@ async fn restart_propagates_persistent_downgrade_recovery_error() {
         pending.end_offset.0, pending.epoch
     )))
     .expect("block the downgrade checkpoint");
-    let result = KraftController::open(
-        data_dir,
-        NodeId(1),
-        uuid::Uuid::nil(),
-        uuid::Uuid::nil(),
-        voter_set(&[NodeId(1)]),
-        TEST_ELECTION_TIMEOUT,
-        None,
-        ControllerFetchMissLimit::default(),
-        MetadataRaftCommandQueueCapacity::default(),
-        MetadataRaftFetchMax::default(),
-        Arc::new(NullPeerSender),
-        0,
-        krabka_units::prelude::bytes(0),
-        krabka_units::prelude::millis(0),
-        MetadataSnapshotFetchMax::default(),
-        test_metadata_log(),
-        crate::kraft::Activation::default(),
-    );
+    let result = reopen_single_voter(data_dir);
     let Err(error) = result else {
         panic!("persistent mandatory-checkpoint failure must fail open");
     };

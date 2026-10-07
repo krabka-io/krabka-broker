@@ -351,3 +351,26 @@ pub fn ts_batch(ts: i64) -> RecordBatch {
     });
     b
 }
+
+/// Append through the same leader/follower paths as the broker.
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum AppendPath {
+    Leader,
+    Follower,
+    Verbatim,
+}
+
+pub(crate) fn append_path(log: &mut Log, path: AppendPath, mut batch: RecordBatch) {
+    let log_end = log.log_end_offset();
+    match path {
+        AppendPath::Leader => {
+            log.append(&mut batch).unwrap();
+        }
+        AppendPath::Verbatim if !batch.attributes.is_control_batch() => {
+            batch.base_offset = log_end.0;
+            let (_, verbatim) = verbatim_from(&batch, LeaderEpoch(0));
+            log.append_verbatim_at(&verbatim, log_end).unwrap();
+        }
+        AppendPath::Follower | AppendPath::Verbatim => log.append_at(&mut batch, log_end).unwrap(),
+    }
+}

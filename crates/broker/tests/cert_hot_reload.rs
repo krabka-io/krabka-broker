@@ -12,18 +12,19 @@
 //! cert X". The A cert cannot satisfy a B-pinned verifier, and the B cert
 //! cannot satisfy an A-pinned verifier.
 
+mod support;
+
 use std::{io, path::PathBuf, sync::Arc};
 
 use assert2::assert;
-use krabka_broker::{Broker, BrokerConfig, config::ListenerSpec};
-use krabka_security::{ClientAuthMode, ListenerProtocol, TlsConfig};
+use krabka_broker::Broker;
+use krabka_security::{ClientAuthMode, TlsConfig};
 use tokio::net::TcpStream;
 use tokio_rustls::{
     TlsConnector,
     rustls::{
-        ClientConfig, DigitallySignedStruct, SignatureScheme,
-        client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier},
-        pki_types::{CertificateDer, ServerName, UnixTime, pem::PemObject},
+        ClientConfig,
+        pki_types::{CertificateDer, ServerName, pem::PemObject as _},
     },
 };
 
@@ -38,66 +39,17 @@ fn write(dir: &std::path::Path, name: &str, body: &str) -> PathBuf {
     p
 }
 
-/// Pins one end-entity cert by its DER bytes. It mirrors the helpers in
-/// `mtls.rs` and `auth_handlers.rs`. It skips the hostname, CA, and validity
-/// checks, which is acceptable for fixture-pinned tests.
-#[derive(Debug)]
-struct PinnedServerVerifier {
-    pinned: CertificateDer<'static>,
-}
-
-impl ServerCertVerifier for PinnedServerVerifier {
-    fn verify_server_cert(
-        &self,
-        end_entity: &CertificateDer<'_>,
-        _intermediates: &[CertificateDer<'_>],
-        _server_name: &ServerName<'_>,
-        _ocsp_response: &[u8],
-        _now: UnixTime,
-    ) -> Result<ServerCertVerified, tokio_rustls::rustls::Error> {
-        if end_entity.as_ref() == self.pinned.as_ref() {
-            Ok(ServerCertVerified::assertion())
-        } else {
-            Err(tokio_rustls::rustls::Error::General(
-                "presented server cert does not match pinned cert".into(),
-            ))
-        }
-    }
-
-    fn verify_tls12_signature(
-        &self,
-        _: &[u8],
-        _: &CertificateDer<'_>,
-        _: &DigitallySignedStruct,
-    ) -> Result<HandshakeSignatureValid, tokio_rustls::rustls::Error> {
-        Ok(HandshakeSignatureValid::assertion())
-    }
-
-    fn verify_tls13_signature(
-        &self,
-        _: &[u8],
-        _: &CertificateDer<'_>,
-        _: &DigitallySignedStruct,
-    ) -> Result<HandshakeSignatureValid, tokio_rustls::rustls::Error> {
-        Ok(HandshakeSignatureValid::assertion())
-    }
-
-    fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
-        vec![
-            SignatureScheme::ED25519,
-            SignatureScheme::ECDSA_NISTP256_SHA256,
-            SignatureScheme::ECDSA_NISTP384_SHA384,
-            SignatureScheme::RSA_PSS_SHA256,
-            SignatureScheme::RSA_PSS_SHA384,
-            SignatureScheme::RSA_PSS_SHA512,
-        ]
-    }
-}
-
 fn pinned_client_config(pinned: CertificateDer<'static>) -> Arc<ClientConfig> {
     let cfg = ClientConfig::builder()
         .dangerous()
-        .with_custom_certificate_verifier(Arc::new(PinnedServerVerifier { pinned }))
+        .with_custom_certificate_verifier(Arc::new(crate::support::tls::PinnedCertVerifier {
+            pinned,
+            schemes: crate::support::tls::fixture_signature_schemes()
+                .into_iter()
+                .take(6)
+                .collect(),
+            mismatch: "presented server cert does not match pinned cert",
+        }))
         .with_no_client_auth();
     Arc::new(cfg)
 }
@@ -133,29 +85,7 @@ async fn handshake_against(
 async fn reload_tls_swaps_served_cert() {
     let _ = rustls::crypto::ring::default_provider().install_default();
 
-    let log_dir = tempfile::tempdir().unwrap();
-    let pem_dir = tempfile::tempdir().unwrap();
-    let cert_path = write(pem_dir.path(), "cert.pem", DEV_CERT_A);
-    let key_path = write(pem_dir.path(), "key.pem", DEV_KEY_A);
-
-    let mut cfg = BrokerConfig::for_tests(log_dir.path().to_path_buf());
-    cfg.listeners = vec![ListenerSpec {
-        name: "SSL".into(),
-        bind_addr: "127.0.0.1:0".parse().unwrap(),
-        advertised: "127.0.0.1:0".into(),
-        protocol: ListenerProtocol::Ssl,
-        tls_config: None,
-        sasl_mechanisms: None,
-        principal_mapper: krabka_broker::SslPrincipalMapper::default(),
-    }];
-    cfg.inter_broker_listener_name = "SSL".into();
-    cfg.tls_config = Some(TlsConfig {
-        cert_chain_path: cert_path.clone(),
-        private_key_path: key_path.clone(),
-        trust_roots_path: None,
-        client_ca_path: None,
-        client_auth: ClientAuthMode::Disabled,
-    });
+    let (_log_dir, _pem_dir, cert_path, key_path, mut cfg) = cert_fixture();
     // Disable the periodic watcher; this test drives reloads via the
     // explicit `BrokerHandle::reload_tls()` so it doesn't depend on
     // poll-tick timing.
@@ -205,29 +135,7 @@ async fn reload_tls_swaps_served_cert() {
 async fn periodic_watcher_reloads_on_mtime_change() {
     let _ = rustls::crypto::ring::default_provider().install_default();
 
-    let log_dir = tempfile::tempdir().unwrap();
-    let pem_dir = tempfile::tempdir().unwrap();
-    let cert_path = write(pem_dir.path(), "cert.pem", DEV_CERT_A);
-    let key_path = write(pem_dir.path(), "key.pem", DEV_KEY_A);
-
-    let mut cfg = BrokerConfig::for_tests(log_dir.path().to_path_buf());
-    cfg.listeners = vec![ListenerSpec {
-        name: "SSL".into(),
-        bind_addr: "127.0.0.1:0".parse().unwrap(),
-        advertised: "127.0.0.1:0".into(),
-        protocol: ListenerProtocol::Ssl,
-        tls_config: None,
-        sasl_mechanisms: None,
-        principal_mapper: krabka_broker::SslPrincipalMapper::default(),
-    }];
-    cfg.inter_broker_listener_name = "SSL".into();
-    cfg.tls_config = Some(TlsConfig {
-        cert_chain_path: cert_path.clone(),
-        private_key_path: key_path.clone(),
-        trust_roots_path: None,
-        client_ca_path: None,
-        client_auth: ClientAuthMode::Disabled,
-    });
+    let (_log_dir, _pem_dir, cert_path, key_path, mut cfg) = cert_fixture();
     cfg.tls_reload_interval = krabka_units::millis(100);
 
     let handle = Broker::start(cfg).await.expect("broker start");
@@ -263,4 +171,29 @@ async fn periodic_watcher_reloads_on_mtime_change() {
     }
 
     handle.shutdown().await;
+}
+
+fn cert_fixture() -> (
+    tempfile::TempDir,
+    tempfile::TempDir,
+    std::path::PathBuf,
+    std::path::PathBuf,
+    krabka_broker::BrokerConfig,
+) {
+    let log_dir = tempfile::tempdir().unwrap();
+    let pem_dir = tempfile::tempdir().unwrap();
+    let cert_path = write(pem_dir.path(), "cert.pem", DEV_CERT_A);
+    let key_path = write(pem_dir.path(), "key.pem", DEV_KEY_A);
+
+    let cfg = crate::support::tls::ssl_config(
+        log_dir.path().to_path_buf(),
+        TlsConfig {
+            cert_chain_path: cert_path.clone(),
+            private_key_path: key_path.clone(),
+            trust_roots_path: None,
+            client_ca_path: None,
+            client_auth: ClientAuthMode::Disabled,
+        },
+    );
+    (log_dir, pem_dir, cert_path, key_path, cfg)
 }

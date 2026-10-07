@@ -13,7 +13,6 @@ use tokio::sync::oneshot;
 use super::*;
 use crate::{
     codes,
-    partition::{ProduceData, ProduceJob},
     partition_writer::test_support::{GatedWal, sample_batch, test_sequencer},
     test_support::FakeMetadataSource,
     wal::{ControllerSequencer, OffsetSequencer},
@@ -48,9 +47,7 @@ async fn a_reservation_refused_during_a_controller_election_answers_not_leader()
     ];
     for (what, refusal) in cases {
         let dir = tempdir().expect("tempdir");
-        let log = Arc::new(Mutex::new(
-            Log::open(dir.path(), LogConfig::default()).expect("open log"),
-        ));
+        let log = open_default_log(dir.path());
         let controller = Arc::new(
             FakeMetadataSource::builder()
                 .term(7)
@@ -61,36 +58,19 @@ async fn a_reservation_refused_during_a_controller_election_answers_not_leader()
         let wal: crate::wal::SharedWal = Arc::new(crate::wal::LocalFsyncWal::new(log.clone()));
         let log_dir_status = crate::log_dir_status::LogDirRegistry::default();
         let (tx, rx) = mpsc::channel(1);
-        let writer = tokio::spawn(run_with_sequencer(
-            ("t".to_string(), PartitionIndex(0)),
-            (
-                log.clone(),
-                Arc::new(ArcSwap::from_pointee(dir.path().to_path_buf())),
-            ),
+        let writer = spawn_writer(
+            dir.path(),
+            log.clone(),
             rx,
-            (
-                Arc::new(Notify::new()),
-                Arc::new(tokio::sync::Mutex::new(ReplicaState::new())),
-                Arc::new(Notify::new()),
-                DeliveryHandles::new(),
-            ),
-            (
-                log_dir_status.clone(),
-                Arc::new(ProducerState::new()),
-                Some(wal),
-            ),
-            crate::config::BrokerConfig::default().max_produce_group,
-            Some(sequencer),
-        ));
+            WriterOptions {
+                log_dir_status: log_dir_status.clone(),
+                wal: Some(wal),
+                sequencer: Some(sequencer),
+                ..Default::default()
+            },
+        );
 
-        let (ack, ack_rx) = oneshot::channel();
-        tx.send(WriterMessage::Produce(ProduceJob {
-            data: ProduceData::Owned(sample_batch(1)),
-            ack,
-            producer_check: None,
-        }))
-        .await
-        .expect("send job");
+        let ack_rx = queue_batch(&tx, sample_batch(1)).await;
         let answer = ack_rx
             .await
             .expect("ack recv")
@@ -110,59 +90,33 @@ async fn a_reservation_refused_during_a_controller_election_answers_not_leader()
 #[tokio::test]
 async fn diskless_writer_acks_all_gates_on_durable_hw() {
     let dir = tempdir().expect("tempdir");
-    let log = Arc::new(Mutex::new(
-        Log::open(dir.path(), LogConfig::default()).expect("open log"),
-    ));
+    let log = open_default_log(dir.path());
     let (sync_started_tx, sync_started_rx) = oneshot::channel();
     let (release_sync_tx, release_sync_rx) = oneshot::channel();
     let wal: Option<crate::wal::SharedWal> =
         Some(Arc::new(GatedWal::new(sync_started_tx, release_sync_rx)));
     let (tx, rx) = mpsc::channel(1);
     let append_notify = Arc::new(Notify::new());
-    let replica_state = Arc::new(tokio::sync::Mutex::new(ReplicaState::new()));
-    {
-        let mut st = replica_state.lock().await;
-        st.install_isr(
-            &[krabka_audit::NodeId(1)],
-            &[krabka_audit::NodeId(1)],
-            krabka_audit::NodeId(1),
-            std::time::Instant::now(),
-        );
-    }
+    let replica_state = replica_with_isr(&[1]).await;
     let hw_advance_notify = Arc::new(Notify::new());
-    let writer = tokio::spawn(run_with_sequencer(
-        ("t".to_string(), PartitionIndex(0)),
-        (
-            log.clone(),
-            Arc::new(ArcSwap::from_pointee(dir.path().to_path_buf())),
-        ),
+    let writer = spawn_writer(
+        dir.path(),
+        log.clone(),
         rx,
-        (
+        WriterOptions {
             append_notify,
-            replica_state.clone(),
-            hw_advance_notify.clone(),
-            DeliveryHandles::new(),
-        ),
-        (
-            crate::log_dir_status::LogDirRegistry::default(),
-            Arc::new(ProducerState::new()),
+            replica_state: replica_state.clone(),
+            hw_advance_notify: hw_advance_notify.clone(),
             wal,
-        ),
-        crate::config::BrokerConfig::default().max_produce_group,
-        Some(test_sequencer()),
-    ));
+            sequencer: Some(test_sequencer()),
+            ..Default::default()
+        },
+    );
 
     let hw_waiter = hw_advance_notify.notified();
     tokio::pin!(hw_waiter);
 
-    let (ack, ack_rx) = oneshot::channel();
-    tx.send(WriterMessage::Produce(ProduceJob {
-        data: ProduceData::Owned(sample_batch(3)),
-        ack,
-        producer_check: None,
-    }))
-    .await
-    .expect("send job");
+    let ack_rx = queue_batch(&tx, sample_batch(3)).await;
 
     let assigned = ack_rx.await.expect("ack recv").expect("append ok");
     assert!(assigned.base_offset == 0);
@@ -192,53 +146,26 @@ async fn diskless_writer_acks_all_gates_on_durable_hw() {
 async fn diskless_acked_record_survives_reopen() {
     let dir = tempdir().expect("tempdir");
     {
-        let log = Arc::new(Mutex::new(
-            Log::open(dir.path(), LogConfig::default()).expect("open log"),
-        ));
+        let log = open_default_log(dir.path());
         let wal: Option<crate::wal::SharedWal> =
             Some(Arc::new(crate::wal::LocalFsyncWal::new(log.clone())));
         let (tx, rx) = mpsc::channel(1);
         let append_notify = Arc::new(Notify::new());
-        let replica_state = Arc::new(tokio::sync::Mutex::new(ReplicaState::new()));
-        {
-            let mut st = replica_state.lock().await;
-            st.install_isr(
-                &[krabka_audit::NodeId(1)],
-                &[krabka_audit::NodeId(1)],
-                krabka_audit::NodeId(1),
-                std::time::Instant::now(),
-            );
-        }
-        let writer = tokio::spawn(run_with_sequencer(
-            ("t".to_string(), PartitionIndex(0)),
-            (
-                log.clone(),
-                Arc::new(ArcSwap::from_pointee(dir.path().to_path_buf())),
-            ),
+        let replica_state = replica_with_isr(&[1]).await;
+        let writer = spawn_writer(
+            dir.path(),
+            log.clone(),
             rx,
-            (
+            WriterOptions {
                 append_notify,
-                replica_state.clone(),
-                Arc::new(Notify::new()),
-                DeliveryHandles::new(),
-            ),
-            (
-                crate::log_dir_status::LogDirRegistry::default(),
-                Arc::new(ProducerState::new()),
+                replica_state: replica_state.clone(),
                 wal,
-            ),
-            crate::config::BrokerConfig::default().max_produce_group,
-            Some(test_sequencer()),
-        ));
+                sequencer: Some(test_sequencer()),
+                ..Default::default()
+            },
+        );
 
-        let (ack, ack_rx) = oneshot::channel();
-        tx.send(WriterMessage::Produce(ProduceJob {
-            data: ProduceData::Owned(sample_batch(1)),
-            ack,
-            producer_check: None,
-        }))
-        .await
-        .expect("send job");
+        let ack_rx = queue_batch(&tx, sample_batch(1)).await;
 
         let assigned = ack_rx.await.expect("ack recv").expect("append ok");
         assert2::assert!((assigned.base_offset) == (0));
@@ -258,9 +185,7 @@ async fn diskless_acked_record_survives_reopen() {
 #[tokio::test]
 async fn diskless_writer_keeps_wal_and_local_trim_frontiers_equal() {
     let dir = tempdir().expect("tempdir");
-    let log = Arc::new(Mutex::new(
-        Log::open(dir.path(), LogConfig::default()).expect("open log"),
-    ));
+    let log = open_default_log(dir.path());
     log.lock()
         .expect("lock")
         .append(&mut sample_batch(4))
@@ -271,19 +196,15 @@ async fn diskless_writer_keeps_wal_and_local_trim_frontiers_equal() {
     let gated_wal = Arc::new(GatedWal::new(sync_started_tx, release_sync_rx));
     let wal: crate::wal::SharedWal = gated_wal.clone();
     let (tx, rx) = mpsc::channel(1);
-    let writer = tokio::spawn(run_writer!(
-        "t".to_string(),
-        PartitionIndex(0),
+    let writer = spawn_writer(
+        dir.path(),
         log.clone(),
-        Arc::new(ArcSwap::from_pointee(dir.path().to_path_buf())),
         rx,
-        Arc::new(Notify::new()),
-        Arc::new(tokio::sync::Mutex::new(ReplicaState::new())),
-        Arc::new(Notify::new()),
-        crate::log_dir_status::LogDirRegistry::default(),
-        Arc::new(ProducerState::new()),
-        Some(wal),
-    ));
+        WriterOptions {
+            wal: Some(wal),
+            ..Default::default()
+        },
+    );
 
     let (ack, ack_rx) = oneshot::channel();
     tx.send(WriterMessage::TrimToOffset {
@@ -304,9 +225,7 @@ async fn diskless_writer_keeps_wal_and_local_trim_frontiers_equal() {
 #[tokio::test]
 async fn diskless_trim_retry_finishes_after_wal_failure() {
     let dir = tempdir().expect("tempdir");
-    let log = Arc::new(Mutex::new(
-        Log::open(dir.path(), LogConfig::default()).expect("open log"),
-    ));
+    let log = open_default_log(dir.path());
     log.lock()
         .expect("lock")
         .append(&mut sample_batch(4))
@@ -317,19 +236,15 @@ async fn diskless_trim_retry_finishes_after_wal_failure() {
     let gated_wal = Arc::new(GatedWal::new(sync_started_tx, release_sync_rx).fail_trim_times(1));
     let wal: crate::wal::SharedWal = gated_wal.clone();
     let (tx, rx) = mpsc::channel(2);
-    let writer = tokio::spawn(run_writer!(
-        "t".to_string(),
-        PartitionIndex(0),
+    let writer = spawn_writer(
+        dir.path(),
         log.clone(),
-        Arc::new(ArcSwap::from_pointee(dir.path().to_path_buf())),
         rx,
-        Arc::new(Notify::new()),
-        Arc::new(tokio::sync::Mutex::new(ReplicaState::new())),
-        Arc::new(Notify::new()),
-        crate::log_dir_status::LogDirRegistry::default(),
-        Arc::new(ProducerState::new()),
-        Some(wal),
-    ));
+        WriterOptions {
+            wal: Some(wal),
+            ..Default::default()
+        },
+    );
 
     let (first_ack, first_rx) = oneshot::channel();
     tx.send(WriterMessage::TrimToOffset {
@@ -365,9 +280,7 @@ async fn diskless_trim_retry_finishes_after_wal_failure() {
 #[tokio::test]
 async fn diskless_writer_invalidates_hot_tail_after_log_rewrite() {
     let dir = tempdir().expect("tempdir");
-    let log = Arc::new(Mutex::new(
-        Log::open(dir.path(), LogConfig::default()).expect("open log"),
-    ));
+    let log = open_default_log(dir.path());
     log.lock()
         .expect("lock")
         .append(&mut sample_batch(2))
@@ -391,19 +304,16 @@ async fn diskless_writer_invalidates_hot_tail_after_log_rewrite() {
     );
     let wal: crate::wal::SharedWal = gated_wal.clone();
     let (tx, rx) = mpsc::channel(1);
-    let writer = tokio::spawn(run_writer!(
-        "t".to_string(),
-        partition,
+    let writer = spawn_writer(
+        dir.path(),
         log,
-        Arc::new(ArcSwap::from_pointee(dir.path().to_path_buf())),
         rx,
-        Arc::new(Notify::new()),
-        Arc::new(tokio::sync::Mutex::new(ReplicaState::new())),
-        Arc::new(Notify::new()),
-        crate::log_dir_status::LogDirRegistry::default(),
-        Arc::new(ProducerState::new()),
-        Some(wal),
-    ));
+        WriterOptions {
+            partition,
+            wal: Some(wal),
+            ..Default::default()
+        },
+    );
 
     let (ack, ack_rx) = oneshot::channel();
     tx.send(WriterMessage::Truncate {

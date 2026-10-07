@@ -102,17 +102,27 @@ async fn wait_for_submission_count(controller: &MockReassignmentController, coun
     .expect("reassignment run loop did not submit expected records");
 }
 
-#[tokio::test]
-async fn run_submits_ready_reassignment_on_image_change() {
+async fn start_watching_reassignment(
+    is_leader: bool,
+) -> (
+    Arc<MockReassignmentController>,
+    CancellationToken,
+    tokio::task::JoinHandle<()>,
+) {
     let initial = img(&[1], &[1], &[], &[], 1);
-    let controller = Arc::new(MockReassignmentController::new(true, initial));
+    let controller = Arc::new(MockReassignmentController::new(is_leader, initial));
     let l = Arc::new(liveness(&[1, 2, 3]).await);
     let shutdown = CancellationToken::new();
     let task_controller: Arc<dyn ReassignmentController> = controller.clone();
     let task = tokio::spawn(run(task_controller, l, shutdown.clone()));
-
     tokio::task::yield_now().await;
     controller.publish(img(&[1, 2, 3], &[1, 2, 3], &[3], &[2], 1));
+    (controller, shutdown, task)
+}
+
+#[tokio::test]
+async fn run_submits_ready_reassignment_on_image_change() {
+    let (controller, shutdown, task) = start_watching_reassignment(true).await;
     wait_for_submission_count(&controller, 1).await;
 
     shutdown.cancel();
@@ -127,15 +137,7 @@ async fn run_submits_ready_reassignment_on_image_change() {
 
 #[tokio::test]
 async fn run_skips_ready_reassignment_when_not_leader() {
-    let initial = img(&[1], &[1], &[], &[], 1);
-    let controller = Arc::new(MockReassignmentController::new(false, initial));
-    let l = Arc::new(liveness(&[1, 2, 3]).await);
-    let shutdown = CancellationToken::new();
-    let task_controller: Arc<dyn ReassignmentController> = controller.clone();
-    let task = tokio::spawn(run(task_controller, l, shutdown.clone()));
-
-    tokio::task::yield_now().await;
-    controller.publish(img(&[1, 2, 3], &[1, 2, 3], &[3], &[2], 1));
+    let (controller, shutdown, task) = start_watching_reassignment(false).await;
     let observed = tokio::time::timeout(
         Duration::from_millis(100),
         wait_for_submission_count(&controller, 1),

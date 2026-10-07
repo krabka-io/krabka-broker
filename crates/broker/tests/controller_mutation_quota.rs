@@ -19,6 +19,7 @@ mod cluster;
 mod kafka_wire;
 #[path = "controller_mutation_quota/quota_admin.rs"]
 mod quota_admin;
+mod support;
 #[path = "controller_mutation_quota/topic_admin.rs"]
 mod topic_admin;
 
@@ -49,18 +50,7 @@ use crate::{
 /// histogram the way Prometheus does. A missing series reads as `0.0`: a
 /// `Family` emits nothing until it has an entry.
 async fn metric_value(handle: &krabka_broker::BrokerHandle, series: &str) -> f64 {
-    let mut rendered = String::new();
-    {
-        let registry = handle.metrics().registry.lock().await;
-        prometheus_client::encoding::text::encode(&mut rendered, &registry)
-            .expect("encode registry");
-    }
-    rendered
-        .lines()
-        .find(|line| line.starts_with(series))
-        .and_then(|line| line.rsplit(' ').next())
-        .and_then(|value| value.parse().ok())
-        .unwrap_or(0.0)
+    crate::support::client::metric_value(handle, series).await
 }
 
 /// Test 1: Set `controller_mutation_rate=2.0` for alice. A strict v7 request

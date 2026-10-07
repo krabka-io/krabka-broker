@@ -83,6 +83,17 @@ async fn put_path_uses_multipart_above_threshold_and_round_trips() {
     .unwrap();
 }
 
+fn multipart_data(directory: &std::path::Path, len: usize) -> LogSegmentData {
+    LogSegmentData {
+        log_segment: write_log_segment(directory, len),
+        offset_index: write_file(directory, "00.index", b"OFFSET-IDX"),
+        time_index: write_file(directory, "00.timeindex", b"TIME-IDX"),
+        transaction_index: None,
+        producer_snapshot_index: None,
+        leader_epoch_index: Bytes::from_static(b"EPOCH-BYTES"),
+    }
+}
+
 /// Multipart path with a tail chunk strictly smaller than `chunk_size`.
 /// `WriteMultipart::finish` flushes the partially-filled buffer as the
 /// final part, and this test asserts that it does. If it did not, the
@@ -95,15 +106,7 @@ async fn multipart_flushes_partial_tail_chunk() {
         .with_multipart_tuning(kibibytes(1), chunk);
     let src = TempDir::new().unwrap();
     let md = sample_metadata(41);
-    let log_path = write_log_segment(src.path(), seg_len);
-    let data = LogSegmentData {
-        log_segment: log_path,
-        offset_index: write_file(src.path(), "00.index", b"OFFSET-IDX"),
-        time_index: write_file(src.path(), "00.timeindex", b"TIME-IDX"),
-        transaction_index: None,
-        producer_snapshot_index: None,
-        leader_epoch_index: Bytes::from_static(b"EPOCH-BYTES"),
-    };
+    let data = multipart_data(src.path(), seg_len);
     tokio::task::spawn_blocking(move || {
         store.copy_log_segment_data(&md, &data).unwrap();
         let fetched = store.fetch_log_segment(&md, 0, None).unwrap();
@@ -129,15 +132,7 @@ async fn put_path_stays_on_single_put_below_threshold() {
         .with_multipart_tuning(mebibytes(1), kibibytes(4));
     let src = TempDir::new().unwrap();
     let md = sample_metadata(42);
-    let log_path = write_log_segment(src.path(), 10); // ten bytes, well under 1 MiB
-    let data = LogSegmentData {
-        log_segment: log_path,
-        offset_index: write_file(src.path(), "00.index", b"OFFSET-IDX"),
-        time_index: write_file(src.path(), "00.timeindex", b"TIME-IDX"),
-        transaction_index: None,
-        producer_snapshot_index: None,
-        leader_epoch_index: Bytes::from_static(b"EPOCH-BYTES"),
-    };
+    let data = multipart_data(src.path(), 10);
     tokio::task::spawn_blocking(move || {
         store.copy_log_segment_data(&md, &data).unwrap();
         let fetched = store.fetch_log_segment(&md, 0, None).unwrap();

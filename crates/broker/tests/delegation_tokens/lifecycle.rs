@@ -19,7 +19,6 @@ use krabka_protocol::owned::{
 };
 
 use crate::{
-    DELEGATION_TOKEN_REQUEST_NOT_ALLOWED,
     cluster::{start_broker, wait_for_token, wait_for_token_gone},
     rpc::{
         send_create_delegation_token, send_describe_delegation_token, send_expire_delegation_token,
@@ -107,36 +106,7 @@ async fn delegation_token_lifecycle_end_to_end() {
         //         this succeed; without it the broker would respond
         //         "unknown user" at round 1.
         let token_password = base64::engine::general_purpose::STANDARD.encode(&hmac_bytes);
-        let mut tokenuser = sasl_scram_sha256_authenticate(addr, &token_id, &token_password)
-            .await
-            .map_err(|e| format!("token SCRAM auth: {e}"))?;
-
-        // ── (d) From the token-authed connection, Create must fail with
-        //         DELEGATION_TOKEN_REQUEST_NOT_ALLOWED (64). This is the
-        //         load-bearing oracle for the principal-override check —
-        //         that error is only reachable when the broker sees this
-        //         session as `authenticated_via_token = true`, which is set
-        //         in the same branch that overrides the principal back to
-        //         the token's owner (here, alice). If the override regressed
-        //         and the principal stayed as the token_id, the request
-        //         would fail with INVALID_REQUEST (or be authorized as a
-        //         brand-new user). 64 is the unambiguous proof.
-        let create_via_token = send_create_delegation_token(
-            &mut tokenuser,
-            200,
-            &CreateDelegationTokenRequest {
-                max_lifetime_ms: -1,
-                ..Default::default()
-            },
-        )
-        .await
-        .map_err(|e| format!("CreateDelegationToken(token-auth): {e}"))?;
-        assert!(
-            create_via_token.error_code == DELEGATION_TOKEN_REQUEST_NOT_ALLOWED,
-            "token-authed Create must return DELEGATION_TOKEN_REQUEST_NOT_ALLOWED (64); \
-             got {} — principal override may have regressed",
-            create_via_token.error_code
-        );
+        let tokenuser = crate::wire::token_session(addr, &token_id, &hmac_bytes).await?;
 
         // ── (e) Third connection: bob (a listed renewer) calls Renew.
         //         Renew authorization (owner OR renewer) is what's load-bearing

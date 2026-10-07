@@ -1,0 +1,77 @@
+//! KIP-951 endpoint projection shared by Fetch, Produce and the share RPCs.
+
+use krabka_metadata::MetadataImage;
+
+#[cfg(test)]
+pub(crate) mod test_support;
+
+/// One `NodeEndpoints` entry, in the shape the four responses share.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct LeaderEndpoint {
+    node_id: i32,
+    host: String,
+    port: i32,
+    rack: Option<String>,
+}
+
+/// The endpoint of every node in `leader_ids`, once per node and ordered by
+/// node id.
+///
+/// Each node resolves on `connection_listener_name`, the listener the request
+/// arrived on, through the same selection that `Metadata` uses. A negative id
+/// and a node that the image does not know contribute nothing, as Kafka's
+/// `getAliveBrokerNode` finds no node for them.
+#[must_use]
+pub(crate) fn leader_endpoints<R: From<LeaderEndpoint>>(
+    image: &MetadataImage,
+    connection_listener_name: &str,
+    inter_broker_listener_name: &str,
+    leader_ids: impl IntoIterator<Item = i32>,
+) -> Vec<R> {
+    let mut node_ids: Vec<i32> = leader_ids.into_iter().filter(|id| *id >= 0).collect();
+    node_ids.sort_unstable();
+    node_ids.dedup();
+    node_ids
+        .into_iter()
+        .filter_map(|node_id| {
+            let record = image.broker(krabka_metadata::NodeId(u64::try_from(node_id).ok()?))?;
+            let (host, port) = crate::handlers::metadata::pick_endpoint_host_port(
+                record,
+                connection_listener_name,
+                inter_broker_listener_name,
+            );
+            Some(
+                LeaderEndpoint {
+                    node_id,
+                    host,
+                    port,
+                    rack: record.rack.clone(),
+                }
+                .into(),
+            )
+        })
+        .collect()
+}
+
+macro_rules! impl_node_endpoint {
+    ($($response:ident),* $(,)?) => {
+        $(impl From<LeaderEndpoint> for krabka_protocol::owned::$response::NodeEndpoint {
+            fn from(endpoint: LeaderEndpoint) -> Self {
+                Self {
+                    node_id: endpoint.node_id,
+                    host: endpoint.host,
+                    port: endpoint.port,
+                    rack: endpoint.rack,
+                    ..Self::default()
+                }
+            }
+        })*
+    };
+}
+
+impl_node_endpoint!(
+    fetch_response,
+    produce_response,
+    share_acknowledge_response,
+    share_fetch_response,
+);

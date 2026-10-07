@@ -14,21 +14,20 @@
 //! `mc` for the one bucket operation the S3 API of `object_store` does not
 //! expose.
 
+#[path = "support/archive_fixture.rs"]
+mod archive_fixture;
+
 #[path = "roundtrip/batches.rs"]
 mod batches;
 
 use std::process::{Command, Stdio};
 
 use assert2::{assert, check};
-use bytes::Bytes;
 use clap::Parser as _;
-use krabka_ids::{LeaderEpoch, Offset};
+use krabka_ids::Offset;
 use krabka_log::{Log, LogConfig, name};
 use krabka_protocol::records::RecordBatch;
-use krabka_remote_storage::{
-    LogSegmentData, RemoteLogSegmentDetails, RemoteLogSegmentId, RemoteLogSegmentMetadata,
-    RemoteLogSegmentState, RemoteStorageManager as _, S3Config, S3RemoteStorage, TopicIdPartition,
-};
+use krabka_remote_storage::{S3Config, S3RemoteStorage, TopicIdPartition};
 use krabka_restore::{Cli, restore};
 use uuid::Uuid;
 
@@ -228,43 +227,12 @@ fn archive_partition(
     );
 
     for export in &exports {
-        let metadata = RemoteLogSegmentMetadata::new(
-            RemoteLogSegmentId::new(
-                TopicIdPartition::new(topic_id, TOPIC, partition),
-                Uuid::new_v4(),
-            ),
-            export.base_offset.0,
-            export.last_offset.0,
-            export.max_timestamp,
-            1,
-            0,
-            RemoteLogSegmentDetails::new(
-                i32::try_from(
-                    std::fs::metadata(&export.log_path)
-                        .expect("log metadata")
-                        .len(),
-                )
-                .expect("fixture segment fits i32"),
-                RemoteLogSegmentState::CopySegmentFinished,
-                maplit::btreemap! {LeaderEpoch(0) => export.base_offset.0},
-            ),
-        )
-        .expect("valid remote metadata");
-        storage
-            .copy_log_segment_data(
-                &metadata,
-                &LogSegmentData {
-                    log_segment: export.log_path.clone(),
-                    offset_index: export.offset_index_path.clone(),
-                    time_index: export.time_index_path.clone(),
-                    transaction_index: export.transaction_index_path.clone(),
-                    producer_snapshot_index: Some(export.producer_snapshot_path.clone()),
-                    leader_epoch_index: Bytes::from(
-                        format!("0\n1\n0 {}\n", export.base_offset.0).into_bytes(),
-                    ),
-                },
-            )
-            .expect("archive the segment into MinIO");
+        crate::archive_fixture::archive_segment(
+            storage,
+            TopicIdPartition::new(topic_id, TOPIC, partition),
+            Uuid::new_v4(),
+            export,
+        );
     }
 
     ArchivedPartition {

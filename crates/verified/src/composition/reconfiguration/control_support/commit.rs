@@ -2,12 +2,14 @@ use creusot_std::prelude::*;
 
 use super::reconfiguration_control_prefix_support;
 #[cfg(creusot)]
+use super::spec::{control_inputs_coherent, control_request_admitted};
+#[cfg(creusot)]
 use super::{
-    super::spec::{expected_member, has_node, membership_coherent, valid_old},
+    super::spec::{expected_member, has_node},
     spec::{control_record_count, next_size, prefix_count},
 };
 #[cfg(creusot)]
-use crate::reconfiguration::{admitted_plan, voter_reconfiguration_rejection};
+use crate::reconfiguration::admitted_plan;
 use crate::{
     raft::{
         advance_high_watermark, control_history_frontier, frontier_reaches, in_half_open_window,
@@ -32,13 +34,8 @@ type CommittedControl = Option<(
 /// final row's offset. Progress is (append base, previous HWM, requested HWM,
 /// actual log end).
 /// No-append preflight consumes none of those coordinates.
-#[requires(state.1.voter_count@ == old@.len())]
-#[requires(reports@.len() == old@.len() + 1)]
-#[ensures((match result { None => false, Some(_) => true }) == (valid_old(old@)
-    && membership_coherent(old@, node, target.membership, request.kind)
-    && match voter_reconfiguration_rejection(state.0, state.1, request, target) {
-        Some(_) => false, None => true,
-    }
+#[requires(control_inputs_coherent(old@, state.1, reports@))]
+#[ensures((match result { None => false, Some(_) => true }) == (control_request_admitted(old@, state, request, node, target)
     && (control_record_count(state.1.kraft_version, request.kind) == 0
         || (progress.0@ >= 0 && 0 <= progress.1@ && progress.1@ <= progress.3@
             && progress.0@ + control_record_count(state.1.kraft_version, request.kind) <= progress.3@

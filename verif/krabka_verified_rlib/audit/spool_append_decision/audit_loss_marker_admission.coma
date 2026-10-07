@@ -1,9 +1,9 @@
-(* #"/workspace/crates/verified/src/audit/spool_append_decision.rs" 48 0 54 29 *)
+(* #"/workspace/crates/verified/src/audit/spool_append_decision.rs" 49 0 55 29 *)
 
-let%span sspool_append_decision = "/workspace/crates/verified/src/audit/spool_append_decision.rs" 58 34 58 35
-let%span sspool_append_decision'0 = "/workspace/crates/verified/src/audit/spool_append_decision.rs" 59 27 59 28
-let%span sspool_append_decision'1 = "/workspace/crates/verified/src/audit/spool_append_decision.rs" 35 10 46 1
-let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span sspool_append_decision = "/workspace/crates/verified/src/audit/spool_append_decision.rs" 59 34 59 35
+let%span sspool_append_decision'0 = "/workspace/crates/verified/src/audit/spool_append_decision.rs" 60 27 60 28
+let%span sspool_append_decision'1 = "/workspace/crates/verified/src/audit/spool_append_decision.rs" 36 10 47 1
+let%span sord = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
 
 use creusot.int.UInt64
 use creusot.prelude.Any
@@ -29,7 +29,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let audit_loss_marker_admission [#"/workspace/crates/verified/src/audit/spool_append_decision.rs" 48 0 54 29]
+let audit_loss_marker_admission [#"/workspace/crates/verified/src/audit/spool_append_decision.rs" 49 0 55 29]
   (header_matches: bool) (field_count: UInt64.t) (count: UInt64.t) (generation: t_Option_u64)
   (previous_generation: UInt64.t) (return (x: t_AuditLossMarkerAdmission)) = (! bb0
   [ bb0 = any [ br0 -> {generation = None} (! bb1) | br1 (x0: UInt64.t) -> {generation = Some x0} (! bb3) ]

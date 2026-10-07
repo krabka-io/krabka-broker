@@ -2,9 +2,26 @@ use assert2::check;
 
 use super::*;
 use crate::{
-    core::test_support::{CellLog, FakeLog, RunsLog, machine},
+    core::test_support::{CellLog, FakeLog, RunsLog, machine, win_election},
     event::Event,
 };
+
+/// Capture the promotion log end before replication tests grow the log.
+/// The election and the two grants retain their separate event times.
+fn promote_with_second_voter(m: &mut QuorumStateMachine, log: &dyn LogView) {
+    m.on_event(Event::ElectionTimeout, log, SimInstant(2000));
+    for (epoch, now) in [(0, SimInstant(2001)), (1, SimInstant(2002))] {
+        m.on_event(
+            Event::ReceiveVoteResponse {
+                from: NodeId(2),
+                epoch,
+                vote_granted: true,
+            },
+            log,
+            now,
+        );
+    }
+}
 
 #[test]
 fn leader_advances_hwm_at_majority_fetch_offset() {
@@ -18,25 +35,7 @@ fn leader_advances_hwm_at_majority_fetch_offset() {
         last_epoch: 1,
     };
     // drive to leader (epoch_start_offset captured as end_offset() == 0)
-    m.on_event(Event::ElectionTimeout, &log, SimInstant(2000));
-    m.on_event(
-        Event::ReceiveVoteResponse {
-            from: NodeId(2),
-            epoch: 0,
-            vote_granted: true,
-        },
-        &log,
-        SimInstant(2001),
-    );
-    m.on_event(
-        Event::ReceiveVoteResponse {
-            from: NodeId(2),
-            epoch: 1,
-            vote_granted: true,
-        },
-        &log,
-        SimInstant(2002),
-    );
+    promote_with_second_voter(&mut m, &log);
     assert2::assert!(matches!(
         m.role(),
         Role::Leader {
@@ -89,25 +88,7 @@ fn leader_hwm_does_not_regress_on_reordered_stale_fetch() {
         end: std::cell::Cell::new(0),
         last_epoch: 1,
     };
-    m.on_event(Event::ElectionTimeout, &log, SimInstant(2000));
-    m.on_event(
-        Event::ReceiveVoteResponse {
-            from: NodeId(2),
-            epoch: 0,
-            vote_granted: true,
-        },
-        &log,
-        SimInstant(2001),
-    );
-    m.on_event(
-        Event::ReceiveVoteResponse {
-            from: NodeId(2),
-            epoch: 1,
-            vote_granted: true,
-        },
-        &log,
-        SimInstant(2002),
-    );
+    promote_with_second_voter(&mut m, &log);
     // Leader log ends at 10; follower 2 fetches at 8 → HWM advances to 8.
     log.end.set(10);
     m.on_event(
@@ -158,25 +139,7 @@ fn leader_holds_hwm_for_prior_epoch_entries_until_current_epoch_committed() {
         end: 10,
         last_epoch: 1,
     };
-    m.on_event(Event::ElectionTimeout, &log, SimInstant(2000));
-    m.on_event(
-        Event::ReceiveVoteResponse {
-            from: NodeId(2),
-            epoch: 0,
-            vote_granted: true,
-        },
-        &log,
-        SimInstant(2001),
-    );
-    m.on_event(
-        Event::ReceiveVoteResponse {
-            from: NodeId(2),
-            epoch: 1,
-            vote_granted: true,
-        },
-        &log,
-        SimInstant(2002),
-    );
+    promote_with_second_voter(&mut m, &log);
     assert2::assert!(matches!(
         m.role(),
         Role::Leader {
@@ -414,36 +377,6 @@ fn a_follower_truncates_to_where_both_logs_still_hold_the_epoch() {
             case.what
         );
     }
-}
-
-/// Drives `m` from `Unattached` to `Role::Leader`, returning every action the
-/// pre-vote round, the vote round and the promotion emitted.
-///
-/// `peers` is the rest of the voter set. Grants past the majority are ignored
-/// by the core's own epoch/role guards, so passing all of them is safe.
-fn win_election(
-    m: &mut QuorumStateMachine,
-    log: &dyn LogView,
-    peers: &[NodeId],
-    now: SimInstant,
-) -> Vec<Action> {
-    let mut actions = m.on_event(Event::ElectionTimeout, log, now);
-    // Pre-vote grants at the pre-bump epoch, then real-vote grants at the epoch
-    // the successful pre-vote bumped us to.
-    for epoch in [0, 1] {
-        for &from in peers {
-            actions.extend(m.on_event(
-                Event::ReceiveVoteResponse {
-                    from,
-                    epoch,
-                    vote_granted: true,
-                },
-                log,
-                now,
-            ));
-        }
-    }
-    actions
 }
 
 fn armed_check_quorum(actions: &[Action]) -> Option<SimInstant> {

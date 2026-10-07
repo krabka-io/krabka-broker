@@ -4,69 +4,16 @@
 //! `SimpleAclAuthorizer`, creates topics as the super user, and seeds the ACL
 //! records a test needs before the authorizer lets alice produce or fetch.
 
-use std::{net::SocketAddr, time::Duration};
+use std::net::SocketAddr;
 
-use assert2::assert;
-use bytes::BytesMut;
-use krabka_broker::{Broker, BrokerHandle, authorizer::SimpleAclAuthorizer, config::ListenerSpec};
-use krabka_metadata::{
-    AclEntry, AclOperation, MetadataRecord, PatternType, PermissionType, ResourceType,
-};
-use krabka_protocol::{Decode, Encode};
-use krabka_security::{ListenerProtocol, SaslMechanism};
-use tempfile::TempDir;
+use krabka_broker::BrokerHandle;
 
+pub use crate::support::sasl::start_sasl_plaintext_with_acl_users as start_single_broker_sasl_plaintext_with_users;
 use crate::{CLIENT_ID, kafka_wire};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Cluster setup helpers
 // ─────────────────────────────────────────────────────────────────────────────
-
-/// Starts a single-broker SASL/PLAINTEXT cluster.
-///
-/// Returns `(handle, _dir, addr)`.
-pub fn start_single_broker_sasl_plaintext_with_users(
-    super_user: &str,
-    users: &[(&str, &str)],
-) -> impl std::future::Future<Output = (BrokerHandle, TempDir, SocketAddr)> {
-    let log_dir = tempfile::tempdir().unwrap();
-    let mut cfg = krabka_broker::BrokerConfig::for_tests(log_dir.path().to_path_buf());
-    cfg.listeners = vec![ListenerSpec {
-        name: "SASL_PLAINTEXT".to_string(),
-        bind_addr: "127.0.0.1:0".parse().unwrap(),
-        advertised: "127.0.0.1:0".to_string(),
-        protocol: ListenerProtocol::SaslPlaintext,
-        tls_config: None,
-        sasl_mechanisms: None,
-        principal_mapper: krabka_broker::SslPrincipalMapper::default(),
-    }];
-    cfg.inter_broker_listener_name = "SASL_PLAINTEXT".to_string();
-    cfg.enabled_sasl_mechanisms = vec![SaslMechanism::Plain];
-    for (name, pass) in users {
-        cfg.plain_credentials
-            .insert((*name).to_string(), (*pass).to_string());
-    }
-    cfg.super_users = std::iter::once(super_user.to_string()).collect();
-    // Install `SimpleAclAuthorizer` so the cluster-Alter gate
-    // fires for non-super principals; the default `AllowAllAuthorizer`
-    // would let every AlterClientQuotas through.
-    // Clients reach this broker over SASL, but its own heartbeat reaches the
-    // PLAINTEXT controller listener as ANONYMOUS; like a Kafka inter-broker
-    // principal it needs `ClusterAction`, or the broker never unfences.
-    cfg.authorizer = std::sync::Arc::new(SimpleAclAuthorizer::new(
-        cfg.super_users
-            .iter()
-            .cloned()
-            .chain(std::iter::once("ANONYMOUS".to_string()))
-            .collect(),
-    ));
-
-    Box::pin(async move {
-        let handle = Broker::start(cfg).await.expect("broker must start");
-        let addr = handle.listen_addr();
-        (handle, log_dir, addr)
-    })
-}
 
 /// Creates a topic with SASL/PLAIN as admin. Asserts success.
 pub async fn create_topic_as_admin(
@@ -75,37 +22,13 @@ pub async fn create_topic_as_admin(
     partitions: i32,
     replication_factor: i16,
 ) {
-    use krabka_protocol::owned::{
-        create_topics_request::{CreatableTopic, CreateTopicsRequest},
-        create_topics_response::CreateTopicsResponse,
-    };
-
-    let req = CreateTopicsRequest {
-        topics: vec![CreatableTopic {
-            name: topic.to_string(),
-            num_partitions: partitions,
-            replication_factor,
-            ..Default::default()
-        }],
-        timeout_ms: 5_000,
-        ..Default::default()
-    };
-    let mut stream = kafka_wire::sasl_plain_authenticate(addr, CLIENT_ID, "admin", b"admin-secret")
-        .await
-        .expect("SASL authenticate for CreateTopics");
-    let mut body = BytesMut::new();
-    req.encode(&mut body, 7).expect("encode CreateTopics");
-    let resp_bytes = kafka_wire::round_trip(&mut stream, 19, 7, 1, CLIENT_ID, true, &body)
-        .await
-        .expect("CreateTopics round-trip");
-    let mut cur: &[u8] = &resp_bytes;
-    let resp = CreateTopicsResponse::decode(&mut cur, 7).expect("decode CreateTopicsResponse");
-    assert!(resp.topics.len() == 1);
-    assert!(
-        resp.topics[0].error_code == 0,
-        "CreateTopics({topic}) must succeed: {:?}",
-        resp.topics[0].error_message
-    );
+    kafka_wire::create_topic_sasl(
+        addr,
+        CLIENT_ID,
+        ("admin", b"admin-secret"),
+        kafka_wire::topic(topic, partitions, replication_factor),
+    )
+    .await;
 }
 
 /// Waits until `handle` sees `(topic, partition)` in its image.
@@ -118,60 +41,33 @@ pub async fn wait_partition_exists(handle: &BrokerHandle, topic: &str, partition
 // ─────────────────────────────────────────────────────────────────────────────
 
 pub async fn seed_compat_shim_disable_acl(handle: &BrokerHandle) {
-    handle
-        .submit_metadata_record_for_test(MetadataRecord::V1AccessControlEntry(AclEntry {
-            resource_type: ResourceType::Topic,
-            resource_name: "__compat_shim_disable__".to_string(),
-            pattern_type: PatternType::Literal,
-            principal: "User:admin".to_string(),
-            host: "*".to_string(),
-            operation: AclOperation::Read,
-            permission_type: PermissionType::Allow,
-        }))
-        .await
-        .expect("seed dummy ACL to disable compat shim");
-    // intentional: absorb the raft commit-then-apply gap for the ACL record;
-    // ACL image state has no test awaiter/metric, and callers additionally
-    // retry until the compat shim is provably off.
-    tokio::time::sleep(Duration::from_millis(50)).await;
+    crate::support::acl::seed_topic_acl(
+        handle,
+        "__compat_shim_disable__",
+        "User:admin",
+        krabka_metadata::AclOperation::Read,
+    )
+    .await;
 }
 
 /// Seeds an ACL that allows alice to Write topic `topic`.
 pub async fn seed_alice_write_acl(handle: &BrokerHandle, topic: &str) {
-    handle
-        .submit_metadata_record_for_test(MetadataRecord::V1AccessControlEntry(AclEntry {
-            resource_type: ResourceType::Topic,
-            resource_name: topic.to_string(),
-            pattern_type: PatternType::Literal,
-            principal: "User:alice".to_string(),
-            host: "*".to_string(),
-            operation: AclOperation::Write,
-            permission_type: PermissionType::Allow,
-        }))
-        .await
-        .expect("seed alice Write ACL");
-    // intentional: absorb the raft commit-then-apply gap for the ACL record;
-    // ACL image state has no test awaiter/metric, and downstream produce/fetch
-    // retry loops guard the actual authorization outcome.
-    tokio::time::sleep(Duration::from_millis(50)).await;
+    crate::support::acl::seed_topic_acl(
+        handle,
+        topic,
+        "User:alice",
+        krabka_metadata::AclOperation::Write,
+    )
+    .await;
 }
 
 /// Seeds an ACL that allows alice to Read topic `topic`.
 pub async fn seed_alice_read_acl(handle: &BrokerHandle, topic: &str) {
-    handle
-        .submit_metadata_record_for_test(MetadataRecord::V1AccessControlEntry(AclEntry {
-            resource_type: ResourceType::Topic,
-            resource_name: topic.to_string(),
-            pattern_type: PatternType::Literal,
-            principal: "User:alice".to_string(),
-            host: "*".to_string(),
-            operation: AclOperation::Read,
-            permission_type: PermissionType::Allow,
-        }))
-        .await
-        .expect("seed alice Read ACL");
-    // intentional: absorb the raft commit-then-apply gap for the ACL record;
-    // ACL image state has no test awaiter/metric, and downstream produce/fetch
-    // retry loops guard the actual authorization outcome.
-    tokio::time::sleep(Duration::from_millis(50)).await;
+    crate::support::acl::seed_topic_acl(
+        handle,
+        topic,
+        "User:alice",
+        krabka_metadata::AclOperation::Read,
+    )
+    .await;
 }

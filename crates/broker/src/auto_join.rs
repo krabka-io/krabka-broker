@@ -32,6 +32,8 @@ mod join_loop;
 mod outcome;
 mod request;
 mod rpc;
+#[cfg(test)]
+mod test_support;
 mod voter_updates;
 
 pub(crate) use self::{join_loop::run, voter_updates::run_voter_updates};

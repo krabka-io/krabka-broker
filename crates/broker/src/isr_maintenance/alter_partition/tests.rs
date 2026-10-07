@@ -485,26 +485,7 @@ async fn send_alter_partition_to_reports_transport_error_for_closed_port() {
 /// Boots a single-node broker that leads the metadata quorum, and returns the
 /// address of its controller listener.
 async fn start_controller() -> (crate::BrokerHandle, SocketAddr, tempfile::TempDir) {
-    let dir = tempfile::TempDir::new().expect("tempdir");
-    let data_listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-        .await
-        .expect("bind data listener");
-    let controller_listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-        .await
-        .expect("bind controller listener");
-    let data_addr = data_listener.local_addr().expect("data addr");
-    let controller_addr = controller_listener.local_addr().expect("controller addr");
-    let mut config = crate::config::BrokerConfig::for_tests(dir.path().to_path_buf());
-    config.listen_addr = data_addr;
-    config.advertised_listener = data_addr.to_string();
-    config.controller_listen_addr = controller_addr;
-    config.controller_quorum_voters = vec![(NodeId(1), controller_addr.to_string())];
-    let broker =
-        crate::Broker::start_with_listeners(config, Some(controller_listener), Some(data_listener))
-            .await
-            .expect("broker start");
-    broker.wait_until_controller_leader().await;
-    (broker, controller_addr, dir)
+    crate::test_support::start_controller().await
 }
 
 /// A krabka controller advertises `AlterPartition` on its controller listener

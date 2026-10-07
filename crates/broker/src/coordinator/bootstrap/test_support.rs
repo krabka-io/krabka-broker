@@ -127,3 +127,69 @@ pub(super) fn classic_group_record(
     .unwrap();
     (key, value)
 }
+
+/// Apply a stream of record values and tombstones in log order.
+pub(super) fn replay_stream(
+    coordinator: &Arc<GroupCoordinator>,
+    stream: impl IntoIterator<Item = (bytes::Bytes, Option<bytes::Bytes>)>,
+) -> super::replay::Replayed {
+    use super::replay::{Replayed, apply_record, apply_tombstone};
+    let mut replayed = Replayed::default();
+    let batch = krabka_protocol::records::RecordBatch::default();
+    for (key, value) in stream {
+        let key = crate::coordinator::persistence::parse_key(&key).unwrap();
+        match value {
+            Some(value) => apply_record(coordinator, &mut replayed, key, &value, &batch).unwrap(),
+            None => apply_tombstone(coordinator, &mut replayed, key),
+        }
+    }
+    replayed
+}
+
+pub(super) async fn assert_classic_replayed(coordinator: &GroupCoordinator) {
+    use crate::coordinator::unified::{GroupType, actor::GroupKindTag};
+    assert!(coordinator.group_type("g") != Some(GroupType::NextGen));
+    let snapshot = coordinator
+        .describe_group("g")
+        .await
+        .expect("classic group present");
+    assert!(
+        snapshot
+            .members
+            .iter()
+            .any(|member| member.member_id == "m1")
+    );
+    assert!(
+        coordinator
+            .find("g")
+            .is_some_and(|handle| handle.kind == GroupKindTag::Classic)
+    );
+}
+
+/// Build a persisted commit with a distinct offset per partition.
+pub(super) fn commit_record(partition: i32, offset: i64) -> krabka_protocol::records::Record {
+    commit_record_for_group("g", partition, offset)
+}
+
+pub(super) fn commit_record_for_group(
+    group: &str,
+    partition: i32,
+    offset: i64,
+) -> krabka_protocol::records::Record {
+    use crate::coordinator::persistence::OffsetCommitValue;
+    krabka_protocol::records::Record {
+        key: Some(OffsetCommitValue::encode_key(group, "t", partition).unwrap()),
+        value: Some(
+            OffsetCommitValue {
+                offset: krabka_log::Offset(offset),
+                leader_epoch: -1,
+                metadata: String::new(),
+                commit_timestamp_ms: 0,
+                expire_timestamp_ms: None,
+                topic_id: None,
+            }
+            .encode_value(),
+        ),
+        ..Default::default()
+    }
+}

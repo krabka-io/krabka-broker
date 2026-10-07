@@ -1,8 +1,6 @@
 //! Unit tests for the KIP-848 downgrade trigger and the classic state it
 //! restores.
 
-use std::collections::HashMap;
-
 use assert2::{assert, check};
 use krabka_log::Offset;
 use krabka_protocol::owned::consumer_group_heartbeat_request::ConsumerGroupHeartbeatRequest;
@@ -15,7 +13,7 @@ use crate::{
             test_support::{
                 decode_assignment, log_has_classic_group_metadata_write,
                 make_coordinator_with_topic, make_coordinator_with_topic_policy, rpc,
-                seed_classic_member, subscription_blob,
+                seed_classic_member,
             },
         },
         classic_state::OffsetEntry,
@@ -29,79 +27,34 @@ use crate::{
 /// the hosted classic member as a classic member.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn last_consumer_member_leaving_downgrades_to_classic() {
-    use crate::coordinator::unified::{
-        classic_state::{ClassicGroup as ClassicState, Member},
-        group::{CoordinatorGroup, GroupKind},
-    };
-
     // Default policy is Bidirectional → downgrade is allowed.
     let (coord, log) = make_coordinator_with_topic("t", 2);
 
     // Seed a classic group with one classic member subscribed to "t".
-    let mut cs = ClassicState::new("g");
-    cs.protocol_type = Some("consumer".into());
-    cs.generation_id = 1;
-    cs.add_member(Member::new(
-        "m-classic",
-        "client",
-        "127.0.0.1",
-        std::time::Duration::from_secs(30),
-        std::time::Duration::from_mins(1),
-        vec![("range".into(), subscription_blob(&["t"]))],
-    ));
-    let group = Box::new(CoordinatorGroup::seeded(
-        "g",
-        GroupKind::Classic(cs),
-        HashMap::new(),
-    ));
-    coord.seed_classic("g", group);
-    let handle = coord.find("g").expect("seeded classic actor");
+    let handle = seed_classic_member(&coord, "m-classic", "t", None);
 
     // A native consumer heartbeat upgrades the group in place; it now hosts
     // the classic member AND the native consumer member.
-    let (tx, rx) = tokio::sync::oneshot::channel();
-    handle
-        .tx
-        .send(GroupActorMessage::Heartbeat {
-            request: ConsumerGroupHeartbeatRequest {
-                group_id: "g".into(),
-                member_id: String::new(),
-                member_epoch: 0,
-                subscribed_topic_names: Some(vec!["t".into()]),
-                rebalance_timeout_ms: 60_000,
-                ..Default::default()
-            },
-            client_id: "client-a".into(),
-            client_host: String::new(),
-            regex_resolver: crate::coordinator::unified::regex_resolver::no_topic_regex_resolver(),
-            reply: tx,
-        })
-        .await
-        .unwrap();
-    let resp = rx.await.unwrap();
+    let resp = rpc::consumer_heartbeat(&handle, "", 0, Some("t")).await;
     assert!(resp.error_code == codes::NONE);
     let native_id = resp.member_id.expect("native member id");
 
     // The native consumer member leaves (member_epoch == -1). It was the
     // only native member, so the group downgrades back to classic.
-    let (tx, rx) = tokio::sync::oneshot::channel();
-    handle
-        .tx
-        .send(GroupActorMessage::Heartbeat {
-            request: ConsumerGroupHeartbeatRequest {
+    assert!(
+        rpc::consumer_request(
+            &handle,
+            ConsumerGroupHeartbeatRequest {
                 group_id: "g".into(),
                 member_id: native_id,
                 member_epoch: -1,
                 ..Default::default()
-            },
-            client_id: "client-a".into(),
-            client_host: String::new(),
-            regex_resolver: crate::coordinator::unified::regex_resolver::no_topic_regex_resolver(),
-            reply: tx,
-        })
+            }
+        )
         .await
-        .unwrap();
-    assert!(rx.await.unwrap().error_code == codes::NONE);
+        .error_code
+            == codes::NONE
+    );
 
     // The group is now classic again. `describe_group` only returns
     // classic groups; it must surface "g" with the hosted classic member
@@ -140,15 +93,7 @@ async fn upgrade_then_downgrade_round_trip() {
     let up = rpc::consumer_heartbeat(&handle, "", 0, Some("t")).await;
     assert!(up.error_code == codes::NONE);
     let c1 = up.member_id.expect("native member id");
-    let describe = {
-        let (tx, rx) = tokio::sync::oneshot::channel();
-        handle
-            .tx
-            .send(GroupActorMessage::Describe { reply: tx })
-            .await
-            .unwrap();
-        rx.await.unwrap()
-    };
+    let describe = { rpc::describe(&handle).await };
     assert!(
         describe.members.len() == 2,
         "upgraded group hosts both m1 and c1"
@@ -206,10 +151,8 @@ async fn classic_leave_of_last_native_member_triggers_downgrade() {
 
     let (coord, _log) =
         make_coordinator_with_topic_policy("t", 2, ConsumerGroupMigrationPolicy::Bidirectional);
-    let handle = seed_classic_member(&coord, "m-classic", "t", None);
-    let joined = rpc::consumer_heartbeat(&handle, "", 0, Some("t")).await;
-    check!(joined.error_code == codes::NONE);
-    let native = joined.member_id.expect("native member id");
+    let (handle, native) =
+        crate::coordinator::unified::actor::test_support::seed_classic_with_native(&coord).await;
 
     let response = rpc::classic_leave(&handle, &native).await;
     check!(response.len() == 1);
@@ -357,21 +300,8 @@ async fn downgraded_group_is_deletable_once_empty() {
     let (coord, _log) =
         make_coordinator_with_topic_policy("t", 2, ConsumerGroupMigrationPolicy::Bidirectional);
 
-    // SPAWN consumer-kind; host a classic member; downgrade.
-    let handle = coord.get_or_create_consumer("g");
-    assert!(handle.kind == GroupKindTag::Consumer);
-    let up = rpc::consumer_heartbeat(&handle, "", 0, Some("t")).await;
-    assert!(up.error_code == codes::NONE);
-    let native = up.member_id.expect("native member id");
-    let join = rpc::classic_join(&handle, "m-classic", "t").await;
-    assert!(join.error_code == codes::NONE);
-    let leave = rpc::consumer_heartbeat(&handle, &native, -1, None).await;
-    assert!(leave.error_code == codes::NONE);
-
-    // Barrier: only a classic-kind group answers `ClassicInspect`, so this
-    // round-trip guarantees the downgrade completed. The lone hosted classic
-    // member keeps it non-empty.
-    let view = rpc::classic_inspect(&handle).await;
+    let (handle, view) =
+        crate::coordinator::unified::actor::test_support::spawn_and_downgrade(&coord).await;
     check!(view.members.iter().any(|m| m.member_id == "m-classic"));
 
     // The spawn-time kind is the stale `Consumer`; delete must not consult

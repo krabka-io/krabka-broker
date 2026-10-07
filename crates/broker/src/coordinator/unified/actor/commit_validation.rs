@@ -245,38 +245,8 @@ mod tests {
         let (coord, _log) =
             make_coordinator_with_topic_policy("t", 2, ConsumerGroupMigrationPolicy::Bidirectional);
 
-        // SPAWN the actor as a consumer group: the first RPC is a native
-        // ConsumerGroupHeartbeat, so the handle's spawn-time `kind == Consumer`.
-        let handle = coord.get_or_create_consumer("g");
-        assert!(
-            handle.kind == GroupKindTag::Consumer,
-            "the group must be spawned consumer-kind"
-        );
-
-        let up = rpc::consumer_heartbeat(&handle, "", 0, Some("t")).await;
-        assert!(up.error_code == codes::NONE);
-        let native = up.member_id.expect("native member id");
-
-        // A CLASSIC member joins the (consumer-kind) group as a hosted member.
-        let join = rpc::classic_join(&handle, "m-classic", "t").await;
-        assert!(join.error_code == codes::NONE);
-
-        // The native consumer member leaves (member_epoch -1). It was the only
-        // native member and a hosted classic member remains → DOWNGRADE in
-        // place. The group is now live-Classic but the handle was spawned
-        // Consumer (its `kind` field stays stale). `maybe_downgrade` runs inside
-        // the Heartbeat handler AFTER the reply is sent, so we round-trip one
-        // more message (the `classic_inspect` below) to be sure the in-place
-        // flip has completed before validating.
-        let leave = rpc::consumer_heartbeat(&handle, &native, -1, None).await;
-        assert!(leave.error_code == codes::NONE);
-
-        // The hosted classic member was re-expressed as a classic member. Read
-        // the restored classic generation it must commit against. This
-        // `ClassicInspect` round-trip is also the barrier that guarantees the
-        // downgrade completed (only a classic-kind group answers it; the actor
-        // processes it strictly after the leave's `maybe_downgrade`).
-        let view = rpc::classic_inspect(&handle).await;
+        let (handle, view) =
+            crate::coordinator::unified::actor::test_support::spawn_and_downgrade(&coord).await;
         // The handle's spawn-time `kind` is unchanged (and stale) — validation
         // must NOT consult it.
         assert!(

@@ -9,12 +9,15 @@
 use std::sync::Arc;
 
 use krabka_ids::Offset;
-use krabka_protocol::records::{HEADER_LEN, RecordBatchHeader};
+use krabka_protocol::records::HEADER_LEN;
 use krabka_units::prelude::{ByteSize, ByteSizeExt};
 use tracing::instrument;
-use zerocopy::FromBytes;
 
-use super::{RawSegmentDesc, Segment, io::read_full_at};
+use super::{
+    RawSegmentDesc, Segment,
+    io::read_full_at,
+    read_raw::{RawBatch, select_raw_range},
+};
 use crate::error::LogError;
 
 impl Segment {
@@ -54,112 +57,41 @@ impl Segment {
             .map_err(|_| LogError::Corrupt("read_raw_desc target offset out of range".into()))?;
         let start_pos = self.read_start_position(target_rel)?;
 
-        // Mirror `read_raw`'s windowing **exactly** so the chosen byte range is
-        // byte-identical. `read_raw` first reads `first_read = max_bytes.max(
-        // HEADER_LEN)` bytes (capped by the bytes available after `start_pos`)
-        // into a buffer, then only includes a batch whose end lands within that
-        // buffer. A batch that straddles the buffer end is included **only** as
-        // the single anti-stall batch when nothing has been included yet (it is
-        // then re-read in full if it's complete on disk). We reproduce that with
-        // a `window` instead of an actual payload read — the scan stays
-        // header-only.
-        //
-        // The budget crosses back to a raw byte count here: everything below
-        // is a file position or a region length.
+        // Use the buffered reader's initial window, without reading payloads.
         let max_bytes = max_size.bytes_usize();
-        let first_read = max_bytes.max(HEADER_LEN) as u64;
-        let available = self.log_size.saturating_sub(start_pos);
-        let window = first_read.min(available); // == read_raw's buf.len()
-
-        let mut pos: u64 = 0;
-        let mut range_start: Option<u64> = None;
-        let mut range_end: u64 = 0;
-        let mut start_offset = fetch_offset;
-        let mut last_offset = fetch_offset - 1;
-        let mut hdr_buf = [0u8; HEADER_LEN];
-
-        loop {
-            // `read_raw` breaks when the next header can't fit in the window.
-            if pos + HEADER_LEN as u64 > window {
-                break;
+        let window =
+            (max_bytes.max(HEADER_LEN) as u64).min(self.log_size.saturating_sub(start_pos));
+        let window = usize::try_from(window)
+            .map_err(|_| LogError::Corrupt("read_raw_desc window too large".into()))?;
+        let mut header = [0; HEADER_LEN];
+        let Some(range) = select_raw_range(fetch_offset, limit_offset, max_bytes, window, |pos| {
+            if read_full_at(&self.log_file, start_pos + pos as u64, &mut header)? < HEADER_LEN {
+                return Ok(None);
             }
-            let n = read_full_at(&self.log_file, start_pos + pos, &mut hdr_buf)?;
-            if n < HEADER_LEN {
-                break;
-            }
-            let hdr = RecordBatchHeader::ref_from_bytes(&hdr_buf)
-                .map_err(|_| LogError::Corrupt("record batch header".into()))?;
-            // Wire values from the fixed v2 header stay raw `i64`.
-            let base = hdr.base_offset.get();
-            let batch_len = usize::try_from(hdr.batch_length.get().max(0)).unwrap_or(0);
-            let total = 12 + batch_len as u64;
-            let batch_last = base + i64::from(hdr.last_offset_delta.get());
-
-            if batch_last < fetch_offset {
-                pos += total;
-                continue;
-            }
-            if base >= limit_offset {
-                break;
-            }
-            // Batch straddles the window end. `read_raw` re-reads exactly one
-            // such batch when nothing is buffered yet (anti-stall: always return
-            // at least one complete batch), provided it's complete on disk.
-            if pos + total > window {
-                if range_start.is_none() {
-                    if start_pos + pos + total > self.log_size {
-                        // Not a complete batch on disk — `read_raw` breaks.
-                        break;
-                    }
-                    let len = usize::try_from(total)
-                        .map_err(|_| LogError::Corrupt("read_raw_desc batch too large".into()))?;
-                    return Ok(RawSegmentDesc {
-                        start_offset: Offset(base),
-                        last_offset: Offset(batch_last),
-                        region: Some(krabka_protocol::records::FileRegion {
-                            file: Arc::clone(&self.log_file),
-                            offset: start_pos + pos,
-                            len,
-                        }),
-                    });
-                }
-                break;
-            }
-
-            if range_start.is_none() {
-                range_start = Some(pos);
-                start_offset = Offset(base);
-            }
-            range_end = pos + total;
-            last_offset = Offset(batch_last);
-            pos += total;
-
-            if range_end - range_start.expect("set above") >= max_bytes as u64 {
-                break;
-            }
+            RawBatch::decode(&header).map(Some)
+        })?
+        else {
+            return Ok(RawSegmentDesc::empty());
+        };
+        if start_pos + range.positions.end as u64 > self.log_size {
+            return Ok(RawSegmentDesc::empty());
         }
-
-        match range_start {
-            Some(s) => {
-                let len = usize::try_from(range_end - s)
-                    .map_err(|_| LogError::Corrupt("read_raw_desc region too large".into()))?;
-                Ok(RawSegmentDesc {
-                    start_offset,
-                    last_offset,
-                    region: Some(krabka_protocol::records::FileRegion {
-                        file: Arc::clone(&self.log_file),
-                        offset: start_pos + s,
-                        len,
-                    }),
-                })
-            }
-            None => Ok(RawSegmentDesc::empty()),
-        }
+        Ok(RawSegmentDesc {
+            start_offset: range.start_offset,
+            last_offset: range.last_offset,
+            region: Some(krabka_protocol::records::FileRegion {
+                file: Arc::clone(&self.log_file),
+                offset: start_pos + range.positions.start as u64,
+                len: range.positions.len(),
+            }),
+        })
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use std::os::unix::fs::FileExt;
+
     use krabka_units::prelude::{bytes, mebibytes};
 
     use super::*;
@@ -169,7 +101,6 @@ mod tests {
     /// broker's sendfile would transmit, and that its TLS pread-fallback would
     /// copy.
     fn region_bytes(region: &krabka_protocol::records::FileRegion) -> Vec<u8> {
-        use std::os::unix::fs::FileExt;
         let mut buf = vec![0u8; region.len];
         let mut filled = 0;
         let mut off = region.offset;
@@ -193,12 +124,26 @@ mod tests {
         for off in 0..5i64 {
             seg.append(&test_batch_at(off), DENSE_INDEX).unwrap();
         }
+        let batch_len = u32::try_from(test_batch_at(0).encoded_len()).unwrap();
         let cases = [
             ("all batches", 0i64, 5i64, mebibytes(10)),
             ("limit clamp", 0, 3, mebibytes(10)),
             ("mid-stream start", 2, 5, mebibytes(10)),
             ("one-batch anti-stall", 0, 5, bytes(1)),
+            ("mid-stream anti-stall", 2, 5, bytes(1)),
+            ("zero-byte anti-stall", 0, 5, bytes(0)),
+            ("window ends inside first batch", 0, 5, bytes(batch_len - 1)),
+            ("window ends after first batch", 0, 5, bytes(batch_len)),
+            (
+                "window holds a second header",
+                0,
+                5,
+                bytes(batch_len + u32::try_from(HEADER_LEN).unwrap()),
+            ),
             ("last batch", 4, 5, mebibytes(10)),
+            ("past last batch", 5, 9, mebibytes(10)),
+            ("at limit", 0, 0, mebibytes(10)),
+            ("past limit", 2, 1, mebibytes(10)),
         ];
         for (_name, fo, lo, mb) in cases {
             let raw = seg.read_raw(Offset(fo), Offset(lo), mb).unwrap();

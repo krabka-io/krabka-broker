@@ -1,18 +1,18 @@
-(* #"/workspace/crates/verified/src/transaction/marker.rs" 20 0 20 67 *)
+(* #"/workspace/crates/verified/src/transaction/marker.rs" 39 0 39 67 *)
 
-let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
-let%span sslice = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 331 18 331 22
-let%span smarker = "/workspace/crates/verified/src/transaction/marker.rs" 24 7 24 16
-let%span smarker'0 = "/workspace/crates/verified/src/transaction/marker.rs" 24 19 24 20
-let%span smarker'1 = "/workspace/crates/verified/src/transaction/marker.rs" 27 15 27 16
-let%span smarker'2 = "/workspace/crates/verified/src/transaction/marker.rs" 27 11 27 17
-let%span smarker'3 = "/workspace/crates/verified/src/transaction/marker.rs" 27 23 27 24
-let%span smarker'4 = "/workspace/crates/verified/src/transaction/marker.rs" 27 19 27 25
-let%span smarker'5 = "/workspace/crates/verified/src/transaction/marker.rs" 9 10 9 55
-let%span smarker'6 = "/workspace/crates/verified/src/transaction/marker.rs" 10 10 11 69
-let%span smarker'7 = "/workspace/crates/verified/src/transaction/marker.rs" 12 10 13 69
-let%span smarker'8 = "/workspace/crates/verified/src/transaction/marker.rs" 14 10 15 71
-let%span smarker'9 = "/workspace/crates/verified/src/transaction/marker.rs" 16 10 18 48
+let%span sord = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sslice = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 331 18 331 22
+let%span smarker = "/workspace/crates/verified/src/transaction/marker.rs" 43 7 43 16
+let%span smarker'0 = "/workspace/crates/verified/src/transaction/marker.rs" 43 19 43 20
+let%span smarker'1 = "/workspace/crates/verified/src/transaction/marker.rs" 46 15 46 16
+let%span smarker'2 = "/workspace/crates/verified/src/transaction/marker.rs" 46 11 46 17
+let%span smarker'3 = "/workspace/crates/verified/src/transaction/marker.rs" 46 23 46 24
+let%span smarker'4 = "/workspace/crates/verified/src/transaction/marker.rs" 46 19 46 25
+let%span smarker'5 = "/workspace/crates/verified/src/transaction/marker.rs" 28 10 28 55
+let%span smarker'6 = "/workspace/crates/verified/src/transaction/marker.rs" 29 10 30 69
+let%span smarker'7 = "/workspace/crates/verified/src/transaction/marker.rs" 31 10 32 69
+let%span smarker'8 = "/workspace/crates/verified/src/transaction/marker.rs" 33 10 34 71
+let%span smarker'9 = "/workspace/crates/verified/src/transaction/marker.rs" 35 10 37 48
 
 use creusot.slice.Slice64
 use creusot.int.UInt8
@@ -38,8 +38,8 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let log_batch_kind [#"/workspace/crates/verified/src/transaction/marker.rs" 20 0 20 67]
-  (is_control: bool) (key: Slice64.slice UInt8.t) (return (x: t_LogBatchKind)) = (! bb0
+let log_batch_kind [#"/workspace/crates/verified/src/transaction/marker.rs" 39 0 39 67] (is_control: bool)
+  (key: Slice64.slice UInt8.t) (return (x: t_LogBatchKind)) = (! bb0
   [ bb0 = any [ br0 -> {is_control = false} (! bb1) | br1 -> {is_control} (! bb2) ]
   | bb2 = s0
     [ s0 = len_u8 [%#smarker] {key} (fun (_x: UInt64.t) -> [ &_22 <- _x ] s1)

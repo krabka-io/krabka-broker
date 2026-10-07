@@ -7,14 +7,10 @@
 use std::time::Duration;
 
 use assert2::assert;
-use krabka_broker::Broker;
 
 use crate::{
     NONE,
-    harness::{
-        bootstrap_share_state, broker_config, broker_test_permit, connect, create_topic, join,
-        produce_n, topic_id, wait_for_share_init,
-    },
+    harness::broker_test_permit,
     share_rpc::{acquired_count, fetch_until_acquired, share_fetch, share_renew},
 };
 
@@ -23,17 +19,11 @@ use crate::{
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn lock_timeout_redelivers() {
     let _permit = broker_test_permit().await;
-    let dir = tempfile::TempDir::new().unwrap();
-    let mut cfg = broker_config(dir.path().to_path_buf());
-    cfg.share_group.record_lock_duration = Duration::from_millis(200);
-    let broker = Broker::start(cfg).await.unwrap();
-    let client = connect(&broker.listen_addr().to_string()).await;
-    create_topic(&broker, &client, "t", 1).await;
-    let tid = topic_id(&broker, "t");
-    bootstrap_share_state(&broker, &client, "g1").await;
-    produce_n(&client, "t", tid, 0, 1).await;
-    let (member, member_epoch) = join(&client, "g1", "t").await;
-    wait_for_share_init(&broker, &client, &member, member_epoch, tid).await;
+    let (broker, client, _dir, tid) = crate::support::share::topic_fixture("t", 1, |cfg| {
+        cfg.share_group.record_lock_duration = Duration::from_millis(200);
+    })
+    .await;
+    let (member, _) = crate::harness::initialize_consumption(&broker, &client, tid, 1).await;
 
     // Fetch but DO NOT acknowledge.
     let row = fetch_until_acquired(&client, "g1", &member, tid, 0, 0).await;
@@ -65,18 +55,12 @@ async fn lock_timeout_redelivers() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn delivery_limit_archives() {
     let _permit = broker_test_permit().await;
-    let dir = tempfile::TempDir::new().unwrap();
-    let mut cfg = broker_config(dir.path().to_path_buf());
-    cfg.share_group.record_lock_duration = Duration::from_millis(150);
-    cfg.share_group.max_delivery_attempts = 2;
-    let broker = Broker::start(cfg).await.unwrap();
-    let client = connect(&broker.listen_addr().to_string()).await;
-    create_topic(&broker, &client, "t", 1).await;
-    let tid = topic_id(&broker, "t");
-    bootstrap_share_state(&broker, &client, "g1").await;
-    produce_n(&client, "t", tid, 0, 1).await;
-    let (member, member_epoch) = join(&client, "g1", "t").await;
-    wait_for_share_init(&broker, &client, &member, member_epoch, tid).await;
+    let (broker, client, _dir, tid) = crate::support::share::topic_fixture("t", 1, |cfg| {
+        cfg.share_group.record_lock_duration = Duration::from_millis(150);
+        cfg.share_group.max_delivery_attempts = 2;
+    })
+    .await;
+    let (member, _) = crate::harness::initialize_consumption(&broker, &client, tid, 1).await;
 
     // Delivery 1 (no ack).
     let row1 = fetch_until_acquired(&client, "g1", &member, tid, 0, 0).await;
@@ -127,17 +111,11 @@ async fn delivery_limit_archives() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn renew_extends_lock_not_redelivered() {
     let _permit = broker_test_permit().await;
-    let dir = tempfile::TempDir::new().unwrap();
-    let mut cfg = broker_config(dir.path().to_path_buf());
-    cfg.share_group.record_lock_duration = Duration::from_millis(500);
-    let broker = Broker::start(cfg).await.unwrap();
-    let client = connect(&broker.listen_addr().to_string()).await;
-    create_topic(&broker, &client, "t", 1).await;
-    let tid = topic_id(&broker, "t");
-    bootstrap_share_state(&broker, &client, "g1").await;
-    produce_n(&client, "t", tid, 0, 1).await;
-    let (member, member_epoch) = join(&client, "g1", "t").await;
-    wait_for_share_init(&broker, &client, &member, member_epoch, tid).await;
+    let (broker, client, _dir, tid) = crate::support::share::topic_fixture("t", 1, |cfg| {
+        cfg.share_group.record_lock_duration = Duration::from_millis(500);
+    })
+    .await;
+    let (member, _) = crate::harness::initialize_consumption(&broker, &client, tid, 1).await;
 
     // Acquire offset 0 (lock 500ms, delivery_count 1). Epoch is now 1.
     let acquire_at = std::time::Instant::now();
@@ -180,17 +158,11 @@ async fn renew_extends_lock_not_redelivered() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn no_renew_redelivers_after_lock_expiry() {
     let _permit = broker_test_permit().await;
-    let dir = tempfile::TempDir::new().unwrap();
-    let mut cfg = broker_config(dir.path().to_path_buf());
-    cfg.share_group.record_lock_duration = Duration::from_millis(500);
-    let broker = Broker::start(cfg).await.unwrap();
-    let client = connect(&broker.listen_addr().to_string()).await;
-    create_topic(&broker, &client, "t", 1).await;
-    let tid = topic_id(&broker, "t");
-    bootstrap_share_state(&broker, &client, "g1").await;
-    produce_n(&client, "t", tid, 0, 1).await;
-    let (member, member_epoch) = join(&client, "g1", "t").await;
-    wait_for_share_init(&broker, &client, &member, member_epoch, tid).await;
+    let (broker, client, _dir, tid) = crate::support::share::topic_fixture("t", 1, |cfg| {
+        cfg.share_group.record_lock_duration = Duration::from_millis(500);
+    })
+    .await;
+    let (member, _) = crate::harness::initialize_consumption(&broker, &client, tid, 1).await;
 
     let row = fetch_until_acquired(&client, "g1", &member, tid, 0, 0).await;
     assert!(acquired_count(&row) == 1, "acquire the single offset");

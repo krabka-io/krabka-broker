@@ -13,7 +13,7 @@ use assert2::assert;
 use krabka_broker::BrokerHandle;
 use krabka_client_core::Client;
 use krabka_protocol::owned::{
-    create_topics_request::{CreatableTopic, CreatableTopicConfig, CreateTopicsRequest},
+    create_topics_request::{CreatableTopic, CreateTopicsRequest},
     fetch_request::{FetchPartition, FetchRequest, FetchTopic},
 };
 
@@ -39,38 +39,7 @@ pub(crate) async fn copy_then_fetch_round_trip(
                 name: topic.into(),
                 num_partitions: 1,
                 replication_factor: 1,
-                configs: vec![
-                    CreatableTopicConfig {
-                        name: "remote.storage.enable".into(),
-                        value: Some("true".into()),
-                        ..Default::default()
-                    },
-                    CreatableTopicConfig {
-                        name: "internal.segment.bytes".into(),
-                        value: Some("1024".into()),
-                        ..Default::default()
-                    },
-                    CreatableTopicConfig {
-                        name: "local.retention.bytes".into(),
-                        value: Some("1".into()),
-                        ..Default::default()
-                    },
-                    CreatableTopicConfig {
-                        name: "retention.bytes".into(),
-                        value: Some("-1".into()),
-                        ..Default::default()
-                    },
-                    // `produce_records_for_test` stamps no record timestamp, so
-                    // sealed segments carry max_timestamp_ms=0; the default 7-day
-                    // `retention.ms` would then immediately evict every tiered
-                    // segment (`now - 0 > 7d`). Disable time retention so the
-                    // copied segments survive for the read-back.
-                    CreatableTopicConfig {
-                        name: "retention.ms".into(),
-                        value: Some("-1".into()),
-                        ..Default::default()
-                    },
-                ],
+                configs: crate::topic_fixture::tiered_configs(Some("1024")),
                 ..Default::default()
             }],
             timeout_ms: 5_000,

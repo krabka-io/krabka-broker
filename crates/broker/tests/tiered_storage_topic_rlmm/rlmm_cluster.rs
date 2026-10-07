@@ -25,6 +25,13 @@ use crate::support;
 /// topic-backed RLMM pointed at its own loopback listener. Returns the
 /// handle plus the log + remote tempdirs. The caller keeps them alive.
 pub(crate) async fn start_broker_with_topic_rlmm() -> (BrokerHandle, TempDir, TempDir) {
+    start_configured_topic_rlmm(|_, _| {}).await
+}
+
+/// Keep held listeners and tempdirs alive while applying a scenario-specific configuration.
+pub(crate) async fn start_configured_topic_rlmm(
+    configure: impl FnOnce(&mut BrokerConfig, &std::path::Path),
+) -> (BrokerHandle, TempDir, TempDir) {
     support::init_tracing();
 
     // Pin a loopback port so the RLMM bootstrap can dial the broker's own
@@ -59,6 +66,8 @@ pub(crate) async fn start_broker_with_topic_rlmm() -> (BrokerHandle, TempDir, Te
         security: None,
         ..KafkaRlmmConfig::default()
     });
+
+    configure(&mut cfg, log_dir.path());
 
     let data_listener = client_listeners.into_iter().next().unwrap();
     let controller_listener = controller_listeners.into_iter().next().unwrap();
@@ -124,60 +133,24 @@ pub(crate) async fn await_activation(broker: &BrokerHandle) {
 /// listener, is `SASL_PLAINTEXT/PLAIN`. The topic-backed RLMM points at it. The
 /// RLMM authenticates as the inter-broker PLAIN principal.
 pub(crate) async fn start_sasl_broker_with_topic_rlmm() -> (BrokerHandle, TempDir, TempDir) {
-    support::init_tracing();
-    // Held listeners eliminate the bind-and-drop TOCTOU race. The data
-    // listener matches `spec.bind_addr == listen` in `start_with_listeners`
-    // even for the custom SASL_PLAINTEXT ListenerSpec, so both can be passed.
-    let (client_addrs, controller_addrs, client_listeners, controller_listeners) =
-        support::bind_and_hold_ports(1).await;
-    let listen = client_addrs[0];
-    let log_dir = TempDir::new().expect("log tempdir");
-    let remote_dir = TempDir::new().expect("remote tempdir");
-
-    let mut cfg = BrokerConfig::for_tests(log_dir.path().to_path_buf());
-    cfg.listen_addr = listen;
-    cfg.advertised_listener = listen.to_string();
-    cfg.controller_listen_addr = controller_addrs[0];
-    cfg.controller_quorum_voters =
-        vec![(krabka_broker::NodeId(1), controller_addrs[0].to_string())];
-    cfg.listeners = vec![ListenerSpec {
-        name: "SASL_PLAINTEXT".to_string(),
-        bind_addr: listen,
-        advertised: format!("127.0.0.1:{}", listen.port()),
-        protocol: ListenerProtocol::SaslPlaintext,
-        tls_config: None,
-        sasl_mechanisms: None,
-        principal_mapper: krabka_broker::SslPrincipalMapper::default(),
-    }];
-    cfg.inter_broker_listener_name = "SASL_PLAINTEXT".to_string();
-    cfg.enabled_sasl_mechanisms = vec![SaslMechanism::Plain];
-    cfg.plain_credentials
-        .insert("rlmm".to_string(), "rlmm-secret".to_string());
-    cfg.inter_broker_credentials = Some(InterBrokerCredentials::Plain {
-        username: "rlmm".to_string(),
-        password: "rlmm-secret".to_string(),
-    });
-    cfg.remote_storage_backend = Some(RemoteStorageBackend::Local {
-        dir: remote_dir.path().to_path_buf(),
-    });
-    cfg.remote_log_manager_interval = krabka_units::secs(1);
-    cfg.remote_log_metadata = RlmmKind::TopicBacked(KafkaRlmmConfig {
-        // The broker overrides bootstrap + security from the inter-broker
-        // listener; the operator value here is the same loopback addr.
-        bootstrap: format!("127.0.0.1:{}", listen.port()),
-        num_partitions: 1,
-        replication: 1,
-        min_isr: 1,
-        snapshot_interval: krabka_units::hours(1),
-        snapshot_dir: log_dir.path().join("remote-log-metadata"),
-        security: None,
-        ..KafkaRlmmConfig::default()
-    });
-
-    let data_listener = client_listeners.into_iter().next().unwrap();
-    let controller_listener = controller_listeners.into_iter().next().unwrap();
-    let broker = Broker::start_with_listeners(cfg, Some(controller_listener), Some(data_listener))
-        .await
-        .expect("broker start");
-    (broker, log_dir, remote_dir)
+    start_configured_topic_rlmm(|cfg, _| {
+        cfg.listeners = vec![ListenerSpec {
+            name: "SASL_PLAINTEXT".to_string(),
+            bind_addr: cfg.listen_addr,
+            advertised: format!("127.0.0.1:{}", cfg.listen_addr.port()),
+            protocol: ListenerProtocol::SaslPlaintext,
+            tls_config: None,
+            sasl_mechanisms: None,
+            principal_mapper: krabka_broker::SslPrincipalMapper::default(),
+        }];
+        cfg.inter_broker_listener_name = "SASL_PLAINTEXT".to_string();
+        cfg.enabled_sasl_mechanisms = vec![SaslMechanism::Plain];
+        cfg.plain_credentials
+            .insert("rlmm".to_string(), "rlmm-secret".to_string());
+        cfg.inter_broker_credentials = Some(InterBrokerCredentials::Plain {
+            username: "rlmm".to_string(),
+            password: "rlmm-secret".to_string(),
+        });
+    })
+    .await
 }

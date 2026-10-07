@@ -12,41 +12,25 @@
 use std::sync::Arc;
 
 use assert2::assert;
-use bytes::Bytes;
 use krabka_log::Offset;
 use krabka_metadata::{LeaderEpoch, MetadataRecord, NodeId, PartitionRecord, TopicRecord};
 use krabka_protocol::{
     owned::{
-        create_topics_request::{CreatableTopic, CreateTopicsRequest},
-        produce_request::{PartitionProduceData, ProduceRequest, TopicProduceData},
-        produce_response::ProduceResponse,
-        share_acknowledge_request::{
-            AcknowledgePartition, AcknowledgeTopic, AcknowledgementBatch as AcknowledgeBatch,
-            ShareAcknowledgeRequest,
-        },
-        share_acknowledge_response::ShareAcknowledgeResponse,
         share_fetch_request::{
             AcknowledgementBatch as FetchAcknowledgeBatch, FetchPartition, FetchTopic,
             ShareFetchRequest,
         },
-        share_fetch_response::{PartitionData, ShareFetchResponse},
+        share_fetch_response::PartitionData,
     },
     primitives::uuid::Uuid as WireUuid,
-    records::{Record, RecordBatch, RecordsPayload},
 };
 
 use crate::{
     authorizer::AllowAllAuthorizer,
     broker::BrokerHandle,
     codes,
-    test_support::{
-        decode_response, encode_request, initialize_share_state, peer, principal, request_context,
-        start_broker_no_audit_with,
-    },
+    test_support::{initialize_share_state, start_broker_no_audit_with},
 };
-
-/// Produce v12 names the topic.
-const PRODUCE_VERSION: i16 = 12;
 
 /// The acknowledge type `Accept`.
 const ACCEPT: i8 = 1;
@@ -64,77 +48,12 @@ async fn start() -> (BrokerHandle, tempfile::TempDir) {
 }
 
 async fn create_topic(broker: &BrokerHandle, name: &str) -> WireUuid {
-    let client = krabka_client_core::Client::builder()
-        .bootstrap(broker.listen_addr().to_string())
-        .client_id("share-persister-error-test")
-        .build()
-        .await
-        .expect("client build");
-    let response = client
-        .send(CreateTopicsRequest {
-            topics: vec![CreatableTopic {
-                name: name.to_string(),
-                num_partitions: 1,
-                replication_factor: 1,
-                ..Default::default()
-            }],
-            timeout_ms: 5_000,
-            ..Default::default()
-        })
-        .await
-        .expect("CreateTopics");
-    assert!(response.topics[0].error_code == codes::NONE, "{response:?}");
-    broker.wait_until_partition_present(name, 0).await;
-    let image = broker.controller_image_for_test();
-    let topic = image.topic(name).expect("created topic in the image");
-    WireUuid(topic.topic_id.into_bytes())
+    crate::handlers::test_support::create_topic(broker, "share-persister-error-test", name, 1).await
 }
 
 /// Appends one batch of two records to partition 0 of `topic`.
 async fn produce_two_records(broker: &BrokerHandle, topic: &str) {
-    let request = ProduceRequest {
-        acks: -1,
-        timeout_ms: 5_000,
-        topic_data: vec![TopicProduceData {
-            name: topic.to_string(),
-            partition_data: vec![PartitionProduceData {
-                index: 0,
-                records: Some(RecordsPayload::V2(vec![RecordBatch {
-                    last_offset_delta: 1,
-                    records: (0..2)
-                        .map(|offset_delta| Record {
-                            offset_delta,
-                            value: Some(Bytes::from_static(b"v")),
-                            ..Default::default()
-                        })
-                        .collect(),
-                    ..Default::default()
-                }])),
-                ..Default::default()
-            }],
-            ..Default::default()
-        }],
-        ..Default::default()
-    };
-    let shared = broker.broker_arc_for_test();
-    let user = principal("producer");
-    let address = peer();
-    let ctx = request_context(&user, &address, "producer-client");
-    let request_bytes = encode_request(&request, PRODUCE_VERSION);
-    let response_bytes = crate::handlers::produce::handle(
-        &shared,
-        PRODUCE_VERSION,
-        &request_bytes,
-        request_bytes.clone(),
-        &ctx,
-    )
-    .await
-    .expect("handle produce");
-    let response: ProduceResponse = decode_response(&response_bytes, PRODUCE_VERSION);
-    assert!(
-        response.responses[0].partition_responses[0].error_code == codes::NONE,
-        "{response:?}"
-    );
+    crate::handlers::test_support::produce_records(broker, topic, 0, 2).await;
 }
 
 /// Sends a `ShareFetch` for partition 0 of `topic_id`. With `accept`, the row
@@ -174,21 +93,7 @@ async fn share_fetch(
         }],
         ..Default::default()
     };
-    let shared = broker.broker_arc_for_test();
-    let user = principal("share-consumer");
-    let address = peer();
-    let ctx = request_context(&user, &address, "share-client");
-    let request_bytes = encode_request(&request, version);
-    let response = crate::test_support::try_dispatch_context(
-        &shared,
-        krabka_protocol::owned::share_fetch_request::API_KEY,
-        version,
-        &request_bytes,
-        &ctx,
-    )
-    .await
-    .expect("handle share fetch");
-    let response: ShareFetchResponse = decode_response(&response, version);
+    let response = crate::handlers::test_support::share_fetch_wire(broker, version, &request).await;
     // An incremental response leaves out a partition with nothing new.
     response
         .responses
@@ -208,41 +113,16 @@ async fn share_acknowledge(
     (first_offset, last_offset): (i64, i64),
 ) -> i16 {
     let version = krabka_protocol::owned::share_acknowledge_request::MAX_VERSION;
-    let request = ShareAcknowledgeRequest {
-        group_id: Some(group.into()),
-        member_id: Some("member".into()),
-        share_session_epoch: epoch,
-        topics: vec![AcknowledgeTopic {
-            topic_id,
-            partitions: vec![AcknowledgePartition {
-                partition_index: 0,
-                acknowledgement_batches: vec![AcknowledgeBatch {
-                    first_offset,
-                    last_offset,
-                    acknowledge_types: vec![ACCEPT],
-                    ..Default::default()
-                }],
-                ..Default::default()
-            }],
-            ..Default::default()
-        }],
-        ..Default::default()
-    };
-    let shared = broker.broker_arc_for_test();
-    let user = principal("share-consumer");
-    let address = peer();
-    let ctx = request_context(&user, &address, "share-client");
-    let request_bytes = encode_request(&request, version);
-    let response = crate::test_support::try_dispatch_context(
-        &shared,
-        krabka_protocol::owned::share_acknowledge_request::API_KEY,
-        version,
-        &request_bytes,
-        &ctx,
-    )
-    .await
-    .expect("handle share acknowledge");
-    let response: ShareAcknowledgeResponse = decode_response(&response, version);
+    let request = crate::handlers::test_support::acknowledge_request(
+        group,
+        "member",
+        epoch,
+        topic_id,
+        (first_offset, last_offset),
+        ACCEPT,
+    );
+    let response =
+        crate::handlers::test_support::share_acknowledge_wire(broker, version, &request).await;
     response.responses[0].partitions[0].error_code
 }
 

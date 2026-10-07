@@ -897,12 +897,9 @@ mod tests {
     /// it from `dc-b`, and both are in the ISR. Every node in `witness_ids`
     /// carries `broker.witness=true`, the way a real witness registers.
     fn stretch_image(witness_ids: &[u64]) -> krabka_metadata::MetadataImage {
-        use krabka_metadata::{
-            BrokerConfigRecord, BrokerRegistrationRecord, MetadataImage, MetadataRecord,
-            PartitionRecord, TopicRecord,
-        };
+        use krabka_metadata::{BrokerConfigRecord, BrokerRegistrationRecord, MetadataRecord};
 
-        let mut image = MetadataImage::new(uuid::Uuid::nil());
+        let mut image = crate::handlers::produce::test_support::image_with_topic("orders", &[1, 2]);
         for (node_id, rack) in [(1u64, "dc-a"), (2u64, "dc-b")] {
             image.apply(&MetadataRecord::V1BrokerRegistration(
                 BrokerRegistrationRecord {
@@ -912,24 +909,6 @@ mod tests {
                 },
             ));
         }
-        image.apply(&MetadataRecord::V1Topic(TopicRecord {
-            name: "orders".into(),
-            topic_id: uuid::Uuid::nil(),
-            partitions: 1,
-            replication_factor: 2,
-        }));
-        image.apply(&MetadataRecord::V1Partition(PartitionRecord {
-            topic: "orders".into(),
-            partition: 0,
-            leader: krabka_audit::NodeId(1),
-            replicas: vec![krabka_audit::NodeId(1), krabka_audit::NodeId(2)],
-            isr: vec![krabka_audit::NodeId(1), krabka_audit::NodeId(2)],
-            leader_epoch: krabka_metadata::LeaderEpoch(0),
-            adding_replicas: vec![],
-            removing_replicas: vec![],
-            directories: vec![],
-            partition_epoch: 0,
-        }));
         for &node_id in witness_ids {
             image.apply(&MetadataRecord::V1BrokerConfig(BrokerConfigRecord {
                 node_id: krabka_audit::NodeId(node_id),
@@ -1021,26 +1000,13 @@ mod tests {
         // The consumer sits in `dc-b`, the witness site. Node 2 is the only
         // same-rack in-ISR replica, so it is exactly the redirect a rack-aware
         // selector wants to make.
-        let dir = tempfile::tempdir().expect("tempdir");
-        let mut config = crate::config::BrokerConfig::for_tests(dir.path().to_path_buf());
-        config.replica_selector = crate::replica_selector::ReplicaSelectorKind::RackAware;
-        let broker_handle = Broker::start(config).await.expect("start broker");
+        let (broker_handle, dir) = crate::handlers::test_support::start_broker_with(|config| {
+            config.replica_selector = crate::replica_selector::ReplicaSelectorKind::RackAware;
+        })
+        .await;
         let broker = broker_handle.broker_arc_for_test();
-        let part_dir = dir.path().join("orders-0");
-        std::fs::create_dir_all(&part_dir).expect("partition dir");
-        // A freshly spawned partition's replica state has no per-follower
-        // entries yet, which default to a log end offset of 0 and an unknown
-        // (permissive) log start -- exactly what a fetch at offset 0 needs to
-        // pass the offset-range check.
-        let partition = crate::broker::spawn_partition(
-            "orders".to_string(),
-            PartitionIndex(0),
-            dir.path().to_path_buf(),
-            Log::open(&part_dir, LogConfig::default()).expect("open partition log"),
-            broker.log_dir_status.clone(),
-            broker.producer_state.clone(),
-            false,
-        );
+        let partition =
+            crate::handlers::test_support::local_partition(&broker, dir.path(), "orders");
 
         for (name, witness_ids, want) in [
             ("node 2 is a plain broker in dc-b", &[][..], 2),
@@ -1069,22 +1035,13 @@ mod tests {
     /// trimmed the offset away, must never be offered.
     #[tokio::test]
     async fn preferred_read_replica_excludes_a_follower_outside_its_reported_range() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let mut config = crate::config::BrokerConfig::for_tests(dir.path().to_path_buf());
-        config.replica_selector = crate::replica_selector::ReplicaSelectorKind::RackAware;
-        let broker_handle = Broker::start(config).await.expect("start broker");
+        let (broker_handle, dir) = crate::handlers::test_support::start_broker_with(|config| {
+            config.replica_selector = crate::replica_selector::ReplicaSelectorKind::RackAware;
+        })
+        .await;
         let broker = broker_handle.broker_arc_for_test();
-        let part_dir = dir.path().join("orders-0");
-        std::fs::create_dir_all(&part_dir).expect("partition dir");
-        let partition = crate::broker::spawn_partition(
-            "orders".to_string(),
-            PartitionIndex(0),
-            dir.path().to_path_buf(),
-            Log::open(&part_dir, LogConfig::default()).expect("open partition log"),
-            broker.log_dir_status.clone(),
-            broker.producer_state.clone(),
-            false,
-        );
+        let partition =
+            crate::handlers::test_support::local_partition(&broker, dir.path(), "orders");
         let image = stretch_image(&[]);
 
         for (name, follower_leo, follower_log_start, fetch_offset, want) in [
@@ -1133,22 +1090,13 @@ mod tests {
     /// this partition (#873).
     #[tokio::test]
     async fn a_named_preferred_read_replica_skips_the_read() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let mut config = crate::config::BrokerConfig::for_tests(dir.path().to_path_buf());
-        config.replica_selector = crate::replica_selector::ReplicaSelectorKind::RackAware;
-        let broker_handle = Broker::start(config).await.expect("start broker");
+        let (broker_handle, dir) = crate::handlers::test_support::start_broker_with(|config| {
+            config.replica_selector = crate::replica_selector::ReplicaSelectorKind::RackAware;
+        })
+        .await;
         let broker = broker_handle.broker_arc_for_test();
-        let part_dir = dir.path().join("orders-0");
-        std::fs::create_dir_all(&part_dir).expect("partition dir");
-        let partition = crate::broker::spawn_partition(
-            "orders".to_string(),
-            PartitionIndex(0),
-            dir.path().to_path_buf(),
-            Log::open(&part_dir, LogConfig::default()).expect("open partition log"),
-            broker.log_dir_status.clone(),
-            broker.producer_state.clone(),
-            false,
-        );
+        let partition =
+            crate::handlers::test_support::local_partition(&broker, dir.path(), "orders");
         broker.partitions.insert(
             "orders".into(),
             PartitionIndex(0),
@@ -1205,15 +1153,7 @@ mod tests {
     async fn a_read_needs_the_installed_role_and_the_image_to_name_this_node() {
         let image = stretch_image(&[]);
         let dir = tempfile::tempdir().expect("tempdir");
-        let partition = crate::broker::spawn_partition(
-            "orders".to_string(),
-            PartitionIndex(0),
-            dir.path().to_path_buf(),
-            Log::open(dir.path(), LogConfig::default()).expect("open partition log"),
-            crate::log_dir_status::LogDirRegistry::default(),
-            std::sync::Arc::new(crate::producer_state::ProducerState::new()),
-            false,
-        );
+        let partition = crate::test_support::open_partition(dir.path(), "orders", 0);
         let refused = |leader_id| super::PartitionData {
             current_leader: super::LeaderIdAndEpoch {
                 leader_id,
@@ -1446,23 +1386,15 @@ mod tests {
                 },
             ),
         ] {
-            let request = effective_partition(last_fetched_epoch, fetch_offset);
-            let mut output = super::PartitionData {
-                partition_index: 0,
-                ..Default::default()
-            };
-            let image = krabka_metadata::MetadataImage::new(uuid::Uuid::nil());
-            let final_ = super::apply_epoch_checks(
-                &image,
-                "diverge",
-                0,
-                &request,
-                read_role(&partition),
-                &mut output,
+            check_epoch_placement(
+                name,
+                &partition,
+                last_fetched_epoch,
+                fetch_offset,
+                want_final,
+                want_out,
             )
             .await;
-            assert!(final_ == want_final, "{name}: final");
-            assert!(output == want_out, "{name}: got {output:?}");
         }
     }
 
@@ -1559,23 +1491,15 @@ mod tests {
                     .await
                     .expect("promote");
             }
-            let request = effective_partition(last_fetched_epoch, fetch_offset);
-            let mut output = super::PartitionData {
-                partition_index: 0,
-                ..Default::default()
-            };
-            let image = krabka_metadata::MetadataImage::new(uuid::Uuid::nil());
-            let final_ = super::apply_epoch_checks(
-                &image,
-                "diverge",
-                0,
-                &request,
-                read_role(&partition),
-                &mut output,
+            check_epoch_placement(
+                name,
+                &partition,
+                last_fetched_epoch,
+                fetch_offset,
+                want_final,
+                want_out,
             )
             .await;
-            assert!(final_ == want_final, "{name}: final");
-            assert!(output == want_out, "{name}: got {output:?}");
         }
     }
 
@@ -1693,5 +1617,31 @@ mod tests {
             };
             assert!(recorded == want, "{name}");
         }
+    }
+    async fn check_epoch_placement(
+        name: &str,
+        partition: &crate::partition::Partition,
+        last_fetched_epoch: i32,
+        fetch_offset: i64,
+        want_final: bool,
+        want_out: super::PartitionData,
+    ) {
+        let request = effective_partition(last_fetched_epoch, fetch_offset);
+        let mut output = super::PartitionData {
+            partition_index: 0,
+            ..Default::default()
+        };
+        let image = krabka_metadata::MetadataImage::new(uuid::Uuid::nil());
+        let final_ = super::apply_epoch_checks(
+            &image,
+            "diverge",
+            0,
+            &request,
+            read_role(partition),
+            &mut output,
+        )
+        .await;
+        assert!(final_ == want_final, "{name}: final");
+        assert!(output == want_out, "{name}: got {output:?}");
     }
 }

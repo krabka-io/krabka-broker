@@ -7,7 +7,6 @@
 use std::path::Path;
 
 use krabka_broker::{BootstrapMode, Broker, BrokerConfig};
-use krabka_log::LogConfig;
 
 use super::ports::{broker0_advertised, broker0_listen, controller_addr_0};
 
@@ -59,32 +58,20 @@ async fn start_host_broker_in_with(
     dir: &Path,
     adjust: impl FnOnce(&mut BrokerConfig),
 ) -> krabka_broker::BrokerHandle {
-    let _ = tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("krabka_broker=debug,info")),
-        )
-        .with_test_writer()
-        .try_init();
+    crate::support::init_jvm_tracing("krabka_broker=debug,info");
     let listen_addr: std::net::SocketAddr = broker0_listen().parse().expect("static addr");
     let controller_addr: std::net::SocketAddr =
         controller_addr_0().parse().expect("allocated addr");
     let mut config = BrokerConfig {
-        broker_id: 1,
-        listen_addr,
-        advertised_listener: broker0_advertised().into(),
-        log_dir: dir.to_path_buf(),
-        log_config: LogConfig::default(),
-        node_id: krabka_broker::NodeId(1),
-        controller_listen_addr: controller_addr,
-        controller_quorum_voters: vec![(krabka_broker::NodeId(1), controller_addr.to_string())],
-        heartbeat_interval: krabka_units::millis(3_000),
-        heartbeat_timeout: krabka_units::millis(9_000),
-        replica_lag_time_max: krabka_units::millis(30_000),
-        controller_election_timeout: krabka_units::secs(5),
-        controller_heartbeat_interval: krabka_units::millis(500),
         bootstrap_mode: bootstrap_mode(dir),
-        ..BrokerConfig::default().with_internal_topics_for(1)
+        ..crate::support::jvm_broker_config(
+            1,
+            listen_addr,
+            controller_addr,
+            broker0_advertised(),
+            dir.to_path_buf(),
+            &[(1, controller_addr)],
+        )
     };
     adjust(&mut config);
     let handle = Broker::start(config).await.expect("start broker");
@@ -119,35 +106,22 @@ pub(crate) async fn start_host_broker_jbod() -> (
     tempfile::TempDir,
     tempfile::TempDir,
 ) {
-    let _ = tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("krabka_broker=debug,info")),
-        )
-        .with_test_writer()
-        .try_init();
+    crate::support::init_jvm_tracing("krabka_broker=debug,info");
     let primary = tempfile::tempdir().expect("tempdir");
     let extra = tempfile::tempdir().expect("tempdir");
     let listen_addr: std::net::SocketAddr = broker0_listen().parse().expect("static addr");
     let controller_addr: std::net::SocketAddr =
         controller_addr_0().parse().expect("allocated addr");
     let config = BrokerConfig {
-        broker_id: 1,
-        listen_addr,
-        advertised_listener: broker0_advertised().into(),
-        log_dir: primary.path().to_path_buf(),
         extra_log_dirs: vec![extra.path().to_path_buf()],
-        log_config: LogConfig::default(),
-        node_id: krabka_broker::NodeId(1),
-        controller_listen_addr: controller_addr,
-        controller_quorum_voters: vec![(krabka_broker::NodeId(1), controller_addr.to_string())],
-        heartbeat_interval: krabka_units::millis(3_000),
-        heartbeat_timeout: krabka_units::millis(9_000),
-        replica_lag_time_max: krabka_units::millis(30_000),
-        controller_election_timeout: krabka_units::secs(5),
-        controller_heartbeat_interval: krabka_units::millis(500),
-        bootstrap_mode: krabka_broker::BootstrapMode::Bootstrap,
-        ..BrokerConfig::default().with_internal_topics_for(1)
+        ..crate::support::jvm_broker_config(
+            1,
+            listen_addr,
+            controller_addr,
+            broker0_advertised(),
+            primary.path().to_path_buf(),
+            &[(1, controller_addr)],
+        )
     };
     let handle = Broker::start(config).await.expect("start broker");
     (handle, primary, extra)

@@ -1,11 +1,11 @@
-(* #"/workspace/crates/verified/src/isr/admission.rs" 142 0 142 62 *)
+(* #"/workspace/crates/verified/src/isr/admission.rs" 143 0 143 62 *)
 
-let%span sadmission = "/workspace/crates/verified/src/isr/admission.rs" 147 44 147 96
-let%span sadmission'0 = "/workspace/crates/verified/src/isr/admission.rs" 146 41 146 99
-let%span sadmission'1 = "/workspace/crates/verified/src/isr/admission.rs" 145 33 145 37
-let%span sadmission'2 = "/workspace/crates/verified/src/isr/admission.rs" 144 37 144 42
-let%span sadmission'3 = "/workspace/crates/verified/src/isr/admission.rs" 134 10 140 1
-let%span sadmission'4 = "/workspace/crates/verified/src/isr/admission.rs" 122 16 122 74
+let%span sadmission = "/workspace/crates/verified/src/isr/admission.rs" 148 44 148 96
+let%span sadmission'0 = "/workspace/crates/verified/src/isr/admission.rs" 147 41 147 99
+let%span sadmission'1 = "/workspace/crates/verified/src/isr/admission.rs" 146 33 146 37
+let%span sadmission'2 = "/workspace/crates/verified/src/isr/admission.rs" 145 37 145 42
+let%span sadmission'3 = "/workspace/crates/verified/src/isr/admission.rs" 135 10 141 1
+let%span sadmission'4 = "/workspace/crates/verified/src/isr/admission.rs" 123 16 123 74
 
 use creusot.prelude.Any
 
@@ -17,15 +17,15 @@ type t_IsrMemberFacts = {
   caught_up_within_lag: bool;
   fetch_within_lag: bool }
 
-predicate kafka_is_caught_up [#"/workspace/crates/verified/src/isr/admission.rs" 121 0 121 52] (facts: t_IsrMemberFacts) =
+predicate kafka_is_caught_up [#"/workspace/crates/verified/src/isr/admission.rs" 122 0 122 52] (facts: t_IsrMemberFacts) =
   [%#sadmission'4] facts.log_end_matches_leader \/ facts.caught_up_within_lag
 
 meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let isr_maintenance_selected [#"/workspace/crates/verified/src/isr/admission.rs" 142 0 142 62]
-  (facts: t_IsrMemberFacts) (return (x: bool)) = (! bb0
+let isr_maintenance_selected [#"/workspace/crates/verified/src/isr/admission.rs" 143 0 143 62] (facts: t_IsrMemberFacts)
+  (return (x: bool)) = (! bb0
   [ bb0 = any
     [ br0 -> {facts.role = Unassigned} (! bb8)
     | br1 -> {facts.role = Leader} (! bb7)

@@ -100,20 +100,7 @@ mod tests {
             &[krabka_audit::NodeId(1), krabka_audit::NodeId(2)],
             &[bad, good],
         );
-        let source = fake_source(img);
-        let controller: Arc<dyn crate::metadata_source::MetadataSource> = Arc::clone(&source) as _;
-        let liveness = liveness_with(&[krabka_audit::NodeId(1), krabka_audit::NodeId(2)]).await;
-        let metrics = crate::metrics::BrokerMetrics::new();
-        let offline: std::collections::HashSet<Uuid> = maplit::hashset! {bad};
-
-        let recoveries = failover_offline_dirs(
-            &controller,
-            krabka_audit::NodeId(1),
-            &offline,
-            &liveness,
-            &metrics,
-        )
-        .await;
+        let (source, recoveries) = run_failover(img, bad).await;
 
         // Exactly one change must have been submitted (the new leader record):
         // broker 2 is elected (broker 1's dir is offline), the offline replica
@@ -147,20 +134,7 @@ mod tests {
             &[krabka_audit::NodeId(1), krabka_audit::NodeId(2)],
             &[good, good],
         );
-        let source = fake_source(img);
-        let controller: Arc<dyn crate::metadata_source::MetadataSource> = Arc::clone(&source) as _;
-        let liveness = liveness_with(&[krabka_audit::NodeId(1), krabka_audit::NodeId(2)]).await;
-        let metrics = crate::metrics::BrokerMetrics::new();
-        let offline: std::collections::HashSet<Uuid> = maplit::hashset! {bad};
-
-        let recoveries = failover_offline_dirs(
-            &controller,
-            krabka_audit::NodeId(1),
-            &offline,
-            &liveness,
-            &metrics,
-        )
-        .await;
+        let (source, recoveries) = run_failover(img, bad).await;
 
         // No change submitted and no recovery needed.
         assert!(source.submitted_records().is_empty());
@@ -194,20 +168,7 @@ mod tests {
             1,
             &[good, bad],
         )));
-        let source = fake_source(img);
-        let controller: Arc<dyn crate::metadata_source::MetadataSource> = Arc::clone(&source) as _;
-        let liveness = liveness_with(&[krabka_audit::NodeId(1), krabka_audit::NodeId(2)]).await;
-        let metrics = crate::metrics::BrokerMetrics::new();
-        let offline: std::collections::HashSet<Uuid> = maplit::hashset! {bad};
-
-        failover_offline_dirs(
-            &controller,
-            krabka_audit::NodeId(1),
-            &offline,
-            &liveness,
-            &metrics,
-        )
-        .await;
+        let (source, _recoveries) = run_failover(img, bad).await;
 
         // Kafka's `handleDirectoriesOffline` change: the surviving dir, at the
         // KIP-903 epoch the broker is registered at.
@@ -240,21 +201,29 @@ mod tests {
             1,
             &[good],
         )));
+        let (source, _recoveries) = run_failover(img, bad).await;
+
+        assert!(source.submitted_records().is_empty());
+    }
+    async fn run_failover(
+        img: krabka_metadata::MetadataImage,
+        bad: Uuid,
+    ) -> (
+        Arc<crate::test_support::FakeMetadataSource>,
+        Vec<(String, i32, crate::config_keys::RecoveryStrategy)>,
+    ) {
         let source = fake_source(img);
         let controller: Arc<dyn crate::metadata_source::MetadataSource> = Arc::clone(&source) as _;
         let liveness = liveness_with(&[krabka_audit::NodeId(1), krabka_audit::NodeId(2)]).await;
         let metrics = crate::metrics::BrokerMetrics::new();
-        let offline: std::collections::HashSet<Uuid> = maplit::hashset! {bad};
-
-        failover_offline_dirs(
+        let recoveries = failover_offline_dirs(
             &controller,
             krabka_audit::NodeId(1),
-            &offline,
+            &maplit::hashset! {bad},
             &liveness,
             &metrics,
         )
         .await;
-
-        assert!(source.submitted_records().is_empty());
+        (source, recoveries)
     }
 }

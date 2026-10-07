@@ -191,7 +191,7 @@ async fn get_bucket_xml<T: DeserializeOwned>(
 #[cfg(test)]
 mod tests {
     use assert2::check;
-    use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+    use tokio::io::AsyncWriteExt as _;
 
     use super::*;
 
@@ -218,13 +218,7 @@ mod tests {
                 ),
             ] {
                 let (mut socket, _) = listener.accept().await.unwrap();
-                let mut request = Vec::new();
-                while !request.ends_with(b"\r\n\r\n") {
-                    let mut chunk = [0; 1024];
-                    let read = socket.read(&mut chunk).await.unwrap();
-                    request.extend_from_slice(&chunk[..read]);
-                }
-                let request = String::from_utf8(request).unwrap();
+                let request = crate::test_support::read_request(&mut socket).await;
                 check!(request.starts_with(&format!("GET /bucket?{query}= HTTP/1.1")));
                 check!(
                     request
@@ -351,13 +345,7 @@ mod tests {
         let endpoint = format!("http://{}", listener.local_addr().unwrap());
         let server = tokio::spawn(async move {
             let (mut socket, _) = listener.accept().await.unwrap();
-            let mut request = Vec::new();
-            while !request.ends_with(b"\r\n\r\n") {
-                let mut chunk = [0; 1024];
-                let read = socket.read(&mut chunk).await.unwrap();
-                request.extend_from_slice(&chunk[..read]);
-            }
-            let request = String::from_utf8(request).unwrap();
+            let request = crate::test_support::read_request(&mut socket).await;
             check!(request.starts_with("GET /storage/v1/b/bucket?fields="));
             socket
                 .write_all(

@@ -14,22 +14,9 @@ use std::{
 
 use assert2::assert;
 use bytes::BytesMut;
-use krabka_protocol::{
-    Decode, Encode,
-    owned::{
-        alter_client_quotas_request::{AlterClientQuotasRequest, EntityData, EntryData, OpData},
-        alter_client_quotas_response::AlterClientQuotasResponse,
-        produce_request::{PartitionProduceData, ProduceRequest, TopicProduceData},
-        produce_response::ProduceResponse,
-    },
-    records::{Record, RecordBatch},
-};
+use krabka_protocol::{Decode, Encode, owned::produce_response::ProduceResponse};
 
-use crate::{CLIENT_ID, kafka_wire};
-
-pub(crate) type QuotaEntity = Vec<(String, Option<String>)>;
-pub(crate) type QuotaOperations = Vec<(String, f64, bool)>;
-pub(crate) type QuotaEntries = Vec<(QuotaEntity, QuotaOperations)>;
+use crate::{CLIENT_ID, kafka_wire, kafka_wire::quotas::QuotaEntries};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Wire driver for AlterClientQuotas
@@ -49,60 +36,15 @@ pub(crate) async fn drive_alter_client_quotas_sasl(
     entries: QuotaEntries,
     validate_only: bool,
 ) -> Vec<(Vec<(String, Option<String>)>, i16)> {
-    const VERSION: i16 = 1; // flexible
-
-    let req = AlterClientQuotasRequest {
-        entries: entries
-            .into_iter()
-            .map(|(entity_parts, ops)| EntryData {
-                entity: entity_parts
-                    .into_iter()
-                    .map(|(entity_type, entity_name)| EntityData {
-                        entity_type,
-                        entity_name,
-                        ..Default::default()
-                    })
-                    .collect(),
-                ops: ops
-                    .into_iter()
-                    .map(|(key, value, remove)| OpData {
-                        key,
-                        value,
-                        remove,
-                        ..Default::default()
-                    })
-                    .collect(),
-                ..Default::default()
-            })
-            .collect(),
+    kafka_wire::quotas::drive_alter_client_quotas_sasl(
+        addr,
+        CLIENT_ID,
+        user,
+        pass,
+        entries,
         validate_only,
-        ..Default::default()
-    };
-
-    let mut stream = kafka_wire::sasl_plain_authenticate(addr, CLIENT_ID, user, pass.as_bytes())
-        .await
-        .expect("SASL authenticate for AlterClientQuotas");
-    let mut body = BytesMut::new();
-    req.encode(&mut body, VERSION)
-        .expect("encode AlterClientQuotas");
-    let resp_bytes = kafka_wire::round_trip(&mut stream, 49, VERSION, 1, CLIENT_ID, true, &body)
-        .await
-        .expect("AlterClientQuotas round-trip");
-    let mut cur: &[u8] = &resp_bytes;
-    let resp = AlterClientQuotasResponse::decode(&mut cur, VERSION)
-        .expect("decode AlterClientQuotasResponse");
-
-    resp.entries
-        .into_iter()
-        .map(|e| {
-            let entity = e
-                .entity
-                .into_iter()
-                .map(|ed| (ed.entity_type, ed.entity_name))
-                .collect();
-            (entity, e.error_code)
-        })
-        .collect()
+    )
+    .await
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -128,40 +70,9 @@ async fn drive_produce_sasl_with_client_id(
 ) -> ProduceResponse {
     const VERSION: i16 = 11; // flexible, supports throttle_time_ms
 
-    let value = vec![0u8; record_bytes];
-    let records: Vec<Record> = (0..count)
-        .map(|i| Record {
-            offset_delta: i32::try_from(i).unwrap(),
-            value: Some(bytes::Bytes::copy_from_slice(&value)),
-            ..Default::default()
-        })
-        .collect();
+    let req = kafka_wire::produce_records(topic, record_bytes, count);
 
-    let req = ProduceRequest {
-        acks: 1,
-        timeout_ms: 30_000,
-        topic_data: vec![TopicProduceData {
-            name: topic.to_string(),
-            partition_data: vec![PartitionProduceData {
-                index: 0,
-                records: Some(
-                    RecordBatch {
-                        last_offset_delta: i32::try_from(count - 1).unwrap(),
-                        records,
-                        ..Default::default()
-                    }
-                    .into(),
-                ),
-                ..Default::default()
-            }],
-            ..Default::default()
-        }],
-        ..Default::default()
-    };
-
-    // SASL handshake uses the default test client_id; only the Produce request
-    // itself carries wire_client_id.  Each TCP connection creates a fresh
-    // broker-side connection state, so the quota window resets per connection.
+    // Authenticate with the suite client id; Produce uses wire_client_id below.
     let mut stream = kafka_wire::sasl_plain_authenticate(addr, CLIENT_ID, user, pass)
         .await
         .expect("SASL authenticate for Produce");

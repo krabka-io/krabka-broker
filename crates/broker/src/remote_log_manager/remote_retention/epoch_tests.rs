@@ -7,16 +7,15 @@ use assert2::assert;
 use krabka_ids::LeaderEpoch;
 use krabka_log::LogConfig;
 use krabka_remote_storage::{
-    InmemoryRemoteLogMetadataManager, LocalTieredStorage, RemoteLogMetadataManager,
-    RemoteLogSegmentId, RemoteLogSegmentMetadata, RemoteLogSegmentMetadataUpdate,
-    RemoteLogSegmentState, RemoteStorageManager,
+    RemoteLogMetadataManager, RemoteLogSegmentId, RemoteLogSegmentMetadata,
+    RemoteLogSegmentMetadataUpdate, RemoteLogSegmentState,
 };
 use uuid::Uuid;
 
 use super::*;
 use crate::remote_log_manager::{
     now_ms,
-    test_support::{tier, tp},
+    test_support::{local_backends, tier, tp},
 };
 
 /// A `CopySegmentFinished` segment over `[start, end]` that records `epochs`,
@@ -91,8 +90,7 @@ fn the_epoch_cache_eviction_set_holds_the_segments_below_the_earliest_epoch() {
 #[tokio::test]
 async fn remote_retention_pass_deletes_segments_below_the_earliest_epoch() {
     let remote_dir = tempfile::tempdir().unwrap();
-    let rsm: Arc<dyn RemoteStorageManager> = Arc::new(LocalTieredStorage::new(remote_dir.path()));
-    let rlmm: Arc<dyn RemoteLogMetadataManager> = Arc::new(InmemoryRemoteLogMetadataManager::new());
+    let (rsm, rlmm) = local_backends(remote_dir.path());
     // An unclean election left epoch 1's segment over offsets that the current
     // lineage assigns to epochs 2 and 3.
     finished_segment(Some(&rlmm), 1, (10, 19), &[(1, 10)]);

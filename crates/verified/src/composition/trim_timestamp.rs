@@ -1,7 +1,9 @@
 use creusot_std::prelude::*;
 
 #[cfg(creusot)]
-use super::trim::{trim_frontier, trim_well_formed};
+use super::time_index::sparse_timestamp_window_valid;
+#[cfg(creusot)]
+use super::trim::{trim_frontier, trim_store_frontiers_valid, trim_well_formed};
 use super::{
     DeleteRecordsTrimDecision, DeleteRecordsTrimFacts, SparseTimestampWindow,
     admitted_trim_bounds_reload_and_retry, constructed_index_retained_candidate,
@@ -12,14 +14,10 @@ type TrimTimestampWitness = (i64, Option<usize>, i64, Option<usize>);
 /// Read from the actual completed logical floor, independently of the newer
 /// producer replay cursor. A retained match below that cursor remains readable.
 /// Decoding, snapshot contents and durable completion remain host obligations.
-#[requires(0 <= stores.0@ && stores.0@ <= facts.high_watermark@ && stores.0@ <= facts.log_end@)]
-#[requires(0 <= stores.1@ && stores.1@ <= facts.high_watermark@ && stores.1@ <= facts.log_end@)]
-#[requires(facts.has_delivery_watermark ==> stores.0@ <= facts.delivery_watermark@ && stores.1@ <= facts.delivery_watermark@)]
-#[requires(base@ >= 0 && window.0@.len() == window.1@.len())]
+#[requires(sparse_timestamp_window_valid(window.0@, window.1@, window.2@))]
+#[requires(trim_store_frontiers_valid(facts, stores.0@, stores.1@))]
+#[requires(base@ >= 0)]
 #[requires(forall<i: Int> 0 <= i && i < window.0@.len() ==> base@ + window.0@[i]@ < facts.log_end@)]
-#[requires(forall<i: Int, j: Int> 0 <= i && i < j && j < window.0@.len() ==> window.0@[i]@ < window.0@[j]@)]
-#[requires(forall<i: Int> 0 <= i && i < window.2@.len() ==> window.2@[i].0@ <= window.2@[i].1@ && window.2@[i].1@ < window.1@.len())]
-#[requires(forall<i: Int, j: Int> 0 <= i && i < j && j < window.2@.len() ==> window.2@[i].0@ < window.2@[j].0@ && window.2@[i].1@ <= window.2@[j].1@)]
 #[ensures(match result {
     Err(error) => match error {
         DeleteRecordsTrimDecision::RejectMalformed => !trim_well_formed(facts),

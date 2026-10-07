@@ -4,7 +4,6 @@
 //! partitions until the client forgets one.
 
 use assert2::assert;
-use krabka_broker::Broker;
 use krabka_protocol::owned::{
     share_fetch_request::{ForgottenTopic, ShareFetchRequest},
     share_fetch_response::ShareFetchResponse,
@@ -12,10 +11,7 @@ use krabka_protocol::owned::{
 
 use crate::{
     ACCEPT, INVALID_SHARE_SESSION_EPOCH, NONE, ONE_MB, SHARE_SESSION_NOT_FOUND,
-    harness::{
-        bootstrap_share_state, broker_config, broker_test_permit, connect, create_topic, join,
-        produce_n, topic_id, wait_for_share_init, wire,
-    },
+    harness::{broker_test_permit, join, produce_n, wire},
     share_rpc::{acquired_count, fetch_until_acquired, share_ack, share_fetch_req},
 };
 
@@ -23,17 +19,8 @@ use crate::{
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn session_epoch_validation() {
     let _permit = broker_test_permit().await;
-    let dir = tempfile::TempDir::new().unwrap();
-    let broker = Broker::start(broker_config(dir.path().to_path_buf()))
-        .await
-        .unwrap();
-    let client = connect(&broker.listen_addr().to_string()).await;
-    create_topic(&broker, &client, "t", 1).await;
-    let tid = topic_id(&broker, "t");
-    bootstrap_share_state(&broker, &client, "g1").await;
-    produce_n(&client, "t", tid, 0, 1).await;
-    let (member, member_epoch) = join(&client, "g1", "t").await;
-    wait_for_share_init(&broker, &client, &member, member_epoch, tid).await;
+    let (broker, client, _dir, tid) = crate::support::share::topic_fixture("t", 1, |_| {}).await;
+    let (member, _) = crate::harness::initialize_consumption(&broker, &client, tid, 1).await;
 
     // Open (epoch 0) succeeds: top-level error_code 0.
     let opened: ShareFetchResponse = client
@@ -78,17 +65,8 @@ async fn session_epoch_validation() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn incremental_session_uses_cached_and_forgotten_partitions() {
     let _permit = broker_test_permit().await;
-    let dir = tempfile::TempDir::new().unwrap();
-    let broker = Broker::start(broker_config(dir.path().to_path_buf()))
-        .await
-        .unwrap();
-    let client = connect(&broker.listen_addr().to_string()).await;
-    create_topic(&broker, &client, "t", 1).await;
-    let tid = topic_id(&broker, "t");
-    bootstrap_share_state(&broker, &client, "g1").await;
-    produce_n(&client, "t", tid, 0, 1).await;
-    let (member, member_epoch) = join(&client, "g1", "t").await;
-    wait_for_share_init(&broker, &client, &member, member_epoch, tid).await;
+    let (broker, client, _dir, tid) = crate::support::share::topic_fixture("t", 1, |_| {}).await;
+    let (member, _) = crate::harness::initialize_consumption(&broker, &client, tid, 1).await;
 
     let first = fetch_until_acquired(&client, "g1", &member, tid, 0, 0).await;
     assert!(acquired_count(&first) == 1);

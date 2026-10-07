@@ -289,3 +289,14 @@ pub async fn produce(
 
 /// The topic configs that turn `id`-mode value validation on.
 pub const VALIDATED: &[(&str, &str)] = &[("schema.validation.value", "true")];
+
+pub async fn boot_config(config: BrokerConfig) -> (BrokerHandle, Client) {
+    let broker = Broker::start(config).await.expect("broker start");
+    let client = Client::builder()
+        .bootstrap(broker.listen_addr().to_string())
+        .client_id("schema-validation-test")
+        .build()
+        .await
+        .expect("client build");
+    (broker, client)
+}

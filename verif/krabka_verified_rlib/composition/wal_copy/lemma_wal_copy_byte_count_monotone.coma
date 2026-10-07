@@ -1,16 +1,16 @@
-(* #"/workspace/crates/verified/src/composition/wal_copy.rs" 30 0 30 89 *)
+(* #"/workspace/crates/verified/src/composition/wal_copy.rs" 31 0 31 89 *)
 
-let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
-let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
-let%span swell_founded = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/well_founded.rs" 43 8 43 33
-let%span svec = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 18 14 18 41
-let%span swal_copy = "/workspace/crates/verified/src/composition/wal_copy.rs" 29 10 29 15
-let%span swal_copy'0 = "/workspace/crates/verified/src/composition/wal_copy.rs" 27 11 27 65
-let%span swal_copy'1 = "/workspace/crates/verified/src/composition/wal_copy.rs" 28 10 28 84
-let%span swal_copy'2 = "/workspace/crates/verified/src/composition/wal_copy.rs" 14 10 14 15
-let%span swal_copy'3 = "/workspace/crates/verified/src/composition/wal_copy.rs" 12 11 12 47
-let%span swal_copy'4 = "/workspace/crates/verified/src/composition/wal_copy.rs" 13 10 13 21
-let%span swal_copy'5 = "/workspace/crates/verified/src/composition/wal_copy.rs" 17 8 19 9
+let%span sord = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sord'0 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span swell_founded = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/well_founded.rs" 43 8 43 33
+let%span svec = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 18 14 18 41
+let%span swal_copy = "/workspace/crates/verified/src/composition/wal_copy.rs" 30 10 30 15
+let%span swal_copy'0 = "/workspace/crates/verified/src/composition/wal_copy.rs" 28 11 28 65
+let%span swal_copy'1 = "/workspace/crates/verified/src/composition/wal_copy.rs" 29 10 29 84
+let%span swal_copy'2 = "/workspace/crates/verified/src/composition/wal_copy.rs" 15 10 15 15
+let%span swal_copy'3 = "/workspace/crates/verified/src/composition/wal_copy.rs" 13 11 13 47
+let%span swal_copy'4 = "/workspace/crates/verified/src/composition/wal_copy.rs" 14 10 14 21
+let%span swal_copy'5 = "/workspace/crates/verified/src/composition/wal_copy.rs" 18 8 20 9
 
 use creusot.int.Int64
 use creusot.int.Int32
@@ -35,7 +35,7 @@ axiom view_Vec_u8_Global_spec:
   forall self: t_Vec_u8_Global [view_Vec_u8_Global self]. [%#svec] Seq.length (view_Vec_u8_Global self)
     <= UInt64.t'int const_MAX
 
-function wal_copy_byte_count [#"/workspace/crates/verified/src/composition/wal_copy.rs" 15 0 15 69] (batches: Seq.seq tup3_i64_i32_Vec_u8_Global) (count: int) : int
+function wal_copy_byte_count [#"/workspace/crates/verified/src/composition/wal_copy.rs" 16 0 16 80] (batches: Seq.seq tup3_i64_i32_Vec_u8_Global) (count: int) : int
 
 axiom wal_copy_byte_count_def:
   forall batches: Seq.seq tup3_i64_i32_Vec_u8_Global, count: int [wal_copy_byte_count batches count]. ([%#swal_copy'3] 0
@@ -72,7 +72,7 @@ constant lower : int
 
 constant upper : int
 
-function lemma_wal_copy_byte_count_monotone [#"/workspace/crates/verified/src/composition/wal_copy.rs" 30 0 30 89] (batches: Seq.seq tup3_i64_i32_Vec_u8_Global) (lower: int) (upper: int) : ()
+function lemma_wal_copy_byte_count_monotone [#"/workspace/crates/verified/src/composition/wal_copy.rs" 31 0 31 89] (batches: Seq.seq tup3_i64_i32_Vec_u8_Global) (lower: int) (upper: int) : ()
 
 goal vc_lemma_wal_copy_byte_count_monotone: ([%#swal_copy'0] 0 <= lower
     /\ lower <= upper /\ upper <= Seq.length batches)

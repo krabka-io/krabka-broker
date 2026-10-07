@@ -32,11 +32,9 @@ use krabka_broker::BrokerHandle;
 use krabka_client_consumer::{AutoOffsetReset, Consumer};
 use krabka_client_core::Client;
 use krabka_client_producer::{Acks, Producer, ProducerRecord};
-use krabka_protocol::owned::create_topics_request::{CreatableTopic, CreateTopicsRequest};
+use support::cluster_lock;
 
 mod support;
-
-use support::cluster_lock;
 
 async fn wait_for_local_replica(broker: &BrokerHandle, topic: &str, partition: i32) {
     let deadline = Instant::now() + Duration::from_secs(30);
@@ -81,20 +79,7 @@ async fn producer_routes_to_non_bootstrap_leaders() {
     // Create the topic with replication_factor=1. Each partition lives on
     // exactly ONE broker; the bootstrap broker has NO replica for partitions
     // placed on the other two nodes.
-    let cr = admin
-        .send(CreateTopicsRequest {
-            topics: vec![CreatableTopic {
-                name: topic.into(),
-                num_partitions: n_partitions,
-                replication_factor: 1,
-                ..Default::default()
-            }],
-            timeout_ms: 5_000,
-            ..Default::default()
-        })
-        .await
-        .unwrap();
-    assert!(cr.topics[0].error_code == 0, "create_topic: {cr:?}");
+    crate::support::client::create_topic(&admin, topic, n_partitions).await;
 
     // Wait for all partitions to materialize in the cluster metadata. Partition
     // records are raft-replicated into every broker's controller image, so once

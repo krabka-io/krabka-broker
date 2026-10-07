@@ -85,3 +85,60 @@ pub(crate) async fn format_at_kafka_4_0(log_dir: &std::path::Path, node: &Broker
 pub(crate) fn docker_rm(name: &str) {
     let _ = Command::new("docker").args(["rm", "-f", name]).output();
 }
+
+/// Endpoints for two host voters and one published JVM voter.
+pub(crate) struct MixedQuorum {
+    pub(crate) ports: [u16; 3],
+    clients: Vec<SocketAddr>,
+    controllers: Vec<SocketAddr>,
+}
+
+impl MixedQuorum {
+    pub(crate) async fn allocate() -> Self {
+        let (clients, controllers) = crate::support::bind_and_drop_ports(3).await;
+        Self {
+            ports: std::array::from_fn(|index| controllers[index].port()),
+            clients,
+            controllers,
+        }
+    }
+
+    pub(crate) async fn start_pair(
+        &self,
+        cluster_id: Uuid,
+        election_timeout: Option<krabka_units::Time>,
+    ) -> ([krabka_broker::BrokerHandle; 2], [tempfile::TempDir; 2]) {
+        let dirs: [tempfile::TempDir; 2] = std::array::from_fn(|_| tempfile::tempdir().unwrap());
+        let voters: Vec<_> = self
+            .controllers
+            .iter()
+            .enumerate()
+            .map(|(index, address)| (u64::try_from(index + 1).unwrap(), *address))
+            .collect();
+        let configs: [BrokerConfig; 2] = std::array::from_fn(|index| {
+            let bind = SocketAddr::from(([0, 0, 0, 0], self.ports[index]));
+            let mut config = krabka_controller_config(
+                index,
+                self.clients[index],
+                bind,
+                &voters,
+                cluster_id,
+                dirs[index].path(),
+            );
+            if let Some(timeout) = election_timeout {
+                config.controller_election_timeout = timeout;
+            }
+            config
+        });
+        for (dir, config) in dirs.iter().zip(&configs) {
+            format_at_kafka_4_0(dir.path(), config).await;
+        }
+        let [first, second] =
+            configs.map(|config| tokio::spawn(krabka_broker::Broker::start(config)));
+        let brokers = [
+            first.await.unwrap().expect("krabka voter 1 start"),
+            second.await.unwrap().expect("krabka voter 2 start"),
+        ];
+        (brokers, dirs)
+    }
+}

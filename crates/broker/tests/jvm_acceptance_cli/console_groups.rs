@@ -5,11 +5,6 @@
 //! All three drive the same coordinator sequence of `JoinGroup`, `SyncGroup`,
 //! `Heartbeat` and `Fetch`, which is why they share a file.
 
-use std::{
-    io::Write,
-    process::{Command, Stdio},
-};
-
 use assert2::assert;
 
 use crate::jvm_acceptance::{
@@ -29,47 +24,18 @@ async fn console_consumer_with_group_round_trip() {
     nc_check_connectivity();
 
     // 1. Create the topic.
-    docker_run_kafka_tool(&[
-        "kafka-topics",
-        "--create",
-        "--if-not-exists",
-        "--topic",
+    crate::jvm_acceptance::create_console_topic(
+        crate::jvm_acceptance::KAFKA_IMAGE,
+        &[],
         TOPIC,
-        "--partitions",
-        "1",
-        "--replication-factor",
-        "1",
-        "--bootstrap-server",
-        broker0_advertised(),
-    ]);
+        1,
+        1,
+    );
 
     // 2. Produce records via kafka-console-producer over stdin.
-    let mut child = Command::new("docker")
-        .args([
-            "run",
-            "--rm",
-            "-i",
-            "--add-host=host.docker.internal:host-gateway",
-            KAFKA_IMAGE,
-            "kafka-console-producer",
-            "--bootstrap-server",
-            broker0_advertised(),
-            "--topic",
-            TOPIC,
-        ])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("spawn producer");
-    child
-        .stdin
-        .as_mut()
-        .expect("stdin")
-        .write_all(b"x\ny\nz\n")
-        .expect("write stdin");
-    drop(child.stdin.take());
-    let producer_out = child.wait_with_output().expect("wait producer");
+
+    let producer_out =
+        crate::jvm_acceptance::produce_console(KAFKA_IMAGE, &[], TOPIC, false, b"x\ny\nz\n");
     assert!(
         producer_out.status.success(),
         "producer failed: {}",
@@ -118,47 +84,18 @@ async fn console_consumer_with_static_membership() {
     let (broker, _dir) = start_host_broker().await;
     nc_check_connectivity();
 
-    docker_run_kafka_tool(&[
-        "kafka-topics",
-        "--create",
-        "--if-not-exists",
-        "--topic",
+    crate::jvm_acceptance::create_console_topic(
+        crate::jvm_acceptance::KAFKA_IMAGE,
+        &[],
         TOPIC,
-        "--partitions",
-        "1",
-        "--replication-factor",
-        "1",
-        "--bootstrap-server",
-        broker0_advertised(),
-    ]);
+        1,
+        1,
+    );
 
     // Produce three records.
-    let mut child = Command::new("docker")
-        .args([
-            "run",
-            "--rm",
-            "-i",
-            "--add-host=host.docker.internal:host-gateway",
-            KAFKA_IMAGE,
-            "kafka-console-producer",
-            "--bootstrap-server",
-            broker0_advertised(),
-            "--topic",
-            TOPIC,
-        ])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("spawn producer");
-    child
-        .stdin
-        .as_mut()
-        .expect("stdin")
-        .write_all(b"a\nb\nc\n")
-        .expect("write stdin");
-    drop(child.stdin.take());
-    let producer_out = child.wait_with_output().expect("wait producer");
+
+    let producer_out =
+        crate::jvm_acceptance::produce_console(KAFKA_IMAGE, &[], TOPIC, false, b"a\nb\nc\n");
     assert!(
         producer_out.status.success(),
         "producer failed: {}",
@@ -239,32 +176,14 @@ async fn cooperative_sticky_kafka_console_consumer() {
     ]);
 
     // 2. Produce 3 records via stdin.
-    let mut child = Command::new("docker")
-        .args([
-            "run",
-            "--rm",
-            "-i",
-            "--add-host=host.docker.internal:host-gateway",
-            KAFKA_IMAGE,
-            "kafka-console-producer",
-            "--bootstrap-server",
-            broker0_advertised(),
-            "--topic",
-            TOPIC,
-        ])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("spawn producer");
-    child
-        .stdin
-        .as_mut()
-        .expect("stdin")
-        .write_all(b"alpha\nbravo\ncharlie\n")
-        .expect("write stdin");
-    drop(child.stdin.take());
-    let producer_out = child.wait_with_output().expect("wait producer");
+
+    let producer_out = crate::jvm_acceptance::produce_console(
+        KAFKA_IMAGE,
+        &[],
+        TOPIC,
+        false,
+        b"alpha\nbravo\ncharlie\n",
+    );
     assert!(
         producer_out.status.success(),
         "producer failed: {}",

@@ -38,7 +38,6 @@ use std::process::Command;
 
 use assert2::check;
 use krabka_broker::{Broker, BrokerConfig, BrokerHandle};
-use krabka_log::LogConfig;
 
 /// Kafka 4.3.1 is the compatibility oracle for KIP-919.
 const KAFKA_IMAGE: &str = "mirror.gcr.io/apache/kafka:4.3.1";
@@ -87,33 +86,21 @@ fn controller_bootstrap() -> &'static str {
 async fn start_host_broker_with(
     adjust: impl FnOnce(&mut BrokerConfig),
 ) -> (BrokerHandle, tempfile::TempDir) {
-    let _ = tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("krabka_broker=info,warn")),
-        )
-        .with_test_writer()
-        .try_init();
+    crate::support::init_jvm_tracing("krabka_broker=info,warn");
     let dir = tempfile::tempdir().expect("tempdir");
     let mut config = BrokerConfig {
-        broker_id: 1,
-        listen_addr: listen_addr().parse().expect("allocated addr"),
-        advertised_listener: advertised_addr().into(),
-        log_dir: dir.path().to_path_buf(),
-        log_config: LogConfig::default(),
-        node_id: krabka_broker::NodeId(1),
-        controller_listen_addr: controller_listen().parse().expect("allocated addr"),
         controller_quorum_voters: vec![(
             krabka_broker::NodeId(1),
             controller_bootstrap().to_string(),
         )],
-        heartbeat_interval: krabka_units::millis(3_000),
-        heartbeat_timeout: krabka_units::millis(9_000),
-        replica_lag_time_max: krabka_units::millis(30_000),
-        controller_election_timeout: krabka_units::secs(5),
-        controller_heartbeat_interval: krabka_units::millis(500),
-        bootstrap_mode: krabka_broker::BootstrapMode::Bootstrap,
-        ..BrokerConfig::default().with_internal_topics_for(1)
+        ..crate::support::jvm_broker_config(
+            1,
+            listen_addr().parse().expect("allocated addr"),
+            controller_listen().parse().expect("allocated addr"),
+            advertised_addr(),
+            dir.path().to_path_buf(),
+            &[(1, controller_listen().parse().expect("allocated addr"))],
+        )
     };
     adjust(&mut config);
     let handle = Broker::start(config).await.expect("start broker");
@@ -309,21 +296,6 @@ async fn kafka_topics_has_no_bootstrap_controller_option() {
     );
 }
 
-/// Extract `FinalizedVersionLevel` for `feature` from `kafka-features describe`
-/// output. Matching the feature's own line matters: several features report a
-/// finalized level, so two independent `contains` checks can match different
-/// lines and pass while the feature under test never moved.
-fn finalized_level(describe_stdout: &str, feature: &str) -> Option<i64> {
-    for line in describe_stdout.lines() {
-        if line.contains(&format!("Feature: {feature}")) {
-            let idx = line.find("FinalizedVersionLevel:")?;
-            let rest = &line[idx + "FinalizedVersionLevel:".len()..];
-            return rest.split_whitespace().next()?.parse().ok();
-        }
-    }
-    None
-}
-
 /// `kafka-features --bootstrap-controller`: `describe`, then `downgrade`, then
 /// `describe` again. That is `ApiVersions` (18) and `UpdateFeatures` (57)
 /// routed over the controller listener.
@@ -339,7 +311,7 @@ async fn kafka_features_bootstrap_controller_describes_and_downgrades() {
     let (broker, _dir) = start_host_broker_with(|_| {}).await;
 
     let described = kafka_tool("kafka-features", &["describe"]);
-    let before = finalized_level(&described, "transaction.version");
+    let before = support::jvm_finalized_level(&described, "transaction.version");
     check!(
         before == Some(2),
         "expected transaction.version finalized at 2 before the downgrade, got {before:?}: {described}"
@@ -356,7 +328,7 @@ async fn kafka_features_bootstrap_controller_describes_and_downgrades() {
     );
 
     let after_out = kafka_tool("kafka-features", &["describe"]);
-    let after = finalized_level(&after_out, "transaction.version");
+    let after = support::jvm_finalized_level(&after_out, "transaction.version");
     check!(
         after == Some(1),
         "downgrade did not move transaction.version over the controller listener, got {after:?}: {after_out}"

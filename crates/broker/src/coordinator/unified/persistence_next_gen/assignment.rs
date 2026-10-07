@@ -34,7 +34,7 @@ use krabka_protocol::{
 use crate::{
     coordinator::unified::persistence::{
         flex::{
-            get_compact_array_len, get_i32_array, get_uuid, put_compact_array_len,
+            array_value_codec, get_compact_array, get_i32_array, get_uuid, put_compact_array,
             put_empty_tagged_fields, put_i32_array, put_tagged_fields, put_uuid, read_tagged,
             skip_tagged_fields,
         },
@@ -54,24 +54,12 @@ pub struct TargetAssignmentMemberValue {
     pub topic_partitions: Vec<AssignedTopicPartitions>,
 }
 
-impl TargetAssignmentMemberValue {
-    #[must_use]
-    pub fn encode(&self) -> Bytes {
-        let mut buf = BytesMut::new();
-        buf.put_i16(0);
-        encode_topic_partitions(&mut buf, &self.topic_partitions);
-        put_empty_tagged_fields(&mut buf);
-        buf.freeze()
-    }
-    /// # Errors
-    /// Returns an error when log I/O fails, a record or index is corrupt, or the requested offset violates the segment state.
-    pub fn decode(mut buf: &[u8]) -> Result<Self, BrokerError> {
-        let _v = get_i16(&mut buf)?;
-        let topic_partitions = decode_topic_partitions(&mut buf)?;
-        skip_tagged_fields(&mut buf)?;
-        Ok(Self { topic_partitions })
-    }
-}
+array_value_codec!(
+    TargetAssignmentMemberValue,
+    topic_partitions,
+    encode_topic_partitions,
+    decode_topic_partitions
+);
 
 /// The member's reconciliation state, with Kafka's discriminants from
 /// `org.apache.kafka.coordinator.group.modern.MemberState`: `STABLE` is 0,
@@ -185,32 +173,27 @@ impl CurrentMemberAssignmentValue {
 }
 
 fn encode_topic_partitions(buf: &mut BytesMut, items: &[AssignedTopicPartitions]) {
-    put_compact_array_len(buf, items.len());
-    for tp in items {
+    put_compact_array(buf, items.iter(), |buf, tp| {
         put_uuid(buf, tp.topic_id.0);
         put_i32_array(buf, &tp.partitions);
         put_empty_tagged_fields(buf);
-    }
+    });
 }
 
 fn decode_topic_partitions(buf: &mut &[u8]) -> Result<Vec<AssignedTopicPartitions>, BrokerError> {
-    let n = get_compact_array_len(buf)?;
-    let mut out = Vec::with_capacity(n);
-    for _ in 0..n {
+    get_compact_array(buf, |buf| {
         let topic_id = Uuid(get_uuid(buf)?);
         let partitions = get_i32_array(buf)?;
         skip_tagged_fields(buf)?;
-        out.push(AssignedTopicPartitions {
+        Ok(AssignedTopicPartitions {
             topic_id,
             partitions,
-        });
-    }
-    Ok(out)
+        })
+    })
 }
 
 fn encode_current_topic_partitions(buf: &mut BytesMut, items: &[CurrentTopicPartitions]) {
-    put_compact_array_len(buf, items.len());
-    for tp in items {
+    put_compact_array(buf, items.iter(), |buf, tp| {
         put_uuid(buf, tp.topic_id.0);
         put_i32_array(buf, &tp.partitions);
         let mut tags = Vec::new();
@@ -220,15 +203,13 @@ fn encode_current_topic_partitions(buf: &mut BytesMut, items: &[CurrentTopicPart
             tags.push((TAG_ASSIGNMENT_EPOCHS, payload.freeze()));
         }
         put_tagged_fields(buf, tags);
-    }
+    });
 }
 
 fn decode_current_topic_partitions(
     buf: &mut &[u8],
 ) -> Result<Vec<CurrentTopicPartitions>, BrokerError> {
-    let n = get_compact_array_len(buf)?;
-    let mut out = Vec::with_capacity(n);
-    for _ in 0..n {
+    get_compact_array(buf, |buf| {
         let topic_id = Uuid(get_uuid(buf)?);
         let partitions = get_i32_array(buf)?;
         let mut assignment_epochs = None;
@@ -239,13 +220,12 @@ fn decode_current_topic_partitions(
             assignment_epochs = get_nullable_i32_array(payload)?;
             Ok(true)
         })?;
-        out.push(CurrentTopicPartitions {
+        Ok(CurrentTopicPartitions {
             topic_id,
             partitions,
             assignment_epochs,
-        });
-    }
-    Ok(out)
+        })
+    })
 }
 
 /// Reads a compact nullable `[]int32`.

@@ -16,13 +16,10 @@ use std::time::Duration;
 use assert2::assert;
 
 use crate::{
-    CLIENT_PRINCIPAL, PASSWORD, RECORDS, TOPIC,
-    cluster::start_diskless_cluster,
-    support,
-    topic::{await_wal_quorum, create_diskless_topic},
+    RECORDS, TOPIC,
     wire::{
         OFFSET_OUT_OF_RANGE, assert_matches_produced, delete_records_below, earliest_offset,
-        fetch_error_code, fetch_log, produce_all, value_at,
+        fetch_error_code, fetch_log,
     },
 };
 
@@ -30,30 +27,10 @@ use crate::{
 async fn trimmed_diskless_offsets_are_served_from_the_object_store() {
     // Flush often, and keep no safety lag behind the committed index frontier,
     // so the trim reaches every offset the flush covered.
-    let cluster = start_diskless_cluster(|config| {
-        config.diskless_wal_flush_interval = krabka_units::millis(100);
-        config.diskless_wal_trim_safety_lag = 0;
-    })
-    .await;
+    let cluster = crate::cluster::start_flushing_cluster(krabka_units::millis(100)).await;
     cluster.await_ready().await;
 
-    let admin = support::sasl_client(
-        &cluster.bootstrap_for_node(cluster.node_ids()[0]),
-        CLIENT_PRINCIPAL,
-        PASSWORD,
-    )
-    .await;
-    let topic_id = create_diskless_topic(&admin).await;
-    let leader = await_wal_quorum(&cluster).await;
-
-    let values: Vec<bytes::Bytes> = (0..RECORDS).map(value_at).collect();
-    let producer = support::sasl_client(
-        &cluster.bootstrap_for_node(leader),
-        CLIENT_PRINCIPAL,
-        PASSWORD,
-    )
-    .await;
-    produce_all(&producer, topic_id, &values).await;
+    let (admin, topic_id, leader, _values, producer) = crate::topic::seed_workload(&cluster).await;
 
     // Wait for the flusher to publish an index record covering the whole
     // committed prefix and for the trim behind it to move the log start off
@@ -132,26 +109,11 @@ async fn await_trimmed_flush(
 /// and the ones above the floor are not.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn deleted_diskless_records_leave_the_object_store_unreadable() {
-    let cluster = start_diskless_cluster(|config| {
-        config.diskless_wal_flush_interval = krabka_units::millis(100);
-        config.diskless_wal_trim_safety_lag = 0;
-    })
-    .await;
+    let cluster = crate::cluster::start_flushing_cluster(krabka_units::millis(100)).await;
     cluster.await_ready().await;
 
-    let admin = support::sasl_client(
-        &cluster.bootstrap_for_node(cluster.node_ids()[0]),
-        CLIENT_PRINCIPAL,
-        PASSWORD,
-    )
-    .await;
-    let topic_id = create_diskless_topic(&admin).await;
-    let leader = await_wal_quorum(&cluster).await;
+    let (admin, topic_id, leader, _values, producer) = crate::topic::seed_workload(&cluster).await;
     let bootstrap = cluster.bootstrap_for_node(leader);
-
-    let values: Vec<bytes::Bytes> = (0..RECORDS).map(value_at).collect();
-    let producer = support::sasl_client(&bootstrap, CLIENT_PRINCIPAL, PASSWORD).await;
-    produce_all(&producer, topic_id, &values).await;
 
     let leader_broker = cluster
         .handle_for_node(leader)

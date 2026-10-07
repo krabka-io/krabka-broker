@@ -1,19 +1,19 @@
-(* #"/workspace/crates/verified/src/wal/batch_equal.rs" 146 0 152 9 *)
+(* #"/workspace/crates/verified/src/wal/batch_equal.rs" 154 0 160 9 *)
 
-let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
-let%span snum = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 328 20 329 89
-let%span snum'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 332 26 332 87
-let%span snum'1 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 27 28 27 33
-let%span scmp = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 14 26 14 75
-let%span smodel = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/model.rs" 37 8 37 28
-let%span soption = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/option.rs" 15 8 18 9
-let%span sbatch_equal = "/workspace/crates/verified/src/wal/batch_equal.rs" 153 4 153 5
-let%span sbatch_equal'0 = "/workspace/crates/verified/src/wal/batch_equal.rs" 157 11 157 64
-let%span sbatch_equal'1 = "/workspace/crates/verified/src/wal/batch_equal.rs" 157 61 157 62
-let%span sbatch_equal'2 = "/workspace/crates/verified/src/wal/batch_equal.rs" 157 45 157 63
-let%span sbatch_equal'3 = "/workspace/crates/verified/src/wal/batch_equal.rs" 157 28 157 63
-let%span sbatch_equal'4 = "/workspace/crates/verified/src/wal/batch_equal.rs" 153 4 157 64
-let%span sbatch_equal'5 = "/workspace/crates/verified/src/wal/batch_equal.rs" 142 10 144 98
+let%span sord = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span snum = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 328 20 329 89
+let%span snum'0 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 332 26 332 87
+let%span snum'1 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 27 28 27 33
+let%span soption = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/option.rs" 15 8 18 9
+let%span scmp = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 14 26 14 75
+let%span sbatch_equal = "/workspace/crates/verified/src/wal/batch_equal.rs" 161 4 161 5
+let%span sbatch_equal'0 = "/workspace/crates/verified/src/wal/batch_equal.rs" 165 11 165 64
+let%span sbatch_equal'1 = "/workspace/crates/verified/src/wal/batch_equal.rs" 165 61 165 62
+let%span sbatch_equal'2 = "/workspace/crates/verified/src/wal/batch_equal.rs" 165 45 165 63
+let%span sbatch_equal'3 = "/workspace/crates/verified/src/wal/batch_equal.rs" 165 28 165 63
+let%span sbatch_equal'4 = "/workspace/crates/verified/src/wal/batch_equal.rs" 161 4 165 64
+let%span sbatch_equal'5 = "/workspace/crates/verified/src/wal/batch_equal.rs" 150 10 152 98
+let%span smodel = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/model.rs" 37 8 37 28
 
 use creusot.int.Int64
 use creusot.prelude.Any
@@ -65,7 +65,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let wal_checkpoint_range_valid [#"/workspace/crates/verified/src/wal/batch_equal.rs" 146 0 152 9]
+let wal_checkpoint_range_valid [#"/workspace/crates/verified/src/wal/batch_equal.rs" 154 0 160 9]
   (recovered_start: Int64.t) (recovered_end: Int64.t) (start: Int64.t) (end': Int64.t) (observed_last: t_Option_i64)
   (return (x: bool)) = (! bb0
   [ bb0 = s0

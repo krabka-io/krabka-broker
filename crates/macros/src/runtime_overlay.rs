@@ -2,10 +2,10 @@
 
 use moxy::{
     ast::{Attributed, Field, ItemStruct, ParseError},
-    token::{Ident, Spanner, TokenStream},
+    token::{Ident, TokenStream},
 };
 
-use crate::meta::Tokens;
+use crate::meta::{Tokens, field_ident, named_fields};
 
 /// The arguments of the `#[overlay(...)]` attribute on the struct.
 #[derive(moxy::FromMeta)]
@@ -15,7 +15,7 @@ struct OverlayTarget {
 }
 
 /// The arguments of one `#[overlay(...)]` field attribute.
-#[derive(moxy::FromMeta)]
+#[derive(Default, moxy::FromMeta)]
 struct OverlayField {
     /// Leave the field out of the copy.
     #[meta(default)]
@@ -36,19 +36,10 @@ enum Assignment {
 }
 
 fn copy(field: &Field) -> Result<Option<Assignment>, ParseError> {
-    let Some(ident) = field.ident.clone() else {
-        return Err(ParseError::new(
-            field.span(),
-            "`RuntimeOverlay` needs named fields",
-        ));
-    };
+    let ident = field_ident(field, "RuntimeOverlay")?.clone();
     let args = field
         .parse_meta::<OverlayField>("overlay")?
-        .unwrap_or(OverlayField {
-            skip: false,
-            refined: false,
-            clone: false,
-        });
+        .unwrap_or_default();
     Ok(match (args.skip, args.refined, args.clone) {
         (true, false, false) => None,
         (false, false, false) => Some(Assignment::Plain(ident)),
@@ -72,23 +63,14 @@ pub(crate) fn expand(item: ItemStruct) -> Result<TokenStream, ParseError> {
         ));
     };
     let target = target.target.0;
-    let ident = item.ident;
-    let generics = item.generics;
-    let fields = item.fields;
-    let Some(named) = fields.as_named() else {
-        return Err(ParseError::new(
-            ident.span(),
-            "`RuntimeOverlay` needs a struct with named fields",
-        ));
-    };
-    let copies = named
-        .fields
+    let copies = named_fields(&item, "RuntimeOverlay")?
         .iter()
         .map(copy)
         .filter_map(Result::transpose)
         .collect::<Result<Vec<_>, _>>()?;
 
-    let (impl_generics, type_generics, where_clause) = generics.split();
+    let ident = item.ident;
+    let (impl_generics, type_generics, where_clause) = item.generics.split();
     Ok(moxy::template! {
         impl {{ impl_generics }} {{ ident }} {{ type_generics }} {{ where_clause }} {
             pub(crate) fn copy_into(&self, target: &mut {{ target }}) {

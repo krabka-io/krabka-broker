@@ -230,30 +230,7 @@ mod tests {
         crate::test_support::wait_for_controller_leader(&broker).await;
         let dir_uuid = uuid::Uuid::from_u128(0xAA);
         let topic_uuid = uuid::Uuid::from_u128(0xBB);
-        broker
-            .controller
-            .submit_change(vec![
-                MetadataRecord::V1Topic(TopicRecord {
-                    name: "t".into(),
-                    topic_id: topic_uuid,
-                    partitions: 1,
-                    replication_factor: 1,
-                }),
-                MetadataRecord::V1Partition(PartitionRecord {
-                    topic: "t".into(),
-                    partition: 0,
-                    leader: krabka_audit::NodeId(1),
-                    replicas: vec![krabka_audit::NodeId(1)],
-                    isr: vec![krabka_audit::NodeId(1)],
-                    leader_epoch: krabka_metadata::LeaderEpoch(0),
-                    adding_replicas: vec![],
-                    removing_replicas: vec![],
-                    directories: vec![uuid::Uuid::nil()],
-                    partition_epoch: 0,
-                }),
-            ])
-            .await
-            .expect("seed partition");
+        seed_topic(&broker, topic_uuid).await;
         let req = request(own_broker_epoch(&broker), dir_uuid, topic_uuid, 0);
 
         let resp = handle_allowed(&broker, req)
@@ -282,30 +259,7 @@ mod tests {
             })])
             .await
             .expect("seed downgraded metadata version");
-        broker
-            .controller
-            .submit_change(vec![
-                MetadataRecord::V1Topic(TopicRecord {
-                    name: "t".into(),
-                    topic_id: topic_uuid,
-                    partitions: 1,
-                    replication_factor: 1,
-                }),
-                MetadataRecord::V1Partition(PartitionRecord {
-                    topic: "t".into(),
-                    partition: 0,
-                    leader: krabka_audit::NodeId(1),
-                    replicas: vec![krabka_audit::NodeId(1)],
-                    isr: vec![krabka_audit::NodeId(1)],
-                    leader_epoch: krabka_metadata::LeaderEpoch(0),
-                    adding_replicas: vec![],
-                    removing_replicas: vec![],
-                    directories: vec![uuid::Uuid::nil()],
-                    partition_epoch: 0,
-                }),
-            ])
-            .await
-            .expect("seed downgraded partition");
+        seed_topic(&broker, topic_uuid).await;
 
         let resp = handle_allowed(
             &broker,

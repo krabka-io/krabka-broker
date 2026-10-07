@@ -30,22 +30,12 @@
 
 mod support;
 
-use std::{
-    process::{Command, Stdio},
-    time::Duration,
-};
-
 use assert2::assert;
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
-use krabka_broker::{Broker, BrokerConfig, BrokerHandle};
+use krabka_broker::BrokerHandle;
 use krabka_client_core::Client;
-use krabka_log::LogConfig;
 use krabka_protocol::{
-    owned::{
-        create_topics_request::{CreatableTopic, CreateTopicsRequest},
-        produce_request::{PartitionProduceData, ProduceRequest, TopicProduceData},
-    },
-    primitives::uuid::Uuid as WireUuid,
+    owned::create_topics_request::{CreatableTopic, CreateTopicsRequest},
     records::{Record, RecordBatch},
 };
 
@@ -59,36 +49,10 @@ use krabka_protocol::{
 /// time. A port per process lets them overlap.
 ///
 /// `&'static str`, so these read as the constants they replaced.
-fn ports() -> &'static (String, String, String) {
-    static PORTS: std::sync::OnceLock<(String, String, String)> = std::sync::OnceLock::new();
-    PORTS.get_or_init(|| {
-        let (client, controller) = (support::free_port(), support::free_port());
-        (
-            format!("host.docker.internal:{client}"),
-            format!("0.0.0.0:{client}"),
-            format!("0.0.0.0:{controller}"),
-        )
-    })
-}
-
 fn bootstrap_addr() -> &'static str {
-    &ports().0
+    &support::jvm_listeners().advertised
 }
 
-fn listen_addr() -> &'static str {
-    &ports().1
-}
-
-fn controller_listen() -> &'static str {
-    &ports().2
-}
-
-/// The broker over loopback, which is how the test's own client reaches it.
-/// Only the containers use the advertised `host.docker.internal` name.
-fn client_addr() -> &'static str {
-    static V: std::sync::OnceLock<String> = std::sync::OnceLock::new();
-    V.get_or_init(|| listen_addr().replace("0.0.0.0", "127.0.0.1"))
-}
 /// Official Apache Kafka image. It ships KIP-932 share groups, which are GA in
 /// 4.x, and the `kafka-console-share-consumer.sh` and `kafka-share-groups.sh`
 /// tools.
@@ -112,52 +76,15 @@ fn share_coordinator_key(group: &str, tid: uuid::Uuid, partition: i32) -> String
 /// then targets a hostname it can resolve. This mirrors
 /// `jvm_consumer_group_next_gen.rs::start_host_broker`.
 async fn start_host_broker() -> (BrokerHandle, tempfile::TempDir) {
-    let bootstrap = bootstrap_addr();
-    let listen = listen_addr();
-    let _ = tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("krabka_broker=info,info")),
-        )
-        .with_test_writer()
-        .try_init();
-    let dir = tempfile::tempdir().expect("tempdir");
-    let listen_addr: std::net::SocketAddr = listen_addr().parse().expect("static addr");
-    let controller_addr: std::net::SocketAddr =
-        controller_listen().parse().expect("allocated addr");
-    let config = BrokerConfig {
-        broker_id: 1,
-        listen_addr,
-        advertised_listener: bootstrap_addr().into(),
-        log_dir: dir.path().to_path_buf(),
-        log_config: LogConfig::default(),
-        node_id: krabka_broker::NodeId(1),
-        controller_listen_addr: controller_addr,
-        controller_quorum_voters: vec![(krabka_broker::NodeId(1), controller_addr.to_string())],
-        heartbeat_interval: krabka_units::millis(3_000),
-        heartbeat_timeout: krabka_units::millis(9_000),
-        replica_lag_time_max: krabka_units::millis(30_000),
-        controller_election_timeout: krabka_units::secs(5),
-        controller_heartbeat_interval: krabka_units::millis(500),
-        bootstrap_mode: krabka_broker::BootstrapMode::Bootstrap,
-        ..BrokerConfig::default().with_internal_topics_for(1)
-    };
-    let handle = Broker::start(config).await.expect("start broker");
-    eprintln!("KRABKA[test] broker started listen={listen} advertised={bootstrap}");
-    (handle, dir)
+    support::start_jvm_single("krabka_broker=info,info", |_| {}).await
 }
-
 async fn connect() -> Client {
     Client::builder()
-        .bootstrap(client_addr().to_string())
+        .bootstrap(support::jvm_client_addr().to_string())
         .client_id("krabka-share-test")
         .build()
         .await
         .expect("client build")
-}
-
-fn wire(tid: uuid::Uuid) -> WireUuid {
-    WireUuid(*tid.as_bytes())
 }
 
 /// Creates `topic` with 1 partition and waits until this broker leads
@@ -232,82 +159,36 @@ async fn produce_at(
     values: &[&str],
     timestamp_ms: i64,
 ) {
-    for _ in 0..40 {
-        let records: Vec<Record> = values
-            .iter()
-            .enumerate()
-            .map(|(i, v)| Record {
-                offset_delta: i32::try_from(i).unwrap(),
-                value: Some(bytes::Bytes::copy_from_slice(v.as_bytes())),
-                ..Default::default()
-            })
-            .collect();
-        let resp = client
-            .send(ProduceRequest {
-                transactional_id: None,
-                acks: -1,
-                timeout_ms: 5_000,
-                topic_data: vec![TopicProduceData {
-                    name: topic.to_string(),
-                    topic_id: wire(tid),
-                    partition_data: vec![PartitionProduceData {
-                        index: 0,
-                        records: Some(
-                            RecordBatch {
-                                last_offset_delta: i32::try_from(values.len() - 1).unwrap(),
-                                base_timestamp: timestamp_ms,
-                                max_timestamp: timestamp_ms,
-                                records,
-                                ..Default::default()
-                            }
-                            .into(),
-                        ),
-                        ..Default::default()
-                    }],
-                    ..Default::default()
-                }],
-                ..Default::default()
-            })
-            .await
-            .expect("Produce");
-        let p = &resp.responses[0].partition_responses[0];
-        if p.error_code == 0 {
-            return;
-        }
-        // 3 = UNKNOWN_TOPIC_OR_PARTITION, 6 = NOT_LEADER_OR_FOLLOWER.
-        if p.error_code == 3 || p.error_code == 6 {
-            // intentional: bounded produce-RPC retry. The failure means the
-            // local writer-actor has not materialized yet even though the image
-            // already names this broker leader; that local readiness is not in
-            // the metadata image and `produce` holds no broker handle to await.
-            tokio::time::sleep(Duration::from_millis(100)).await;
-            continue;
-        }
-        panic!("produce failed: {p:?}");
-    }
-    panic!("partition never became produceable for {topic}");
+    let records = values
+        .iter()
+        .enumerate()
+        .map(|(i, value)| Record {
+            offset_delta: i32::try_from(i).unwrap(),
+            value: Some(bytes::Bytes::copy_from_slice(value.as_bytes())),
+            ..Default::default()
+        })
+        .collect();
+    support::share::produce_batch(
+        client,
+        topic,
+        tid,
+        0,
+        RecordBatch {
+            last_offset_delta: i32::try_from(values.len() - 1).unwrap(),
+            base_timestamp: timestamp_ms,
+            max_timestamp: timestamp_ms,
+            records,
+            ..Default::default()
+        },
+    )
+    .await;
 }
 
 /// Runs a docker container against the host broker and returns its output. The
 /// share consumer exits with a non-zero status on an idle timeout, even after
 /// it consumed records, so callers check stdout and not the exit status.
 fn docker_run(args: &[&str]) -> std::process::Output {
-    let out = Command::new("docker")
-        .arg("run")
-        .arg("--rm")
-        .arg("--add-host=host.docker.internal:host-gateway")
-        .arg(KAFKA_IMAGE)
-        .args(args)
-        .stderr(Stdio::piped())
-        .stdout(Stdio::piped())
-        .output()
-        .expect("docker run");
-    eprintln!(
-        "KRABKA[test] docker {args:?} status={} stderr={}",
-        out.status,
-        String::from_utf8_lossy(&out.stderr),
-    );
-    out
+    support::jvm_docker_run(KAFKA_IMAGE, args)
 }
 
 /// Sets `share.auto.offset.reset` for `group` through the real
@@ -396,26 +277,7 @@ async fn jvm_share_groups_describe_state() {
     let group = "jvm-share-gd";
     let values = ["d-one", "d-two"];
 
-    let client = connect().await;
-    let tid = create_topic(&broker, &client, topic).await;
-    bootstrap_share_state(&broker, &client, &share_coordinator_key(group, tid, 0)).await;
-    produce(&client, topic, tid, &values).await;
-
-    // Join + read so the group is registered with the coordinator.
-    set_share_auto_offset_reset(bootstrap, group, "earliest");
-    let _ = docker_run(&[
-        "bash",
-        "-c",
-        &format!(
-            "{SHARE_CONSUMER} \
-                --bootstrap-server {bootstrap} \
-                --topic {topic} \
-                --group {group} \
-                --timeout-ms 15000 \
-                --max-messages {}",
-            values.len()
-        ),
-    ]);
+    register_jvm_share_group(&broker, topic, group, &values).await;
 
     // `--describe --state` drives ShareGroupDescribe (api_key 77). Renders e.g.
     //   GROUP         COORDINATOR (ID)              STATE   #MEMBERS
@@ -453,29 +315,7 @@ async fn jvm_share_groups_list() {
     let group = "jvm-share-gl";
     let values = ["l-one", "l-two"];
 
-    let client = connect().await;
-    let tid = create_topic(&broker, &client, topic).await;
-    bootstrap_share_state(&broker, &client, &share_coordinator_key(group, tid, 0)).await;
-    produce(&client, topic, tid, &values).await;
-
-    set_share_auto_offset_reset(bootstrap, group, "earliest");
-    // Join + read so the share group is registered with the coordinator. The
-    // share-group actor stays in the coordinator's share registry after the
-    // consumer's idle-timeout exit (it is only removed on a delete-groups
-    // tombstone), so `--list` below still sees a live group entry.
-    let _ = docker_run(&[
-        "bash",
-        "-c",
-        &format!(
-            "{SHARE_CONSUMER} \
-                --bootstrap-server {bootstrap} \
-                --topic {topic} \
-                --group {group} \
-                --timeout-ms 15000 \
-                --max-messages {}",
-            values.len()
-        ),
-    ]);
+    register_jvm_share_group(&broker, topic, group, &values).await;
 
     // `--list` drives ListGroups(16) with types_filter=["share"]. The share
     // group id must appear in stdout.
@@ -601,4 +441,26 @@ async fn jvm_share_consumer_defaults_to_latest() {
          {state_out}\nstderr:\n{}",
         String::from_utf8_lossy(&state.stderr),
     );
+}
+
+async fn register_jvm_share_group(
+    broker: &BrokerHandle,
+    topic: &str,
+    group: &str,
+    values: &[&str],
+) {
+    let client = connect().await;
+    let tid = create_topic(broker, &client, topic).await;
+    bootstrap_share_state(broker, &client, &share_coordinator_key(group, tid, 0)).await;
+    produce(&client, topic, tid, values).await;
+    let bootstrap = bootstrap_addr();
+    set_share_auto_offset_reset(bootstrap, group, "earliest");
+    let _ = docker_run(&[
+        "bash",
+        "-c",
+        &format!(
+            "{SHARE_CONSUMER} --bootstrap-server {bootstrap} --topic {topic} --group {group} --timeout-ms 15000 --max-messages {}",
+            values.len()
+        ),
+    ]);
 }

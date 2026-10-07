@@ -12,6 +12,8 @@
 // directory is `tests/`. `#[path]` re-bases each declaration onto the sibling
 // `share_groups/` directory, which keeps the parts out of `tests/` where every
 // `.rs` file would become another test binary.
+mod support;
+
 #[path = "share_groups/share_group_harness.rs"]
 mod share_group_harness;
 #[path = "share_groups/share_group_listing.rs"]

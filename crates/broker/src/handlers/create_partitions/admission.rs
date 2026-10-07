@@ -9,15 +9,5 @@ use krabka_protocol::owned::create_partitions_request::CreatePartitionsTopic;
 /// first row. Kafka's `ControllerApis.createPartitions` answers each once
 /// with `INVALID_REQUEST` and grows none of them.
 pub(super) fn duplicate_names(topics: &[CreatePartitionsTopic]) -> Vec<String> {
-    let mut counts: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
-    for topic in topics {
-        *counts.entry(topic.name.as_str()).or_insert(0) += 1;
-    }
-    let mut seen = std::collections::HashSet::new();
-    topics
-        .iter()
-        .map(|topic| topic.name.as_str())
-        .filter(|name| counts[name] > 1 && seen.insert(*name))
-        .map(str::to_owned)
-        .collect()
+    crate::handlers::request_names::duplicate_names(topics.iter().map(|topic| topic.name.as_str()))
 }

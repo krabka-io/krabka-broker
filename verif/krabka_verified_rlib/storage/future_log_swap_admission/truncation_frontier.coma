@@ -1,8 +1,8 @@
-(* #"/workspace/crates/verified/src/storage/future_log_swap_admission.rs" 111 0 111 68 *)
+(* #"/workspace/crates/verified/src/storage/future_log_swap_admission.rs" 112 0 112 68 *)
 
-let%span sfuture_log_swap_admission = "/workspace/crates/verified/src/storage/future_log_swap_admission.rs" 107 10 107 30
-let%span sfuture_log_swap_admission'0 = "/workspace/crates/verified/src/storage/future_log_swap_admission.rs" 108 10 108 29
-let%span sfuture_log_swap_admission'1 = "/workspace/crates/verified/src/storage/future_log_swap_admission.rs" 109 10 109 53
+let%span sfuture_log_swap_admission = "/workspace/crates/verified/src/storage/future_log_swap_admission.rs" 108 10 108 30
+let%span sfuture_log_swap_admission'0 = "/workspace/crates/verified/src/storage/future_log_swap_admission.rs" 109 10 109 29
+let%span sfuture_log_swap_admission'1 = "/workspace/crates/verified/src/storage/future_log_swap_admission.rs" 110 10 110 53
 
 use creusot.int.Int64
 use creusot.prelude.Any
@@ -12,7 +12,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let truncation_frontier [#"/workspace/crates/verified/src/storage/future_log_swap_admission.rs" 111 0 111 68]
+let truncation_frontier [#"/workspace/crates/verified/src/storage/future_log_swap_admission.rs" 112 0 112 68]
   (frontier: Int64.t) (new_end: Int64.t) (return (x: Int64.t)) = (! bb0
   [ bb0 = s0
     [ s0 = [ &_10 <- Int64.lt frontier new_end ] s1 | s1 = any [ br0 -> {_10 = false} (! bb2) | br1 -> {_10} (! bb1) ] ]

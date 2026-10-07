@@ -5,9 +5,7 @@
 use std::{net::SocketAddr, sync::Arc};
 
 use assert2::{assert, check};
-use krabka_metadata::{
-    AclEntry, AclOperation, MetadataRecord, PatternType, PermissionType, ResourceType,
-};
+use krabka_metadata::{AclEntry, AclOperation, MetadataRecord, PatternType, ResourceType};
 use krabka_protocol::{
     UnknownTaggedFields,
     owned::{
@@ -152,27 +150,7 @@ async fn drive(
 }
 
 async fn seed_controller_quota(handle: &BrokerHandle, rate: f64) {
-    handle
-        .broker_arc_for_test()
-        .controller
-        .submit_change(vec![MetadataRecord::V1ClientQuota(
-            krabka_metadata::ClientQuotaRecord {
-                entity: vec![
-                    krabka_metadata::QuotaEntity {
-                        entity_type: "user".into(),
-                        entity_name: Some("admin".into()),
-                    },
-                    krabka_metadata::QuotaEntity {
-                        entity_type: "client-id".into(),
-                        entity_name: Some("admin-client".into()),
-                    },
-                ],
-                config_key: "controller_mutation_rate".into(),
-                config_value: Some(rate),
-            },
-        )])
-        .await
-        .expect("seed quota");
+    crate::handlers::test_support::seed_controller_quota(handle, rate).await;
 }
 
 /// A denial on cluster `Create` is a shortcut only. `DenyAll` also denies the
@@ -1684,22 +1662,7 @@ async fn handle_authorizes_create_per_topic_when_cluster_create_is_denied() {
         created: &'static [&'static str],
     }
 
-    fn acl(
-        resource_type: ResourceType,
-        resource_name: &str,
-        pattern_type: PatternType,
-        operation: AclOperation,
-    ) -> AclEntry {
-        AclEntry {
-            resource_type,
-            resource_name: resource_name.into(),
-            pattern_type,
-            principal: "User:alice".into(),
-            host: "*".into(),
-            operation,
-            permission_type: PermissionType::Allow,
-        }
-    }
+    use crate::handlers::test_support::acl;
 
     let cluster_create = acl(
         ResourceType::Cluster,

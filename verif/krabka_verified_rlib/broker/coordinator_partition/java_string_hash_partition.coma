@@ -1,40 +1,40 @@
-(* #"/workspace/crates/verified/src/broker/coordinator_partition.rs" 156 0 156 85 *)
+(* #"/workspace/crates/verified/src/broker/coordinator_partition.rs" 157 0 157 85 *)
 
-let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
-let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
-let%span sconvert = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/convert.rs" 274 26 274 51
-let%span snum = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 338 26 338 48
-let%span snum'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 338 26 338 48
-let%span swell_founded = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/well_founded.rs" 43 8 43 33
-let%span sslice = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 331 18 331 22
-let%span scoordinator_partition = "/workspace/crates/verified/src/broker/coordinator_partition.rs" 157 26 157 27
-let%span scoordinator_partition'0 = "/workspace/crates/verified/src/broker/coordinator_partition.rs" 161 19 161 24
-let%span scoordinator_partition'1 = "/workspace/crates/verified/src/broker/coordinator_partition.rs" 162 20 162 27
-let%span scoordinator_partition'2 = "/workspace/crates/verified/src/broker/coordinator_partition.rs" 165 14 165 35
-let%span scoordinator_partition'3 = "/workspace/crates/verified/src/broker/coordinator_partition.rs" 166 18 166 29
-let%span scoordinator_partition'4 = "/workspace/crates/verified/src/broker/coordinator_partition.rs" 164 34 164 87
-let%span scoordinator_partition'5 = "/workspace/crates/verified/src/broker/coordinator_partition.rs" 163 16 163 38
-let%span scoordinator_partition'6 = "/workspace/crates/verified/src/broker/coordinator_partition.rs" 167 33 167 35
-let%span scoordinator_partition'7 = "/workspace/crates/verified/src/broker/coordinator_partition.rs" 167 15 167 36
-let%span scoordinator_partition'8 = "/workspace/crates/verified/src/broker/coordinator_partition.rs" 167 60 167 72
-let%span scoordinator_partition'9 = "/workspace/crates/verified/src/broker/coordinator_partition.rs" 167 50 167 73
-let%span scoordinator_partition'10 = "/workspace/crates/verified/src/broker/coordinator_partition.rs" 167 15 167 74
-let%span scoordinator_partition'11 = "/workspace/crates/verified/src/broker/coordinator_partition.rs" 168 17 168 18
-let%span scoordinator_partition'12 = "/workspace/crates/verified/src/broker/coordinator_partition.rs" 168 8 168 18
-let%span scoordinator_partition'13 = "/workspace/crates/verified/src/broker/coordinator_partition.rs" 170 30 170 38
-let%span scoordinator_partition'14 = "/workspace/crates/verified/src/broker/coordinator_partition.rs" 171 8 171 9
-let%span scoordinator_partition'15 = "/workspace/crates/verified/src/broker/coordinator_partition.rs" 172 21 172 22
-let%span scoordinator_partition'16 = "/workspace/crates/verified/src/broker/coordinator_partition.rs" 177 9 177 35
-let%span scoordinator_partition'17 = "/workspace/crates/verified/src/broker/coordinator_partition.rs" 147 12 149 86
-let%span scoordinator_partition'18 = "/workspace/crates/verified/src/broker/coordinator_partition.rs" 151 10 151 50
-let%span scoordinator_partition'19 = "/workspace/crates/verified/src/broker/coordinator_partition.rs" 152 10 152 50
-let%span scoordinator_partition'20 = "/workspace/crates/verified/src/broker/coordinator_partition.rs" 153 10 154 52
-let%span scoordinator_partition'21 = "/workspace/crates/verified/src/broker/coordinator_partition.rs" 99 10 99 15
-let%span scoordinator_partition'22 = "/workspace/crates/verified/src/broker/coordinator_partition.rs" 98 11 98 45
-let%span scoordinator_partition'23 = "/workspace/crates/verified/src/broker/coordinator_partition.rs" 102 8 107 9
-let%span scoordinator_partition'24 = "/workspace/crates/verified/src/broker/coordinator_partition.rs" 131 11 131 31
-let%span scoordinator_partition'25 = "/workspace/crates/verified/src/broker/coordinator_partition.rs" 134 8 135 30
-let%span scoordinator_partition'26 = "/workspace/crates/verified/src/broker/coordinator_partition.rs" 117 8 123 9
+let%span sord = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span sord'0 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span snum = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 338 26 338 48
+let%span snum'0 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 338 26 338 48
+let%span sconvert = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/convert.rs" 274 26 274 51
+let%span swell_founded = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/well_founded.rs" 43 8 43 33
+let%span sslice = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 331 18 331 22
+let%span scoordinator_partition = "/workspace/crates/verified/src/broker/coordinator_partition.rs" 158 26 158 27
+let%span scoordinator_partition'0 = "/workspace/crates/verified/src/broker/coordinator_partition.rs" 162 19 162 24
+let%span scoordinator_partition'1 = "/workspace/crates/verified/src/broker/coordinator_partition.rs" 163 20 163 27
+let%span scoordinator_partition'2 = "/workspace/crates/verified/src/broker/coordinator_partition.rs" 166 14 166 35
+let%span scoordinator_partition'3 = "/workspace/crates/verified/src/broker/coordinator_partition.rs" 167 18 167 29
+let%span scoordinator_partition'4 = "/workspace/crates/verified/src/broker/coordinator_partition.rs" 165 34 165 87
+let%span scoordinator_partition'5 = "/workspace/crates/verified/src/broker/coordinator_partition.rs" 164 16 164 38
+let%span scoordinator_partition'6 = "/workspace/crates/verified/src/broker/coordinator_partition.rs" 168 33 168 35
+let%span scoordinator_partition'7 = "/workspace/crates/verified/src/broker/coordinator_partition.rs" 168 15 168 36
+let%span scoordinator_partition'8 = "/workspace/crates/verified/src/broker/coordinator_partition.rs" 168 60 168 72
+let%span scoordinator_partition'9 = "/workspace/crates/verified/src/broker/coordinator_partition.rs" 168 50 168 73
+let%span scoordinator_partition'10 = "/workspace/crates/verified/src/broker/coordinator_partition.rs" 168 15 168 74
+let%span scoordinator_partition'11 = "/workspace/crates/verified/src/broker/coordinator_partition.rs" 169 17 169 18
+let%span scoordinator_partition'12 = "/workspace/crates/verified/src/broker/coordinator_partition.rs" 169 8 169 18
+let%span scoordinator_partition'13 = "/workspace/crates/verified/src/broker/coordinator_partition.rs" 171 30 171 38
+let%span scoordinator_partition'14 = "/workspace/crates/verified/src/broker/coordinator_partition.rs" 172 8 172 9
+let%span scoordinator_partition'15 = "/workspace/crates/verified/src/broker/coordinator_partition.rs" 173 21 173 22
+let%span scoordinator_partition'16 = "/workspace/crates/verified/src/broker/coordinator_partition.rs" 178 9 178 35
+let%span scoordinator_partition'17 = "/workspace/crates/verified/src/broker/coordinator_partition.rs" 148 12 150 86
+let%span scoordinator_partition'18 = "/workspace/crates/verified/src/broker/coordinator_partition.rs" 152 10 152 50
+let%span scoordinator_partition'19 = "/workspace/crates/verified/src/broker/coordinator_partition.rs" 153 10 153 50
+let%span scoordinator_partition'20 = "/workspace/crates/verified/src/broker/coordinator_partition.rs" 154 10 155 52
+let%span scoordinator_partition'21 = "/workspace/crates/verified/src/broker/coordinator_partition.rs" 100 10 100 15
+let%span scoordinator_partition'22 = "/workspace/crates/verified/src/broker/coordinator_partition.rs" 99 11 99 45
+let%span scoordinator_partition'23 = "/workspace/crates/verified/src/broker/coordinator_partition.rs" 103 8 108 9
+let%span scoordinator_partition'24 = "/workspace/crates/verified/src/broker/coordinator_partition.rs" 132 11 132 31
+let%span scoordinator_partition'25 = "/workspace/crates/verified/src/broker/coordinator_partition.rs" 135 8 136 30
+let%span scoordinator_partition'26 = "/workspace/crates/verified/src/broker/coordinator_partition.rs" 118 8 124 9
 
 use creusot.int.Int32
 use creusot.int.UInt64
@@ -66,7 +66,7 @@ let len_u16 (self_: Slice64.slice UInt16.t) (return (x: UInt64.t)) = any
     = UInt64.t'int result}
     (! return {result}) ]
 
-function java_string_hash_prefix_model [#"/workspace/crates/verified/src/broker/coordinator_partition.rs" 100 0 100 72] (units: Seq.seq UInt16.t) (limit: int) : Int32.t
+function java_string_hash_prefix_model [#"/workspace/crates/verified/src/broker/coordinator_partition.rs" 101 0 101 72] (units: Seq.seq UInt16.t) (limit: int) : Int32.t
 
 axiom java_string_hash_prefix_model_def:
   forall units: Seq.seq UInt16.t, limit: int [java_string_hash_prefix_model units limit]. ([%#scoordinator_partition'22] 0
@@ -95,14 +95,14 @@ let wrapping_add (self_: Int32.t) (rhs: Int32.t) (return (x: Int32.t)) = any
 
 constant const_MIN: Int32.t = (-2147483648: Int32.t)
 
-function java_string_abs_model [#"/workspace/crates/verified/src/broker/coordinator_partition.rs" 115 0 115 42] (hash: Int32.t) : Int32.t
+function java_string_abs_model [#"/workspace/crates/verified/src/broker/coordinator_partition.rs" 116 0 116 42] (hash: Int32.t) : Int32.t
  = [%#scoordinator_partition'26] if hash = const_MIN then
     (0: Int32.t)
   else
     if Int32.lt hash (0: Int32.t) then Int32.neg hash else hash
 
 
-function java_string_hash_partition_model [#"/workspace/crates/verified/src/broker/coordinator_partition.rs" 132 0 132 81] (units: Seq.seq UInt16.t) (partition_count: Int32.t) : int
+function java_string_hash_partition_model [#"/workspace/crates/verified/src/broker/coordinator_partition.rs" 133 0 133 81] (units: Seq.seq UInt16.t) (partition_count: Int32.t) : int
  =
   [%#scoordinator_partition'25] ComputerDivision.mod (Int32.to_int (java_string_abs_model (java_string_hash_prefix_model units (Seq.length units)))) (Int32.to_int partition_count)
 
@@ -110,7 +110,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let java_string_hash_partition [#"/workspace/crates/verified/src/broker/coordinator_partition.rs" 156 0 156 85]
+let java_string_hash_partition [#"/workspace/crates/verified/src/broker/coordinator_partition.rs" 157 0 157 85]
   (units: Slice64.slice UInt16.t) (partition_count: Int32.t) (return (x: t_Option_i32)) = (! bb0
   [ bb0 = s0
     [ s0 = [ &_13 <- Int32.le partition_count ([%#scoordinator_partition] (0: Int32.t)) ] s1

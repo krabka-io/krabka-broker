@@ -4,163 +4,18 @@
 //! id, produces records into it, joins a share group, and waits until the
 //! group lifecycle has durably initialized the share state a consume needs.
 
-use std::{
-    sync::{Arc, OnceLock},
-    time::Duration,
-};
-
 use assert2::assert;
-use krabka_broker::BrokerConfig;
 use krabka_client_core::Client;
-use krabka_protocol::{
-    owned::{
-        create_topics_request::{CreatableTopic, CreateTopicsRequest},
-        incremental_alter_configs_request::{
-            AlterConfigsResource, AlterableConfig, IncrementalAlterConfigsRequest,
-        },
-        produce_request::{PartitionProduceData, ProduceRequest, TopicProduceData},
-        share_group_heartbeat_request::ShareGroupHeartbeatRequest,
-    },
-    primitives::uuid::Uuid as WireUuid,
-    records::{Record, RecordBatch},
+use krabka_protocol::owned::share_group_heartbeat_request::ShareGroupHeartbeatRequest;
+
+pub use crate::support::share::{
+    bootstrap_share_state, broker_config, broker_test_permit, connect, create_topic, join,
+    produce_n, produce_values, topic_id, wire,
 };
-
-pub async fn connect(bootstrap: &str) -> Arc<Client> {
-    Arc::new(
-        Client::builder()
-            .bootstrap(bootstrap)
-            .client_id("c1")
-            .build()
-            .await
-            .unwrap(),
-    )
-}
-
-/// Create `topic` with `partitions` partitions and wait until this broker has
-/// materialized (and leads) partition 0, so a subsequent produce won't race the
-/// replicator supervisor.
-pub async fn create_topic(
-    broker: &krabka_broker::BrokerHandle,
-    client: &Client,
-    topic: &str,
-    partitions: i32,
-) {
-    let resp = client
-        .send(CreateTopicsRequest {
-            topics: vec![CreatableTopic {
-                name: topic.into(),
-                num_partitions: partitions,
-                replication_factor: 1,
-                ..Default::default()
-            }],
-            timeout_ms: 5_000,
-            ..Default::default()
-        })
-        .await
-        .expect("CreateTopics");
-    assert!(
-        resp.topics[0].error_code == 0,
-        "topic create failed: {resp:?}"
-    );
-    broker.wait_until_partition_present(topic, 0).await;
-}
-
-/// Resolve a created topic's id from this broker's metadata image.
-pub fn topic_id(broker: &krabka_broker::BrokerHandle, topic: &str) -> uuid::Uuid {
-    let image = broker.controller_image_for_test();
-    image
-        .topic(topic)
-        .map(|t| *t.topic_id.as_bytes())
-        .map(uuid::Uuid::from_bytes)
-        .expect("topic present in image")
-}
-
-pub fn wire(tid: uuid::Uuid) -> WireUuid {
-    WireUuid(*tid.as_bytes())
-}
 
 // These single-broker tests only need one state partition. Keeping the test
 // geometry small also prevents the parallel test runner from exhausting its
 // process-wide file-descriptor limit while eleven brokers run concurrently.
-const SHARE_STATE_PARTITIONS: i32 = 1;
-const MAX_CONCURRENT_TEST_BROKERS: usize = 3;
-
-pub async fn broker_test_permit() -> tokio::sync::OwnedSemaphorePermit {
-    static GATE: OnceLock<Arc<tokio::sync::Semaphore>> = OnceLock::new();
-
-    Arc::clone(
-        GATE.get_or_init(|| Arc::new(tokio::sync::Semaphore::new(MAX_CONCURRENT_TEST_BROKERS))),
-    )
-    .acquire_owned()
-    .await
-    .expect("broker test concurrency gate remains open")
-}
-
-pub fn broker_config(log_dir: std::path::PathBuf) -> BrokerConfig {
-    let mut config = BrokerConfig::for_tests(log_dir);
-    config.share_coordinator.state_topic_num_partitions = SHARE_STATE_PARTITIONS;
-    config
-}
-
-/// Brings up the two coordinators that a share group uses, and puts `group` on
-/// `share.auto.offset.reset=earliest`.
-///
-/// No broker creates `__consumer_offsets` or `__share_group_state` when it
-/// starts. `ShareGroupHeartbeat` needs the group coordinator, and the
-/// share-partition manager persists its SPSO advance through the share
-/// coordinator. Until this broker leads and loads the state partition, that
-/// advance lives only in memory, and a restart loses it. The handle helpers
-/// ask for each topic as a client's first lookup does, and wait until this
-/// broker serves it.
-pub async fn bootstrap_share_state(
-    broker: &krabka_broker::BrokerHandle,
-    client: &Client,
-    group: &str,
-) {
-    broker.wait_until_group_coordinator_ready().await;
-    broker.wait_until_share_coordinator_ready().await;
-    set_auto_offset_reset_earliest(client, group).await;
-}
-
-/// Kafka resource type id for `GROUP`.
-const RESOURCE_TYPE_GROUP: i8 = 32;
-
-/// `config_operation` SET = 0 in the `IncrementalAlterConfigs` wire protocol.
-const CONFIG_OP_SET: i8 = 0;
-
-/// Put the group on `share.auto.offset.reset=earliest`, which is what every
-/// test in this binary assumes: each one produces its records before the first
-/// member joins and then expects to acquire them.
-///
-/// Kafka's default is `latest`, and a share partition with no persisted state
-/// resolves the strategy the first time it is loaded, so without this the
-/// records produced above are behind the resolved start offset and no fetch
-/// ever sees them. This is the same `kafka-configs --entity-type groups
-/// --alter` a share-group operator runs to replay a topic from its beginning.
-pub async fn set_auto_offset_reset_earliest(client: &Client, group: &str) {
-    let resp = client
-        .send(IncrementalAlterConfigsRequest {
-            resources: vec![AlterConfigsResource {
-                resource_type: RESOURCE_TYPE_GROUP,
-                resource_name: group.into(),
-                configs: vec![AlterableConfig {
-                    name: "share.auto.offset.reset".into(),
-                    config_operation: CONFIG_OP_SET,
-                    value: Some("earliest".into()),
-                    ..Default::default()
-                }],
-                ..Default::default()
-            }],
-            ..Default::default()
-        })
-        .await
-        .expect("IncrementalAlterConfigs(group)");
-    assert!(
-        resp.responses[0].error_code == 0,
-        "share.auto.offset.reset=earliest rejected: {:?}",
-        resp.responses[0].error_message
-    );
-}
 
 /// Wait until the group-coordinator lifecycle hook has durably initialized the
 /// share state for `(group, topic, partition)`. The persister summary then
@@ -205,100 +60,16 @@ pub async fn wait_for_share_init(
     );
 }
 
-/// Produce `n` records into `(topic, partition)` in a single batch. Each record
-/// carries a tiny distinct value so the bytes are non-empty.
-///
-/// This helper retries while the freshly-created partition is still
-/// materializing its leader (`UNKNOWN_TOPIC_OR_PARTITION` /
-/// `NOT_LEADER_OR_FOLLOWER`), exactly as a real producer would.
-pub async fn produce_n(client: &Client, topic: &str, tid: uuid::Uuid, partition: i32, n: i64) {
-    let values = (0..n)
-        .map(|i| bytes::Bytes::from(format!("v{i}")))
-        .collect();
-    produce_values(client, topic, tid, partition, values).await;
-}
-
-/// [`produce_n`] for records that carry `values`, one record for each.
-pub async fn produce_values(
+/// Initialize the common g1/t fixture before its first consume.
+pub async fn initialize_consumption(
+    broker: &krabka_broker::BrokerHandle,
     client: &Client,
-    topic: &str,
     tid: uuid::Uuid,
-    partition: i32,
-    values: Vec<bytes::Bytes>,
-) {
-    let n = i64::try_from(values.len()).unwrap();
-    for _ in 0..40 {
-        let records: Vec<Record> = values
-            .iter()
-            .enumerate()
-            .map(|(i, value)| Record {
-                offset_delta: i32::try_from(i).unwrap(),
-                value: Some(value.clone()),
-                ..Default::default()
-            })
-            .collect();
-        let resp = client
-            .send(ProduceRequest {
-                transactional_id: None,
-                acks: -1,
-                timeout_ms: 5_000,
-                topic_data: vec![TopicProduceData {
-                    name: topic.to_string(),
-                    // Produce negotiates v13, which carries topic_id (not name)
-                    // on the wire; the broker resolves the topic by id.
-                    topic_id: wire(tid),
-                    partition_data: vec![PartitionProduceData {
-                        index: partition,
-                        records: Some(
-                            RecordBatch {
-                                last_offset_delta: i32::try_from(n - 1).unwrap(),
-                                records,
-                                ..Default::default()
-                            }
-                            .into(),
-                        ),
-                        ..Default::default()
-                    }],
-                    ..Default::default()
-                }],
-                ..Default::default()
-            })
-            .await
-            .expect("Produce");
-        let p = &resp.responses[0].partition_responses[0];
-        // 3 = UNKNOWN_TOPIC_OR_PARTITION, 6 = NOT_LEADER_OR_FOLLOWER.
-        if p.error_code == 0 {
-            return;
-        }
-        if p.error_code == 3 || p.error_code == 6 {
-            // intentional: bounded produce-retry backoff while the partition
-            // leader materializes; this helper has no BrokerHandle to await on
-            // and mirrors a real producer's retry.
-            tokio::time::sleep(Duration::from_millis(100)).await;
-            continue;
-        }
-        panic!("produce failed: {p:?}");
-    }
-    panic!("partition never became produceable for {topic}:{partition}");
-}
-
-/// Join `group` as a fresh member subscribed to `topic` so the share actor
-/// knows the member. The `ShareFetch` membership check needs this. Returns
-/// `(member_id, member_epoch)` so the caller can drive heartbeats inside the
-/// `wait_for_share_init` lifecycle loop.
-pub async fn join(client: &Client, group: &str, topic: &str) -> (String, i32) {
-    let resp = client
-        .send(ShareGroupHeartbeatRequest {
-            group_id: group.into(),
-            member_id: uuid::Uuid::new_v4().to_string(),
-            member_epoch: 0,
-            subscribed_topic_names: Some(vec![topic.into()]),
-            ..Default::default()
-        })
-        .await
-        .expect("ShareGroupHeartbeat");
-    assert!(resp.error_code == 0, "join failed: {:?}", resp.error_code);
-    let member_id = resp.member_id.expect("the broker echoes the member id");
-    let member_epoch = resp.member_epoch;
-    (member_id, member_epoch)
+    records: i64,
+) -> (String, i32) {
+    bootstrap_share_state(broker, client, "g1").await;
+    produce_n(client, "t", tid, 0, records).await;
+    let (member, epoch) = join(client, "g1", "t").await;
+    wait_for_share_init(broker, client, &member, epoch, tid).await;
+    (member, epoch)
 }

@@ -45,7 +45,7 @@ use crate::{
     coordinator::unified::actor::{DescribeMember, DescribeView, GroupActorMessage},
     error::BrokerError,
     handlers::{
-        authorized_operations::{DescribedGroupRow as _, fill_group_authorized_operations},
+        authorized_operations::{DescribedGroupRow, fill_group_authorized_operations},
         group_version_disabled,
     },
     task_util::{AskError, ask},
@@ -159,20 +159,14 @@ pub(crate) async fn handle(
 const UNAUTHORIZED_TOPICS_MESSAGE: &str =
     "The group has described topic(s) that the client is not authorized to describe.";
 
-/// Kafka's `handleConsumerGroupDescribe`: "Clients are not allowed to see
-/// topics that are not authorized for Describe". A group with a topic in the
-/// assignment or target assignment of any member that the caller cannot
-/// `Describe` is replaced by a `TOPIC_AUTHORIZATION_FAILED` row with no members,
-/// so the topic names, ids and partition ownership stay hidden.
-fn hide_undescribable_topics(
-    authorizer: &dyn Authorizer,
-    image: &MetadataImage,
-    ctx: &crate::handlers::RequestContext<'_>,
-    groups: &mut [DescribedGroup],
-) {
-    fn topics(group: &DescribedGroup) -> impl Iterator<Item = &str> {
-        group
-            .members
+/// Topic names exposed by a group describe response, including target assignments.
+pub(super) trait DescribedTopics: DescribedGroupRow {
+    fn topics(&self) -> impl Iterator<Item = &str>;
+}
+
+impl DescribedTopics for DescribedGroup {
+    fn topics(&self) -> impl Iterator<Item = &str> {
+        self.members
             .iter()
             .flat_map(|member| {
                 member
@@ -183,17 +177,29 @@ fn hide_undescribable_topics(
             })
             .map(|topic| topic.topic_name.as_str())
     }
+}
 
-    let named: HashSet<&str> = groups.iter().flat_map(topics).collect();
+/// Kafka's `handleConsumerGroupDescribe`: "Clients are not allowed to see
+/// topics that are not authorized for Describe". A group with a topic in the
+/// assignment or target assignment of any member that the caller cannot
+/// `Describe` is replaced by a `TOPIC_AUTHORIZATION_FAILED` row with no members,
+/// so the topic names, ids and partition ownership stay hidden.
+pub(super) fn hide_undescribable_topics<G: DescribedTopics>(
+    authorizer: &dyn Authorizer,
+    image: &MetadataImage,
+    ctx: &crate::handlers::RequestContext<'_>,
+    groups: &mut [G],
+) {
+    let named: HashSet<&str> = groups.iter().flat_map(DescribedTopics::topics).collect();
     let undescribable =
         crate::handlers::denied_topics(authorizer, image, ctx, AclOperation::Describe, named);
     if undescribable.is_empty() {
         return;
     }
     for group in groups {
-        if topics(group).any(|topic| undescribable.contains(topic)) {
-            *group = DescribedGroup::error_row(
-                &group.group_id,
+        if group.topics().any(|topic| undescribable.contains(topic)) {
+            *group = G::error_row(
+                group.group_id(),
                 codes::TOPIC_AUTHORIZATION_FAILED,
                 Some(UNAUTHORIZED_TOPICS_MESSAGE.to_owned()),
             );
@@ -299,10 +305,15 @@ fn response(groups: Vec<DescribedGroup>) -> ConsumerGroupDescribeResponse {
 #[cfg(test)]
 mod tests {
     use assert2::assert;
-    use krabka_metadata::{FeatureLevelRecord, MetadataRecord};
+    use krabka_metadata::MetadataRecord;
 
     use super::*;
-    use crate::handlers::authorized_operations::authorized_operations_bits;
+    use crate::handlers::{
+        authorized_operations::authorized_operations_bits,
+        group_heartbeat_test_support::{
+            acl_authorizer, image_with_group_version, set_group_version,
+        },
+    };
 
     const VERSION: i16 = krabka_protocol::owned::consumer_group_describe_request::MAX_VERSION;
 
@@ -311,15 +322,6 @@ mod tests {
             group_ids: group_ids.into_iter().map(Into::into).collect(),
             ..Default::default()
         }
-    }
-
-    fn image_with_group_version(level: i16) -> MetadataImage {
-        let mut image = MetadataImage::new(uuid::Uuid::nil());
-        image.apply(&MetadataRecord::V1FeatureLevel(FeatureLevelRecord {
-            name: krabka_metadata::group_version::GROUP_VERSION_FEATURE.into(),
-            level,
-        }));
-        image
     }
 
     #[test]
@@ -560,7 +562,7 @@ mod tests {
                 AclOperation::Describe,
             ),
         ));
-        let authorizer = crate::authorizer::SimpleAclAuthorizer::new(HashSet::new());
+        let authorizer = acl_authorizer();
         let principal = crate::test_support::principal("alice");
         let peer = crate::test_support::peer();
         let ctx = crate::test_support::request_context(&principal, &peer, "alice-client");
@@ -711,20 +713,6 @@ mod tests {
         }
     }
 
-    /// Lowers `group.version` back to 0 (unfinalized/disabled) on an
-    /// already-started test broker, whose bootstrap otherwise finalizes it
-    /// at the modern release default.
-    async fn disable_group_version(broker: &crate::broker::Broker) {
-        broker
-            .controller
-            .submit_change(vec![MetadataRecord::V1FeatureLevel(FeatureLevelRecord {
-                name: krabka_metadata::group_version::GROUP_VERSION_FEATURE.into(),
-                level: 0,
-            })])
-            .await
-            .expect("disable group.version");
-    }
-
     /// The `group.version` protocol gate — `UNSUPPORTED_VERSION` when the
     /// next-gen consumer-group RPCs are not finalized — runs BEFORE the
     /// group ACL check, matching Kafka's `handleConsumerGroupDescribe`. A
@@ -734,14 +722,13 @@ mod tests {
     /// none are individually authorization-checked.
     #[tokio::test]
     async fn handle_protocol_gate_precedes_group_acl_for_every_row() {
-        let authorizer =
-            crate::authorizer::SimpleAclAuthorizer::new(std::collections::HashSet::new());
+        let authorizer = acl_authorizer();
         let (broker_handle, _dir) = crate::test_support::start_group_broker_no_audit(
             std::sync::Arc::new(crate::test_support::ControllerPeerAllowed(authorizer)),
         )
         .await;
         let broker = broker_handle.broker_arc_for_test();
-        disable_group_version(&broker).await;
+        set_group_version(&broker, 0).await;
         let principal = crate::test_support::principal("nobody");
         let peer = crate::test_support::peer();
         let ctx = crate::test_support::request_context(&principal, &peer, "consumer-client");
@@ -771,8 +758,7 @@ mod tests {
     /// groups in.
     #[tokio::test]
     async fn handle_orders_denied_rows_before_allowed_rows() {
-        let authorizer =
-            crate::authorizer::SimpleAclAuthorizer::new(std::collections::HashSet::new());
+        let authorizer = acl_authorizer();
         let (broker_handle, _dir) = crate::test_support::start_group_broker_no_audit(
             std::sync::Arc::new(crate::test_support::ControllerPeerAllowed(authorizer)),
         )
@@ -837,31 +823,6 @@ mod tests {
         let peer = crate::test_support::peer();
         let ctx = crate::test_support::request_context(&principal, &peer, "admin-client");
 
-        // Flag unset: sentinel preserved even for a clean row.
-        let req_off = request_with_ops(vec!["live-group"], false);
-        let resp_off = handle(&broker, req_off, VERSION, &ctx)
-            .await
-            .expect("ConsumerGroupDescribe handler");
-        assert!(
-            resp_off.groups
-                == vec![DescribedGroup {
-                    group_id: "live-group".into(),
-                    group_state: "Empty".into(),
-                    assignor_name: "uniform".into(),
-                    authorized_operations: i32::MIN,
-                    unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(vec![]),
-                    ..Default::default()
-                }],
-            "{resp_off:?}"
-        );
-
-        // Flag set: bitfield filled from the group's supported operations
-        // (Read, Describe, Delete, DescribeConfigs, AlterConfigs) under
-        // AllowAll.
-        let req_on = request_with_ops(vec!["live-group"], true);
-        let resp_on = handle(&broker, req_on, VERSION, &ctx)
-            .await
-            .expect("ConsumerGroupDescribe handler");
         let expected_bits = authorized_operations_bits(
             authorizer.as_ref(),
             &broker.controller.current_image(),
@@ -870,18 +831,27 @@ mod tests {
             "live-group",
         );
         assert!(expected_bits != i32::MIN);
-        assert!(
-            resp_on.groups
-                == vec![DescribedGroup {
-                    group_id: "live-group".into(),
-                    group_state: "Empty".into(),
-                    assignor_name: "uniform".into(),
-                    authorized_operations: expected_bits,
-                    unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(vec![]),
-                    ..Default::default()
-                }],
-            "{resp_on:?}"
-        );
+        for (include, bits) in [(false, i32::MIN), (true, expected_bits)] {
+            let resp = handle(
+                &broker,
+                request_with_ops(vec!["live-group"], include),
+                VERSION,
+                &ctx,
+            )
+            .await
+            .expect("ConsumerGroupDescribe handler");
+            assert!(
+                resp.groups
+                    == vec![DescribedGroup {
+                        group_id: "live-group".into(),
+                        group_state: "Empty".into(),
+                        assignor_name: "uniform".into(),
+                        authorized_operations: bits,
+                        ..Default::default()
+                    }],
+                "include = {include}: {resp:?}"
+            );
+        }
 
         broker_handle.shutdown().await;
     }

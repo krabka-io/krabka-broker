@@ -125,33 +125,10 @@ impl RemoteLogMetadataManager for SwappableRlmm {
 #[cfg(test)]
 mod tests {
     use assert2::assert;
-    use krabka_remote_storage::{
-        InmemoryRemoteLogMetadataManager, RemoteLogSegmentId, RemoteLogSegmentState,
-    };
-    use uuid::Uuid;
+    use krabka_remote_storage::InmemoryRemoteLogMetadataManager;
 
     use super::*;
-
-    fn tp() -> TopicIdPartition {
-        TopicIdPartition::new(Uuid::from_u128(1), "orders", 0)
-    }
-
-    fn started(id: u128, start: i64, end: i64) -> RemoteLogSegmentMetadata {
-        RemoteLogSegmentMetadata::new(
-            RemoteLogSegmentId::new(tp(), Uuid::from_u128(id)),
-            start,
-            end,
-            end + 1,
-            1,
-            100,
-            krabka_remote_storage::RemoteLogSegmentDetails::new(
-                2048,
-                RemoteLogSegmentState::CopySegmentStarted,
-                maplit::btreemap! {LeaderEpoch(0) => start},
-            ),
-        )
-        .unwrap()
-    }
+    use crate::manager::test_support::{started, tp};
 
     #[test]
     fn delegates_to_initial_then_to_swapped() {

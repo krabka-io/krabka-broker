@@ -163,6 +163,24 @@ mod tests {
         event::Event,
     };
 
+    /// A follower attached to voter 2 at epoch 4 before it resigns.
+    fn following_second_voter() -> (QuorumStateMachine, FakeLog) {
+        let mut m = machine(NodeId(1), &[NodeId(1), NodeId(2), NodeId(3)]);
+        let log = FakeLog {
+            end: 5,
+            last_epoch: 1,
+        };
+        m.on_event(
+            Event::ReceiveBeginQuorumEpoch {
+                leader_id: NodeId(2),
+                leader_epoch: 4,
+            },
+            &log,
+            SimInstant(10),
+        );
+        (m, log)
+    }
+
     #[test]
     fn begin_quorum_epoch_makes_us_follower() {
         let mut m = machine(NodeId(1), &[NodeId(1), NodeId(2), NodeId(3)]);
@@ -204,20 +222,7 @@ mod tests {
 
     #[test]
     fn end_quorum_epoch_triggers_immediate_election() {
-        let mut m = machine(NodeId(1), &[NodeId(1), NodeId(2), NodeId(3)]);
-        // follow leader 2 @ epoch 4 first
-        let log = FakeLog {
-            end: 5,
-            last_epoch: 1,
-        };
-        m.on_event(
-            Event::ReceiveBeginQuorumEpoch {
-                leader_id: NodeId(2),
-                leader_epoch: 4,
-            },
-            &log,
-            SimInstant(10),
-        );
+        let (mut m, log) = following_second_voter();
         let actions = m.on_event(
             Event::ReceiveEndQuorumEpoch {
                 leader_id: NodeId(2),
@@ -351,19 +356,7 @@ mod tests {
     /// can grant the first candidate's pre-vote.
     #[test]
     fn end_quorum_epoch_backs_off_a_later_candidate() {
-        let mut m = machine(NodeId(1), &[NodeId(1), NodeId(2), NodeId(3)]);
-        let log = FakeLog {
-            end: 5,
-            last_epoch: 1,
-        };
-        m.on_event(
-            Event::ReceiveBeginQuorumEpoch {
-                leader_id: NodeId(2),
-                leader_epoch: 4,
-            },
-            &log,
-            SimInstant(10),
-        );
+        let (mut m, log) = following_second_voter();
         let actions = m.on_event(
             Event::ReceiveEndQuorumEpoch {
                 leader_id: NodeId(2),

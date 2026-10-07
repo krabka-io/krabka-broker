@@ -1,16 +1,16 @@
-(* #"/workspace/crates/verified/src/retention/remote_retention_model.rs" 15 0 15 93 *)
+(* #"/workspace/crates/verified/src/retention/remote_retention_model.rs" 16 0 16 93 *)
 
-let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
-let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
-let%span sconvert = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/convert.rs" 274 26 274 51
-let%span sremote_retention_model = "/workspace/crates/verified/src/retention/remote_retention_model.rs" 16 24 16 25
-let%span sremote_retention_model'0 = "/workspace/crates/verified/src/retention/remote_retention_model.rs" 17 15 17 20
-let%span sremote_retention_model'1 = "/workspace/crates/verified/src/retention/remote_retention_model.rs" 19 24 19 48
-let%span sremote_retention_model'2 = "/workspace/crates/verified/src/retention/remote_retention_model.rs" 20 25 20 33
-let%span sremote_retention_model'3 = "/workspace/crates/verified/src/retention/remote_retention_model.rs" 20 25 20 49
-let%span sremote_retention_model'4 = "/workspace/crates/verified/src/retention/remote_retention_model.rs" 21 15 21 20
-let%span sremote_retention_model'5 = "/workspace/crates/verified/src/retention/remote_retention_model.rs" 23 18 23 49
-let%span sremote_retention_model'6 = "/workspace/crates/verified/src/retention/remote_retention_model.rs" 11 10 13 56
+let%span sord = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span sord'0 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sconvert = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/convert.rs" 274 26 274 51
+let%span sremote_retention_model = "/workspace/crates/verified/src/retention/remote_retention_model.rs" 17 24 17 25
+let%span sremote_retention_model'0 = "/workspace/crates/verified/src/retention/remote_retention_model.rs" 18 15 18 20
+let%span sremote_retention_model'1 = "/workspace/crates/verified/src/retention/remote_retention_model.rs" 20 24 20 48
+let%span sremote_retention_model'2 = "/workspace/crates/verified/src/retention/remote_retention_model.rs" 21 25 21 33
+let%span sremote_retention_model'3 = "/workspace/crates/verified/src/retention/remote_retention_model.rs" 21 25 21 49
+let%span sremote_retention_model'4 = "/workspace/crates/verified/src/retention/remote_retention_model.rs" 22 15 22 20
+let%span sremote_retention_model'5 = "/workspace/crates/verified/src/retention/remote_retention_model.rs" 24 18 24 49
+let%span sremote_retention_model'6 = "/workspace/crates/verified/src/retention/remote_retention_model.rs" 12 10 14 56
 
 use creusot.int.Int32
 use creusot.int.Int64
@@ -36,7 +36,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let barrier_cut_expired [#"/workspace/crates/verified/src/retention/remote_retention_model.rs" 15 0 15 93]
+let barrier_cut_expired [#"/workspace/crates/verified/src/retention/remote_retention_model.rs" 16 0 16 93]
   (published_epoch: Int64.t) (retained_cuts: Int32.t) (held_epoch: Int64.t) (return (x: bool)) = (! bb0
   [ bb0 = s0
     [ s0 = [ &_9 <- Int32.le retained_cuts ([%#sremote_retention_model] (0: Int32.t)) ] s1

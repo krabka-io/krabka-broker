@@ -12,7 +12,7 @@ use krabka_protocol::{
 
 pub(super) mod rpc;
 
-use super::{GroupActorHandle, GroupActorMessage, MetadataProvider};
+use super::{GroupActorHandle, MetadataProvider};
 use crate::{
     codes,
     coordinator::unified::{
@@ -190,76 +190,31 @@ pub(super) async fn seed_and_upgrade(
     coord: &Arc<GroupCoordinator>,
     topic: &str,
 ) -> Arc<GroupActorHandle> {
-    use super::super::{
-        classic_state::{ClassicGroup as ClassicState, Member},
-        group::{CoordinatorGroup, GroupKind},
-    };
-
-    let mut cs = ClassicState::new("g");
-    cs.protocol_type = Some("consumer".into());
-    cs.generation_id = 1;
-    cs.add_member(Member::new(
-        "m-classic",
-        "client",
-        "127.0.0.1",
-        std::time::Duration::from_secs(30),
-        std::time::Duration::from_mins(1),
-        vec![("range".into(), subscription_blob(&[topic]))],
-    ));
-    let group = Box::new(CoordinatorGroup::seeded(
-        "g",
-        GroupKind::Classic(cs),
-        HashMap::new(),
-    ));
-    coord.seed_classic("g", group);
-    let handle = coord.find("g").expect("seeded classic actor");
+    let handle = seed_classic_member(coord, "m-classic", topic, None);
 
     // Native consumer heartbeat triggers the in-place upgrade and the
     // reconcile that gives m-classic a target.
-    let (tx, rx) = tokio::sync::oneshot::channel();
-    handle
-        .tx
-        .send(GroupActorMessage::Heartbeat {
-            request: ConsumerGroupHeartbeatRequest {
-                group_id: "g".into(),
-                member_id: String::new(),
-                member_epoch: 0,
-                subscribed_topic_names: Some(vec![topic.into()]),
-                rebalance_timeout_ms: 60_000,
-                ..Default::default()
-            },
-            client_id: "client-a".into(),
-            client_host: String::new(),
-            regex_resolver: crate::coordinator::unified::regex_resolver::no_topic_regex_resolver(),
-            reply: tx,
-        })
-        .await
-        .unwrap();
-    let resp = rx.await.unwrap();
+    let resp = rpc::consumer_heartbeat(&handle, "", 0, Some(topic)).await;
     assert!(resp.error_code == codes::NONE);
 
     // The native heartbeat minted a transient consumer member to drive the
     // upgrade. Have it leave so the group hosts only the classic member(s)
     // under test — otherwise it would claim a share of the partitions.
     let native_id = resp.member_id.expect("native member id");
-    let (tx, rx) = tokio::sync::oneshot::channel();
-    handle
-        .tx
-        .send(GroupActorMessage::Heartbeat {
-            request: ConsumerGroupHeartbeatRequest {
+    assert!(
+        rpc::consumer_request(
+            &handle,
+            ConsumerGroupHeartbeatRequest {
                 group_id: "g".into(),
                 member_id: native_id,
                 member_epoch: -1,
                 ..Default::default()
-            },
-            client_id: "client-a".into(),
-            client_host: String::new(),
-            regex_resolver: crate::coordinator::unified::regex_resolver::no_topic_regex_resolver(),
-            reply: tx,
-        })
+            }
+        )
         .await
-        .unwrap();
-    assert!(rx.await.unwrap().error_code == codes::NONE);
+        .error_code
+            == codes::NONE
+    );
     handle
 }
 
@@ -321,4 +276,48 @@ pub(super) fn seed_classic_member(
     ));
     coord.seed_classic("g", group);
     coord.find("g").expect("seeded classic actor")
+}
+
+/// Seed a stable classic group and report the generation before a leave.
+pub(super) fn seed_stable_classic(
+    coordinator: &Arc<GroupCoordinator>,
+    members: &[&str],
+) -> (Arc<GroupActorHandle>, i32) {
+    let mut group = completing_classic_group(members);
+    group.as_classic_mut().unwrap().state = super::super::classic_state::GroupState::Stable;
+    let generation = group.as_classic().unwrap().generation_id;
+    coordinator.seed_classic("g", Box::new(group));
+    (coordinator.find("g").unwrap(), generation)
+}
+
+/// Spawn consumer-kind, host a classic member, then downgrade. The inspect
+/// reply is the barrier after the leave, so callers see the live classic kind.
+pub(super) async fn spawn_and_downgrade(
+    coordinator: &Arc<GroupCoordinator>,
+) -> (Arc<GroupActorHandle>, super::ClassicView) {
+    let handle = coordinator.get_or_create_consumer("g");
+    assert!(
+        handle.kind == super::GroupKindTag::Consumer,
+        "the group must be spawned consumer-kind"
+    );
+    let joined = rpc::consumer_heartbeat(&handle, "", 0, Some("t")).await;
+    assert!(joined.error_code == codes::NONE);
+    let native = joined.member_id.expect("native member id");
+    let hosted = rpc::classic_join(&handle, "m-classic", "t").await;
+    assert!(hosted.error_code == codes::NONE);
+    let left = rpc::consumer_heartbeat(&handle, &native, -1, None).await;
+    assert!(left.error_code == codes::NONE);
+    let view = rpc::classic_inspect(&handle).await;
+    (handle, view)
+}
+
+/// Seed a convertible classic member and join its first native consumer.
+pub(super) async fn seed_classic_with_native(
+    coordinator: &Arc<GroupCoordinator>,
+) -> (Arc<GroupActorHandle>, String) {
+    let handle = seed_classic_member(coordinator, "m-classic", "t", None);
+    let response = rpc::consumer_heartbeat(&handle, "", 0, Some("t")).await;
+    assert!(response.error_code == codes::NONE);
+    let native = response.member_id.expect("native member id");
+    (handle, native)
 }

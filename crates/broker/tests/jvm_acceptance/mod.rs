@@ -59,10 +59,13 @@ pub(crate) use self::{
     docker::{
         ClientPropsFile, KAFKA_IMAGE, KAFKA_IMAGE_ELR, KAFKA_IMAGE_LEGACY, KAFKA_IMAGE_TIERED,
         KAFKA_IMAGE_TXN, STREAMS_APP_JAVA, TRANSACTIONAL_PRODUCER_JAVA, TempFileMount,
+        add_console_acl, authenticated_console_round_trip, consume_console, create_console_topic,
         docker_run_kafka_tool, docker_run_kafka_tool_allowing_failure,
         docker_run_kafka_tool_allowing_failure_with_image, docker_run_kafka_tool_with_image,
         docker_run_kafka_tool_with_image_and_mount, docker_run_kafka_tool_with_image_and_mounts,
-        docker_run_kafka_tool_with_mount, nc_check_connectivity, tool_output, write_client_props,
+        docker_run_kafka_tool_with_mount, nc_check_connectivity, numbered_payload, produce_console,
+        provision_console_scram, provision_ssl_scram_sha512, tool_output,
+        verify_console_reassignment, write_client_props, write_plain_props, write_ssl_sasl_props,
         write_temp_file,
     },
     minio::{
@@ -77,8 +80,8 @@ pub(crate) use self::{
     },
     sasl::{
         oauthbearer_jaas, plain_jaas, scram_jaas, start_dual_mech_broker,
-        start_dual_mech_broker_with_reauth, start_oauthbearer_broker, start_sasl_plaintext_broker,
-        start_sasl_plaintext_broker_with_super_user,
+        start_dual_mech_broker_with_reauth, start_oauthbearer_broker, start_plain_acl_topic,
+        start_sasl_plaintext_broker, start_sasl_plaintext_broker_with_super_user,
     },
     three_broker_cluster::{
         start_three_broker_sasl_plaintext_jvm_cluster,

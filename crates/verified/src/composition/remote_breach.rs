@@ -1,7 +1,7 @@
 use creusot_std::prelude::*;
 
 #[cfg(creusot)]
-use super::trim::{trim_frontier, trim_well_formed};
+use super::trim::{trim_frontier, trim_store_frontiers_valid, trim_well_formed};
 use super::{
     DeleteRecordsTrimApplication, DeleteRecordsTrimDecision, DeleteRecordsTrimFacts,
     delete_records_trim_application, delete_records_trim_decision, trim::trim_steps_converge,
@@ -22,9 +22,7 @@ type RemoteBreachPlan = (
 /// prefix below the published floor. Store progress alone cannot authorize it.
 /// Trace/publication observations mean durable completion; truthful metadata,
 /// actual I/O and atomic publication remain host obligations.
-#[requires(0 <= stores.0@ && stores.0@ <= facts.high_watermark@ && stores.0@ <= facts.log_end@)]
-#[requires(0 <= stores.1@ && stores.1@ <= facts.high_watermark@ && stores.1@ <= facts.log_end@)]
-#[requires(facts.has_delivery_watermark ==> stores.0@ <= facts.delivery_watermark@ && stores.1@ <= facts.delivery_watermark@)]
+#[requires(trim_store_frontiers_valid(facts, stores.0@, stores.1@))]
 #[requires(match previous { None => true, Some(floor) => 0 <= floor@ && floor@ <= stores.0@ && floor@ <= stores.1@ })]
 #[requires(forall<i: Int> 0 <= i && i < finished@.len() ==> 0 <= finished@[i].0@ && finished@[i].0@ <= finished@[i].1@)]
 #[ensures(match result {

@@ -32,7 +32,7 @@ use std::collections::{HashMap, HashSet};
 
 use krabka_protocol::owned::{
     share_fetch_request::{FetchPartition, ShareFetchRequest},
-    share_fetch_response::{LeaderIdAndEpoch, NodeEndpoint, ShareFetchResponse},
+    share_fetch_response::{LeaderIdAndEpoch, ShareFetchResponse},
 };
 
 mod acknowledge;
@@ -72,7 +72,7 @@ pub(crate) use self::{
     acknowledge::{
         AckApplication, Renewal, acknowledgement_batches_are_valid, apply_acknowledgements,
     },
-    leader_hint::{current_leader, leader_endpoints, names_the_leader},
+    leader_hint::{current_leader, names_the_leader},
 };
 use self::{
     acquire::{AcquireContext, acquire_records},
@@ -327,7 +327,7 @@ pub(crate) async fn handle(
             };
         }
     }
-    let node_endpoints = leader_endpoints(
+    let node_endpoints = crate::handlers::leader_endpoints(
         &image,
         ctx.connection_listener_name,
         &broker.config.inter_broker_listener_name,
@@ -335,16 +335,7 @@ pub(crate) async fn handle(
             .iter()
             .filter(|p| names_the_leader(p.out.error_code))
             .map(|p| p.out.current_leader.leader_id),
-    )
-    .into_iter()
-    .map(|endpoint| NodeEndpoint {
-        node_id: endpoint.node_id,
-        host: endpoint.host,
-        port: endpoint.port,
-        rack: endpoint.rack,
-        ..Default::default()
-    })
-    .collect();
+    );
 
     // Group pending rows back into per-topic responses, preserving first-seen
     // topic order.

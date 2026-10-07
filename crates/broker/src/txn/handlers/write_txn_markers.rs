@@ -606,21 +606,7 @@ mod tests {
         .await
         .expect("append transactional offset");
 
-        let req = WriteTxnMarkersRequest {
-            markers: vec![WritableTxnMarker {
-                producer_id: 91,
-                producer_epoch: 4,
-                transaction_result: true,
-                transaction_version: 1,
-                topics: vec![WritableTxnMarkerTopic {
-                    name: OFFSETS_TOPIC.into(),
-                    partition_indexes: vec![offsets_partition],
-                    ..Default::default()
-                }],
-                ..Default::default()
-            }],
-            ..Default::default()
-        };
+        let req = offsets_commit_marker(offsets_partition);
         let response = handle_allowed(&broker, req).await.expect("commit marker");
         assert!(response.markers[0].topics[0].partitions[0].error_code == codes::NONE);
 
@@ -841,21 +827,7 @@ mod tests {
             ack.await.expect("AddPendingTxnOffsets ack");
         }
 
-        let req = WriteTxnMarkersRequest {
-            markers: vec![WritableTxnMarker {
-                producer_id: 91,
-                producer_epoch: 4,
-                transaction_result: true,
-                transaction_version: 1,
-                topics: vec![WritableTxnMarkerTopic {
-                    name: OFFSETS_TOPIC.into(),
-                    partition_indexes: vec![offsets_partition],
-                    ..Default::default()
-                }],
-                ..Default::default()
-            }],
-            ..Default::default()
-        };
+        let req = offsets_commit_marker(offsets_partition);
         let response = handle_allowed(&broker, req).await.expect("commit marker");
         assert!(response.markers[0].topics[0].partitions[0].error_code == codes::NONE);
 
@@ -883,5 +855,23 @@ mod tests {
             assert!(offsets.pending_txn.is_empty());
         }
         broker_handle.shutdown().await;
+    }
+    fn offsets_commit_marker(offsets_partition: i32) -> WriteTxnMarkersRequest {
+        use crate::coordinator::bootstrap::OFFSETS_TOPIC;
+        WriteTxnMarkersRequest {
+            markers: vec![WritableTxnMarker {
+                producer_id: 91,
+                producer_epoch: 4,
+                transaction_result: true,
+                transaction_version: 1,
+                topics: vec![WritableTxnMarkerTopic {
+                    name: OFFSETS_TOPIC.into(),
+                    partition_indexes: vec![offsets_partition],
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }],
+            ..Default::default()
+        }
     }
 }

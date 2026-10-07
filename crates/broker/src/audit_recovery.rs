@@ -70,49 +70,22 @@ fn tail_window_start(
 
 #[cfg(test)]
 mod tests {
-    use std::sync::{
-        Arc, Mutex,
-        atomic::{AtomicI32, AtomicU64},
-    };
+    use std::sync::Arc;
 
     use assert2::assert;
     use bytes::Bytes;
     use krabka_audit::chain::{GENESIS_HEAD, to_hex};
-    use krabka_ids::PartitionIndex;
-    use krabka_log::{Log, LogConfig, Offset};
+    use krabka_log::Offset;
     use krabka_protocol::records::{Record, RecordBatch, RecordHeader};
-    use tokio::sync::{Notify, mpsc};
+    use tokio::sync::Notify;
 
     use super::*;
-    use crate::delivery::DeliveryHandles;
 
     fn test_partition() -> (Partition, tempfile::TempDir) {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let log = Log::open(dir.path(), LogConfig::default()).expect("open log");
-        let (tx, _rx) = mpsc::channel(1);
-        let writer = tokio::spawn(async {});
-        let p = Partition {
-            topic: "__audit".into(),
-            index: PartitionIndex(0),
-            log_dir: Arc::new(arc_swap::ArcSwap::from_pointee(dir.path().to_path_buf())),
-            log: Arc::new(Mutex::new(log)),
-            writer_tx: tx,
-            marker_materialization: Arc::new(tokio::sync::Mutex::new(
-                std::collections::HashMap::default(),
-            )),
-            append_notify: Arc::new(Notify::new()),
-            replica_state: Arc::new(tokio::sync::Mutex::new(
-                crate::replica_state::ReplicaState::new(),
-            )),
-            hw_advance_notify: Arc::new(Notify::new()),
-            current_leader: Arc::new(AtomicU64::new(0)),
-            current_leader_epoch: Arc::new(AtomicI32::new(0)),
-            delivery: DeliveryHandles::new(),
-            replication_target: crate::partition::initial_replication_target(None),
-            diskless: false,
-            writer_handle: Arc::new(Mutex::new(Some(writer))),
-        };
-        (p, dir)
+        let (mut partition, dir) =
+            crate::partition::test_support::test_partition(Arc::new(Notify::new()));
+        partition.topic = "__audit".into();
+        (partition, dir)
     }
 
     fn header(key: &str, value: impl Into<Bytes>) -> RecordHeader {

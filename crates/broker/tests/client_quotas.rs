@@ -53,6 +53,7 @@ mod data_plane;
 mod kafka_wire;
 #[path = "client_quotas/quota_admin.rs"]
 mod quota_admin;
+mod support;
 #[path = "client_quotas/throttling.rs"]
 mod throttling;
 

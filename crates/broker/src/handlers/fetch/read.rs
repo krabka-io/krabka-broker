@@ -1105,24 +1105,7 @@ mod tests {
     /// value the caller left in it cannot leak out either.
     #[tokio::test]
     async fn do_read_reports_a_fetch_below_the_log_start_out_of_range() {
-        let (partition, _dir) =
-            crate::partition::test_support::test_partition(Arc::new(tokio::sync::Notify::new()));
-        let limit = {
-            let mut log = partition.log.lock().expect("log mutex poisoned");
-            log.append(&mut RecordBatch {
-                records: vec![Record {
-                    offset_delta: 0,
-                    value: Some(Bytes::from_static(b"deleted by retention")),
-                    ..Record::default()
-                }],
-                ..RecordBatch::default()
-            })
-            .expect("append the batch retention then deletes");
-            let limit = log.log_end_offset();
-            log.trim_to_offset(limit)
-                .expect("trim the whole log away from under the fetch");
-            limit
-        };
+        let (partition, _dir, limit) = retained_partition();
         partition.replica_state.lock().await.hw = limit;
 
         let refused = PartitionData {
@@ -1331,24 +1314,7 @@ mod tests {
     /// online, and not an error that fails the whole fetch.
     #[tokio::test]
     async fn a_read_that_loses_the_race_with_retention_is_out_of_range() {
-        let (partition, dir) =
-            crate::partition::test_support::test_partition(Arc::new(tokio::sync::Notify::new()));
-        let limit = {
-            let mut log = partition.log.lock().expect("log mutex poisoned");
-            log.append(&mut RecordBatch {
-                records: vec![Record {
-                    offset_delta: 0,
-                    value: Some(Bytes::from_static(b"deleted by retention")),
-                    ..Record::default()
-                }],
-                ..RecordBatch::default()
-            })
-            .expect("append the batch retention then deletes");
-            let limit = log.log_end_offset();
-            log.trim_to_offset(limit)
-                .expect("advance the log start past the fetch offset");
-            limit
-        };
+        let (partition, dir, limit) = retained_partition();
         let log_dirs = LogDirRegistry::probe(&[dir.path().to_path_buf()]);
 
         let error = super::read_records(&partition.log, &whole_log_read(limit))
@@ -1385,5 +1351,30 @@ mod tests {
         // window below the log end.
         assert!(super::deliverable_offset(&mut log, Offset(3), false, now_ms) == Offset(3));
         assert!(super::deliverable_offset(&mut log, Offset(4), false, now_ms) == Offset(4));
+    }
+    fn retained_partition() -> (
+        crate::partition::Partition,
+        tempfile::TempDir,
+        krabka_log::Offset,
+    ) {
+        let (partition, dir) =
+            crate::partition::test_support::test_partition(Arc::new(tokio::sync::Notify::new()));
+        let limit = {
+            let mut log = partition.log.lock().expect("log mutex poisoned");
+            log.append(&mut RecordBatch {
+                records: vec![Record {
+                    offset_delta: 0,
+                    value: Some(Bytes::from_static(b"deleted by retention")),
+                    ..Record::default()
+                }],
+                ..RecordBatch::default()
+            })
+            .expect("append the batch retention then deletes");
+            let limit = log.log_end_offset();
+            log.trim_to_offset(limit)
+                .expect("trim the whole log away from under the fetch");
+            limit
+        };
+        (partition, dir, limit)
     }
 }

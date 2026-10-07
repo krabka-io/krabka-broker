@@ -1,53 +1,48 @@
-(* #"/workspace/crates/verified/src/composition/controller_session.rs" 53 0 60 27 *)
+(* #"/workspace/crates/verified/src/composition/controller_session.rs" 47 0 54 27 *)
 
-let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
-let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span sord = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span sord'0 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
 let%span sacl_decision = "/workspace/crates/verified/src/authz/acl_decision.rs" 123 10 131 1
-let%span scontroller_session = "/workspace/crates/verified/src/composition/controller_session.rs" 61 27 67 5
-let%span scontroller_session'0 = "/workspace/crates/verified/src/composition/controller_session.rs" 68 24 68 34
-let%span scontroller_session'1 = "/workspace/crates/verified/src/composition/controller_session.rs" 76 16 76 23
-let%span scontroller_session'2 = "/workspace/crates/verified/src/composition/controller_session.rs" 82 14 82 34
-let%span scontroller_session'3 = "/workspace/crates/verified/src/composition/controller_session.rs" 83 14 83 28
-let%span scontroller_session'4 = "/workspace/crates/verified/src/composition/controller_session.rs" 79 16 81 99
-let%span scontroller_session'5 = "/workspace/crates/verified/src/composition/controller_session.rs" 78 16 78 77
-let%span scontroller_session'6 = "/workspace/crates/verified/src/composition/controller_session.rs" 77 16 77 63
-let%span scontroller_session'7 = "/workspace/crates/verified/src/composition/controller_session.rs" 84 59 84 70
-let%span scontroller_session'8 = "/workspace/crates/verified/src/composition/controller_session.rs" 84 59 84 72
-let%span scontroller_session'9 = "/workspace/crates/verified/src/composition/controller_session.rs" 84 55 84 57
-let%span scontroller_session'10 = "/workspace/crates/verified/src/composition/controller_session.rs" 84 12 84 73
-let%span scontroller_session'11 = "/workspace/crates/verified/src/composition/controller_session.rs" 88 25 88 36
-let%span scontroller_session'12 = "/workspace/crates/verified/src/composition/controller_session.rs" 88 25 88 38
-let%span scontroller_session'13 = "/workspace/crates/verified/src/composition/controller_session.rs" 88 12 88 39
-let%span scontroller_session'14 = "/workspace/crates/verified/src/composition/controller_session.rs" 87 8 90 10
-let%span scontroller_session'15 = "/workspace/crates/verified/src/composition/controller_session.rs" 91 13 91 14
-let%span scontroller_session'16 = "/workspace/crates/verified/src/composition/controller_session.rs" 91 8 91 14
-let%span scontroller_session'17 = "/workspace/crates/verified/src/composition/controller_session.rs" 26 11 26 97
-let%span scontroller_session'18 = "/workspace/crates/verified/src/composition/controller_session.rs" 27 11 27 97
-let%span scontroller_session'19 = "/workspace/crates/verified/src/composition/controller_session.rs" 28 11 29 95
-let%span scontroller_session'20 = "/workspace/crates/verified/src/composition/controller_session.rs" 30 11 31 105
-let%span scontroller_session'21 = "/workspace/crates/verified/src/composition/controller_session.rs" 32 10 34 100
-let%span scontroller_session'22 = "/workspace/crates/verified/src/composition/controller_session.rs" 35 10 39 1
-let%span scontroller_session'23 = "/workspace/crates/verified/src/composition/controller_session.rs" 40 10 40 44
-let%span scontroller_session'24 = "/workspace/crates/verified/src/composition/controller_session.rs" 41 10 44 1
-let%span scontroller_session'25 = "/workspace/crates/verified/src/composition/controller_session.rs" 45 10 49 1
-let%span scontroller_session'26 = "/workspace/crates/verified/src/composition/controller_session.rs" 50 10 52 95
-let%span scontroller_session'27 = "/workspace/crates/verified/src/authz/controller_session.rs" 7 10 10 1
-let%span swell_founded = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/well_founded.rs" 43 8 43 33
-let%span sslice = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 331 18 331 22
-let%span svec = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 104 18 104 36
-let%span svec'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 18 14 18 41
-let%span svec'1 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 118 18 118 48
-let%span sjwks_publication = "/workspace/crates/verified/src/composition/jwks_publication.rs" 72 11 72 97
-let%span sjwks_publication'0 = "/workspace/crates/verified/src/composition/jwks_publication.rs" 73 11 73 97
-let%span sjwks_publication'1 = "/workspace/crates/verified/src/composition/jwks_publication.rs" 74 11 75 95
-let%span sjwks_publication'2 = "/workspace/crates/verified/src/composition/jwks_publication.rs" 76 11 77 105
-let%span sjwks_publication'3 = "/workspace/crates/verified/src/composition/jwks_publication.rs" 78 10 78 112
-let%span sjwks_publication'4 = "/workspace/crates/verified/src/composition/jwks_publication.rs" 79 10 81 100
-let%span sjwks_publication'5 = "/workspace/crates/verified/src/composition/jwks_publication.rs" 82 10 90 1
-let%span sjwks_publication'6 = "/workspace/crates/verified/src/composition/jwks_publication.rs" 22 10 22 16
-let%span sjwks_publication'7 = "/workspace/crates/verified/src/composition/jwks_publication.rs" 19 11 19 49
-let%span sjwks_publication'8 = "/workspace/crates/verified/src/composition/jwks_publication.rs" 20 10 20 41
-let%span sjwks_publication'9 = "/workspace/crates/verified/src/composition/jwks_publication.rs" 21 10 21 80
+let%span scontroller_session = "/workspace/crates/verified/src/composition/controller_session.rs" 55 27 61 5
+let%span scontroller_session'0 = "/workspace/crates/verified/src/composition/controller_session.rs" 62 24 62 34
+let%span scontroller_session'1 = "/workspace/crates/verified/src/composition/controller_session.rs" 70 16 70 23
+let%span scontroller_session'2 = "/workspace/crates/verified/src/composition/controller_session.rs" 76 14 76 34
+let%span scontroller_session'3 = "/workspace/crates/verified/src/composition/controller_session.rs" 77 14 77 28
+let%span scontroller_session'4 = "/workspace/crates/verified/src/composition/controller_session.rs" 73 16 75 99
+let%span scontroller_session'5 = "/workspace/crates/verified/src/composition/controller_session.rs" 72 16 72 77
+let%span scontroller_session'6 = "/workspace/crates/verified/src/composition/controller_session.rs" 71 16 71 63
+let%span scontroller_session'7 = "/workspace/crates/verified/src/composition/controller_session.rs" 78 59 78 70
+let%span scontroller_session'8 = "/workspace/crates/verified/src/composition/controller_session.rs" 78 59 78 72
+let%span scontroller_session'9 = "/workspace/crates/verified/src/composition/controller_session.rs" 78 55 78 57
+let%span scontroller_session'10 = "/workspace/crates/verified/src/composition/controller_session.rs" 78 12 78 73
+let%span scontroller_session'11 = "/workspace/crates/verified/src/composition/controller_session.rs" 82 25 82 36
+let%span scontroller_session'12 = "/workspace/crates/verified/src/composition/controller_session.rs" 82 25 82 38
+let%span scontroller_session'13 = "/workspace/crates/verified/src/composition/controller_session.rs" 82 12 82 39
+let%span scontroller_session'14 = "/workspace/crates/verified/src/composition/controller_session.rs" 81 8 84 10
+let%span scontroller_session'15 = "/workspace/crates/verified/src/composition/controller_session.rs" 85 13 85 14
+let%span scontroller_session'16 = "/workspace/crates/verified/src/composition/controller_session.rs" 85 8 85 14
+let%span scontroller_session'17 = "/workspace/crates/verified/src/composition/controller_session.rs" 25 11 25 67
+let%span scontroller_session'18 = "/workspace/crates/verified/src/composition/controller_session.rs" 26 10 28 100
+let%span scontroller_session'19 = "/workspace/crates/verified/src/composition/controller_session.rs" 29 10 33 1
+let%span scontroller_session'20 = "/workspace/crates/verified/src/composition/controller_session.rs" 34 10 34 44
+let%span scontroller_session'21 = "/workspace/crates/verified/src/composition/controller_session.rs" 35 10 38 1
+let%span scontroller_session'22 = "/workspace/crates/verified/src/composition/controller_session.rs" 39 10 43 1
+let%span scontroller_session'23 = "/workspace/crates/verified/src/composition/controller_session.rs" 44 10 46 95
+let%span scontroller_session'24 = "/workspace/crates/verified/src/authz/controller_session.rs" 7 10 10 1
+let%span swell_founded = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/well_founded.rs" 43 8 43 33
+let%span sslice = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 331 18 331 22
+let%span svec = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 104 18 104 36
+let%span svec'0 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 18 14 18 41
+let%span svec'1 = "/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 118 18 118 48
+let%span sjwks_publication = "/workspace/crates/verified/src/composition/jwks_publication.rs" 91 11 91 67
+let%span sjwks_publication'0 = "/workspace/crates/verified/src/composition/jwks_publication.rs" 92 10 92 112
+let%span sjwks_publication'1 = "/workspace/crates/verified/src/composition/jwks_publication.rs" 93 10 95 100
+let%span sjwks_publication'2 = "/workspace/crates/verified/src/composition/jwks_publication.rs" 96 10 104 1
+let%span sjwks_publication'3 = "/workspace/crates/verified/src/composition/jwks_publication.rs" 75 8 80 109
+let%span sjwks_publication'4 = "/workspace/crates/verified/src/composition/jwks_publication.rs" 22 10 22 16
+let%span sjwks_publication'5 = "/workspace/crates/verified/src/composition/jwks_publication.rs" 19 11 19 49
+let%span sjwks_publication'6 = "/workspace/crates/verified/src/composition/jwks_publication.rs" 20 10 20 41
+let%span sjwks_publication'7 = "/workspace/crates/verified/src/composition/jwks_publication.rs" 21 10 21 80
 
 use creusot.int.Int64
 use creusot.int.UInt64
@@ -90,57 +85,58 @@ type tup2_u64_u64 = { f0: UInt64.t; f1: UInt64.t }
 
 type tup2_OAuthSessionDecision_tup2_u64_u64 = { f0'0: t_OAuthSessionDecision; f1'0: tup2_u64_u64 }
 
-predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other <= self
+predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord'0] other <= self
 
 meta "rewrite_def" predicate ge_log_Int
 
-predicate gt_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord'0] other < self
+predicate gt_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other < self
 
 meta "rewrite_def" predicate gt_log_Int
+
+predicate initial_session_input_valid [#"/workspace/crates/verified/src/composition/jwks_publication.rs" 69 0 73 9] (facts: t_OAuthSessionFacts) (cache: t_JwksCacheFacts) (completed: int) =
+  [%#sjwks_publication'3] Int64.to_int cache.now_ms'0 = Int64.to_int facts.now_ms
+  /\ ge_log_Int (Int64.to_int facts.now_ms) 0
+  /\ ge_log_Int completed (Int64.to_int facts.now_ms)
+  /\ ComputerDivision.mod (UInt64.t'int cache.generation_before'0) 2 = 0
+  /\ cache.generation_after'0 = cache.generation_before'0
+  /\ (not cache.expiry_enabled'0
+    \/ ge_log_Int (Int64.to_int cache.expiry_ms'0) 0
+    /\ gt_log_Int (Int64.to_int cache.last_successful_fetch_ms'0) 0
+    /\ Int64.to_int cache.last_successful_fetch_ms'0 <= Int64.to_int facts.now_ms)
+  /\ facts.expiry = Present
+  /\ gt_log_Int (Int64.to_int facts.token_expires_at_ms) completed
+  /\ facts.authentication = Initial /\ facts.cap = Disabled
 
 function successful_fetches [#"/workspace/crates/verified/src/composition/jwks_publication.rs" 23 0 23 61] (fetches: Seq.seq bool) (prefix: int) : int
 
 axiom successful_fetches_spec:
-  forall fetches: Seq.seq bool, prefix: int [successful_fetches fetches prefix]. ([%#sjwks_publication'7] 0 <= prefix
+  forall fetches: Seq.seq bool, prefix: int [successful_fetches fetches prefix]. ([%#sjwks_publication'5] 0 <= prefix
       /\ prefix <= Seq.length fetches)
-    -> ([%#sjwks_publication'8] 0 <= successful_fetches fetches prefix /\ successful_fetches fetches prefix <= prefix)
+    -> ([%#sjwks_publication'6] 0 <= successful_fetches fetches prefix /\ successful_fetches fetches prefix <= prefix)
 
 axiom successful_fetches_spec'0:
-  forall fetches: Seq.seq bool, prefix: int [successful_fetches fetches prefix]. ([%#sjwks_publication'7] 0 <= prefix
+  forall fetches: Seq.seq bool, prefix: int [successful_fetches fetches prefix]. ([%#sjwks_publication'5] 0 <= prefix
       /\ prefix <= Seq.length fetches)
-    -> ([%#sjwks_publication'9] (successful_fetches fetches prefix = 0)
+    -> ([%#sjwks_publication'7] (successful_fetches fetches prefix = 0)
     = (forall i: int. 0 <= i /\ i < prefix -> not Seq.get fetches i))
 
 constant const_MAX: UInt64.t = (18446744073709551615: UInt64.t)
 
 let published_keys_bound_oauth_session (facts: t_OAuthSessionFacts) (cache: t_JwksCacheFacts) (completed_ms: Int64.t)
   (fetches: Slice64.slice bool) (begin_unfinished_writer: bool) (return (x: tup2_OAuthSessionDecision_tup2_u64_u64)) =
-{[@stop_split] [@expl:published_keys_bound_oauth_session requires] ([@stop_split] [@expl:published_keys_bound_oauth_session requires #0] [%#sjwks_publication] Int64.to_int cache.now_ms'0
-      = Int64.to_int facts.now_ms
-    /\ ge_log_Int (Int64.to_int facts.now_ms) 0 /\ ge_log_Int (Int64.to_int completed_ms) (Int64.to_int facts.now_ms))
-  /\ ([@stop_split] [@expl:published_keys_bound_oauth_session requires #1] [%#sjwks_publication'0] ComputerDivision.mod (UInt64.t'int cache.generation_before'0) 2
-      = 0
-    /\ cache.generation_after'0 = cache.generation_before'0)
-  /\ ([@stop_split] [@expl:published_keys_bound_oauth_session requires #2] [%#sjwks_publication'1] not cache.expiry_enabled'0
-    \/ ge_log_Int (Int64.to_int cache.expiry_ms'0) 0
-    /\ gt_log_Int (Int64.to_int cache.last_successful_fetch_ms'0) 0
-    /\ Int64.to_int cache.last_successful_fetch_ms'0 <= Int64.to_int facts.now_ms)
-  /\ ([@stop_split] [@expl:published_keys_bound_oauth_session requires #3] [%#sjwks_publication'2] facts.expiry
-    = Present
-  /\ gt_log_Int (Int64.to_int facts.token_expires_at_ms) (Int64.to_int completed_ms)
-  /\ facts.authentication = Initial /\ facts.cap = Disabled)}
+{[@stop_split] [@expl:published_keys_bound_oauth_session requires] [%#sjwks_publication] initial_session_input_valid facts cache (Int64.to_int completed_ms)}
   any
   [ return (result: tup2_OAuthSessionDecision_tup2_u64_u64) ->
-  {[@stop_split] [@expl:published_keys_bound_oauth_session ensures] ([@stop_split] [@expl:published_keys_bound_oauth_session ensures #0] [%#sjwks_publication'3] ge_log_Int (UInt64.t'int result.f1'0.f0) (UInt64.t'int cache.generation_before'0)
+  {[@stop_split] [@expl:published_keys_bound_oauth_session ensures] ([@stop_split] [@expl:published_keys_bound_oauth_session ensures #0] [%#sjwks_publication'0] ge_log_Int (UInt64.t'int result.f1'0.f0) (UInt64.t'int cache.generation_before'0)
       /\ UInt64.t'int result.f1'0.f1 <= successful_fetches (Slice64.view fetches) (Seq.length (Slice64.view fetches)))
-    /\ ([@stop_split] [@expl:published_keys_bound_oauth_session ensures #1] [%#sjwks_publication'4] (result.f0'0
+    /\ ([@stop_split] [@expl:published_keys_bound_oauth_session ensures #1] [%#sjwks_publication'1] (result.f0'0
         = Reject)
       = (gt_log_Int (UInt64.t'int result.f1'0.f1) 0
       \/ begin_unfinished_writer /\ UInt64.t'int cache.generation_before'0 < UInt64.t'int const_MAX - 1
       \/ cache.expiry_enabled'0
       /\ gt_log_Int (Int64.to_int completed_ms
       - Int64.to_int cache.last_successful_fetch_ms'0) (Int64.to_int cache.expiry_ms'0)))
-    /\ ([@stop_split] [@expl:published_keys_bound_oauth_session ensures #2] [%#sjwks_publication'5] match result.f0'0 with
+    /\ ([@stop_split] [@expl:published_keys_bound_oauth_session ensures #2] [%#sjwks_publication'2] match result.f0'0 with
       | Reject -> true
       | Admit session_lifetime_ms effective_expires_at_ms -> result.f1'0.f0 = cache.generation_before'0
       /\ UInt64.t'int result.f1'0.f1 = 0
@@ -199,7 +195,7 @@ type t_Option_i64 = None | Some Int64.t
 let controller_request_admission (expiry_ms: t_Option_i64) (api_key: Int16.t) (now_ms'1: Int64.t) (return (x: bool)) =
 any
   [ return (result: bool) ->
-  {[@stop_split] [@expl:controller_request_admission ensures] [%#scontroller_session'27] result
+  {[@stop_split] [@expl:controller_request_admission ensures] [%#scontroller_session'24] result
     = match expiry_ms with
       | None -> true
       | Some at' -> Int64.to_int now_ms'1 < Int64.to_int at'
@@ -231,30 +227,17 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let published_controller_session_bounds_quorum_requests [#"/workspace/crates/verified/src/composition/controller_session.rs" 53 0 60 27]
+let published_controller_session_bounds_quorum_requests [#"/workspace/crates/verified/src/composition/controller_session.rs" 47 0 54 27]
   (facts: t_OAuthSessionFacts) (cache: t_JwksCacheFacts) (completed_ms: Int64.t) (fetches: Slice64.slice bool)
   (begin_unfinished_writer: bool) (requests: Slice64.slice tup2_i64_AclFacts)
   (return (x: tup3_Option_i64_Vec_bool_Global_tup2_u64_u64)) =
-{[@stop_split] [@expl:published_controller_session_bounds_quorum_requests requires] ([@stop_split] [@expl:published_controller_session_bounds_quorum_requests requires #0] [%#scontroller_session'17] Int64.to_int cache.now_ms'0
-      = Int64.to_int facts.now_ms
-    /\ ge_log_Int (Int64.to_int facts.now_ms) 0 /\ ge_log_Int (Int64.to_int completed_ms) (Int64.to_int facts.now_ms))
-  /\ ([@stop_split] [@expl:published_controller_session_bounds_quorum_requests requires #1] [%#scontroller_session'18] ComputerDivision.mod (UInt64.t'int cache.generation_before'0) 2
-      = 0
-    /\ cache.generation_after'0 = cache.generation_before'0)
-  /\ ([@stop_split] [@expl:published_controller_session_bounds_quorum_requests requires #2] [%#scontroller_session'19] not cache.expiry_enabled'0
-    \/ ge_log_Int (Int64.to_int cache.expiry_ms'0) 0
-    /\ gt_log_Int (Int64.to_int cache.last_successful_fetch_ms'0) 0
-    /\ Int64.to_int cache.last_successful_fetch_ms'0 <= Int64.to_int facts.now_ms)
-  /\ ([@stop_split] [@expl:published_controller_session_bounds_quorum_requests requires #3] [%#scontroller_session'20] facts.expiry
-    = Present
-  /\ gt_log_Int (Int64.to_int facts.token_expires_at_ms) (Int64.to_int completed_ms)
-  /\ facts.authentication = Initial /\ facts.cap = Disabled)}
+{[@stop_split] [@expl:published_controller_session_bounds_quorum_requests requires] [%#scontroller_session'17] initial_session_input_valid facts cache (Int64.to_int completed_ms)}
   (! bb0
   [ bb0 = s0
     [ s0 = published_keys_bound_oauth_session [%#scontroller_session] {facts} {cache} {completed_ms} {fetches}
-        {begin_unfinished_writer} (fun (_x: tup2_OAuthSessionDecision_tup2_u64_u64) -> [ &_46 <- _x ] s1)
-    | s1 = [ &session <- _46.f0'0 ] s2
-    | s2 = [ &trace <- _46.f1'0 ] s3
+        {begin_unfinished_writer} (fun (_x: tup2_OAuthSessionDecision_tup2_u64_u64) -> [ &_32 <- _x ] s1)
+    | s1 = [ &session <- _32.f0'0 ] s2
+    | s2 = [ &trace <- _32.f1'0 ] s3
     | s3 = new_bool [%#scontroller_session'0] (fun (_x: t_Vec_bool_Global) -> [ &responses <- _x ] s4)
     | s4 = any
       [ br0 -> {session = Reject} (! bb6) | br1 (x0: Int64.t) (x1: Int64.t) -> {session = Admit x0 x1} (! bb5) ] ]
@@ -282,50 +265,50 @@ let published_controller_session_bounds_quorum_requests [#"/workspace/crates/ver
         /\ ((Seq.get (Slice64.view requests) j).f1'1.saw_allow
         \/ (Seq.get (Slice64.view requests) j).f1'1.default_decision = Allow))}
       (! [ &variant_old_bb8 <- [%#scontroller_session'2] Seq.length (Slice64.view requests) - UInt64.t'int i ] s0)
-      [ s0 = len_tup2_i64_AclFacts [%#scontroller_session'3] {requests} (fun (_x: UInt64.t) -> [ &_81 <- _x ] s1)
-      | s1 = [ &_79 <- UInt64.lt i _81 ] s2
-      | s2 = any [ br0 -> {_79 = false} (! bb24) | br1 -> {_79} (! bb11) ] ]
+      [ s0 = len_tup2_i64_AclFacts [%#scontroller_session'3] {requests} (fun (_x: UInt64.t) -> [ &_67 <- _x ] s1)
+      | s1 = [ &_65 <- UInt64.lt i _67 ] s2
+      | s2 = any [ br0 -> {_65 = false} (! bb24) | br1 -> {_65} (! bb11) ] ]
       [ bb11 = s0
-        [ s0 = [ &_85 <- Some expiry'0 ] s1
-        | s1 = [ &_88 <- i ] s2
-        | s2 = [ &_89 <- Slice64.length requests ] s3
-        | s3 = [ &_90 <- UInt64.lt _88 _89 ] s4
-        | s4 = {[@expl:index in bounds] [%#scontroller_session'7] _90} s5
-        | s5 = Slice64.get [%#scontroller_session'8] <tup2_i64_AclFacts> {requests} {_88}
-            (fun (r: tup2_i64_AclFacts) -> [ &_87 <- r.f0'1 ] s6)
-        | s6 = controller_request_admission [%#scontroller_session'10] {_85} {[%#scontroller_session'9] (55: Int16.t)}
-            {_87} (fun (_x: bool) -> [ &_84 <- _x ] s7)
-        | s7 = any [ br0 -> {_84 = false} (! bb24) | br1 -> {_84} (! bb14) ] ]
+        [ s0 = [ &_71 <- Some expiry'0 ] s1
+        | s1 = [ &_74 <- i ] s2
+        | s2 = [ &_75 <- Slice64.length requests ] s3
+        | s3 = [ &_76 <- UInt64.lt _74 _75 ] s4
+        | s4 = {[@expl:index in bounds] [%#scontroller_session'7] _76} s5
+        | s5 = Slice64.get [%#scontroller_session'8] <tup2_i64_AclFacts> {requests} {_74}
+            (fun (r: tup2_i64_AclFacts) -> [ &_73 <- r.f0'1 ] s6)
+        | s6 = controller_request_admission [%#scontroller_session'10] {_71} {[%#scontroller_session'9] (55: Int16.t)}
+            {_73} (fun (_x: bool) -> [ &_70 <- _x ] s7)
+        | s7 = any [ br0 -> {_70 = false} (! bb24) | br1 -> {_70} (! bb14) ] ]
       | bb14 = s0
-        [ s0 = [ &_97 <- i ] s1
-        | s1 = [ &_98 <- Slice64.length requests ] s2
-        | s2 = [ &_99 <- UInt64.lt _97 _98 ] s3
-        | s3 = {[@expl:index in bounds] [%#scontroller_session'11] _99} s4
-        | s4 = Slice64.get [%#scontroller_session'12] <tup2_i64_AclFacts> {requests} {_97}
-            (fun (r: tup2_i64_AclFacts) -> [ &_96 <- r.f1'1 ] s5)
-        | s5 = acl_decision [%#scontroller_session'13] {_96} (fun (_x: t_AclDecision) -> [ &_95 <- _x ] s6)
+        [ s0 = [ &_83 <- i ] s1
+        | s1 = [ &_84 <- Slice64.length requests ] s2
+        | s2 = [ &_85 <- UInt64.lt _83 _84 ] s3
+        | s3 = {[@expl:index in bounds] [%#scontroller_session'11] _85} s4
+        | s4 = Slice64.get [%#scontroller_session'12] <tup2_i64_AclFacts> {requests} {_83}
+            (fun (r: tup2_i64_AclFacts) -> [ &_82 <- r.f1'1 ] s5)
+        | s5 = acl_decision [%#scontroller_session'13] {_82} (fun (_x: t_AclDecision) -> [ &_81 <- _x ] s6)
         | s6 = any
-          [ br0 -> {_95 = AllowSuperuser} (! bb20)
-          | br1 -> {_95 = AllowAcl} (! bb20)
-          | br2 -> {_95 = AllowNoAcl} (! bb20)
-          | br3 -> {_95 = DenyExplicit} (! bb18)
-          | br4 -> {_95 = DenyDefault} (! bb18) ] ]
-      | bb18 = s0 [ s0 = [ &_94 <- false ] s1 | s1 = bb21 ]
-      | bb20 = s0 [ s0 = [ &_94 <- true ] s1 | s1 = bb21 ]
+          [ br0 -> {_81 = AllowSuperuser} (! bb20)
+          | br1 -> {_81 = AllowAcl} (! bb20)
+          | br2 -> {_81 = AllowNoAcl} (! bb20)
+          | br3 -> {_81 = DenyExplicit} (! bb18)
+          | br4 -> {_81 = DenyDefault} (! bb18) ] ]
+      | bb18 = s0 [ s0 = [ &_80 <- false ] s1 | s1 = bb21 ]
+      | bb20 = s0 [ s0 = [ &_80 <- true ] s1 | s1 = bb21 ]
       | bb21 = s0
         [ s0 = MutBorrow.borrow_mut <t_Vec_bool_Global> {responses}
-            (fun (_bor: MutBorrow.t t_Vec_bool_Global) -> [ &_93 <- _bor ] [ &responses <- _bor.final ] s1)
-        | s1 = push_bool [%#scontroller_session'14] {_93} {_94} (fun (_x: ()) -> [ &_92 <- _x ] s2)
+            (fun (_bor: MutBorrow.t t_Vec_bool_Global) -> [ &_79 <- _bor ] [ &responses <- _bor.final ] s1)
+        | s1 = push_bool [%#scontroller_session'14] {_79} {_80} (fun (_x: ()) -> [ &_78 <- _x ] s2)
         | s2 = UInt64.add [%#scontroller_session'16] {i} {[%#scontroller_session'15] (1: UInt64.t)}
             (fun (_x: UInt64.t) -> [ &i <- _x ] s3)
         | s3 = bb8 ] ] ]
   | bb24 = s0
-    [ s0 = [ &_102 <- Some expiry'0 ] s1
-    | s1 = [ &_ret <- { f0'2 = _102; f1'2 = responses; f2'2 = trace } ] s2
+    [ s0 = [ &_88 <- Some expiry'0 ] s1
+    | s1 = [ &_ret <- { f0'2 = _88; f1'2 = responses; f2'2 = trace } ] s2
     | s2 = return {_ret} ]
   | bb6 = s0
-    [ s0 = [ &_56 <- None ] s1
-    | s1 = [ &_ret <- { f0'2 = _56; f1'2 = responses; f2'2 = trace } ] s2
+    [ s0 = [ &_42 <- None ] s1
+    | s1 = [ &_ret <- { f0'2 = _42; f1'2 = responses; f2'2 = trace } ] s2
     | s2 = return {_ret} ] ]
   [ & _ret: tup3_Option_i64_Vec_bool_Global_tup2_u64_u64 = Any.any_l ()
   | & facts: t_OAuthSessionFacts = facts
@@ -336,59 +319,59 @@ let published_controller_session_bounds_quorum_requests [#"/workspace/crates/ver
   | & requests: Slice64.slice tup2_i64_AclFacts = requests
   | & session: t_OAuthSessionDecision = Any.any_l ()
   | & trace: tup2_u64_u64 = Any.any_l ()
-  | & _46: tup2_OAuthSessionDecision_tup2_u64_u64 = Any.any_l ()
+  | & _32: tup2_OAuthSessionDecision_tup2_u64_u64 = Any.any_l ()
   | & responses: t_Vec_bool_Global = Any.any_l ()
   | & expiry'0: Int64.t = Any.any_l ()
-  | & _56: t_Option_i64 = Any.any_l ()
+  | & _42: t_Option_i64 = Any.any_l ()
   | & effective_expires_at_ms: Int64.t = Any.any_l ()
   | & i: UInt64.t = Any.any_l ()
-  | & _79: bool = Any.any_l ()
-  | & _81: UInt64.t = Any.any_l ()
-  | & _84: bool = Any.any_l ()
-  | & _85: t_Option_i64 = Any.any_l ()
-  | & _87: Int64.t = Any.any_l ()
-  | & _88: UInt64.t = Any.any_l ()
-  | & _89: UInt64.t = Any.any_l ()
-  | & _90: bool = Any.any_l ()
-  | & _92: () = Any.any_l ()
-  | & _93: MutBorrow.t t_Vec_bool_Global = Any.any_l ()
-  | & _94: bool = Any.any_l ()
-  | & _95: t_AclDecision = Any.any_l ()
-  | & _96: t_AclFacts = Any.any_l ()
-  | & _97: UInt64.t = Any.any_l ()
-  | & _98: UInt64.t = Any.any_l ()
-  | & _99: bool = Any.any_l ()
-  | & _102: t_Option_i64 = Any.any_l ()
+  | & _65: bool = Any.any_l ()
+  | & _67: UInt64.t = Any.any_l ()
+  | & _70: bool = Any.any_l ()
+  | & _71: t_Option_i64 = Any.any_l ()
+  | & _73: Int64.t = Any.any_l ()
+  | & _74: UInt64.t = Any.any_l ()
+  | & _75: UInt64.t = Any.any_l ()
+  | & _76: bool = Any.any_l ()
+  | & _78: () = Any.any_l ()
+  | & _79: MutBorrow.t t_Vec_bool_Global = Any.any_l ()
+  | & _80: bool = Any.any_l ()
+  | & _81: t_AclDecision = Any.any_l ()
+  | & _82: t_AclFacts = Any.any_l ()
+  | & _83: UInt64.t = Any.any_l ()
+  | & _84: UInt64.t = Any.any_l ()
+  | & _85: bool = Any.any_l ()
+  | & _88: t_Option_i64 = Any.any_l ()
   | & variant_old_bb8: int = Any.any_l () ])
   [ return (result: tup3_Option_i64_Vec_bool_Global_tup2_u64_u64) ->
-  {[@stop_split] [@expl:published_controller_session_bounds_quorum_requests ensures] ([@stop_split] [@expl:published_controller_session_bounds_quorum_requests ensures #0] [%#scontroller_session'21] (result.f0'2
+  {[@stop_split] [@expl:published_controller_session_bounds_quorum_requests ensures] ([@stop_split] [@expl:published_controller_session_bounds_quorum_requests ensures #0] [%#scontroller_session'18] (result.f0'2
         = None)
       = (gt_log_Int (UInt64.t'int result.f2'2.f1) 0
       \/ begin_unfinished_writer /\ UInt64.t'int cache.generation_before'0 < UInt64.t'int const_MAX - 1
       \/ cache.expiry_enabled'0
       /\ gt_log_Int (Int64.to_int completed_ms
       - Int64.to_int cache.last_successful_fetch_ms'0) (Int64.to_int cache.expiry_ms'0)))
-    /\ ([@stop_split] [@expl:published_controller_session_bounds_quorum_requests ensures #1] [%#scontroller_session'22] match result.f0'2 with
+    /\ ([@stop_split] [@expl:published_controller_session_bounds_quorum_requests ensures #1] [%#scontroller_session'19] match result.f0'2 with
         | None -> Seq.length (view_Vec_bool_Global result.f1'2) = 0
         | Some expiry'0 -> expiry'0 = facts.token_expires_at_ms
         /\ gt_log_Int (Int64.to_int expiry'0) (Int64.to_int completed_ms)
         /\ result.f2'2.f0 = cache.generation_before'0 /\ UInt64.t'int result.f2'2.f1 = 0
         end)
-    /\ ([@stop_split] [@expl:published_controller_session_bounds_quorum_requests ensures #2] [%#scontroller_session'23] Seq.length (view_Vec_bool_Global result.f1'2)
+    /\ ([@stop_split] [@expl:published_controller_session_bounds_quorum_requests ensures #2] [%#scontroller_session'20] Seq.length (view_Vec_bool_Global result.f1'2)
       <= Seq.length (Slice64.view requests))
-    /\ ([@stop_split] [@expl:published_controller_session_bounds_quorum_requests ensures #3] [%#scontroller_session'24] forall i: int. 0
+    /\ ([@stop_split] [@expl:published_controller_session_bounds_quorum_requests ensures #3] [%#scontroller_session'21] forall i: int. 0
             <= i
           /\ i < Seq.length (view_Vec_bool_Global result.f1'2)
         -> match result.f0'2 with
           | None -> false
           | Some expiry'0 -> Int64.to_int (Seq.get (Slice64.view requests) i).f0'1 < Int64.to_int expiry'0
           end)
-    /\ ([@stop_split] [@expl:published_controller_session_bounds_quorum_requests ensures #4] [%#scontroller_session'25] match result.f0'2 with
+    /\ ([@stop_split] [@expl:published_controller_session_bounds_quorum_requests ensures #4] [%#scontroller_session'22] match result.f0'2 with
         | None -> true
         | Some expiry'0 -> Seq.length (view_Vec_bool_Global result.f1'2) < Seq.length (Slice64.view requests)
         -> ge_log_Int (Int64.to_int (Seq.get (Slice64.view requests) (Seq.length (view_Vec_bool_Global result.f1'2))).f0'1) (Int64.to_int expiry'0)
         end)
-    /\ ([@stop_split] [@expl:published_controller_session_bounds_quorum_requests ensures #5] [%#scontroller_session'26] forall i: int. 0
+    /\ ([@stop_split] [@expl:published_controller_session_bounds_quorum_requests ensures #5] [%#scontroller_session'23] forall i: int. 0
           <= i
         /\ i < Seq.length (view_Vec_bool_Global result.f1'2)
       -> Seq.get (view_Vec_bool_Global result.f1'2) i
