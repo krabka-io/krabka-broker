@@ -37,13 +37,9 @@ pub(crate) fn decode_key(bytes: &[u8]) -> Result<String, BrokerError> {
             "unsupported TransactionLogKey version",
         )));
     }
-    let transactional_id = get_string_owned(&mut buf)?;
-    if !buf.is_empty() {
-        return Err(BrokerError::Protocol(ProtocolError::InvalidValue(
-            "TransactionLogKey: trailing bytes after decode",
-        )));
-    }
-    Ok(transactional_id)
+    // Kafka's generated `TransactionLogKey` reader stops after its last field
+    // and ignores any bytes that follow, so this decoder does too.
+    Ok(get_string_owned(&mut buf)?)
 }
 
 #[cfg(test)]
@@ -87,5 +83,13 @@ mod tests {
         assert!(decode_key(&bad).is_err());
         // truncated
         assert!(decode_key(&key[..1]).is_err());
+    }
+
+    /// Kafka's generated reader ignores bytes after the last field.
+    #[test]
+    fn decode_key_ignores_trailing_bytes() {
+        let mut key = encode_key("abc").unwrap();
+        key.push(0xff);
+        assert!(decode_key(&key).unwrap() == "abc");
     }
 }

@@ -242,29 +242,38 @@ impl TxnCoordinator {
         // An append holds this lock across its write, so the replay starts
         // after every append that began in an older term.
         let state_partition_write = self.state_partition_writes[index].lock().await;
-        let replay = match self.partitions.get(bootstrap::TOPIC, partition) {
-            Some(part) => {
-                let read_max = self.recovery_read_max;
-                let last_epoch_tag = self.persist_last_producer_epoch;
-                let num_partitions = self.num_partitions;
-                crate::blocking::spawn_blocking(move || {
-                    replay_partition(&part, partition, (read_max, last_epoch_tag), |tid| {
+        // Kafka's `loadTransactionMetadata` never fails: a replay error ends
+        // the replay with what it loaded so far, and a partition without a
+        // log loads empty. Only a replay task that dies fails the load here.
+        let replay = if let Some(part) = self.partitions.get(bootstrap::TOPIC, partition) {
+            let read_max = self.recovery_read_max;
+            let last_epoch_tag = self.persist_last_producer_epoch;
+            let num_partitions = self.num_partitions;
+            crate::blocking::spawn_blocking(move || {
+                Ok(replay_partition(
+                    &part,
+                    partition,
+                    (read_max, last_epoch_tag),
+                    |tid| {
                         PartitionIndex(crate::txn::partitioner::partition_for_tid(
                             tid,
                             num_partitions,
                         ))
-                    })
-                })
-                .await
-                .unwrap_or_else(|error| {
-                    Err(BrokerError::Txn(format!(
-                        "__transaction_state-{partition} replay task failed: {error}"
-                    )))
-                })
-            }
-            None => Err(BrokerError::Txn(format!(
-                "__transaction_state-{partition} is not local"
-            ))),
+                    },
+                ))
+            })
+            .await
+            .unwrap_or_else(|error| {
+                Err(BrokerError::Txn(format!(
+                    "__transaction_state-{partition} replay task failed: {error}"
+                )))
+            })
+        } else {
+            warn!(
+                "Attempted to load transaction metadata from {}-{partition}, but found no log",
+                bootstrap::TOPIC
+            );
+            Ok(RecoveredTransactions::default())
         };
         let prepared = self.publish_load(partition, generation, replay).await;
         drop(state_partition_write);

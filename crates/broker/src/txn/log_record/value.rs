@@ -4,7 +4,8 @@
 //! The encoder is deterministic: it groups and sorts a transaction's
 //! partitions before it writes them, so every replica produces identical
 //! bytes for the same entry. The decoder accepts either version, reads the
-//! v1 tagged fields it knows, and rejects trailing bytes.
+//! v1 tagged fields it knows, and ignores bytes after the last field, as
+//! Kafka's generated reader does.
 
 use std::collections::{BTreeMap, HashSet};
 
@@ -254,12 +255,6 @@ pub(crate) fn decode_value(
             }
             _ => Ok(false),
         })?;
-    }
-
-    if !buf.is_empty() {
-        return Err(BrokerError::Protocol(ProtocolError::InvalidValue(
-            "TransactionLogValue: trailing bytes after decode",
-        )));
     }
 
     Ok(TxnEntry {
@@ -519,10 +514,13 @@ mod tests {
     }
 
     #[test]
-    fn decode_value_rejects_trailing_bytes() {
+    fn decode_value_ignores_trailing_bytes() {
         let mut extra = SAMPLE.to_vec();
         extra.push(0xff); // one trailing byte
-        assert!(decode_value(&extra, "t".into(), false).is_err());
+        assert!(
+            decode_value(&extra, "t".into(), false).unwrap()
+                == decode_value(SAMPLE, "t".into(), false).unwrap()
+        );
     }
 
     /// `TransactionLog.serializeValue` writes a null partition array only for

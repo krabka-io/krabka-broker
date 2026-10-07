@@ -210,35 +210,62 @@ impl TxnCoordinator {
 }
 
 /// Replays `__transaction_state`-`partition` from its log start offset to its
-/// log end offset.
+/// log end offset, as Kafka's `TransactionStateManager.loadTransactionMetadata`
+/// does.
 ///
 /// A record whose key version or value version Kafka 4.3.1 does not read is
-/// logged at WARN and skipped, as Kafka's
-/// `TransactionStateManager.loadTransactionMetadata` skips the
-/// `UnknownKeyVersion` and `UnknownValueVersion` results of
-/// `TransactionLog.read`: it can be the leftover of an aborted upgrade. The
-/// key version is read first, so a tombstone of an unknown key version is
-/// skipped too.
+/// logged at WARN and skipped, as Kafka skips the `UnknownKeyVersion` and
+/// `UnknownValueVersion` results of `TransactionLog.read`: it can be the
+/// leftover of an aborted upgrade. The key version is read first, so a
+/// tombstone of an unknown key version is skipped too.
+///
+/// Every other failure ends the replay but not the load. Kafka's loop sits in
+/// a `try` whose `catch` logs `Error loading transactions from transaction log
+/// <partition>` at ERROR and returns the transactions it loaded up to the
+/// failing record, which the caller then installs and serves. This replay
+/// does the same for a read error, a missing key, a key or value that does not
+/// decode, and a record that krabka's producer-id index refuses: a misplaced
+/// transaction or a producer id that two transactions claim.
 ///
 /// `partition_for` maps a transactional id to its state partition. The replay
 /// is a pure fold over the log. It does not touch the coordinator, so a load
 /// can run it on the blocking pool.
-///
-/// # Errors
-///
-/// Returns [`BrokerError`] if a read or decode fails, a record is misplaced,
-/// an offset overflows, or two transactions claim one producer ID.
 // cargo-mutants: the log walk itself. `RecoveredTransactions` carries the
 // decisions and is mutation-tested on its own.
 #[cfg_attr(test, mutants::skip)]
 pub(super) fn replay_partition(
     part: &crate::partition::Partition,
     partition: PartitionIndex,
+    read: (krabka_units::ByteSize, bool),
+    partition_for: impl Fn(&str) -> PartitionIndex,
+) -> RecoveredTransactions {
+    let mut recovered = RecoveredTransactions::default();
+    if let Err(error) = replay_into(&mut recovered, part, partition, read, partition_for) {
+        tracing::error!(
+            %error,
+            "Error loading transactions from transaction log {}-{partition}",
+            crate::txn::bootstrap::TOPIC
+        );
+    }
+    recovered
+}
+
+/// Folds the log of `partition` into `recovered`, record by record, and stops
+/// at the first record that fails.
+///
+/// # Errors
+///
+/// Returns [`BrokerError`] if a read or decode fails, a record is misplaced,
+/// an offset overflows, or two transactions claim one producer ID. Everything
+/// before the failing record stays in `recovered`.
+#[cfg_attr(test, mutants::skip)]
+fn replay_into(
+    recovered: &mut RecoveredTransactions,
+    part: &crate::partition::Partition,
+    p: PartitionIndex,
     (read_max, last_epoch_tag): (krabka_units::ByteSize, bool),
     partition_for: impl Fn(&str) -> PartitionIndex,
-) -> Result<RecoveredTransactions, BrokerError> {
-    let p = partition;
-    let mut recovered = RecoveredTransactions::default();
+) -> Result<(), BrokerError> {
     let mut offset = part.log_start_offset();
     loop {
         let out = part.read_log(offset, read_max)?;
@@ -253,8 +280,10 @@ pub(super) fn replay_partition(
                 )));
             }
             for rec in &batch.records {
+                // Kafka: `require(record.hasKey, "Transaction state log's key
+                // should not be null")`.
                 let key_bytes = rec.key.as_ref().ok_or_else(|| {
-                    BrokerError::Txn(format!("__transaction_state-{p} record is missing its key"))
+                    BrokerError::Txn("Transaction state log's key should not be null".into())
                 })?;
                 if let Some(version) = unknown_version(key_bytes, KEY_VERSIONS) {
                     warn_unknown_version("key", version, p);
@@ -281,7 +310,7 @@ pub(super) fn replay_partition(
             offset = recovery_next_offset(batch.base_offset, batch.last_offset_delta)?;
         }
     }
-    Ok(recovered)
+    Ok(())
 }
 
 /// The `TransactionLogKey` versions Kafka 4.3.1 reads: the key's
@@ -382,38 +411,44 @@ mod tests {
         assert!(log.log_end_offset().0 == 1);
     }
 
-    /// A record of a key or value version Kafka 4.3.1 does not read is
-    /// skipped, as `TransactionStateManager.loadTransactionMetadata` skips
-    /// `UnknownKeyVersion` and `UnknownValueVersion`, and the records around
-    /// it load. A key or value of a known version that does not decode fails
-    /// the load.
+    /// The replay follows Kafka's `TransactionStateManager.loadTransactionMetadata`.
+    /// A record of a key or value version Kafka 4.3.1 does not read is skipped,
+    /// as Kafka skips `UnknownKeyVersion` and `UnknownValueVersion`, and the
+    /// records around it load. Any other failure ends the replay with the
+    /// transactions loaded before it, Kafka's partial load: the record after
+    /// it is not loaded. Bytes after a decoded key or value are ignored, as
+    /// Kafka's generated readers ignore them.
     #[tokio::test]
-    async fn replay_skips_unknown_key_and_value_versions() {
+    async fn replay_skips_unknown_versions_and_stops_at_the_first_bad_record() {
         use bytes::Bytes;
         use krabka_protocol::records::{Record, RecordBatch};
 
         use super::{RecoveredTransactions, replay_partition};
         use crate::txn::log_record::{encode_key, encode_value};
 
-        let record = |key: Vec<u8>, value: Option<Vec<u8>>| RecordBatch {
+        let record = |key: Option<Vec<u8>>, value: Option<Vec<u8>>| RecordBatch {
             records: vec![Record {
-                key: Some(Bytes::from(key)),
+                key: key.map(Bytes::from),
                 value: value.map(Bytes::from),
                 ..Record::default()
             }],
             ..RecordBatch::default()
         };
-        let entry = |tid: &str, producer_id: i64| {
-            TxnEntry::new_empty(tid.to_owned(), ProducerId(producer_id), 0, 60_000, 0)
-        };
+        let key = |tid: &str| Some(encode_key(tid).unwrap());
         let value_of = |tid: &str, producer_id: i64| {
-            encode_value(&entry(tid, producer_id), TxnVersion::Classic, false)
+            let entry = TxnEntry::new_empty(tid.to_owned(), ProducerId(producer_id), 0, 60_000, 0);
+            encode_value(&entry, TxnVersion::Classic, false)
         };
         let with_version = |mut bytes: Vec<u8>, version: i16| {
             bytes[..2].copy_from_slice(&version.to_be_bytes());
             bytes
         };
-        let replay = |odd: Option<RecordBatch>| async move {
+        let with_trailing_byte = |mut bytes: Vec<u8>| {
+            bytes.push(0xff);
+            bytes
+        };
+        // "misplaced" maps to state partition 1, every other id to 0.
+        let replay = |batches: Vec<RecordBatch>| async move {
             let dir = tempfile::tempdir().unwrap();
             let (coordinator, _data) = live_coordinator(dir.path()).await;
             let part = coordinator
@@ -422,88 +457,99 @@ mod tests {
                 .expect("the state partition");
             {
                 let mut log = part.log.lock().unwrap();
-                log.append(&mut record(
-                    encode_key("a").unwrap(),
-                    Some(value_of("a", 1)),
-                ))
-                .unwrap();
-                if let Some(mut odd) = odd {
-                    log.append(&mut odd).unwrap();
+                for mut batch in batches {
+                    log.append(&mut batch).unwrap();
                 }
-                log.append(&mut record(
-                    encode_key("b").unwrap(),
-                    Some(value_of("b", 2)),
-                ))
-                .unwrap();
             }
-            replay_partition(
+            let RecoveredTransactions { state, pid_to_tid } = replay_partition(
                 &part,
                 PartitionIndex(0),
                 (krabka_units::mebibytes(1), false),
-                |_| PartitionIndex(0),
-            )
-            .ok()
-            .map(|RecoveredTransactions { state, pid_to_tid }| (state, pid_to_tid))
+                |tid| PartitionIndex(i32::from(tid == "misplaced")),
+            );
+            (state, pid_to_tid)
         };
-        let both = replay(None).await;
-        assert!(both.as_ref().is_some_and(|(state, _)| state.len() == 2));
+        let a = || record(key("a"), Some(value_of("a", 1)));
+        let b = || record(key("b"), Some(value_of("b", 2)));
+        let c = || record(key("c"), Some(value_of("c", 3)));
+        let only_a = replay(vec![a()]).await;
+        let a_and_b = replay(vec![a(), b()]).await;
+        let a_c_and_b = replay(vec![a(), c(), b()]).await;
+        assert!(only_a.0.len() == 1 && a_and_b.0.len() == 2 && a_c_and_b.0.len() == 3);
 
         let cases = [
             (
                 "key version 1 with a value",
                 record(
-                    with_version(encode_key("c").unwrap(), 1),
+                    Some(with_version(encode_key("c").unwrap(), 1)),
                     Some(value_of("c", 3)),
                 ),
-                both.clone(),
+                &a_and_b,
             ),
             (
                 "key version -1 as a tombstone",
-                record(with_version(encode_key("a").unwrap(), -1), None),
-                both.clone(),
+                record(Some(with_version(encode_key("a").unwrap(), -1)), None),
+                &a_and_b,
             ),
             (
                 "key version 1 with a key body that does not decode",
-                record(vec![0x00, 0x01, 0x7f], Some(vec![0xff])),
-                both.clone(),
+                record(Some(vec![0x00, 0x01, 0x7f]), Some(vec![0xff])),
+                &a_and_b,
             ),
             (
                 "value version 2",
-                record(
-                    encode_key("c").unwrap(),
-                    Some(with_version(value_of("c", 3), 2)),
-                ),
-                both.clone(),
+                record(key("c"), Some(with_version(value_of("c", 3), 2))),
+                &a_and_b,
             ),
             (
                 "value version -1",
+                record(key("c"), Some(with_version(value_of("c", 3), -1))),
+                &a_and_b,
+            ),
+            (
+                "key and value with trailing bytes",
                 record(
-                    encode_key("c").unwrap(),
-                    Some(with_version(value_of("c", 3), -1)),
+                    Some(with_trailing_byte(encode_key("c").unwrap())),
+                    Some(with_trailing_byte(value_of("c", 3))),
                 ),
-                both.clone(),
+                &a_c_and_b,
             ),
             (
                 "known value version with a corrupt value",
-                record(
-                    encode_key("c").unwrap(),
-                    Some(value_of("c", 3)[..9].to_vec()),
-                ),
-                None,
+                record(key("c"), Some(value_of("c", 3)[..9].to_vec())),
+                &only_a,
             ),
             (
                 "known key version whose key does not decode",
-                record(vec![0x00, 0x00, 0x00, 0x05, b'c'], Some(value_of("c", 3))),
-                None,
+                record(
+                    Some(vec![0x00, 0x00, 0x00, 0x05, b'c']),
+                    Some(value_of("c", 3)),
+                ),
+                &only_a,
             ),
             (
                 "key shorter than its version",
-                record(vec![0x00], Some(value_of("c", 3))),
-                None,
+                record(Some(vec![0x00]), Some(value_of("c", 3))),
+                &only_a,
+            ),
+            (
+                "record without a key",
+                record(None, Some(value_of("c", 3))),
+                &only_a,
+            ),
+            (
+                "transaction in another state partition",
+                record(key("misplaced"), Some(value_of("misplaced", 3))),
+                &only_a,
+            ),
+            (
+                "producer id another transaction holds",
+                record(key("c"), Some(value_of("c", 1))),
+                &only_a,
             ),
         ];
         for (name, odd, expected) in cases {
-            check!(replay(Some(odd)).await == expected, "{name}");
+            check!(replay(vec![a(), odd, b()]).await == *expected, "{name}");
         }
     }
 }
