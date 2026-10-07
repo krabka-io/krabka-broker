@@ -24,6 +24,38 @@ pub enum PersistedFormatError {
     Malformed(String),
 }
 
+/// A committed metadata log record that a controller cannot replay. It stops
+/// the controller, as Kafka's `QuorumController` hands a record it cannot
+/// replay to `SharedServer.fatalQuorumControllerFaultHandler`, and a
+/// controller-role node's `MetadataLoader` hands one it cannot load to
+/// `SharedServer.metadataLoaderFaultHandler`, which is fatal on a node whose
+/// `process.roles` include `controller`. Both handlers halt the process.
+#[derive(Debug, PartialEq, Eq, Error)]
+pub enum MetadataReplayError {
+    /// The record's bytes are not a metadata record this build reads: an
+    /// unknown apiKey, a value version above the highest it supports, a frame
+    /// version other than 1, or a krabka-private record that does not decode.
+    #[error("the metadata record at offset {offset} does not decode: {error}")]
+    UndecodableRecord {
+        /// The record's offset in the metadata log.
+        offset: i64,
+        /// Why it does not decode.
+        error: krabka_metadata::TranslateError,
+    },
+    /// A KIP-853 control record that does not decode, or that names a
+    /// `kraft.version` or voter set Kafka would refuse. Kafka's
+    /// `KRaftControlRecordStateMachine` throws while it reads such a record,
+    /// and `KafkaRaftClientDriver` hands the throw to
+    /// `SharedServer.raftManagerFaultHandler`, which is fatal on every role.
+    #[error("the KRaft control record at offset {offset} is invalid: {reason}")]
+    InvalidControlRecord {
+        /// The record's offset in the metadata log.
+        offset: i64,
+        /// Why it is invalid.
+        reason: String,
+    },
+}
+
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum RaftError {
@@ -121,6 +153,11 @@ pub enum RaftError {
     /// A mixed-version cluster meets it during a rolling upgrade.
     #[error("the peer does not implement version {version} of krabka-private api {api_key}")]
     UnsupportedPrivateVersion { api_key: i16, version: i16 },
+
+    /// A committed metadata log record that this controller cannot replay.
+    /// The controller stops.
+    #[error("metadata replay: {0}")]
+    MetadataReplay(#[from] MetadataReplayError),
 
     #[error("startup misconfiguration: {0}")]
     Startup(String),

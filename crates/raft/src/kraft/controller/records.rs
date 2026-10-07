@@ -3,7 +3,7 @@
 //! control batches, and the KIP-595 `LeaderChange` marker.
 
 use krabka_ids::Offset;
-use krabka_metadata::VoterSet;
+use krabka_metadata::{MetadataImage, MetadataRecord, TranslateError, VoterSet, from_kraft_value};
 use krabka_protocol::{
     Decode, Encode,
     owned::no_op_record::NoOpRecord,
@@ -14,9 +14,71 @@ use krabka_protocol::{
 };
 
 use crate::{
-    error::RaftError,
+    error::{MetadataReplayError, RaftError},
     kraft::types::{Epoch, NodeId},
 };
+
+/// Decodes the committed metadata value at `offset` against `image`, as every
+/// controller replay path reads it: live apply, restart recovery, the
+/// downgrade-snapshot rebuild and the leader's walk of an earlier epoch's
+/// tail.
+///
+/// Bytes that are not a metadata record this build reads are a
+/// [`MetadataReplayError::UndecodableRecord`], and the caller stops the
+/// controller. Kafka's controller cannot replay such a record either:
+/// `MetadataRecordSerde` throws on it, and `QuorumController` and the
+/// controller-role `MetadataLoader` hand the throw to a fatal fault handler
+/// (`SharedServer.fatalQuorumControllerFaultHandler` and
+/// `SharedServer.metadataLoaderFaultHandler`, whose `fatal` is
+/// `processRoles.contains(ProcessRole.ControllerRole)`). The snapshot reader
+/// refuses the same bytes, so a snapshot and the log it replaces agree.
+///
+/// An empty KIP-835 `NoOpRecord` is `Ok(None)`: it changes nothing.
+///
+/// A record that decodes but names a topic, partition or ACL the image does
+/// not hold is `Ok(None)`: the caller skips it, as it skips a record that fails
+/// `MetadataImage::validate`. Kafka never commits such a record, because its
+/// active controller replays each record before it appends it. A krabka leader
+/// checks a write against its committed image, so a write can lose a race to an
+/// earlier one still in flight (a partition change behind the deletion of its
+/// topic). Every replica then decodes the same bytes against the same image
+/// and skips the same record, so the replicas agree. Stopping on it instead
+/// would stop every controller on a race a client can cause.
+///
+/// The krabka-private record errors of later `krabka-metadata` revisions
+/// (`UnknownPrivateTag`, `UnknownPrivateRecordVersion`, `PrivateTagMismatch`,
+/// `TrailingPrivateRecordBytes`) are undecodable: only the image-resolution
+/// errors below are skips.
+///
+/// # Errors
+/// [`MetadataReplayError::UndecodableRecord`] as above.
+pub fn decode_committed_value(
+    value: &[u8],
+    image: &MetadataImage,
+    offset: i64,
+) -> Result<Option<MetadataRecord>, MetadataReplayError> {
+    // A KIP-835 no-op changes nothing, and has no image record to become.
+    if is_kip835_noop(value) {
+        return Ok(None);
+    }
+    match from_kraft_value(value, image) {
+        Ok(record) => Ok(Some(record)),
+        Err(
+            error @ (TranslateError::UnknownTopicId(_)
+            | TranslateError::UnknownTopicName(_)
+            | TranslateError::UnknownAclId(_)
+            | TranslateError::Invalid { .. }),
+        ) => {
+            tracing::warn!(
+                offset,
+                %error,
+                "kraft: skipped a committed record that names state the image does not hold"
+            );
+            Ok(None)
+        }
+        Err(error) => Err(MetadataReplayError::UndecodableRecord { offset, error }),
+    }
+}
 
 /// The api key of Kafka's `NoOpRecord`.
 const NO_OP_RECORD_API_KEY: u32 = 20;

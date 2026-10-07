@@ -95,7 +95,7 @@ pub use controller::{
     Controller, ControllerHandle, QuorumState, QuorumStateSnapshot, SnapshotRange, SnapshotSlice,
     metadata_log_nonempty,
 };
-pub use error::{PersistedFormatError, RaftError};
+pub use error::{MetadataReplayError, PersistedFormatError, RaftError};
 pub use handshake::{
     AllowAllGrants, ClusterGrants, ClusterOperation, ControllerApiVersions, RaftConnection,
     RaftHandshakeError, RaftListenerHandshake,

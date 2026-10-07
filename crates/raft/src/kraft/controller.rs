@@ -140,6 +140,8 @@ mod tests_quorum_requests;
 #[cfg(test)]
 mod tests_recovery;
 #[cfg(test)]
+mod tests_replay_fault;
+#[cfg(test)]
 mod tests_snapshotting;
 #[cfg(test)]
 mod tests_submit;
@@ -310,6 +312,9 @@ struct Engine {
     /// The reason the last activation of this node failed, which stops the
     /// engine. `None` while no activation has failed.
     activation_fault: Option<String>,
+    /// The committed record this node could not replay, which stops the
+    /// engine. `None` while every committed record has replayed.
+    replay_fault: Option<crate::error::MetadataReplayError>,
 }
 
 #[derive(Clone)]

@@ -16,7 +16,7 @@ use super::{
         assigned_record_offset, hwm_reaches_waiter, leader_alone_is_majority,
         submit_waiter_need_offset, validate_append_result,
     },
-    records::{metadata_record_batch, next_batch_offset},
+    records::{decode_committed_value, metadata_record_batch, next_batch_offset},
 };
 use crate::{
     DelegationTokenMutation, OffsetReservation, SubmitChangeResult, error::RaftError,
@@ -320,14 +320,17 @@ impl Engine {
     /// offset were appended by an earlier leader, possibly this node, and are
     /// not committed. They commit when this epoch's first record does. Each
     /// value is decoded against the image that the values before it produce,
-    /// as a replica replays it. A value that does not decode or validate is
-    /// skipped. A node that does not lead has no such records, and gets the
-    /// committed image.
+    /// as a replica replays it. A value that names state the image does not
+    /// hold, or that does not validate, is skipped, as replay skips it (see
+    /// [`decode_committed_value`]). A node that does not lead has no such
+    /// records, and gets the committed image.
     ///
     /// # Errors
     ///
-    /// Returns the error of a log read that fails. `visit` has then seen the
-    /// records before that read.
+    /// Returns the error of a log read that fails, and
+    /// [`RaftError::MetadataReplay`] for a value that does not decode. `visit`
+    /// has then seen the records before it. The value commits with this
+    /// epoch's first record, and its apply then stops the controller.
     pub(super) fn replay_earlier_epoch_tail(
         &self,
         mut visit: impl FnMut(&MetadataImage, &MetadataRecord),
@@ -352,12 +355,13 @@ impl Engine {
                 if batch.base_offset >= end.0 || batch.attributes.is_control_batch() {
                     continue;
                 }
-                for value in batch
-                    .records
-                    .iter()
-                    .filter_map(|record| record.value.as_ref())
-                {
-                    let Ok(record) = from_kraft_value(value, &image) else {
+                for (offset, value) in batch.records.iter().filter_map(|record| {
+                    let offset = batch
+                        .base_offset
+                        .saturating_add(i64::from(record.offset_delta));
+                    record.value.as_ref().map(|value| (offset, value))
+                }) {
+                    let Some(record) = decode_committed_value(value, &image, offset)? else {
                         continue;
                     };
                     if image.validate(&record).is_err() {

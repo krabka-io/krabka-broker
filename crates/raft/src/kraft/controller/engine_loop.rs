@@ -139,8 +139,8 @@ impl Engine {
 
     /// Publish the fault that stops the engine: the failure of the metadata
     /// log directory when a write to it returned an I/O error, or else the
-    /// failure of a controller activation. Returns `true` once a fault is
-    /// published.
+    /// failure of a controller activation, or else a committed record this
+    /// node could not replay. Returns `true` once a fault is published.
     pub fn publish_fault(&mut self) -> bool {
         let fault = if let Some(failure) = self.log.failure() {
             format!(
@@ -152,6 +152,8 @@ impl Engine {
             )
         } else if let Some(fault) = &self.activation_fault {
             fault.clone()
+        } else if let Some(fault) = &self.replay_fault {
+            fault.to_string()
         } else {
             return false;
         };

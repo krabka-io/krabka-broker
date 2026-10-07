@@ -176,6 +176,13 @@ impl Engine {
     pub fn retry_pending_downgrade_snapshot(&mut self) {
         while self.downgrade_snapshot_pending.is_some() {
             if let Err(error) = self.write_downgrade_snapshot_and_prune() {
+                // A committed record that does not replay stops the
+                // controller, wherever the replay meets it.
+                if let RaftError::MetadataReplay(fault) = error {
+                    tracing::error!(%fault, "kraft: stopping the controller");
+                    self.replay_fault = Some(fault);
+                    break;
+                }
                 tracing::error!(
                     ?error,
                     "mandatory metadata downgrade snapshot remains pending"

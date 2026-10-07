@@ -43,7 +43,7 @@ fn reopened_control_log(write: impl FnOnce(&mut KraftLog)) -> (tempfile::TempDir
 
 fn replayed_control_state(log: &KraftLog, initial: VoterSet) -> QuorumState {
     let mut state = QuorumState::bootstrap(uuid::Uuid::nil(), initial);
-    replay_control_records(log, &mut state, MetadataRaftFetchMax::default());
+    replay_control_records(log, &mut state, MetadataRaftFetchMax::default()).expect("replay");
     state
 }
 
@@ -242,7 +242,16 @@ fn control_state_at_replays_version_and_voters_at_boundary_offsets() {
 
     // end_offset 3: negative kraft version errors
     let s3 = control_state_at(&log, &bootstrap, Offset(3), max);
-    check!(matches!(s3, Err(RaftError::ChangeRejected(_))));
+    let Err(RaftError::MetadataReplay(fault)) = s3 else {
+        panic!("a negative kraft.version is a replay fault: {s3:?}");
+    };
+    check!(
+        fault
+            == crate::error::MetadataReplayError::InvalidControlRecord {
+                offset: 2,
+                reason: "negative kraft.version -1".into(),
+            }
+    );
 }
 
 #[tokio::test]

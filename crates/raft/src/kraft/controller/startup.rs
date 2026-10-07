@@ -97,7 +97,7 @@ impl KraftController {
         // Every record in a cleanly reopened log is committed. Recover the
         // latest control state before constructing the core so elections never
         // briefly use stale configured voters.
-        replay_control_records(&log, &mut initial_state, metadata_raft_fetch_max);
+        replay_control_records(&log, &mut initial_state, metadata_raft_fetch_max)?;
         let controls =
             KraftControlState::new(initial_state.voters.clone(), initial_state.kraft_version);
         let core = QuorumStateMachine::new(me, initial_state, election_timeout);
@@ -196,6 +196,7 @@ impl KraftController {
             pending_reconfig: None,
             activation,
             activation_fault: None,
+            replay_fault: None,
         };
 
         // A restart can rediscover a committed downgrade whose earlier local
@@ -353,7 +354,7 @@ impl KraftController {
                 voters: boundary_state.voters,
             }));
         }
-        replay_control_records(&log, &mut initial_state, metadata_raft_fetch_max);
+        replay_control_records(&log, &mut initial_state, metadata_raft_fetch_max)?;
         image.apply(&MetadataRecord::V1KRaftVersion(
             krabka_metadata::KRaftVersionRecord {
                 kraft_version: initial_state.kraft_version,
