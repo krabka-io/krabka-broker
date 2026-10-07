@@ -15,9 +15,64 @@ use crate::error::BrokerError;
 pub(super) const QUORUM_STATE_FILE: &str = "quorum-state.json";
 pub(super) const QUORUM_STATE_BACKUP_FILE: &str = "quorum-state.json.bak";
 
-#[derive(Debug, serde::Deserialize, serde::Serialize)]
+/// Version of `quorum-state.json` and its `.bak`, the required top-level
+/// `"version"` field.
+///
+/// Part of the 1.x on-disk contract: a 1.x broker reads every descriptor that
+/// any earlier 1.x broker wrote.
+pub(super) const QUORUM_MEMBERSHIP_VERSION: i16 = 0;
+
+#[derive(Debug, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
 struct PersistedQuorumMembership {
+    version: i16,
     voters: Vec<u64>,
+}
+
+/// Just the version of a descriptor, read before the rest of it.
+#[derive(serde::Deserialize)]
+struct PersistedQuorumMembershipVersion {
+    version: Option<serde_json::Value>,
+}
+
+/// Why a WAL quorum membership descriptor could not be read.
+#[derive(Debug, PartialEq, Eq, thiserror::Error)]
+enum QuorumMembershipDecodeError {
+    /// The descriptor has no `"version"`, as one written before 1.0 does.
+    #[error(
+        "the descriptor has no \"version\": it predates krabka 1.0, whose data a 1.x broker \
+         does not read; reformat this node"
+    )]
+    MissingVersion,
+    /// The descriptor carries a version this build does not read.
+    #[error(
+        "unsupported descriptor version {found}: this build reads version \
+         {QUORUM_MEMBERSHIP_VERSION}"
+    )]
+    UnsupportedVersion {
+        /// The `"version"` as JSON text.
+        found: String,
+    },
+    /// The bytes are not a descriptor at all.
+    #[error("{0}")]
+    Malformed(String),
+}
+
+fn decode_quorum_membership(
+    bytes: &[u8],
+) -> Result<PersistedQuorumMembership, QuorumMembershipDecodeError> {
+    let malformed =
+        |err: serde_json::Error| QuorumMembershipDecodeError::Malformed(err.to_string());
+    let probe: PersistedQuorumMembershipVersion =
+        serde_json::from_slice(bytes).map_err(malformed)?;
+    let version = probe
+        .version
+        .ok_or(QuorumMembershipDecodeError::MissingVersion)?;
+    if version != QUORUM_MEMBERSHIP_VERSION {
+        return Err(QuorumMembershipDecodeError::UnsupportedVersion {
+            found: version.to_string(),
+        });
+    }
+    serde_json::from_slice(bytes).map_err(malformed)
 }
 
 pub(super) fn load_or_prepare_quorum_membership(
@@ -36,13 +91,15 @@ pub(super) fn load_or_prepare_quorum_membership(
     };
     if let Some(existing) = existing {
         let bytes = fs::read(existing)?;
-        let persisted: PersistedQuorumMembership =
-            serde_json::from_slice(&bytes).map_err(|err| {
-                BrokerError::Replication(format!(
-                    "decode WAL quorum membership {}: {err}",
-                    existing.display()
-                ))
-            })?;
+        // The backup is read under the same rules as the primary: a backup
+        // of a version this build does not read is an error, never a reason
+        // to fall back further or to bootstrap the shard again.
+        let persisted = decode_quorum_membership(&bytes).map_err(|err| {
+            BrokerError::Replication(format!(
+                "decode WAL quorum membership {}: {err}",
+                existing.display()
+            ))
+        })?;
         let persisted_ids = persisted.voters.into_iter().map(NodeId).collect::<Vec<_>>();
         if persisted_ids != voter_ids {
             return Err(BrokerError::Replication(format!(
@@ -64,6 +121,7 @@ pub(super) fn persist_quorum_membership(
 ) -> Result<(), BrokerError> {
     let path = root.join(QUORUM_STATE_FILE);
     let persisted = PersistedQuorumMembership {
+        version: QUORUM_MEMBERSHIP_VERSION,
         voters: voter_ids.iter().map(|id| id.0).collect(),
     };
     let bytes = serde_json::to_vec_pretty(&persisted).map_err(|err| {
@@ -127,12 +185,18 @@ mod tests {
         persist_quorum_membership(root.path(), &voter_ids).unwrap();
 
         let is_new = load_or_prepare_quorum_membership(root.path(), &voter_ids).unwrap();
-        let persisted: PersistedQuorumMembership =
-            serde_json::from_slice(&fs::read(root.path().join(QUORUM_STATE_FILE)).unwrap())
+        let persisted =
+            decode_quorum_membership(&fs::read(root.path().join(QUORUM_STATE_FILE)).unwrap())
                 .unwrap();
 
         assert!(!is_new);
-        assert!(persisted.voters == vec![0, 1, 2]);
+        assert!(
+            persisted
+                == PersistedQuorumMembership {
+                    version: QUORUM_MEMBERSHIP_VERSION,
+                    voters: vec![0, 1, 2],
+                }
+        );
         assert!(root.path().join(QUORUM_STATE_FILE).exists());
         assert!(
             !root
@@ -169,6 +233,7 @@ mod tests {
         fs::write(
             root.path().join(QUORUM_STATE_FILE),
             serde_json::to_vec(&serde_json::json!({
+                "version": 0,
                 "voters": [0, 1, 2],
                 "leader_epoch": 4,
                 "leader_id": 1,
@@ -182,7 +247,7 @@ mod tests {
         let persisted: serde_json::Value =
             serde_json::from_slice(&fs::read(root.path().join(QUORUM_STATE_FILE)).unwrap())
                 .unwrap();
-        assert!(persisted == serde_json::json!({"voters": [0, 1, 2]}));
+        assert!(persisted == serde_json::json!({"version": 0, "voters": [0, 1, 2]}));
         assert!(!root.path().join(QUORUM_STATE_BACKUP_FILE).exists());
     }
 
@@ -219,26 +284,89 @@ mod tests {
         assert!(fs::read(&backup).unwrap() == b"stale-backup");
     }
 
-    #[test]
-    fn legacy_quorum_state_descriptor_ignores_unused_election_fields() {
-        let root = tempfile::tempdir().unwrap();
-        let cluster_id = Uuid::from_u128(17);
-        fs::write(
-            root.path().join(QUORUM_STATE_FILE),
-            serde_json::json!({
-                "cluster_id": cluster_id,
-                "voters": [0, 1, 2],
-                "kraft_version": 1,
-                "leader_epoch": 7,
-                "leader_id": 9,
-                "voted_key": {"id": 9, "directory_id": Uuid::from_u128(99)},
-            })
-            .to_string(),
-        )
-        .unwrap();
-        let voter_ids = vec![NodeId(0), NodeId(1), NodeId(2)];
+    /// The exact bytes a 1.x broker writes for voters `[0, 1, 2]`. A change
+    /// here is a change to the 1.x on-disk contract.
+    const GOLDEN_DESCRIPTOR: &str =
+        "{\n  \"version\": 0,\n  \"voters\": [\n    0,\n    1,\n    2\n  ]\n}";
 
-        assert!(!load_or_prepare_quorum_membership(root.path(), &voter_ids).unwrap());
+    #[test]
+    fn quorum_membership_descriptor_matches_the_golden_bytes() {
+        let root = tempfile::tempdir().unwrap();
+        persist_quorum_membership(root.path(), &[NodeId(0), NodeId(1), NodeId(2)]).unwrap();
+
+        let written = fs::read_to_string(root.path().join(QUORUM_STATE_FILE)).unwrap();
+
+        assert!(written == GOLDEN_DESCRIPTOR);
+        assert!(
+            decode_quorum_membership(GOLDEN_DESCRIPTOR.as_bytes())
+                == Ok(PersistedQuorumMembership {
+                    version: QUORUM_MEMBERSHIP_VERSION,
+                    voters: vec![0, 1, 2],
+                })
+        );
+    }
+
+    #[test]
+    fn quorum_membership_decode_rejects_a_missing_or_unknown_version() {
+        for (name, descriptor, expected) in [
+            (
+                "pre-1.0 descriptor with no version",
+                serde_json::json!({"voters": [0, 1, 2]}),
+                QuorumMembershipDecodeError::MissingVersion,
+            ),
+            (
+                "pre-1.0 descriptor with election fields",
+                serde_json::json!({
+                    "cluster_id": Uuid::from_u128(17),
+                    "voters": [0, 1, 2],
+                    "kraft_version": 1,
+                    "leader_epoch": 7,
+                }),
+                QuorumMembershipDecodeError::MissingVersion,
+            ),
+            (
+                "future version",
+                serde_json::json!({"version": 1, "voters": [0, 1, 2]}),
+                QuorumMembershipDecodeError::UnsupportedVersion {
+                    found: "1".to_owned(),
+                },
+            ),
+            (
+                "version that is not a number",
+                serde_json::json!({"version": "0", "voters": [0, 1, 2]}),
+                QuorumMembershipDecodeError::UnsupportedVersion {
+                    found: "\"0\"".to_owned(),
+                },
+            ),
+        ] {
+            let bytes = serde_json::to_vec(&descriptor).unwrap();
+            assert!(
+                decode_quorum_membership(&bytes) == Err(expected),
+                "case {name}"
+            );
+        }
+    }
+
+    #[test]
+    fn quorum_membership_refuses_a_primary_or_backup_of_an_unknown_version() {
+        let voter_ids = vec![NodeId(0), NodeId(1), NodeId(2)];
+        for file in [QUORUM_STATE_FILE, QUORUM_STATE_BACKUP_FILE] {
+            let root = tempfile::tempdir().unwrap();
+            fs::write(
+                root.path().join(file),
+                serde_json::json!({"version": 1, "voters": [0, 1, 2]}).to_string(),
+            )
+            .unwrap();
+
+            let error = load_or_prepare_quorum_membership(root.path(), &voter_ids).unwrap_err();
+
+            assert!(
+                error
+                    .to_string()
+                    .contains("unsupported descriptor version 1"),
+                "{file}: {error}"
+            );
+        }
     }
 
     #[test]

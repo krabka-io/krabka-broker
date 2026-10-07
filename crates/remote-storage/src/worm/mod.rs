@@ -52,7 +52,7 @@ mod verify;
 
 pub use self::{
     archiver::{SealedManifest, WormArchiver},
-    chain::{WormChainRecord, next_chain_stamp},
+    chain::{WORM_CHAIN_RECORD_VERSION, WormChainRecord, next_chain_stamp},
     config::WormConfig,
     error::WormError,
     manifest::{

@@ -285,7 +285,11 @@ mod tests {
             .await
             .unwrap_err();
 
-        check!(error == "diskless WAL index partition 0 offset 1: invalid diskless WAL index key");
+        check!(
+            error
+                == "diskless WAL index partition 0 offset 1: unknown diskless WAL index key version \
+                    28271"
+        );
         check!(visited_offsets(&log) == vec![(0, 0), (0, 1)]);
     }
 

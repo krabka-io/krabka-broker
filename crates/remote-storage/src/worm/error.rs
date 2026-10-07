@@ -24,6 +24,23 @@ pub enum WormError {
     /// The chain record on the segment metadata is not decodable.
     #[error("malformed WORM chain record: {0}")]
     MalformedChainRecord(String),
+    /// The chain record has no `"version"`, or one this build does not read.
+    /// A record without one was written before krabka 1.0.
+    #[error(
+        "unsupported WORM chain record version {}: this build reads version {}{}",
+        found.as_deref().unwrap_or("(none)"),
+        crate::worm::chain::WORM_CHAIN_RECORD_VERSION,
+        if found.is_none() {
+            "; the record predates krabka 1.0, whose data a 1.x broker does not read"
+        } else {
+            ""
+        }
+    )]
+    UnsupportedChainRecordVersion {
+        /// The `"version"` the record carries, as JSON text, or `None` when it
+        /// has none.
+        found: Option<String>,
+    },
     /// The manifest does not encode to, or decode from, its JSON form.
     #[error("WORM manifest codec error: {0}")]
     Codec(String),

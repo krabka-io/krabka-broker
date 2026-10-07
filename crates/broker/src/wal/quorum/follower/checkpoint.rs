@@ -12,10 +12,70 @@ use krabka_log::Log;
 pub(super) const DURABLE_OFFSET_FILE: &str = "wal-durable-offset.checkpoint";
 const DURABLE_OFFSET_BACKUP_FILE: &str = "wal-durable-offset.checkpoint.bak";
 
-#[derive(Debug, Clone, Copy)]
+/// Version of `wal-durable-offset.checkpoint` and its `.bak`, the file's first
+/// line, as in Kafka's own checkpoint files. The second line is
+/// `<start> <end>`.
+///
+/// Part of the 1.x on-disk contract: a 1.x broker reads every checkpoint that
+/// any earlier 1.x broker wrote.
+pub(super) const DURABLE_OFFSET_VERSION: i16 = 0;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct DurableRange {
     pub(super) start: Offset,
     pub(super) end: Offset,
+}
+
+/// Why a durable-offset checkpoint could not be read.
+#[derive(Debug, PartialEq, Eq, thiserror::Error)]
+enum DurableOffsetDecodeError {
+    /// The first line holds the two offsets, as a checkpoint written before
+    /// 1.0 does, with no version line above them.
+    #[error(
+        "the checkpoint has no version line: it predates krabka 1.0, whose data a 1.x broker \
+         does not read; reformat this node"
+    )]
+    MissingVersion,
+    /// The version line names a version this build does not read.
+    #[error(
+        "unsupported checkpoint version {found:?}: this build reads version \
+         {DURABLE_OFFSET_VERSION}"
+    )]
+    UnsupportedVersion {
+        /// The version line as it was found.
+        found: String,
+    },
+    /// The offsets line is not two offsets.
+    #[error("expected two offsets: {0}")]
+    Malformed(String),
+}
+
+fn decode_durable_offset(text: &str) -> Result<DurableRange, DurableOffsetDecodeError> {
+    let mut lines = text.lines();
+    let version = lines.next().unwrap_or_default().trim();
+    if version.split_ascii_whitespace().count() > 1 {
+        return Err(DurableOffsetDecodeError::MissingVersion);
+    }
+    if version.parse::<i16>() != Ok(DURABLE_OFFSET_VERSION) {
+        return Err(DurableOffsetDecodeError::UnsupportedVersion {
+            found: version.to_owned(),
+        });
+    }
+    let offsets = lines
+        .next()
+        .unwrap_or_default()
+        .split_ascii_whitespace()
+        .map(str::parse::<i64>)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| DurableOffsetDecodeError::Malformed(error.to_string()))?;
+    let trailing = lines.any(|line| !line.trim().is_empty());
+    match (offsets.as_slice(), trailing) {
+        ([start, end], false) => Ok(DurableRange {
+            start: Offset(*start),
+            end: Offset(*end),
+        }),
+        _ => Err(DurableOffsetDecodeError::Malformed(format!("{text:?}"))),
+    }
 }
 
 pub(super) fn recover_durable_offset(log: &mut Log, path: &Path) -> Result<(), crate::BrokerError> {
@@ -35,27 +95,16 @@ pub(super) fn recover_durable_offset(log: &mut Log, path: &Path) -> Result<(), c
             })
         },
         |checkpoint| {
+            // The backup is read under the same rules as the primary: a backup
+            // of a version this build does not read is an error, never a
+            // reason to fall back to the log start.
             let value = std::fs::read_to_string(checkpoint)?;
-            let offsets = value
-                .split_ascii_whitespace()
-                .map(str::parse::<i64>)
-                .collect::<Result<Vec<_>, _>>()
-                .map_err(|error| {
-                    crate::BrokerError::Replication(format!(
-                        "decode WAL durable offsets {}: {error}",
-                        checkpoint.display()
-                    ))
-                })?;
-            match offsets.as_slice() {
-                [start, end] => Ok(DurableRange {
-                    start: Offset(*start),
-                    end: Offset(*end),
-                }),
-                _ => Err(crate::BrokerError::Replication(format!(
-                    "decode WAL durable offsets {}: expected two offsets",
+            decode_durable_offset(&value).map_err(|error| {
+                crate::BrokerError::Replication(format!(
+                    "decode WAL durable offsets {}: {error}",
                     checkpoint.display()
-                ))),
-            }
+                ))
+            })
         },
     )?;
     let start = log.log_start_offset();
@@ -110,7 +159,7 @@ pub(super) fn write_durable_offset(
     let temporary = path.with_extension("checkpoint.tmp");
     let backup = path.with_file_name(DURABLE_OFFSET_BACKUP_FILE);
     let mut file = std::fs::File::create(&temporary)?;
-    writeln!(file, "{} {}", durable.start.0, durable.end.0)?;
+    write!(file, "{}", encode_durable_offset(durable))?;
     file.sync_all()?;
     drop(file);
     if backup.exists() {
@@ -133,6 +182,13 @@ pub(super) fn write_durable_offset(
     Ok(())
 }
 
+fn encode_durable_offset(durable: DurableRange) -> String {
+    format!(
+        "{DURABLE_OFFSET_VERSION}\n{} {}\n",
+        durable.start.0, durable.end.0
+    )
+}
+
 fn restore_durable_offset_backup(path: &Path, backup: &Path) {
     let (Ok(false), Ok(true)) = (path.try_exists(), backup.try_exists()) else {
         return;
@@ -147,6 +203,78 @@ mod tests {
     use krabka_protocol::records::{Record, RecordBatch};
 
     use super::*;
+
+    /// The exact bytes a 1.x broker writes for the range `3..7`. A change
+    /// here is a change to the 1.x on-disk contract.
+    const GOLDEN_CHECKPOINT: &str = "0\n3 7\n";
+
+    #[test]
+    fn durable_offset_checkpoint_matches_the_golden_bytes() {
+        let range = DurableRange {
+            start: Offset(3),
+            end: Offset(7),
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(DURABLE_OFFSET_FILE);
+
+        write_durable_offset(&path, range).unwrap();
+
+        assert!(std::fs::read_to_string(&path).unwrap() == GOLDEN_CHECKPOINT);
+        assert!(decode_durable_offset(GOLDEN_CHECKPOINT) == Ok(range));
+    }
+
+    #[test]
+    fn durable_offset_decode_rejects_a_missing_or_unknown_version() {
+        for (name, text, expected) in [
+            (
+                "pre-1.0 checkpoint, offsets on the first line",
+                "3 7\n",
+                DurableOffsetDecodeError::MissingVersion,
+            ),
+            (
+                "future version",
+                "1\n3 7\n",
+                DurableOffsetDecodeError::UnsupportedVersion {
+                    found: "1".to_owned(),
+                },
+            ),
+            (
+                "version that is not a number",
+                "v0\n3 7\n",
+                DurableOffsetDecodeError::UnsupportedVersion {
+                    found: "v0".to_owned(),
+                },
+            ),
+            (
+                "empty file",
+                "",
+                DurableOffsetDecodeError::UnsupportedVersion {
+                    found: String::new(),
+                },
+            ),
+        ] {
+            assert!(decode_durable_offset(text) == Err(expected), "case {name}");
+        }
+    }
+
+    #[test]
+    fn durable_offset_recovery_refuses_a_primary_or_backup_of_an_unknown_version() {
+        for file in [DURABLE_OFFSET_FILE, DURABLE_OFFSET_BACKUP_FILE] {
+            let dir = tempfile::tempdir().unwrap();
+            let mut log = Log::open(dir.path(), LogConfig::default()).unwrap();
+            std::fs::write(dir.path().join(file), "1\n0 0\n").unwrap();
+
+            let error = recover_durable_offset(&mut log, &dir.path().join(DURABLE_OFFSET_FILE))
+                .unwrap_err();
+
+            assert!(
+                error
+                    .to_string()
+                    .contains("unsupported checkpoint version \"1\""),
+                "{file}: {error}"
+            );
+        }
+    }
 
     #[test]
     fn durable_offset_backup_is_restored_only_when_primary_is_missing() {
@@ -200,16 +328,16 @@ mod tests {
         recover_durable_offset(&mut reopened, &checkpoint).unwrap();
 
         assert2::assert!((reopened.log_end_offset()) == (Offset(1)));
-        assert2::assert!((std::fs::read_to_string(checkpoint).unwrap().trim()) == ("0 1"));
+        assert2::assert!((std::fs::read_to_string(checkpoint).unwrap()) == ("0\n0 1\n"));
     }
 
     #[test]
     fn follower_checkpoint_recovery_respects_whole_batches_and_interior_floors() {
         for (value, accepted, expected_start, expected_end) in [
-            (Some("0 1\n"), false, 0, 3),
-            (Some("1 2\n"), false, 0, 3),
-            (Some("1 3\n"), true, 1, 3),
-            (Some("1 1\n"), true, 1, 1),
+            (Some("0\n0 1\n"), false, 0, 3),
+            (Some("0\n1 2\n"), false, 0, 3),
+            (Some("0\n1 3\n"), true, 1, 3),
+            (Some("0\n1 1\n"), true, 1, 1),
             (None, true, 1, 1),
         ] {
             let dir = tempfile::tempdir().unwrap();
@@ -264,10 +392,12 @@ mod tests {
     #[test]
     fn follower_recovery_rejects_incomplete_and_invalid_durable_ranges() {
         for (checkpoint_value, expected_error) in [
-            ("1\n", "expected two offsets"),
-            ("-1 0\n", "outside recovered range"),
-            ("1 0\n", "outside recovered range"),
-            ("0 2\n", "outside recovered range"),
+            ("0\n1\n", "expected two offsets"),
+            ("0\n-1 0\n", "outside recovered range"),
+            ("0\n1 0\n", "outside recovered range"),
+            ("0\n0 2\n", "outside recovered range"),
+            ("0 1\n", "predates krabka 1.0"),
+            ("1\n0 1\n", "unsupported checkpoint version \"1\""),
         ] {
             let dir = tempfile::tempdir().unwrap();
             let checkpoint = dir.path().join(DURABLE_OFFSET_FILE);

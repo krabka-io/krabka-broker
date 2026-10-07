@@ -308,10 +308,8 @@ mod tests {
                 let error = hydrate_follower!(root, shard, destination).unwrap_err();
                 assert!(error.to_string().contains("promotion copy interrupted"));
                 assert!(
-                    std::fs::read_to_string(follower_dir.join(DURABLE_OFFSET_FILE))
-                        .unwrap()
-                        .trim()
-                        == format!("{destination_floor} 6")
+                    std::fs::read_to_string(follower_dir.join(DURABLE_OFFSET_FILE)).unwrap()
+                        == format!("0\n{destination_floor} 6\n")
                 );
                 drop(destination);
                 destination = Log::open(&destination_dir, LogConfig::default()).unwrap();

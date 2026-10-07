@@ -40,6 +40,12 @@ pub struct WalIndexEntry {
 }
 
 /// Compaction key for one logical range.
+///
+/// Every `__diskless_wal_index` key starts with a big-endian `i16` key
+/// version. As in Kafka's coordinator records, the key version names the
+/// record type the key and its value belong to, so a reader dispatches on it
+/// before it looks at anything else and a key type it does not know is
+/// refused instead of being decoded as another type.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct WalIndexKey {
     pub topic_id: Uuid,
@@ -48,26 +54,44 @@ pub struct WalIndexKey {
 }
 
 impl WalIndexKey {
-    const LEN: usize = 28;
+    /// Key version of a range key, whose value is a [`WalFlushRecord`].
+    ///
+    /// Part of the 1.x on-disk contract: a 1.x broker reads every range key
+    /// that any earlier 1.x broker wrote.
+    pub const KEY_VERSION: i16 = 0;
+    const LEN: usize = 30;
 
     #[must_use]
     pub fn to_bytes(self) -> Bytes {
         let mut out = Vec::with_capacity(Self::LEN);
+        out.extend_from_slice(&Self::KEY_VERSION.to_be_bytes());
         out.extend_from_slice(self.topic_id.as_bytes());
         out.extend_from_slice(&self.partition.to_be_bytes());
         out.extend_from_slice(&self.first_offset.to_be_bytes());
         out.into()
     }
 
+    /// Decode a range key, or `None` when `bytes` are not one: another key
+    /// version, or the wrong length.
     #[must_use]
     pub fn from_bytes(bytes: &[u8]) -> Option<Self> {
         let bytes: &[u8; Self::LEN] = bytes.try_into().ok()?;
+        if wal_index_key_version(bytes) != Some(Self::KEY_VERSION) {
+            return None;
+        }
         Some(Self {
-            topic_id: Uuid::from_bytes(bytes[..16].try_into().ok()?),
-            partition: i32::from_be_bytes(bytes[16..20].try_into().ok()?),
-            first_offset: i64::from_be_bytes(bytes[20..].try_into().ok()?),
+            topic_id: Uuid::from_bytes(bytes[2..18].try_into().ok()?),
+            partition: i32::from_be_bytes(bytes[18..22].try_into().ok()?),
+            first_offset: i64::from_be_bytes(bytes[22..].try_into().ok()?),
         })
     }
+}
+
+/// The leading key version of a `__diskless_wal_index` key, or `None` for a
+/// key shorter than the version itself.
+#[must_use]
+pub fn wal_index_key_version(key: &[u8]) -> Option<i16> {
+    Some(i16::from_be_bytes(key.get(..2)?.try_into().ok()?))
 }
 
 impl From<&WalIndexEntry> for WalIndexKey {
@@ -88,32 +112,63 @@ pub struct WalDeleteFloorKey {
 }
 
 impl WalDeleteFloorKey {
-    const LEN: usize = 21;
-    const TAG: u8 = 0xf0;
+    /// Key version of a delete-floor key, whose value is a
+    /// [`WalDeleteFloorRecord`].
+    ///
+    /// Part of the 1.x on-disk contract: a 1.x broker reads every delete-floor
+    /// key that any earlier 1.x broker wrote.
+    pub const KEY_VERSION: i16 = 1;
+    const LEN: usize = 22;
 
     #[must_use]
     pub fn to_bytes(self) -> Bytes {
         let mut out = Vec::with_capacity(Self::LEN);
-        out.push(Self::TAG);
+        out.extend_from_slice(&Self::KEY_VERSION.to_be_bytes());
         out.extend_from_slice(self.topic_id.as_bytes());
         out.extend_from_slice(&self.partition.to_be_bytes());
         out.into()
     }
 
+    /// Decode a delete-floor key, or `None` when `bytes` are not one: another
+    /// key version, or the wrong length.
     #[must_use]
     pub fn from_bytes(bytes: &[u8]) -> Option<Self> {
         let bytes: &[u8; Self::LEN] = bytes.try_into().ok()?;
-        if bytes[0] != Self::TAG {
+        if wal_index_key_version(bytes) != Some(Self::KEY_VERSION) {
             return None;
         }
         Some(Self {
-            topic_id: Uuid::from_bytes(bytes[1..17].try_into().ok()?),
-            partition: i32::from_be_bytes(bytes[17..].try_into().ok()?),
+            topic_id: Uuid::from_bytes(bytes[2..18].try_into().ok()?),
+            partition: i32::from_be_bytes(bytes[18..].try_into().ok()?),
         })
     }
 }
 
+/// Split the leading big-endian `i16` version off a `__diskless_wal_index`
+/// value, refusing any version other than `expected`.
+fn split_value_version<'a>(
+    bytes: &'a [u8],
+    record: &str,
+    expected: i16,
+) -> Result<&'a [u8], String> {
+    let (version, body) = bytes
+        .split_first_chunk::<2>()
+        .ok_or_else(|| format!("truncated {record}: {} bytes hold no version", bytes.len()))?;
+    let version = i16::from_be_bytes(*version);
+    if version != expected {
+        return Err(format!(
+            "unsupported {record} version {version}: this build reads version {expected}. \
+             A record written before krabka 1.0 has no version prefix and is not readable; \
+             reformat the cluster"
+        ));
+    }
+    Ok(body)
+}
+
 /// Durable `DeleteRecords` floor.
+///
+/// The value is a big-endian `i16` [`Self::VERSION`] followed by the wincode
+/// body.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WalDeleteFloorRecord {
     pub topic_id: Uuid,
@@ -122,27 +177,42 @@ pub struct WalDeleteFloorRecord {
 }
 
 impl WalDeleteFloorRecord {
+    /// Value version of a delete-floor record.
+    ///
+    /// Part of the 1.x on-disk contract: a 1.x broker reads every delete-floor
+    /// record that any earlier 1.x broker wrote.
+    pub const VERSION: i16 = 0;
+
     /// Encode with the index topic codec.
     ///
     /// # Errors
     /// Returns the codec error when the record cannot be encoded.
     pub fn to_bytes(&self) -> Result<Bytes, String> {
-        <serde_wincode::SerdeCompat<Self> as wincode::Serialize>::serialize(self)
-            .map(Bytes::from)
-            .map_err(|error| error.to_string())
+        let body = <serde_wincode::SerdeCompat<Self> as wincode::Serialize>::serialize(self)
+            .map_err(|error| error.to_string())?;
+        let mut out = Vec::with_capacity(2 + body.len());
+        out.extend_from_slice(&Self::VERSION.to_be_bytes());
+        out.extend_from_slice(&body);
+        Ok(out.into())
     }
 
     /// Decode the index topic codec.
     ///
     /// # Errors
-    /// Returns the codec error when `bytes` are malformed.
+    /// Returns an error for a missing or unsupported version, or when the body
+    /// is malformed.
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, String> {
-        <serde_wincode::SerdeCompat<Self> as wincode::Deserialize>::deserialize(bytes)
+        let body = split_value_version(bytes, "diskless WAL delete-floor record", Self::VERSION)?;
+        <serde_wincode::SerdeCompat<Self> as wincode::Deserialize>::deserialize(body)
             .map_err(|error| error.to_string())
     }
 }
 
 /// Durable index value for a flushed object.
+///
+/// The value is a big-endian `i16` `format_version` followed by the wincode
+/// body of `object_key` and `entries`, so a reader checks the version before it
+/// decodes anything else.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WalFlushRecord {
     pub object_key: String,
@@ -150,7 +220,25 @@ pub struct WalFlushRecord {
     pub entries: Vec<WalIndexEntry>,
 }
 
+/// The wincode body of a [`WalFlushRecord`], as it is encoded.
+#[derive(Serialize)]
+struct WalFlushBodyRef<'a> {
+    object_key: &'a str,
+    entries: &'a [WalIndexEntry],
+}
+
+/// The wincode body of a [`WalFlushRecord`], as it is decoded.
+#[derive(Deserialize)]
+struct WalFlushBody {
+    object_key: String,
+    entries: Vec<WalIndexEntry>,
+}
+
 impl WalFlushRecord {
+    /// Value version of a flush record.
+    ///
+    /// Part of the 1.x on-disk contract: a 1.x broker reads every flush record
+    /// that any earlier 1.x broker wrote. It is encoded as a big-endian `i16`.
     pub const FORMAT_VERSION: u16 = 2;
 
     /// Encode one keyed WAL range in the format a flusher publishes.
@@ -179,52 +267,43 @@ impl WalFlushRecord {
                 self.format_version
             ));
         }
-        <serde_wincode::SerdeCompat<Self> as wincode::Serialize>::serialize(self)
-            .map(Bytes::from)
-            .map_err(|error| error.to_string())
+        let version = Self::wire_version();
+        let body =
+            <serde_wincode::SerdeCompat<WalFlushBodyRef<'_>> as wincode::Serialize>::serialize(
+                &WalFlushBodyRef {
+                    object_key: &self.object_key,
+                    entries: &self.entries,
+                },
+            )
+            .map_err(|error| error.to_string())?;
+        let mut out = Vec::with_capacity(2 + body.len());
+        out.extend_from_slice(&version.to_be_bytes());
+        out.extend_from_slice(&body);
+        Ok(out.into())
     }
 
     /// Decode with strict format-version checking.
     ///
     /// # Errors
-    /// Returns an error for malformed bytes or an unsupported version.
+    /// Returns an error for a missing or unsupported version, or malformed
+    /// bytes.
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, String> {
-        match <serde_wincode::SerdeCompat<Self> as wincode::Deserialize>::deserialize(bytes) {
-            Ok(record) if record.format_version == Self::FORMAT_VERSION => Ok(record),
-            Ok(record) => Err(format!(
-                "unsupported diskless WAL index format version {}",
-                record.format_version
-            )),
-            Err(error) => {
-                if let Ok(previous) = <serde_wincode::SerdeCompat<PreviousWalFlushRecord> as wincode::Deserialize>::deserialize(bytes) {
-                    return Err(format!(
-                        "unsupported diskless WAL index format version {}",
-                        previous.format_version
-                    ));
-                }
-                Err(error.to_string())
-            }
-        }
+        let body = split_value_version(bytes, "diskless WAL index format", Self::wire_version())?;
+        let body =
+            <serde_wincode::SerdeCompat<WalFlushBody> as wincode::Deserialize>::deserialize(body)
+                .map_err(|error| error.to_string())?;
+        Ok(Self {
+            object_key: body.object_key,
+            format_version: Self::FORMAT_VERSION,
+            entries: body.entries,
+        })
     }
-}
 
-#[allow(dead_code)]
-#[derive(Deserialize)]
-struct PreviousWalFlushRecord {
-    object_key: String,
-    format_version: u16,
-    entries: Vec<PreviousWalIndexEntry>,
-}
-
-#[allow(dead_code)]
-#[derive(Deserialize)]
-struct PreviousWalIndexEntry {
-    topic_id: Uuid,
-    partition: i32,
-    first_offset: i64,
-    last_offset: i64,
-    byte_start: u64,
-    byte_len: u32,
+    /// [`Self::FORMAT_VERSION`] as the `i16` the value leads with. The
+    /// version is far below `i16::MAX`, so the conversion keeps its value.
+    const fn wire_version() -> i16 {
+        Self::FORMAT_VERSION.cast_signed()
+    }
 }
 
 /// One live capture range and its authoritative object.
@@ -266,21 +345,49 @@ pub struct DisklessWalCapture {
     pub authentication: Option<SegmentManifest>,
 }
 
+/// Just the version of a capture, read before the rest of it.
+#[derive(Deserialize)]
+struct DisklessWalCaptureVersion {
+    format_version: Option<serde_json::Value>,
+}
+
 impl DisklessWalCapture {
+    /// Version of `diskless-wal-index.json`, its required top-level
+    /// `"format_version"` field.
+    ///
+    /// Part of the 1.x on-disk contract: a 1.x restore reads every capture
+    /// that any earlier 1.x build wrote.
     pub const FORMAT_VERSION: u16 = 1;
 
-    /// Decode JSON and reject unknown capture versions.
+    /// Decode JSON and reject a missing or unknown capture version.
+    ///
+    /// The version is read on its own first, so a capture of another version
+    /// is reported as that, and not as whatever field its shape lacks.
     ///
     /// # Errors
-    /// Returns an error for malformed JSON, an unsupported version, or invalid state.
+    /// Returns an error for malformed JSON, a missing or unsupported version,
+    /// or invalid state.
     pub fn from_slice(bytes: &[u8]) -> Result<Self, String> {
-        let capture: Self = serde_json::from_slice(bytes).map_err(|error| error.to_string())?;
-        if capture.format_version != Self::FORMAT_VERSION {
-            return Err(format!(
-                "unsupported diskless WAL capture format version {}",
-                capture.format_version
-            ));
+        let probe: DisklessWalCaptureVersion =
+            serde_json::from_slice(bytes).map_err(|error| error.to_string())?;
+        match probe.format_version {
+            None => {
+                return Err(
+                    "diskless WAL capture has no format_version: it predates krabka \
+                     1.0, which this build does not read"
+                        .to_owned(),
+                );
+            }
+            Some(version) if version != Self::FORMAT_VERSION => {
+                return Err(format!(
+                    "unsupported diskless WAL capture format version {version}: this build \
+                     reads version {}",
+                    Self::FORMAT_VERSION
+                ));
+            }
+            Some(_) => {}
         }
+        let capture: Self = serde_json::from_slice(bytes).map_err(|error| error.to_string())?;
         capture.validate()?;
         Ok(capture)
     }
@@ -559,8 +666,16 @@ impl WalCaptureProjection {
             }
             return Ok(());
         }
-        let range_key = WalIndexKey::from_bytes(key)
-            .ok_or_else(|| "invalid diskless WAL index key".to_owned())?;
+        let range_key =
+            WalIndexKey::from_bytes(key).ok_or_else(|| match wal_index_key_version(key) {
+                Some(version)
+                    if version != WalIndexKey::KEY_VERSION
+                        && version != WalDeleteFloorKey::KEY_VERSION =>
+                {
+                    format!("unknown diskless WAL index key version {version}")
+                }
+                _ => "invalid diskless WAL index key".to_owned(),
+            })?;
         let Some(value) = value else {
             self.ranges.remove(&range_key);
             return Ok(());
@@ -887,4 +1002,267 @@ pub fn parse_wal_object(object: &Bytes) -> Result<Vec<WalObjectEntry>, WalObject
         entries.push(entry);
     }
     Ok(entries)
+}
+
+#[cfg(test)]
+mod tests {
+    use assert2::check;
+
+    use super::*;
+
+    const TOPIC_ID: Uuid = Uuid::from_u128(0x0011_2233_4455_6677_8899_aabb_ccdd_eeff);
+
+    fn floor_record() -> WalDeleteFloorRecord {
+        WalDeleteFloorRecord {
+            topic_id: TOPIC_ID,
+            partition: 3,
+            floor: 42,
+        }
+    }
+
+    fn flush_record() -> WalFlushRecord {
+        WalFlushRecord {
+            object_key: "wal/a".to_owned(),
+            format_version: WalFlushRecord::FORMAT_VERSION,
+            entries: vec![WalIndexEntry {
+                topic_id: TOPIC_ID,
+                partition: 3,
+                first_offset: 10,
+                last_offset: 12,
+                byte_start: 6,
+                byte_len: 64,
+                max_timestamp_ms: 1_700_000_000_000,
+            }],
+        }
+    }
+
+    /// The exact value bytes of [`floor_record`]: the `i16` version 0, then
+    /// the wincode body. A change here is a change to the 1.x on-disk
+    /// contract.
+    const GOLDEN_FLOOR_RECORD: &[u8] = &[
+        0x00, 0x00, // version 0
+        0x10, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // topic id length 16
+        0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, //
+        0x88, 0x99, 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff, // topic id
+        0x03, 0x00, 0x00, 0x00, // partition 3
+        0x2a, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // floor 42
+    ];
+
+    /// The exact value bytes of [`flush_record`]: the `i16` version 2, then
+    /// the wincode body of `object_key` and `entries`. A change here is a
+    /// change to the 1.x on-disk contract.
+    const GOLDEN_FLUSH_RECORD: &[u8] = &[
+        0x00, 0x02, // version 2
+        0x05, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // object key length 5
+        b'w', b'a', b'l', b'/', b'a', // object key
+        0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // one entry
+        0x10, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // topic id length 16
+        0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, //
+        0x88, 0x99, 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff, // topic id
+        0x03, 0x00, 0x00, 0x00, // partition 3
+        0x0a, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // first offset 10
+        0x0c, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // last offset 12
+        0x06, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // byte start 6
+        0x40, 0x00, 0x00, 0x00, // byte length 64
+        0x00, 0x68, 0xe5, 0xcf, 0x8b, 0x01, 0x00, 0x00, // max timestamp
+    ];
+
+    /// The exact key bytes of the range key of [`flush_record`]: the `i16`
+    /// key version 0, then the topic id, partition and first offset.
+    const GOLDEN_RANGE_KEY: &[u8] = &[
+        0x00, 0x00, // key version 0
+        0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, //
+        0x88, 0x99, 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff, // topic id
+        0x00, 0x00, 0x00, 0x03, // partition 3
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x0a, // first offset 10
+    ];
+
+    /// The exact key bytes of the delete-floor key of [`floor_record`]: the
+    /// `i16` key version 1, then the topic id and partition.
+    const GOLDEN_FLOOR_KEY: &[u8] = &[
+        0x00, 0x01, // key version 1
+        0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, //
+        0x88, 0x99, 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff, // topic id
+        0x00, 0x00, 0x00, 0x03, // partition 3
+    ];
+
+    #[test]
+    fn index_values_encode_to_the_golden_bytes_and_decode_back() {
+        check!(floor_record().to_bytes().unwrap().as_ref() == GOLDEN_FLOOR_RECORD);
+        check!(WalDeleteFloorRecord::from_bytes(GOLDEN_FLOOR_RECORD) == Ok(floor_record()));
+        check!(flush_record().to_bytes().unwrap().as_ref() == GOLDEN_FLUSH_RECORD);
+        check!(WalFlushRecord::from_bytes(GOLDEN_FLUSH_RECORD) == Ok(flush_record()));
+    }
+
+    #[test]
+    fn index_keys_encode_to_the_golden_bytes_and_decode_back() {
+        let range = WalIndexKey::from(&flush_record().entries[0]);
+        let floor = WalDeleteFloorKey {
+            topic_id: TOPIC_ID,
+            partition: 3,
+        };
+        check!(range.to_bytes().as_ref() == GOLDEN_RANGE_KEY);
+        check!(WalIndexKey::from_bytes(GOLDEN_RANGE_KEY) == Some(range));
+        check!(floor.to_bytes().as_ref() == GOLDEN_FLOOR_KEY);
+        check!(WalDeleteFloorKey::from_bytes(GOLDEN_FLOOR_KEY) == Some(floor));
+        // Neither key type decodes as the other, nor does the replay fence.
+        check!(WalIndexKey::from_bytes(GOLDEN_FLOOR_KEY) == None);
+        check!(WalDeleteFloorKey::from_bytes(GOLDEN_RANGE_KEY) == None);
+        check!(WalIndexKey::from_bytes(REPLAY_FENCE_KEY) == None);
+        check!(WalDeleteFloorKey::from_bytes(REPLAY_FENCE_KEY) == None);
+    }
+
+    /// `golden` with its leading two-byte version replaced by `version`.
+    fn with_version(golden: &[u8], version: i16) -> Vec<u8> {
+        let mut bytes = version.to_be_bytes().to_vec();
+        bytes.extend_from_slice(&golden[2..]);
+        bytes
+    }
+
+    #[test]
+    fn index_values_of_another_version_are_refused() {
+        let pre_1_0 = " A record written before krabka 1.0 has no version prefix and is not \
+                       readable; reformat the cluster";
+        for (name, decoded, expected) in [
+            (
+                "flush record of version 3",
+                WalFlushRecord::from_bytes(&with_version(GOLDEN_FLUSH_RECORD, 3)).map(|_| ()),
+                format!(
+                    "unsupported diskless WAL index format version 3: this build reads \
+                     version 2.{pre_1_0}"
+                ),
+            ),
+            (
+                "flush record in the pre-1.0 layout, version inside the body",
+                WalFlushRecord::from_bytes(&GOLDEN_FLUSH_RECORD[2..]).map(|_| ()),
+                format!(
+                    "unsupported diskless WAL index format version 1280: this build reads \
+                     version 2.{pre_1_0}"
+                ),
+            ),
+            (
+                "delete floor of version 1",
+                WalDeleteFloorRecord::from_bytes(&with_version(GOLDEN_FLOOR_RECORD, 1)).map(|_| ()),
+                format!(
+                    "unsupported diskless WAL delete-floor record version 1: this build reads \
+                     version 0.{pre_1_0}"
+                ),
+            ),
+            (
+                "delete floor in the pre-1.0 layout, no version",
+                WalDeleteFloorRecord::from_bytes(&GOLDEN_FLOOR_RECORD[2..]).map(|_| ()),
+                format!(
+                    "unsupported diskless WAL delete-floor record version 4096: this build \
+                     reads version 0.{pre_1_0}"
+                ),
+            ),
+            (
+                "empty value",
+                WalDeleteFloorRecord::from_bytes(&[]).map(|_| ()),
+                "truncated diskless WAL delete-floor record: 0 bytes hold no version".to_owned(),
+            ),
+        ] {
+            check!(decoded == Err(expected), "case {name}");
+        }
+    }
+
+    fn capture() -> DisklessWalCapture {
+        DisklessWalCapture {
+            format_version: DisklessWalCapture::FORMAT_VERSION,
+            captured_at_ms: 1_700_000_000_000,
+            source_cutoffs: vec![5],
+            partitions: vec![DisklessPartitionCapture {
+                topic: "orders".to_owned(),
+                topic_id: TOPIC_ID,
+                partition: 3,
+                delete_floor: 10,
+                recovery_cutoff: 13,
+                ranges: vec![CapturedWalRange {
+                    object_key: "wal/a".to_owned(),
+                    entry: flush_record().entries[0].clone(),
+                }],
+            }],
+            metadata_snapshot_sha256: None,
+            rlmm_snapshot_sha256: None,
+            group_offsets_sha256: None,
+            authentication: None,
+        }
+    }
+
+    /// The exact `diskless-wal-index.json` bytes of [`capture`]. A change here
+    /// is a change to the 1.x capture format.
+    const GOLDEN_CAPTURE: &str = concat!(
+        r#"{"format_version":1,"captured_at_ms":1700000000000,"source_cutoffs":[5],"#,
+        r#""partitions":[{"topic":"orders","topic_id":"00112233-4455-6677-8899-aabbccddeeff","#,
+        r#""partition":3,"delete_floor":10,"recovery_cutoff":13,"ranges":[{"object_key":"wal/a","#,
+        r#""entry":{"topic_id":"00112233-4455-6677-8899-aabbccddeeff","partition":3,"#,
+        r#""first_offset":10,"last_offset":12,"byte_start":6,"byte_len":64,"#,
+        r#""max_timestamp_ms":1700000000000}}]}]}"#,
+    );
+
+    #[test]
+    fn capture_encodes_to_the_golden_bytes_and_decodes_back() {
+        check!(serde_json::to_string(&capture()).unwrap() == GOLDEN_CAPTURE);
+        check!(DisklessWalCapture::from_slice(GOLDEN_CAPTURE.as_bytes()) == Ok(capture()));
+    }
+
+    #[test]
+    fn capture_of_a_missing_or_unknown_version_is_refused() {
+        let golden: serde_json::Value = serde_json::from_str(GOLDEN_CAPTURE).unwrap();
+        let mut future = golden.clone();
+        future["format_version"] = serde_json::json!(2);
+        let mut pre_1_0 = golden;
+        pre_1_0.as_object_mut().unwrap().remove("format_version");
+        for (name, json, expected) in [
+            (
+                "future version",
+                future,
+                "unsupported diskless WAL capture format version 2: this build reads version 1",
+            ),
+            (
+                "pre-1.0 capture with no version",
+                pre_1_0,
+                "diskless WAL capture has no format_version: it predates krabka 1.0, which this \
+                 build does not read",
+            ),
+        ] {
+            check!(
+                DisklessWalCapture::from_slice(&serde_json::to_vec(&json).unwrap())
+                    == Err(expected.to_owned()),
+                "case {name}"
+            );
+        }
+    }
+
+    #[test]
+    fn index_keys_of_another_version_are_refused() {
+        for (name, key, expected) in [
+            (
+                "unknown key version",
+                with_version(GOLDEN_RANGE_KEY, 7),
+                "unknown diskless WAL index key version 7",
+            ),
+            (
+                "pre-1.0 range key, no version",
+                GOLDEN_RANGE_KEY[2..].to_vec(),
+                "unknown diskless WAL index key version 17",
+            ),
+            (
+                "pre-1.0 delete-floor key, one-byte tag",
+                [&[0xf0], &GOLDEN_FLOOR_KEY[2..]].concat(),
+                "unknown diskless WAL index key version -4096",
+            ),
+            (
+                "range key of the wrong length",
+                GOLDEN_RANGE_KEY[..29].to_vec(),
+                "invalid diskless WAL index key",
+            ),
+        ] {
+            let mut projection = WalCaptureProjection::default();
+            check!(
+                projection.apply(Some(&key), Some(GOLDEN_FLUSH_RECORD)) == Err(expected.to_owned()),
+                "case {name}"
+            );
+        }
+    }
 }

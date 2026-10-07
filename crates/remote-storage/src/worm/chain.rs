@@ -17,6 +17,31 @@ use crate::{
     },
 };
 
+/// Version of the [`WormChainRecord`] JSON in a segment's
+/// [`CustomMetadata`].
+///
+/// Part of the 1.x on-disk contract: a 1.x broker reads every chain record
+/// that any earlier 1.x broker wrote to `__remote_log_metadata`.
+pub const WORM_CHAIN_RECORD_VERSION: i16 = 0;
+
+/// The JSON form of a [`WormChainRecord`], version first.
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WormChainRecordJson {
+    version: i16,
+    epoch_id: EpochId,
+    seq: ManifestSeq,
+    prev_head: ChainHead,
+    head: Option<ChainHead>,
+    manifest_version_id: Option<String>,
+}
+
+/// Just the version of a chain record, read before the rest of it.
+#[derive(Deserialize)]
+struct WormChainRecordVersion {
+    version: Option<serde_json::Value>,
+}
+
 /// The chain receipt a copy leaves on a segment's custom metadata.
 ///
 /// The record has two forms. The **request** form, from
@@ -24,8 +49,12 @@ use crate::{
 /// the copy, when the manifest bytes do not exist yet. The **receipt** form,
 /// from [`WormChainRecord::with_head`], carries the head the manifest produced
 /// and is the only form [`next_chain_stamp`] continues from.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+///
+/// On the wire the record is a JSON object with a required top-level
+/// `"version"`, [`WORM_CHAIN_RECORD_VERSION`]. The object is closed
+/// (`deny_unknown_fields`): a later field always comes with a new version, so
+/// a reader never drops a part of a receipt it does not understand.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WormChainRecord {
     /// Chain run this manifest belongs to.
     pub epoch_id: EpochId,
@@ -77,8 +106,15 @@ impl WormChainRecord {
     /// serialisation of this type can fail.
     #[must_use]
     pub fn to_custom_metadata(&self) -> CustomMetadata {
-        let json = serde_json::to_vec(self)
-            .expect("WormChainRecord holds only infallibly serialisable fields");
+        let json = serde_json::to_vec(&WormChainRecordJson {
+            version: WORM_CHAIN_RECORD_VERSION,
+            epoch_id: self.epoch_id,
+            seq: self.seq,
+            prev_head: self.prev_head,
+            head: self.head,
+            manifest_version_id: self.manifest_version_id.clone(),
+        })
+        .expect("WormChainRecord holds only infallibly serialisable fields");
         CustomMetadata(json)
     }
 
@@ -88,12 +124,28 @@ impl WormChainRecord {
     ///
     /// # Errors
     ///
-    /// Returns [`WormError::MalformedChainRecord`] when `cm` does not hold the
-    /// JSON of a chain record: bytes that are not `UTF-8`, text that is not
-    /// JSON, an object with a missing or unknown field, or a hex string that
+    /// Returns [`WormError::UnsupportedChainRecordVersion`] when the object
+    /// has no `"version"`, as a record written before krabka 1.0 does, or a
+    /// version other than [`WORM_CHAIN_RECORD_VERSION`]. Returns
+    /// [`WormError::MalformedChainRecord`] when `cm` does not hold the JSON of
+    /// a chain record: bytes that are not `UTF-8`, text that is not a JSON
+    /// object, an object with a missing or unknown field, or a hex string that
     /// is not 64 characters.
     pub fn from_custom_metadata(cm: &CustomMetadata) -> Result<Self, WormError> {
-        serde_json::from_slice(&cm.0).map_err(|e| WormError::MalformedChainRecord(e.to_string()))
+        let malformed = |e: serde_json::Error| WormError::MalformedChainRecord(e.to_string());
+        let probe: WormChainRecordVersion = serde_json::from_slice(&cm.0).map_err(malformed)?;
+        let version = probe.version.map(|version| version.to_string());
+        if version.as_deref() != Some(WORM_CHAIN_RECORD_VERSION.to_string().as_str()) {
+            return Err(WormError::UnsupportedChainRecordVersion { found: version });
+        }
+        let json: WormChainRecordJson = serde_json::from_slice(&cm.0).map_err(malformed)?;
+        Ok(Self {
+            epoch_id: json.epoch_id,
+            seq: json.seq,
+            prev_head: json.prev_head,
+            head: json.head,
+            manifest_version_id: json.manifest_version_id,
+        })
     }
 
     /// The chain position the next manifest takes after this one.
@@ -127,7 +179,9 @@ impl WormChainRecord {
 /// than restarting the old chain at sequence zero and looking like a rewrite.
 /// Returns `None` when the selected receipt is at `u64::MAX`, because no later
 /// sequence exists and restarting at genesis would hide exhaustion as a new
-/// chain run.
+/// chain run. Returns `None` too when a live segment carries a chain record of
+/// a version other than [`WORM_CHAIN_RECORD_VERSION`], because this build
+/// cannot tell where that chain ends.
 ///
 /// `new_epoch_id` is a parameter and not a `Uuid::new_v4()` call inside, so the
 /// function stays pure and testable.
@@ -146,9 +200,23 @@ pub fn next_chain_stamp(
         ) {
             None
         } else {
-            md.custom_metadata()
-                .and_then(|custom| WormChainRecord::from_custom_metadata(custom).ok())
-                .filter(|record| record.head.is_some())
+            match md
+                .custom_metadata()
+                .map(WormChainRecord::from_custom_metadata)
+            {
+                Some(Ok(record)) => Some(record).filter(|record| record.head.is_some()),
+                // A chain record of a version this build does not read: the
+                // chain cannot be continued, and starting a fresh epoch over
+                // it would hide that. Custom metadata with no version at all
+                // is no chain record, like any other backend's metadata: the
+                // object may be another backend's JSON receipt, and a pre-1.0
+                // record never reaches a 1.x broker, whose cluster was
+                // reformatted.
+                Some(Err(WormError::UnsupportedChainRecordVersion { found: Some(_) })) => {
+                    return None;
+                }
+                Some(Err(_)) | None => None,
+            }
         };
         let sequence = receipt.as_ref().map_or(0, |record| record.seq.0);
         candidates.push((md.start_offset(), sequence, receipt.is_some()));
@@ -450,6 +518,91 @@ mod tests {
                 "case {name}"
             );
         }
+    }
+
+    fn golden_record() -> WormChainRecord {
+        WormChainRecord::request(ChainStamp {
+            epoch_id: epoch(),
+            seq: ManifestSeq(11),
+            prev_head: head(0x5a),
+        })
+        .with_head(head(0x6b))
+        .with_manifest_version(Some("v1".to_owned()))
+    }
+
+    /// The exact custom-metadata bytes of [`golden_record`]. A change here is
+    /// a change to the 1.x `__remote_log_metadata` contract.
+    const GOLDEN_RECORD: &str = concat!(
+        r#"{"version":0,"epoch_id":"00000000-0000-0000-0000-000000001234","seq":11,"#,
+        r#""prev_head":"5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a","#,
+        r#""head":"6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b","#,
+        r#""manifest_version_id":"v1"}"#,
+    );
+
+    #[test]
+    fn chain_record_encodes_to_the_golden_bytes_and_decodes_back() {
+        check!(golden_record().to_custom_metadata().0 == GOLDEN_RECORD.as_bytes());
+        check!(
+            WormChainRecord::from_custom_metadata(&CustomMetadata(
+                GOLDEN_RECORD.as_bytes().to_vec()
+            ))
+            .unwrap()
+                == golden_record()
+        );
+    }
+
+    #[test]
+    fn chain_record_of_a_missing_or_unknown_version_is_refused() {
+        let golden: serde_json::Value = serde_json::from_str(GOLDEN_RECORD).unwrap();
+        let with_version = |version: Option<serde_json::Value>| {
+            let mut record = golden.clone();
+            let object = record.as_object_mut().unwrap();
+            object.remove("version");
+            if let Some(version) = version {
+                object.insert("version".to_owned(), version);
+            }
+            CustomMetadata(serde_json::to_vec(&record).unwrap())
+        };
+        for (name, custom, found) in [
+            ("pre-1.0 record with no version", with_version(None), None),
+            (
+                "future version",
+                with_version(Some(serde_json::json!(1))),
+                Some("1"),
+            ),
+            (
+                "version that is not a number",
+                with_version(Some(serde_json::json!("0"))),
+                Some("\"0\""),
+            ),
+        ] {
+            let err = WormChainRecord::from_custom_metadata(&custom).unwrap_err();
+            assert2::assert!(
+                let WormError::UnsupportedChainRecordVersion { found: actual } = &err,
+                "case {name}: {err}"
+            );
+            check!(actual.as_deref() == found, "case {name}");
+        }
+    }
+
+    #[test]
+    fn next_chain_stamp_refuses_to_continue_past_a_record_of_an_unknown_version() {
+        let mut future: serde_json::Value = serde_json::from_str(GOLDEN_RECORD).unwrap();
+        future["version"] = serde_json::json!(1);
+        let segments = [
+            sample_metadata(
+                100,
+                RemoteLogSegmentState::CopySegmentFinished,
+                Some(receipt(3, 0x01, 0x02)),
+            ),
+            sample_metadata(
+                50,
+                RemoteLogSegmentState::CopySegmentFinished,
+                Some(CustomMetadata(serde_json::to_vec(&future).unwrap())),
+            ),
+        ];
+
+        check!(next_chain_stamp(&segments, EpochId(Uuid::from_u128(0xfeed))) == None);
     }
 
     #[test]

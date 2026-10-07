@@ -379,7 +379,7 @@ mod tests {
                     let end = if published { 3 } else { prior_end };
                     assert!(
                         std::fs::read_to_string(&follower.durable_offset_path).unwrap()
-                            == format!("{floor} {end}\n")
+                            == format!("0\n{floor} {end}\n")
                     );
                     if failure == 4 {
                         std::fs::remove_dir(temporary).unwrap();

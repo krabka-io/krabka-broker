@@ -26,9 +26,12 @@ use crate::{
     serde::{MetadataEvent, Reader, read_uvarint, write_uvarint},
 };
 
-/// Format version at the head of every snapshot file. The snapshot is a
-/// persisted format, so a change to its layout bumps this version and keeps a
-/// decoder arm for every earlier 1.x version. See `docs/persisted_formats.md`.
+/// Format version at the head of every snapshot file.
+///
+/// Part of the 1.x on-disk contract: a 1.x broker reads every snapshot that
+/// any earlier 1.x broker wrote, so a change to the layout bumps this version
+/// and keeps a decoder arm for every earlier 1.x version. See
+/// `docs/persisted_formats.md`.
 pub const SNAPSHOT_FORMAT_VERSION: u16 = 0;
 
 /// Default snapshot file name under the snapshot directory.
