@@ -92,7 +92,33 @@ the broker does not know is logged and skipped, and any other bad record fails
 the load. Before, an unknown type stopped the group load, and the share loader
 skipped every bad record. The transaction coordinator skips an unknown key or
 value version in `__transaction_state`, as Kafka's `TransactionStateManager`
-does.
+does, and on any other bad record it logs an error and serves the
+transactions it loaded before it, as Kafka does.
+
+The records the coordinators write to `__consumer_offsets` now match Kafka
+4.3.1 field for field:
+
+- `MetadataHash` in the consumer, share and streams group metadata records is
+  Kafka's `computeTopicHash` and `computeGroupHash` (XXH3-64, seed 0), not a
+  krabka hash. A hash a 0.x broker wrote does not match.
+- The target-assignment metadata records carry KIP-1263's
+  `AssignmentTimestamp`, and the assignment interval runs from it.
+- `StreamsGroupMetadataValue` carries `ValidatedTopologyEpoch` and
+  `LastAssignmentConfigs`, and `StreamsGroupCurrentMemberAssignmentValue`
+  carries KIP-1251's per-task `AssignmentEpochs`.
+- `ConsumerGroupPartitionMetadata` (type 4) is read and replayed, and is
+  tombstoned where Kafka tombstones it. krabka no longer writes
+  `StreamsGroupPartitionMetadata` (type 18), which Kafka 4.3.1 does not know;
+  a type-18 record in an existing log is skipped as an unknown type.
+- Group deletion tombstones follow Kafka's `createGroupTombstoneRecords`
+  order, and include the resolved regular expressions.
+- Replay follows Kafka's `GroupMetadataManager.replay` record by record: a
+  child record creates its group, a tombstone for a group the log does not
+  hold is ignored, and an out-of-order tombstone fails the load.
+- KIP-1331's `StoredDescriptionTopologyEpoch` and
+  `FailedDescriptionTopologyEpoch` tags, which exist only on Kafka trunk, are
+  written only while `group.streams.topology.description.plugin.class` is set,
+  and are always read.
 
 ### Added
 
