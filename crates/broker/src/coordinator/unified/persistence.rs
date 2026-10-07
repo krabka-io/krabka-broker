@@ -640,24 +640,6 @@ macro_rules! key_string_boundaries {
 #[cfg(test)]
 pub(crate) use key_string_boundaries;
 
-/// Snapshot metadata and current assignment for each affected member, with protocol-specific extras.
-macro_rules! snapshot_members {
-    ($pending:ident, $state:ident, $members:expr; $metadata:ident, $current:ident; |$mid:ident, $member:ident| $extra:block) => {
-        for $mid in $members {
-            if let Some($member) = $state.members.get($mid) {
-                $pending
-                    .member_metadata
-                    .push(($mid.clone(), Some($metadata($member))));
-                $pending
-                    .current_per_member
-                    .push(($mid.clone(), Some($current($member))));
-                $extra
-            }
-        }
-    };
-}
-pub(crate) use snapshot_members;
-
 /// Validate the three per-member record families of an atomic migration.
 macro_rules! assert_member_record_count {
     ($pending:expr, $count:expr) => {

@@ -86,14 +86,18 @@ async fn first_join_advances_epoch_not_ready() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn second_heartbeat_at_right_epoch_accepted() {
-    let (coord, _log) = make_coordinator();
+    let (coord, log) = make_coordinator();
     let handle = coord.get_or_create_streams("g");
     let join = heartbeat(&handle, member_request("m1", 0)).await;
     assert!(join.error_code == codes::NONE);
     let epoch = join.member_epoch;
+    let batches = log.batches().await.len();
     let resp = heartbeat(&handle, member_request("m1", epoch)).await;
     assert!(resp.error_code == codes::NONE);
     assert!(resp.member_epoch == epoch);
+    // A heartbeat that changes nothing writes nothing, as Kafka's
+    // `streamsGroupHeartbeat` adds no record for an unchanged member.
+    assert!(log.batches().await.len() == batches);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -348,7 +352,50 @@ async fn leave_removes_member() {
     .await;
     assert!(resp.error_code == codes::NONE);
     assert!(resp.member_epoch == -1);
-    crate::coordinator::unified::test_support::assert_next_tombstone_batch(&log, pre_leave).await;
+    let batches = log.batches().await;
+    assert!(batches.len() == pre_leave + 1);
+    // Kafka's `streamsGroupFenceMember`: the member's current assignment,
+    // target and member tombstones, and the group epoch bumped with the
+    // group's metadata as it was, in one batch, and no target.
+    let seed = coord.cached_streams_seed("g").expect("the group's records");
+    let expected = crate::coordinator::unified::streams::persistence::PendingStreamsRecords {
+        member_metadata: vec![(join.member_id.clone(), None)],
+        target_per_member: vec![(join.member_id.clone(), None)],
+        current_per_member: vec![(join.member_id.clone(), None)],
+        group_metadata: Some(
+            crate::coordinator::unified::streams::persistence::StreamsGroupMetadataValue {
+                epoch: join.member_epoch + 1,
+                metadata_hash: seed.metadata_hash,
+                validated_topology_epoch: seed.validated_topology_epoch,
+                last_assignment_configs: Some(
+                    seed.last_assignment_configs
+                        .iter()
+                        .map(|(key, value)| {
+                            crate::coordinator::unified::streams::persistence::LastAssignmentConfig {
+                                key: key.clone(),
+                                value: value.clone(),
+                            }
+                        })
+                        .collect(),
+                ),
+                description: crate::coordinator::unified::streams::persistence::DescriptionEpochs::default(),
+            },
+        ),
+        ..Default::default()
+    }
+    .into_batch("g", 0)
+    .unwrap();
+    let key_values = |batch: &krabka_protocol::records::RecordBatch| -> Vec<_> {
+        batch
+            .records
+            .iter()
+            .map(|record| (record.key.clone(), record.value.clone()))
+            .collect()
+    };
+    assert!(key_values(&batches[batches.len() - 1]) == key_values(&expected));
+    assert!(
+        (seed.group_epoch, seed.assignment_epoch) == (join.member_epoch + 1, join.member_epoch)
+    );
 }
 
 /// A heartbeat applies the member fields that it carries, a rejoin at epoch 0

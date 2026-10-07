@@ -60,15 +60,11 @@ pub(super) fn reconcile(
     config: &StreamsGroupConfig,
     metadata_source: Option<&Arc<dyn MetadataSource>>,
 ) {
-    let target_epoch = actor.state.target.epoch;
     if actor.state.dirty {
         update_group_epoch(actor, config, metadata_source);
     }
     if actor.assignment_pending() && assignment_delay(actor, config, Instant::now()).is_none() {
         update_target_assignment(actor, config);
-    }
-    if actor.state.target.epoch != target_epoch {
-        actor.target_changed = true;
     }
 }
 
@@ -219,9 +215,11 @@ fn update_target_assignment(actor: &mut ActorState, config: &StreamsGroupConfig)
     if let Some((number_of_tasks, topology)) = ready {
         install_computed_target(actor, config, &topology, &number_of_tasks);
     } else {
-        actor
-            .state
-            .install_target(StreamsTargetAssignment::default());
+        actor.target_changed = Some(
+            actor
+                .state
+                .install_target(StreamsTargetAssignment::default()),
+        );
         actor.state.phase = if actor.state.members.is_empty() {
             StreamsGroupStatePhase::Empty
         } else {
@@ -301,7 +299,7 @@ fn install_computed_target(
         standby: assignment.standby,
         warmup: HashMap::new(),
     };
-    actor.state.install_target(target);
+    actor.target_changed = Some(actor.state.install_target(target));
     // A computed target ends `NotReady`; the members then reconcile toward it.
     actor.state.phase = StreamsGroupStatePhase::Reconciling;
     actor.state.refresh_phase();

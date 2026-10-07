@@ -331,10 +331,10 @@ struct ActorState {
     /// `StreamsGroupHeartbeatResult.creatableTopics` does, and `KafkaApis`
     /// sends them to the controller as a `CreateTopics` request.
     creatable_topics: Vec<super::topology::InternalTopicSpec>,
-    /// Set when a reconcile installed a new target. The next record batch then
-    /// carries the target and current assignment of every member, because the
-    /// new target changed all of them.
-    target_changed: bool,
+    /// The members whose target the last target assignment changed, set when
+    /// a reconcile installed a target and taken by the records of the
+    /// transition that installed it.
+    target_changed: Option<Vec<String>>,
     /// Whether the topology was configured against the metadata image since
     /// the actor started. A seeded actor has not, so its first heartbeat
     /// configures the topology again, as Kafka does when the configured
@@ -382,7 +382,7 @@ impl ActorState {
             validated_topology_epoch: 0,
             last_assignment_configs: BTreeMap::new(),
             creatable_topics: Vec::new(),
-            target_changed: false,
+            target_changed: None,
             configured: false,
             configured_topology: None,
             initial_rebalance_deadline: None,
@@ -534,15 +534,9 @@ async fn actor_loop(
                 break;
             }
             Wake::SessionCheck => {
-                if handle_session_tick(
-                    &mut actor,
-                    &config,
-                    &*offsets_log,
-                    metadata_source,
-                    &coordinator,
-                )
-                .await
-                .is_err()
+                if handle_session_tick(&mut actor, &config, &*offsets_log, &coordinator)
+                    .await
+                    .is_err()
                 {
                     break;
                 }

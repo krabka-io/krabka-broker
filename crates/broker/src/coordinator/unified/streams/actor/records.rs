@@ -20,57 +20,105 @@ use crate::coordinator::unified::{
             StreamsGroupTargetAssignmentMetadataValue,
         },
         state::{
-            INITIAL_EPOCH, StoredTopologyHandle, StreamsGroupState, StreamsGroupStatePhase,
-            StreamsMemberState,
+            StoredTopologyHandle, StreamsGroupState, StreamsGroupStatePhase, StreamsMemberState,
         },
     },
 };
 
-/// Builds a `PendingStreamsRecords` for the changes to `affected_members`.
+/// The records of one streams-group transition, as Kafka's
+/// `GroupMetadataManager` writes them: a record only where the transition
+/// changed what it holds.
 ///
-/// The result always holds the current group epoch. It holds the topology and
-/// the partition metadata when both are present, and the target metadata once
-/// the actor has installed a target, that is, when its epoch is past
-/// [`INITIAL_EPOCH`]: Kafka's `TargetAssignmentBuilder` writes the record, and a
-/// new group writes none while the initial rebalance delay holds its
-/// assignment back. After a
-/// reconcile that installed a new target, it holds the records of every
-/// member, because the new target changed the assignment of all of them.
-pub(super) fn snapshot_pending_after_change(
-    actor: &mut ActorState,
-    affected_members: &[String],
-) -> PendingStreamsRecords {
-    let all_members: Vec<String>;
-    let affected_members = if std::mem::take(&mut actor.target_changed) {
-        let mut ids: Vec<String> = actor.state.members.keys().cloned().collect();
-        ids.sort_unstable();
-        all_members = ids;
-        all_members.as_slice()
-    } else {
-        affected_members
-    };
-    let state = &actor.state;
-    let mut pending = PendingStreamsRecords {
-        group_metadata: Some(group_metadata_value(actor)),
-        ..Default::default()
-    };
-    if let Some(topology) = &actor.topology {
-        pending.topology = Some(topology.clone());
+/// [`StreamsRecorder::start`] takes the group epoch, whether the group holds a
+/// topology, and the values of the members that the transition may change.
+/// [`StreamsRecorder::finish`] compares them with the group after it: a member
+/// that went gets `removeStreamsMember`'s tombstones, a changed member a
+/// member record (`hasStreamsMemberMetadataChanged`), a topology that the
+/// transition initialized its record (`maybeUpdateTopology`), a moved epoch
+/// the group record (`newStreamsGroupMetadataRecord`), the targets that the
+/// transition's target assignment changed with the target metadata
+/// (`TargetAssignmentBuilder`), and a changed current assignment its record
+/// (`maybeReconcile`).
+pub(super) struct StreamsRecorder {
+    group_epoch: i32,
+    had_topology: bool,
+    members: Vec<(
+        String,
+        Option<(
+            StreamsGroupMemberMetadataValue,
+            StreamsGroupCurrentMemberAssignmentValue,
+        )>,
+    )>,
+}
+
+impl StreamsRecorder {
+    pub(super) fn start(actor: &ActorState, member_ids: &[&str]) -> Self {
+        Self {
+            group_epoch: actor.state.group_epoch,
+            had_topology: actor.topology.is_some(),
+            members: member_ids
+                .iter()
+                .map(|member_id| {
+                    (
+                        (*member_id).to_owned(),
+                        actor.state.members.get(*member_id).map(|member| {
+                            (
+                                member_metadata_value(member),
+                                current_assignment_value(member),
+                            )
+                        }),
+                    )
+                })
+                .collect(),
+        }
     }
-    if state.target.epoch > INITIAL_EPOCH {
-        pending.target_metadata = Some(StreamsGroupTargetAssignmentMetadataValue {
-            assignment_epoch: state.target.epoch,
-            assignment_timestamp_ms: actor.assignment_timestamp_ms,
-        });
-    }
-    crate::coordinator::unified::persistence::snapshot_members!(pending, state, affected_members;
-        member_metadata_value, current_assignment_value; |mid, m| {
-            if let Some(tv) = target_member_value(state, mid) {
-                pending.target_per_member.push((mid.clone(), Some(tv)));
+
+    /// The records of the transition. The members whose target changed come
+    /// from the target assignment that the transition computed, if it did.
+    pub(super) fn finish(self, actor: &mut ActorState) -> PendingStreamsRecords {
+        let mut pending = PendingStreamsRecords::default();
+        for (member_id, before) in self.members {
+            match (before, actor.state.members.get(&member_id)) {
+                (Some(_), None) => {
+                    crate::coordinator::unified::persistence::tombstone_members!(
+                        pending,
+                        std::iter::once(&member_id)
+                    );
+                }
+                (before, Some(member)) => {
+                    let metadata = member_metadata_value(member);
+                    let current = current_assignment_value(member);
+                    if before.as_ref().map(|(metadata, _)| metadata) != Some(&metadata) {
+                        pending
+                            .member_metadata
+                            .push((member_id.clone(), Some(metadata)));
+                    }
+                    if before.as_ref().map(|(_, current)| current) != Some(&current) {
+                        pending.current_per_member.push((member_id, Some(current)));
+                    }
+                }
+                (None, None) => {}
             }
         }
-    );
-    pending
+        if !self.had_topology {
+            pending.topology.clone_from(&actor.topology);
+        }
+        if actor.state.group_epoch != self.group_epoch {
+            pending.group_metadata = Some(group_metadata_value(actor));
+        }
+        if let Some(changed) = actor.target_changed.take() {
+            let state = &actor.state;
+            pending.target_metadata = Some(StreamsGroupTargetAssignmentMetadataValue {
+                assignment_epoch: state.target.epoch,
+                assignment_timestamp_ms: actor.assignment_timestamp_ms,
+            });
+            for member_id in changed {
+                let value = target_member_value(state, &member_id).unwrap_or_default();
+                pending.target_per_member.push((member_id, Some(value)));
+            }
+        }
+        pending
+    }
 }
 
 /// Kafka's `newStreamsGroupMetadataRecord`: the group epoch, the metadata
@@ -231,8 +279,9 @@ pub(super) async fn reconcile_and_flush(
     offsets_log: &dyn OffsetsLog,
     coordinator: &GroupCoordinator,
 ) -> Result<(), crate::error::BrokerError> {
+    let recorder = StreamsRecorder::start(actor, &[]);
     super::reconciliation::reconcile(actor, config, metadata_source);
-    let pending = snapshot_pending_after_change(actor, &[]);
+    let pending = recorder.finish(actor);
     flush_pending(
         actor,
         pending,
@@ -326,9 +375,9 @@ pub(super) fn apply_seed(actor: &mut ActorState, seed: StreamsGroupSeed) {
             m.sent_tasks = [m.active.clone(), m.standby.clone(), m.warmup.clone()];
     });
     for (mid, tv) in seed.target_per_member {
-        if !tv.active.is_empty() {
-            state.target.active.insert(mid.clone(), tv.active);
-        }
+        // A target record, an empty one included, gives the member a target,
+        // as Kafka's replay of `StreamsGroupTargetAssignmentMemberValue` does.
+        state.target.active.insert(mid.clone(), tv.active);
         if !tv.standby.is_empty() {
             state.target.standby.insert(mid.clone(), tv.standby);
         }
