@@ -808,6 +808,58 @@ mod tests {
         }
     }
 
+    /// A response with a corrupt batch leaves the fetch offset where it was,
+    /// and the loop waits out its poll interval before it asks again, rather
+    /// than asking the same voter for the same offset in a tight loop. Kafka
+    /// asks again on its next poll too; nothing faults and nothing counts.
+    #[tokio::test]
+    async fn a_corrupt_fetch_waits_for_the_next_poll_rather_than_spinning() {
+        use crate::metadata_observer::test_support::{encode_batches, topic_value, values_batch};
+
+        let mut corrupt =
+            encode_batches(&[values_batch(0, &[topic_value("never-applied", 1)])]).to_vec();
+        *corrupt.last_mut().expect("a batch has bytes") ^= 0xff;
+        let corrupt = Bytes::from(corrupt);
+        let fetches = Arc::new(AtomicUsize::new(0));
+        let mock = {
+            let fetches = Arc::clone(&fetches);
+            krabka_client_core::MockBroker::start(move |api_key, _version, _corr_id, _body| {
+                if api_key == api_versions_request::API_KEY {
+                    return Some(api_versions_response_v0());
+                }
+                if api_key == krabka_raft::API_KEY_METADATA_FETCH {
+                    fetches.fetch_add(1, Ordering::SeqCst);
+                    return Some(metadata_fetch_response_body(corrupt.clone(), 1, 1));
+                }
+                None
+            })
+            .await
+        };
+        let dir = tempfile::tempdir().unwrap();
+        // The park after the corrupt answer is the loop's only wait; a timer
+        // that cannot be armed turns it into the loop's exit, so a loop that
+        // fetched again without parking would show more than one fetch.
+        let timer = BrokenTimer::dead(TimerFailure::Registration);
+        let observer = run_until_it_stops(config_on(
+            vec![(NodeId(1), mock.addr.to_string())],
+            timer.injectable(),
+            dir.path(),
+        ))
+        .await;
+        mock.stop();
+
+        assert!(
+            (
+                fetches.load(Ordering::SeqCst),
+                timer.registrations(),
+                observer.current_metadata_offset(),
+                observer.metadata_load_error_count(),
+                observer.watch_fatal().borrow().clone(),
+                observer.current_image().topic("never-applied").is_some(),
+            ) == (1, 1, -1, 0, None, false)
+        );
+    }
+
     /// A broker-only node that landed on a follower moves to the leader that
     /// follower names, because only the leader records the observers it sees
     /// for `DescribeQuorum`, and it identifies itself to that leader in every
