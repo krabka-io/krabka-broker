@@ -226,23 +226,23 @@ fn a_joiner_gets_a_partition_only_after_the_incumbent_reports_it_revoked() {
 
     let mut state = GroupState::new("g");
     let incumbent = handoff_join(&mut state, "a");
-    check!(incumbent.response == identity_ok("a", 1, Some(vec![0, 1])));
+    check!(incumbent.response == identity_ok("a", 2, Some(vec![0, 1])));
 
-    // `b` joins: the group moves to epoch 2 and `a` keeps both partitions
+    // `b` joins: the group moves to epoch 3 and `a` keeps both partitions
     // until its own heartbeat.
     let joiner = handoff_join(&mut state, "b");
-    check!(joiner.response.member_epoch == 2);
+    check!(joiner.response.member_epoch == 3);
     check!(assigned_partitions(&joiner.response) == Some(vec![]));
     check!(state.members["b"].assignment_state == UnreleasedPartitions);
     check!(state.members["a"].assigned_partitions == [(IDENTITY_TOPIC, vec![0, 1])].into());
 
     // The incumbent's heartbeat carries no owned set. It is told its smaller
-    // assignment, and it stays at epoch 1 with the other partition pending
+    // assignment, and it stays at epoch 2 with the other partition pending
     // revocation.
-    let told = handoff_keepalive(&mut state, "a", 1, None);
+    let told = handoff_keepalive(&mut state, "a", 2, None);
     let kept = assigned_partitions(&told.response).expect("a is told its assignment shrank");
     check!(kept.len() == 1);
-    check!(told.response == identity_ok("a", 1, Some(kept.clone())));
+    check!(told.response == identity_ok("a", 2, Some(kept.clone())));
     let revoked = 1 - kept[0];
     check!(state.members["a"].assignment_state == UnrevokedPartitions);
     check!(
@@ -252,20 +252,20 @@ fn a_joiner_gets_a_partition_only_after_the_incumbent_reports_it_revoked() {
 
     // Neither `a`'s next null heartbeat nor `b`'s moves anything: `a` still
     // owns the partition, so `b` does not get it.
-    let again = handoff_keepalive(&mut state, "a", 1, None);
-    check!(again.response == identity_ok("a", 1, None));
-    let waiting = handoff_keepalive(&mut state, "b", 2, None);
-    check!(waiting.response == identity_ok("b", 2, None));
+    let again = handoff_keepalive(&mut state, "a", 2, None);
+    check!(again.response == identity_ok("a", 2, None));
+    let waiting = handoff_keepalive(&mut state, "b", 3, None);
+    check!(waiting.response == identity_ok("b", 3, None));
     check!(state.members["b"].assigned_partitions.is_empty());
     check!(state.members["a"].assignment_state == UnrevokedPartitions);
 
     // `a` reports what it owns now, without the revoked partition. It moves to
     // the target epoch, and `b` is granted the partition at its next heartbeat.
-    let acknowledged = handoff_keepalive(&mut state, "a", 1, Some(kept.clone()));
-    check!(acknowledged.response == identity_ok("a", 2, None));
+    let acknowledged = handoff_keepalive(&mut state, "a", 2, Some(kept.clone()));
+    check!(acknowledged.response == identity_ok("a", 3, None));
     check!(state.members["a"].assignment_state == Stable);
-    let granted = handoff_keepalive(&mut state, "b", 2, None);
-    check!(granted.response == identity_ok("b", 2, Some(vec![revoked])));
+    let granted = handoff_keepalive(&mut state, "b", 3, None);
+    check!(granted.response == identity_ok("b", 3, Some(vec![revoked])));
     check!(state.members["b"].assignment_state == Stable);
 }
 
@@ -846,12 +846,21 @@ fn step_heartbeat_first_join_targets_all_partitions() {
         Instant::now(),
         &RegexResolution::none(),
     );
-    // First join succeeds, advances to group epoch 1, targets all
-    // partitions of "t", and must persist records.
+    // First join succeeds, advances the new group from epoch 1 to 2, targets
+    // all partitions of "t", and must persist records.
     check!(step.response.error_code == 0);
-    check!(step.response.member_epoch == 1);
+    check!(step.response.member_epoch == 2);
     check!(group.target.per_member["m1"][&topic_id].clone() == vec![0, 1]);
-    check!(!step.pending.is_empty());
+    // Kafka's first `ConsumerGroupMetadataValue` and target assignment
+    // metadata of a new group carry epoch 2.
+    check!(
+        (
+            step.pending.group_metadata.map(|value| value.epoch),
+            step.pending
+                .target_metadata
+                .map(|value| value.assignment_epoch)
+        ) == (Some(2), Some(2))
+    );
 }
 
 /// Kafka's `getOrMaybeCreateConsumerGroup` for a heartbeat that meets a

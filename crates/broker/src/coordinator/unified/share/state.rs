@@ -11,6 +11,8 @@ use std::{
 
 use krabka_protocol::primitives::uuid::Uuid;
 
+use super::super::INITIAL_GROUP_EPOCH;
+
 /// One member of a share group.
 #[derive(Debug, Clone)]
 pub struct ShareMemberState {
@@ -114,10 +116,10 @@ impl ShareGroupState {
     pub fn new(group_id: impl Into<String>) -> Self {
         Self {
             group_id: group_id.into(),
-            group_epoch: 0,
+            group_epoch: INITIAL_GROUP_EPOCH,
             members: HashMap::new(),
             target: ShareTargetAssignment {
-                epoch: 0,
+                epoch: INITIAL_GROUP_EPOCH,
                 per_member: HashMap::new(),
             },
             dirty: false,
@@ -250,7 +252,9 @@ mod tests {
     #[test]
     fn add_member_bumps_nothing_until_reconcile() {
         let mut g = ShareGroupState::new("g1");
-        assert!(g.group_epoch == 0);
+        // Kafka's `ModernGroup` starts at group epoch 1 and
+        // `TargetAssignmentMetadata.INITIAL` at assignment epoch 1.
+        assert!((g.group_epoch, g.target.epoch) == (1, 1));
         g.add_or_update_member(ShareMemberState::joining(
             "m1",
             "c1",

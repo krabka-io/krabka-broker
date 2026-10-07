@@ -17,7 +17,9 @@ use krabka_protocol::primitives::uuid::Uuid;
 use super::{TargetAssignment, member::MemberState, regex::ResolvedRegularExpression};
 use crate::{
     codes,
-    coordinator::unified::{actor::CommitFence, persistence_next_gen::MemberAssignmentState},
+    coordinator::unified::{
+        INITIAL_GROUP_EPOCH, actor::CommitFence, persistence_next_gen::MemberAssignmentState,
+    },
 };
 
 /// The first `OffsetCommit` version that a member of the consumer protocol
@@ -62,16 +64,34 @@ pub struct GroupState {
     /// deprecated `ConsumerGroupPartitionMetadata` value (key v4), so the next
     /// metadata update writes its tombstone.
     has_subscription_metadata_record: bool,
+    /// Whether the log holds the group: a batch of its records was appended,
+    /// or the group was loaded from the log. Kafka's
+    /// `getOrMaybeCreateConsumerGroup` creates a group in its timeline and
+    /// keeps it only once records commit, so a group that no record holds
+    /// does not exist for a heartbeat that does not join.
+    presence: LogPresence,
+}
+
+/// Whether the log holds a consumer group. See [`GroupState::mark_persisted`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LogPresence {
+    /// No batch of the group's records was appended or loaded.
+    Absent,
+    /// A batch was appended, or the group was loaded from the log.
+    Present,
 }
 
 impl GroupState {
     pub fn new(group_id: impl Into<String>) -> Self {
         Self {
             group_id: group_id.into(),
-            group_epoch: 0,
+            group_epoch: INITIAL_GROUP_EPOCH,
             members: HashMap::new(),
             instance_to_member: HashMap::new(),
-            target: TargetAssignment::default(),
+            target: TargetAssignment {
+                epoch: INITIAL_GROUP_EPOCH,
+                per_member: HashMap::new(),
+            },
             dirty: false,
             rebalance_deadlines: HashMap::new(),
             resolved_regexes: HashMap::new(),
@@ -79,7 +99,20 @@ impl GroupState {
             metadata_refresh_requested: false,
             assignment_timestamp_ms: 0,
             has_subscription_metadata_record: false,
+            presence: LogPresence::Absent,
         }
+    }
+
+    /// Whether the log holds the group. See [`Self::mark_persisted`].
+    #[must_use]
+    pub(crate) fn is_persisted(&self) -> bool {
+        self.presence == LogPresence::Present
+    }
+
+    /// Records that the log holds the group: a batch of its records was
+    /// appended, or it was loaded from the log.
+    pub(crate) fn mark_persisted(&mut self) {
+        self.presence = LogPresence::Present;
     }
 
     crate::coordinator::unified::member_helpers::assignment_delay_method!();
@@ -1093,9 +1126,12 @@ mod tests {
     #[test]
     fn bump_epoch_increments_and_dirties() {
         let mut g = GroupState::new("g");
+        // Kafka's `ModernGroup` starts at group epoch 1 and
+        // `TargetAssignmentMetadata.INITIAL` at assignment epoch 1.
+        assert!((g.group_epoch, g.target.epoch) == (1, 1));
         g.dirty = false;
         assert!(g.bump_epoch());
-        assert!(g.group_epoch == 1);
+        assert!(g.group_epoch == 2);
         assert!(g.dirty);
     }
 

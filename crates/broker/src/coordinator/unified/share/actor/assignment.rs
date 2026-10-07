@@ -200,12 +200,12 @@ mod tests {
         // (step, partitions in the image, partition initialized before the
         // step, expected group epoch, expected target of m)
         let steps: [Step; 6] = [
-            ("join with nothing initialized", 1, None, 1, vec![]),
-            ("partition 0 initialized", 1, Some(0), 2, vec![0]),
-            ("retry", 1, None, 2, vec![0]),
-            ("topic grows", 2, None, 3, vec![0]),
-            ("partition 1 initialized", 2, Some(1), 4, vec![0, 1]),
-            ("retry after growth", 2, None, 4, vec![0, 1]),
+            ("join with nothing initialized", 1, None, 2, vec![]),
+            ("partition 0 initialized", 1, Some(0), 3, vec![0]),
+            ("retry", 1, None, 3, vec![0]),
+            ("topic grows", 2, None, 4, vec![0]),
+            ("partition 1 initialized", 2, Some(1), 5, vec![0, 1]),
+            ("retry after growth", 2, None, 5, vec![0, 1]),
         ];
         for (step, partitions, initialized, epoch, target) in steps {
             if let Some(partition) = initialized {

@@ -108,7 +108,7 @@ pub(super) async fn seed_initialized(
                 }],
                 ..ShareGroupStatePartitionMetadataValue::default()
             },
-            ..ShareGroupSeed::default()
+            ..ShareGroupSeed::new_group()
         }))
         .await
         .unwrap();

@@ -664,7 +664,7 @@ mod tests {
             .group_coordinator
             .cached_share_seed("g-new")
             .expect("share group persisted");
-        assert!(seed.group_epoch == 1, "the first alter bumps epoch 0 -> 1");
+        assert!(seed.group_epoch == 2, "the first alter bumps epoch 1 -> 2");
         assert!(
             seed.state_partition_metadata
                 .initialized
@@ -765,7 +765,7 @@ mod tests {
         // exact-retry short-circuit, unlike the old per-partition
         // `state_epoch` scheme this replaces.
         let reset_request = request("g-reset", "reset-topic", &[0, 9]);
-        for expected_group_epoch in [1, 2] {
+        for expected_group_epoch in [2, 3] {
             let response = handle(
                 &broker,
                 reset_request.clone(),

@@ -39,7 +39,9 @@ use crate::{
 const TOPIC: Uuid = Uuid([42; 16]);
 const TOPIC_NAME: &str = "t";
 const MAX_CLOCK: u8 = 4;
-const MAX_EPOCH: i32 = 5;
+// A new share group starts at Kafka's group epoch 1, so the bound allows the
+// same five epoch bumps as before that start moved from 0.
+const MAX_EPOCH: i32 = 6;
 const MAX_STATES: usize = 1_000_000;
 const MAX_DEPTH: usize = 64;
 
@@ -50,7 +52,7 @@ const MAX_DEPTH: usize = 64;
 // considering a field -- into a failure instead of a silently smaller search
 // that still passes the upper bound. The *generated* count is deliberately not
 // pinned: it depends on dedupe timing across the BFS worker threads.
-const PINNED_UNIQUE_STATES: usize = 55_096;
+const PINNED_UNIQUE_STATES: usize = 55_900;
 const WITNESS_STALE_FENCED: u8 = 1 << 0;
 const WITNESS_FORWARD_FENCED: u8 = 1 << 1;
 const WITNESS_TIMEOUT: u8 = 1 << 2;

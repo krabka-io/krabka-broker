@@ -146,8 +146,8 @@ impl GroupSeed {
     #[must_use]
     pub fn new_group() -> Self {
         Self {
-            group_epoch: 1,
-            target_epoch: 1,
+            group_epoch: super::INITIAL_GROUP_EPOCH,
+            target_epoch: super::INITIAL_GROUP_EPOCH,
             ..Self::default()
         }
     }
@@ -160,8 +160,8 @@ impl ShareGroupSeed {
     #[must_use]
     pub fn new_group() -> Self {
         Self {
-            group_epoch: 1,
-            target_epoch: 1,
+            group_epoch: super::INITIAL_GROUP_EPOCH,
+            target_epoch: super::INITIAL_GROUP_EPOCH,
             ..Self::default()
         }
     }

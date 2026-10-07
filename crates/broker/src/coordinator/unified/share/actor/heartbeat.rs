@@ -294,8 +294,8 @@ mod tests {
             (
                 None,
                 vec![
-                    (request("m1", 0, true), response("m1", 1, Some(vec![]))),
-                    (request("m1", 1, false), response("m1", 1, None)),
+                    (request("m1", 0, true), response("m1", 2, Some(vec![]))),
+                    (request("m1", 2, false), response("m1", 2, None)),
                 ],
             ),
             (
@@ -303,13 +303,13 @@ mod tests {
                 vec![
                     (
                         request("m1", 0, true),
-                        response("m1", 1, Some(vec![0, 1, 2, 3])),
+                        response("m1", 2, Some(vec![0, 1, 2, 3])),
                     ),
-                    (request("m1", 1, false), response("m1", 1, None)),
-                    (request("m2", 0, true), response("m2", 2, Some(vec![0, 1]))),
-                    (request("m1", 1, false), response("m1", 2, Some(vec![2, 3]))),
                     (request("m1", 2, false), response("m1", 2, None)),
-                    (request("m1", 2, true), response("m1", 2, Some(vec![2, 3]))),
+                    (request("m2", 0, true), response("m2", 3, Some(vec![0, 1]))),
+                    (request("m1", 2, false), response("m1", 3, Some(vec![2, 3]))),
+                    (request("m1", 3, false), response("m1", 3, None)),
+                    (request("m1", 3, true), response("m1", 3, Some(vec![2, 3]))),
                 ],
             ),
         ];
@@ -366,7 +366,7 @@ mod tests {
                     ..Default::default()
                 },
                 1,
-                2,
+                3,
             ),
             (
                 "m9",
@@ -376,7 +376,7 @@ mod tests {
                     ..Default::default()
                 },
                 0,
-                1,
+                2,
             ),
         ];
         for (member_id, expected, new_batches, group_epoch) in rows {
@@ -421,16 +421,16 @@ mod tests {
         let (coord, _log) = make_coordinator(metadata);
         let handle = coord.get_or_create_share("g");
         let joined = heartbeat(&handle, subscribed_request("m1", 0)).await;
-        assert!(joined.member_epoch == 1);
+        assert!(joined.member_epoch == 2);
         // Re-send with an epoch ahead of the server → fenced.
         let resp = heartbeat(&handle, subscribed_request("m1", 99)).await;
         assert!(resp.error_code == codes::FENCED_MEMBER_EPOCH);
     }
 
     /// The member epoch rule of Kafka's `throwIfShareGroupMemberEpochIsInvalid`.
-    /// Member `m1` is at epoch 3 with previous epoch 1: it joins at epoch 1,
-    /// `m2` and `m3` join (group epochs 2 and 3), and `m1` heartbeats once at
-    /// epoch 1. Each row sends one heartbeat on a fresh group and compares the
+    /// Member `m1` is at epoch 4 with previous epoch 2: it joins at epoch 2,
+    /// `m2` and `m3` join (group epochs 3 and 4), and `m1` heartbeats once at
+    /// epoch 2. Each row sends one heartbeat on a fresh group and compares the
     /// whole response.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn member_epoch_rule_matches_kafka() {
@@ -438,22 +438,22 @@ mod tests {
         // (member id, request epoch, accepted)
         let rows = [
             ("m1", 0, true),
-            ("m1", 1, true),
-            ("m1", 2, false),
-            ("m1", 3, true),
-            ("m1", 4, false),
-            ("m9", 3, false),
+            ("m1", 2, true),
+            ("m1", 3, false),
+            ("m1", 4, true),
+            ("m1", 5, false),
+            ("m9", 4, false),
         ];
 
         for (index, (member_id, member_epoch, accepted)) in rows.into_iter().enumerate() {
             let (metadata, _id) = metadata_with_topic("t", 4);
             let (coord, _log) = make_coordinator(metadata);
             let handle = coord.get_or_create_share("g");
-            check!(heartbeat(&handle, request("m1", 0)).await.member_epoch == 1);
-            check!(heartbeat(&handle, request("m2", 0)).await.member_epoch == 2);
-            check!(heartbeat(&handle, request("m3", 0)).await.member_epoch == 3);
-            let advanced = heartbeat(&handle, request("m1", 1)).await;
-            check!(advanced.member_epoch == 3);
+            check!(heartbeat(&handle, request("m1", 0)).await.member_epoch == 2);
+            check!(heartbeat(&handle, request("m2", 0)).await.member_epoch == 3);
+            check!(heartbeat(&handle, request("m3", 0)).await.member_epoch == 4);
+            let advanced = heartbeat(&handle, request("m1", 2)).await;
+            check!(advanced.member_epoch == 4);
 
             let resp = heartbeat(&handle, request(member_id, member_epoch)).await;
 
@@ -463,9 +463,9 @@ mod tests {
                 // the full assignment, as a current heartbeat does.
                 ShareGroupHeartbeatResponse {
                     member_id: Some("m1".into()),
-                    member_epoch: 3,
+                    member_epoch: 4,
                     assignment: advanced.assignment.clone(),
-                    ..super::super::response::base_resp(codes::NONE, 3, &config)
+                    ..super::super::response::base_resp(codes::NONE, 4, &config)
                 }
             } else if member_id == "m1" {
                 super::super::response::error_resp(codes::FENCED_MEMBER_EPOCH, &config)
@@ -496,8 +496,8 @@ mod tests {
         let rows = [
             (0, Some("rack-a"), Some("rack-a")),
             (0, Some("rack-b"), Some("rack-b")),
-            (1, None, Some("rack-b")),
-            (1, Some("rack-c"), Some("rack-c")),
+            (2, None, Some("rack-b")),
+            (2, Some("rack-c"), Some("rack-c")),
         ];
         for (index, (member_epoch, rack_id, expected)) in rows.into_iter().enumerate() {
             let resp = heartbeat(&handle, request(member_epoch, rack_id)).await;

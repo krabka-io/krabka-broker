@@ -120,7 +120,7 @@ pub struct StreamsGroupState {
 /// epoch past the assignment epoch. A member that joins while the initial
 /// rebalance delay holds the assignment back so reconciles to epoch 1, and does
 /// not stay at the join epoch 0.
-pub const INITIAL_EPOCH: i32 = 1;
+pub const INITIAL_EPOCH: i32 = crate::coordinator::unified::INITIAL_GROUP_EPOCH;
 
 impl StreamsGroupState {
     pub fn new(group_id: impl Into<String>) -> Self {

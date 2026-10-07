@@ -105,6 +105,7 @@ fn topic_partition_map(partitions: Vec<AssignedTopicPartitions>) -> HashMap<Uuid
 }
 
 pub(super) fn apply_seed(state: &mut GroupState, seed: GroupSeed, image: &ReconcileInput) {
+    state.mark_persisted();
     state.group_epoch = seed.group_epoch;
     state.record_metadata_hash(seed.metadata_hash);
     state.target.epoch = seed.target_epoch;

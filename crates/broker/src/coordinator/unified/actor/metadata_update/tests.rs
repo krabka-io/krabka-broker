@@ -135,24 +135,24 @@ async fn the_heartbeat_after_a_metadata_update_refreshes_the_assignment() {
             before: snapshot_of(&[]),
             after: snapshot_of(&[("orders", 1, 3)]),
             update: &["orders"],
-            expected: answer(2, Some(vec![(1, vec![0, 1, 2])])),
+            expected: answer(3, Some(vec![(1, vec![0, 1, 2])])),
         },
         Row {
             name: "the subscribed topic grows",
             before: snapshot_of(&[("orders", 1, 1)]),
             after: snapshot_of(&[("orders", 1, 3)]),
             update: &["orders"],
-            expected: answer(2, Some(vec![(1, vec![0, 1, 2])])),
+            expected: answer(3, Some(vec![(1, vec![0, 1, 2])])),
         },
         // The target loses the partitions. Kafka's `CurrentAssignmentBuilder`
-        // keeps the member at epoch 1 until it acknowledges the revocation, and
+        // keeps the member at epoch 2 until it acknowledges the revocation, and
         // its heartbeat answer already carries the smaller assignment.
         Row {
             name: "the subscribed topic is deleted",
             before: snapshot_of(&[("orders", 1, 2)]),
             after: snapshot_of(&[]),
             update: &["orders"],
-            expected: answer(1, Some(vec![])),
+            expected: answer(2, Some(vec![])),
         },
         // The update names `payments` only. The group does not read the
         // metadata again, so it does not see that `orders` grew in the same
@@ -163,7 +163,7 @@ async fn the_heartbeat_after_a_metadata_update_refreshes_the_assignment() {
             before: snapshot_of(&[("orders", 1, 1)]),
             after: snapshot_of(&[("orders", 1, 2), ("payments", 2, 1)]),
             update: &["payments"],
-            expected: answer(1, None),
+            expected: answer(2, None),
         },
         // A new partition leader changes the topic but not its hash, and Kafka
         // bumps the group epoch only for a new hash.
@@ -172,7 +172,7 @@ async fn the_heartbeat_after_a_metadata_update_refreshes_the_assignment() {
             before: snapshot_of(&[("orders", 1, 2)]),
             after: snapshot_of(&[("orders", 1, 2)]),
             update: &["orders"],
-            expected: answer(1, None),
+            expected: answer(2, None),
         },
     ];
 
@@ -209,19 +209,19 @@ async fn a_loaded_group_refreshes_its_metadata_at_the_first_heartbeat() {
             "the topic is as it was",
             snapshot_of(&[("orders", 1, 2)]),
             None,
-            answer(1, None),
+            answer(2, None),
         ),
         (
             "the topic grew while no coordinator held the group",
             snapshot_of(&[("orders", 1, 3)]),
             None,
-            answer(2, Some(vec![(1, vec![0, 1, 2])])),
+            answer(3, Some(vec![(1, vec![0, 1, 2])])),
         ),
         (
             "the topic grew after the load",
             snapshot_of(&[("orders", 1, 2)]),
             Some(snapshot_of(&[("orders", 1, 3)])),
-            answer(2, Some(vec![(1, vec![0, 1, 2])])),
+            answer(3, Some(vec![(1, vec![0, 1, 2])])),
         ),
     ];
 
@@ -315,7 +315,7 @@ async fn the_written_metadata_hash_is_kafkas() {
         heartbeat(&handle, join()).await;
         let seed = coordinator.cached_seed("g").expect("the group's records");
         written.push((case, seed.group_epoch, seed.metadata_hash));
-        expected.push((case, 1, hash));
+        expected.push((case, 2, hash));
     }
     check!(written == expected);
 }

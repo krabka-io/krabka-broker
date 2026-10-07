@@ -46,6 +46,13 @@ pub(crate) mod test_support;
 #[cfg(test)]
 mod value_version_tests;
 
+/// The group epoch and target assignment epoch of a new consumer, share or
+/// streams group: Kafka 4.3.1's `ModernGroup` and `StreamsGroup` constructors
+/// set the group epoch to 1, and `TargetAssignmentMetadata.INITIAL` holds
+/// assignment epoch 1. The first epoch bump of a new group therefore writes
+/// group epoch 2.
+pub const INITIAL_GROUP_EPOCH: i32 = 1;
+
 pub use self::{
     group_coordinator::{GroupCoordinator, GroupType},
     image_metadata::ImageMetadataProvider,

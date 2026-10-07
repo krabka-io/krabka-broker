@@ -143,12 +143,11 @@ pub(super) async fn handle_actor_heartbeat(
         });
         return true;
     };
-    // A consumer group exists once its first join bumped the group epoch, and
-    // it keeps that epoch after its members left. An actor that never got a
-    // member, such as one left by a join that Kafka refused before it wrote
-    // anything, holds no group, and Kafka answers any other epoch with
-    // GROUP_ID_NOT_FOUND.
-    if request.member_epoch != 0 && state.group_epoch == 0 && state.members.is_empty() {
+    // A consumer group exists once the log holds it, and it stays after its
+    // members left. An actor whose group no record holds, such as one left by
+    // a join that Kafka refused before it wrote anything, holds no group, and
+    // Kafka answers any other epoch with GROUP_ID_NOT_FOUND.
+    if request.member_epoch != 0 && !state.is_persisted() && state.members.is_empty() {
         let _ = reply.send(ConsumerGroupHeartbeatResponse {
             error_code: codes::GROUP_ID_NOT_FOUND,
             error_message: Some(

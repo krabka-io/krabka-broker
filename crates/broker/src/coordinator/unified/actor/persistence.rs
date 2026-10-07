@@ -229,6 +229,7 @@ crate::coordinator::unified::persistence::flush_pending_records! {
     group &state.group_id;
     encode pending.to_batch(&state.group_id, now_ms);
     cache {
+        state.mark_persisted();
         // Kafka clears `hasSubscriptionMetadataRecord` when it replays the k4
         // tombstone it just wrote.
         if pending.partition_metadata == PartitionMetadataWrite::Tombstone {
