@@ -552,8 +552,14 @@ mod tests {
     enum Want {
         /// Count one load error and skip the rest of the response.
         LoadError,
+        /// Count one load error and skip the rest of the response, where the
+        /// decoder refuses the bytes with exactly this error.
+        LoadErrorOn(krabka_metadata::TranslateError),
         /// Skip the record alone, as the controller skips it.
         Skip,
+        /// Skip the record alone, where the decoder reports exactly this
+        /// error against the image: one the controller skips too.
+        SkipOn(krabka_metadata::TranslateError),
         /// Whatever the pinned `krabka-metadata` decoder says: a load error
         /// where it refuses the bytes, an apply where it reads them.
         AsTheDecoderSays,
@@ -565,9 +571,20 @@ mod tests {
     /// nothing after it in the response applies, as Kafka's `MetadataLoader`
     /// abandons the rest of a commit; the broker does not stop, and the fetch
     /// resumes past the response. A record the controller skips is skipped
-    /// alone.
+    /// alone: an `InvalidReference`, which the image decides, is skipped,
+    /// and an `InvalidValue`, which the bytes alone decide, is a load error.
     #[test]
     fn a_record_that_does_not_decode_counts_and_skips_the_rest_of_the_response() {
+        use krabka_metadata::TranslateError;
+        use krabka_protocol::{
+            owned::{
+                broker_registration_change_record::BrokerRegistrationChangeRecord,
+                partition_change_record::PartitionChangeRecord,
+            },
+            primitives::uuid::Uuid as KUuid,
+            records::metadata::KraftMetadataRecord,
+        };
+
         use crate::metadata_observer::test_support::{
             encode_batches, patched_topic_value, topic_value, undecodable_private_value,
             values_batch,
@@ -583,7 +600,29 @@ mod tests {
         .expect("encode a topic config")
         .remove(0)
         .to_vec();
-        let cases: [(&str, Vec<u8>, Want); 6] = [
+        // Partition 0 of topic `before`, which has no partitions.
+        let unknown_partition_change =
+            KraftMetadataRecord::PartitionChange(PartitionChangeRecord {
+                topic_id: KUuid(Uuid::from_u128(1).into_bytes()),
+                partition_id: 0,
+                ..Default::default()
+            })
+            .encode_value(0)
+            .expect("encode a partition change")
+            .to_vec();
+        // A `fenced` value Kafka's `BrokerRegistrationFencingChange` does not
+        // define.
+        let unknown_fenced_change =
+            KraftMetadataRecord::BrokerRegistrationChange(BrokerRegistrationChangeRecord {
+                broker_id: 1,
+                broker_epoch: 1,
+                fenced: 2,
+                ..Default::default()
+            })
+            .encode_value(0)
+            .expect("encode a broker registration change")
+            .to_vec();
+        let cases: [(&str, Vec<u8>, Want); 8] = [
             (
                 "unknown apiKey",
                 patched_topic_value(1, 99),
@@ -617,6 +656,22 @@ mod tests {
                 .to_vec(),
                 Want::Skip,
             ),
+            (
+                "invalid reference: unknown partition of a known topic",
+                unknown_partition_change,
+                Want::SkipOn(TranslateError::InvalidReference {
+                    field: "partition change",
+                    detail: "unknown partition before-0".into(),
+                }),
+            ),
+            (
+                "invalid value: unknown fenced value",
+                unknown_fenced_change,
+                Want::LoadErrorOn(TranslateError::InvalidValue {
+                    field: "broker registration change fenced",
+                    detail: "unknown value 2".into(),
+                }),
+            ),
         ];
 
         for (case, failing, want) in cases {
@@ -640,7 +695,19 @@ mod tests {
                     assert!(refused, "{case}: the decoder must refuse the bytes");
                     true
                 }
+                Want::LoadErrorOn(error) => {
+                    let refused =
+                        krabka_metadata::from_kraft_value(&failing, &image_tx.borrow()).err();
+                    assert!(refused == Some(error), "{case}: the decoder's error");
+                    true
+                }
                 Want::Skip => false,
+                Want::SkipOn(error) => {
+                    let refused =
+                        krabka_metadata::from_kraft_value(&failing, &image_tx.borrow()).err();
+                    assert!(refused == Some(error), "{case}: the decoder's error");
+                    false
+                }
                 Want::AsTheDecoderSays => {
                     krabka_metadata::from_kraft_value(&failing, &MetadataImage::new(cluster_id))
                         .is_err()

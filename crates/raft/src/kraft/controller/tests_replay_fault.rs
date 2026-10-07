@@ -1,16 +1,20 @@
 //! Tests for how a controller meets a committed record it cannot replay: live
 //! apply and restart recovery stop on bytes that do not decode, as Kafka's
 //! fatal fault handlers stop a controller, and skip a record that decodes but
-//! names state the image does not hold. Control-record replay stops on an
-//! invalid KIP-853 record.
+//! names state the image does not hold. A field value no build accepts
+//! (`TranslateError::InvalidValue`) is undecodable; a value measured against
+//! the image (`TranslateError::InvalidReference`) is a skip. Control-record
+//! replay stops on an invalid KIP-853 record.
 
 use assert2::check;
 use bytes::Bytes;
 use krabka_metadata::{TopicConfigRecord, TopicRecord, TranslateError};
 use krabka_protocol::{
     owned::{
+        broker_registration_change_record::BrokerRegistrationChangeRecord,
         k_raft_version_record::KRaftVersionRecord, no_op_record::NoOpRecord,
-        remove_topic_record::RemoveTopicRecord, voters_record::VotersRecord as WireVotersRecord,
+        partition_change_record::PartitionChangeRecord, remove_topic_record::RemoveTopicRecord,
+        voters_record::VotersRecord as WireVotersRecord,
     },
     primitives::uuid::Uuid as KUuid,
     records::metadata::KraftMetadataRecord,
@@ -86,10 +90,83 @@ fn unknown_topic_config_value() -> Vec<u8> {
         .to_vec()
 }
 
+/// The id of the topic [`known_topic_value`] creates.
+const KNOWN_TOPIC_ID: u128 = 2;
+
+/// The value bytes of a `TopicRecord` for topic `known` with no partitions,
+/// which every row commits before the record under test.
+fn known_topic_value() -> Vec<u8> {
+    let record = MetadataRecord::V1Topic(TopicRecord {
+        name: "known".into(),
+        topic_id: uuid::Uuid::from_u128(KNOWN_TOPIC_ID),
+        partitions: 0,
+        replication_factor: 1,
+    });
+    to_kraft_values(&record, &MetadataImage::new(uuid::Uuid::nil()))
+        .expect("encode the known topic")
+        .remove(0)
+        .to_vec()
+}
+
+/// An image holding the topic of [`known_topic_value`].
+fn known_topic_image() -> MetadataImage {
+    let mut image = MetadataImage::new(uuid::Uuid::nil());
+    let record =
+        from_kraft_value(&known_topic_value(), &image).expect("decode the known topic record");
+    image.apply(&record);
+    image
+}
+
+/// A `PartitionChangeRecord` for partition 0 of the known topic, which has
+/// no partitions: an `InvalidReference`, since the image decides it.
+fn unknown_partition_change_value() -> Vec<u8> {
+    KraftMetadataRecord::PartitionChange(PartitionChangeRecord {
+        topic_id: KUuid(uuid::Uuid::from_u128(KNOWN_TOPIC_ID).into_bytes()),
+        partition_id: 0,
+        ..Default::default()
+    })
+    .encode_value(0)
+    .expect("encode a partition change")
+    .to_vec()
+}
+
+/// The error the decoder reports for [`unknown_partition_change_value`].
+fn unknown_partition_error() -> TranslateError {
+    TranslateError::InvalidReference {
+        field: "partition change",
+        detail: "unknown partition known-0".into(),
+    }
+}
+
+/// A `BrokerRegistrationChangeRecord` for broker 1 whose `fenced` is 2, a
+/// value Kafka's `BrokerRegistrationFencingChange` does not define: an
+/// `InvalidValue`, since the bytes alone decide it, whatever the image holds.
+fn unknown_fenced_change_value() -> Vec<u8> {
+    KraftMetadataRecord::BrokerRegistrationChange(BrokerRegistrationChangeRecord {
+        broker_id: 1,
+        broker_epoch: 1,
+        fenced: 2,
+        ..Default::default()
+    })
+    .encode_value(0)
+    .expect("encode a broker registration change")
+    .to_vec()
+}
+
+/// The error the decoder reports for [`unknown_fenced_change_value`].
+fn unknown_fenced_error() -> TranslateError {
+    TranslateError::InvalidValue {
+        field: "broker registration change fenced",
+        detail: "unknown value 2".into(),
+    }
+}
+
 /// What replay must do with one committed value.
 enum Want {
     /// Stop the controller: the value does not decode.
     Stop,
+    /// Stop the controller on exactly this decoder error.
+    StopWith(TranslateError),
     /// Skip the value and keep going.
     Skip,
     /// Whatever the pinned `krabka-metadata` decoder says: stop where it
@@ -108,10 +185,11 @@ fn fault_for(value: &[u8], offset: i64) -> Option<MetadataReplayError> {
 /// One row per failure kind. A controller stops on bytes that do not decode,
 /// in live apply and in restart recovery, and names the record's offset and
 /// the decoder's error. It skips a record that decodes but that the image
-/// cannot take.
+/// cannot take. Each row first commits a topic, so a row can name a topic
+/// the image holds.
 #[test]
 fn a_controller_stops_on_a_committed_record_it_cannot_decode() {
-    let cases: [(&str, Vec<u8>, Want); 6] = [
+    let cases: [(&str, Vec<u8>, Want); 8] = [
         ("unknown apiKey", patched_topic_value(1, 99), Want::Stop),
         (
             "value version above the highest supported",
@@ -137,13 +215,33 @@ fn a_controller_stops_on_a_committed_record_it_cannot_decode() {
             Want::Skip,
         ),
         ("validate failure", unknown_topic_config_value(), Want::Skip),
+        (
+            "invalid reference: unknown partition of a known topic",
+            unknown_partition_change_value(),
+            Want::Skip,
+        ),
+        (
+            "invalid value: unknown fenced value",
+            unknown_fenced_change_value(),
+            Want::StopWith(unknown_fenced_error()),
+        ),
     ];
 
     for (case, value, want) in cases {
         let (mut engine, _dir) = build_engine_only(NodeId(1), &[NodeId(1)]);
         elect_single_voter_engine(&mut engine);
-        let offset = engine.log.log_end_offset().0;
         let epoch = i32::try_from(engine.core.quorum_state().leader_epoch).expect("epoch");
+        let known = engine.log.log_end_offset().0;
+        engine
+            .log
+            .append(&mut one_offset_batch(known, epoch, &known_topic_value()), 0)
+            .expect("append the known topic");
+        engine.advance_and_apply(engine.log.log_end_offset());
+        check!(
+            engine.replay_fault == None,
+            "{case}: the known topic applies"
+        );
+        let offset = engine.log.log_end_offset().0;
         engine
             .log
             .append(&mut one_offset_batch(offset, epoch, &value), 0)
@@ -152,12 +250,14 @@ fn a_controller_stops_on_a_committed_record_it_cannot_decode() {
 
         engine.advance_and_apply(engine.log.log_end_offset());
 
+        let skip = matches!(want, Want::Skip);
         let want_fault = match want {
             Want::Stop => {
                 let fault = fault_for(&value, offset);
                 check!(fault.is_some(), "{case}: the decoder must refuse the bytes");
                 fault
             }
+            Want::StopWith(error) => Some(MetadataReplayError::UndecodableRecord { offset, error }),
             Want::Skip => None,
             Want::AsTheDecoderSays => fault_for(&value, offset),
         };
@@ -169,7 +269,7 @@ fn a_controller_stops_on_a_committed_record_it_cannot_decode() {
             published == want_fault.as_ref().map(|fault| Some(fault.to_string())),
             "{case}: the published fault"
         );
-        if matches!(want, Want::Skip) {
+        if skip {
             check!(engine.image == image_before, "{case}: nothing applied");
         }
 
@@ -290,29 +390,50 @@ fn control_replay_stops_on_an_invalid_control_record() {
 }
 
 /// The krabka-private and decoder errors that are not image lookups stop
-/// replay; the image lookups are skips.
+/// replay; the image lookups are skips. Each row names the decoder's error
+/// for its value against the image, and the whole result it must come to.
 #[test]
 fn only_image_lookups_are_skipped() {
-    let image = MetadataImage::new(uuid::Uuid::nil());
-    let cases: [(&str, Vec<u8>, bool); 3] = [
-        ("unknown apiKey", patched_topic_value(1, 99), true),
-        ("unknown topic id", unknown_topic_removal_value(), false),
-        ("empty KIP-835 no-op", noop_value(), false),
+    let image = known_topic_image();
+    let undecodable = |error| Err(MetadataReplayError::UndecodableRecord { offset: 4, error });
+    let cases = [
+        (
+            "unknown apiKey",
+            patched_topic_value(1, 99),
+            Some(TranslateError::NoCounterpart("Unknown")),
+            undecodable(TranslateError::NoCounterpart("Unknown")),
+        ),
+        (
+            "unknown topic id",
+            unknown_topic_removal_value(),
+            Some(TranslateError::UnknownTopicId(uuid::Uuid::from_bytes(
+                [7; 16],
+            ))),
+            Ok(None),
+        ),
+        (
+            "invalid reference: unknown partition of a known topic",
+            unknown_partition_change_value(),
+            Some(unknown_partition_error()),
+            Ok(None),
+        ),
+        (
+            "invalid value: unknown fenced value",
+            unknown_fenced_change_value(),
+            Some(unknown_fenced_error()),
+            undecodable(unknown_fenced_error()),
+        ),
+        ("empty KIP-835 no-op", noop_value(), None, Ok(None)),
     ];
-    for (case, value, stops) in cases {
-        let decoded = records::decode_committed_value(&value, &image, 4);
+    for (case, value, decoder_error, want) in cases {
+        if let Some(decoder_error) = decoder_error {
+            check!(
+                from_kraft_value(&value, &image).err() == Some(decoder_error),
+                "{case}: the decoder's error"
+            );
+        }
         check!(
-            matches!(
-                decoded,
-                Err(MetadataReplayError::UndecodableRecord {
-                    offset: 4,
-                    error: TranslateError::NoCounterpart(_)
-                })
-            ) == stops,
-            "{case}"
-        );
-        check!(
-            decoded.is_ok_and(|record| record.is_none()) == !stops,
+            records::decode_committed_value(&value, &image, 4) == want,
             "{case}"
         );
     }
