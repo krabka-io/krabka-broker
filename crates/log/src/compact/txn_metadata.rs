@@ -13,6 +13,7 @@ use krabka_ids::{Offset, ProducerId};
 use krabka_protocol::records::RecordBatch;
 
 use crate::{
+    error::LogError,
     log::control::{ABORT_CONTROL_TYPE, COMMIT_CONTROL_TYPE, parse_control_marker_type},
     txn_index::AbortedTxn,
 };
@@ -107,15 +108,20 @@ impl CleanedTransactionMetadata {
     /// a delete horizon, and drops it once the horizon has passed. A control
     /// batch of any other type, such as a barrier marker, is never
     /// discardable.
-    pub fn on_control_batch_read(&mut self, batch: &RecordBatch) -> bool {
+    ///
+    /// # Errors
+    /// Returns the error of [`parse_control_marker_type`] for a key that is
+    /// short or carries a negative version. Kafka's `ControlRecordType.parse`
+    /// throws there, and the pass stops.
+    pub fn on_control_batch_read(&mut self, batch: &RecordBatch) -> Result<bool, LogError> {
         self.consume_aborted_up_to(batch_last_offset(batch));
         // A control batch with no record was emptied by an earlier pass.
         let Some(record) = batch.records.first() else {
-            return true;
+            return Ok(true);
         };
         let producer_id = ProducerId(batch.producer_id);
-        match record.key.as_deref().and_then(parse_control_marker_type) {
-            Some(ABORT_CONTROL_TYPE) => match self.ongoing_aborted.remove(&producer_id) {
+        Ok(match parse_control_marker_type(record.key.as_deref())? {
+            ABORT_CONTROL_TYPE => match self.ongoing_aborted.remove(&producer_id) {
                 // Keep the marker until every batch of the transaction is gone.
                 Some(state) if state.last_observed_batch_offset.is_some() => {
                     self.cleaned_index.push(state.txn);
@@ -125,9 +131,9 @@ impl CleanedTransactionMetadata {
             },
             // The marker is discardable when the pass read no batch of the
             // transaction.
-            Some(COMMIT_CONTROL_TYPE) => !self.ongoing_committed.remove(&producer_id),
+            COMMIT_CONTROL_TYPE => !self.ongoing_committed.remove(&producer_id),
             _ => false,
-        }
+        })
     }
 
     /// Update the state with a data batch the pass has just read, and say
@@ -192,7 +198,7 @@ mod tests {
         for (index, step) in steps.into_iter().enumerate() {
             let (answer, want) = match step {
                 Step::Data(batch, want) => (meta.on_batch_read(&batch), want),
-                Step::Control(batch, want) => (meta.on_control_batch_read(&batch), want),
+                Step::Control(batch, want) => (meta.on_control_batch_read(&batch).unwrap(), want),
             };
             assert2::assert!(answer == want, "step {index}");
         }

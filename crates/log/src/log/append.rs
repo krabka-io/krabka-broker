@@ -12,7 +12,7 @@ use tracing::instrument;
 
 use super::{
     Log,
-    control::{ControlBatchKind, control_batch_kind},
+    control::{ControlBatchKind, check_control_record_versions, control_batch_kind},
 };
 use crate::{
     config::{DeliveryPolicy, ScheduleOrder},
@@ -367,6 +367,7 @@ impl Log {
             batch.last_offset_delta,
             Offset(batch.base_offset),
         )?;
+        check_control_record_versions(batch)?;
         let (index_interval, flush_on_append) = self.roll_for_append(
             || {
                 ByteSize::from_bytes(

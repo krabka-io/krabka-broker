@@ -75,12 +75,20 @@ pub(super) fn write_meta_properties(
         })
 }
 
+/// The `bootstrap.json` format version this build writes: the required
+/// top-level `version` field.
+///
+/// It is part of the 1.x on-disk contract. No reader exists: the broker never
+/// reads `bootstrap.json`, which only mirrors `bootstrap.records.bin` for an
+/// operator. A reader added later refuses a missing or unknown version. The
+/// number is 1 because the field carried 1 before it was named `version`.
+pub(super) const BOOTSTRAP_MANIFEST_VERSION: u32 = 1;
+
 /// Human-readable manifest written to `<log_dir>/bootstrap.json`.
 #[derive(Debug, Serialize)]
 struct BootstrapManifest {
-    /// Schema version of this bootstrap manifest. Bumped if the layout
-    /// changes; the broker's future consumer will reject unknown values.
-    schema: u32,
+    /// Always [`BOOTSTRAP_MANIFEST_VERSION`].
+    version: u32,
     /// Kafka's 22-character base64 form.
     cluster_id: ClusterId,
     record_count: usize,
@@ -162,7 +170,7 @@ pub(super) fn write_bootstrap_files(
     // 3. Manifest JSON (cluster id + base64 mirrors of each blob).
     let records_b64: Vec<String> = record_blobs.iter().map(|b| STANDARD.encode(b)).collect();
     let manifest = BootstrapManifest {
-        schema: 1,
+        version: BOOTSTRAP_MANIFEST_VERSION,
         cluster_id,
         record_count: records.len(),
         records_b64,
@@ -172,4 +180,44 @@ pub(super) fn write_bootstrap_files(
     let json_path = log_dir.join("bootstrap.json");
     std::fs::write(&json_path, json).map_err(|e| format!("write bootstrap.json: {e}"))?;
     fault.after(&json_path)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The records the golden manifest mirrors.
+    fn golden_records() -> Vec<MetadataRecord> {
+        vec![MetadataRecord::V1FeatureLevel(
+            krabka_metadata::FeatureLevelRecord {
+                name: "metadata.version".into(),
+                level: 30,
+            },
+        )]
+    }
+
+    /// `golden_records` in `bootstrap.json`, for the cluster id below.
+    const GOLDEN_MANIFEST: &str = r#"{
+  "version": 1,
+  "cluster_id": "AQIDBAUGBwgJCgsMDQ4PEA",
+  "record_count": 1,
+  "records_b64": [
+    "EQAAABAAAAAAAAAAbWV0YWRhdGEudmVyc2lvbh4A"
+  ]
+}"#;
+
+    /// `bootstrap.json` is laid out byte for byte as the 1.x contract fixes
+    /// it.
+    #[test]
+    fn the_bootstrap_manifest_matches_its_golden_text() {
+        let dir = tempfile::tempdir().unwrap();
+        let cluster_id = ClusterId(uuid::Uuid::from_u128(
+            0x0102_0304_0506_0708_090a_0b0c_0d0e_0f10,
+        ));
+        write_bootstrap_files(dir.path(), cluster_id, &golden_records(), &Fault::default())
+            .unwrap();
+        assert2::assert!(
+            std::fs::read_to_string(dir.path().join("bootstrap.json")).unwrap() == GOLDEN_MANIFEST
+        );
+    }
 }

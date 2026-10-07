@@ -237,7 +237,7 @@ pub fn rewrite_segments(
         // `Cleaner.shouldDiscardBatch` does: a transaction whose records all
         // die in this pass still holds its marker until the next one.
         let (txn, aborted) = if is_control {
-            let discardable = txn_meta.on_control_batch_read(batch);
+            let discardable = txn_meta.on_control_batch_read(batch)?;
             let state = if producer_id.get() < 0 {
                 TxnDataState::NotTransactional
             } else if discardable {
