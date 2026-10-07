@@ -112,12 +112,14 @@ pub(crate) fn serve_classic_sync(
 /// and keeps its `assigned_partitions` and `last_synced_assignment`. A new
 /// member arrives with a fresh facade, where `awaiting_sync = true`.
 ///
-/// `add_or_update_member` marks the group dirty if and only if the
-/// subscription is new or changed, so the caller reconciles and persists only
-/// when it needs to.
+/// The member keeps its pattern, which the caller drops through Kafka's
+/// regex update, and its server assignor (`maybeUpdateServerAssignorName` of
+/// nothing).
 pub(crate) struct ClassicMemberRegistration {
     pub member_id: String,
     pub subscription_topics: HashSet<String>,
+    /// The rack of the member's `ConsumerProtocolSubscription`, if any.
+    pub rack_id: Option<String>,
     pub protocols: Vec<(String, Bytes)>,
     pub client_id: String,
     pub client_host: String,
@@ -133,6 +135,7 @@ pub(crate) fn upsert_classic_member(
     let ClassicMemberRegistration {
         member_id,
         subscription_topics,
+        rack_id,
         protocols,
         client_id,
         client_host,
@@ -157,8 +160,15 @@ pub(crate) fn upsert_classic_member(
         .and_then(|m| m.classic.as_ref())
         .map(|c| c.last_synced_assignment.clone())
         .unwrap_or_default();
-    let member_epoch = existing.map_or(state.group_epoch, |m| m.member_epoch);
+    // A new member starts at epoch 0, as Kafka's `getOrMaybeCreateMember`
+    // creates it, and its reconciliation moves it to the target epoch.
+    let member_epoch = existing.map_or(0, |m| m.member_epoch);
     let previous_member_epoch = existing.map_or(0, |m| m.previous_member_epoch);
+    // Kafka's `maybeUpdateRackId(Utils.toOptional(subscription.rackId()))`: no
+    // rack keeps the stored one.
+    let rack_id = rack_id.or_else(|| existing.and_then(|m| m.rack_id.clone()));
+    let server_assignor = existing.and_then(|m| m.server_assignor.clone());
+    let subscribed_topic_regex = existing.and_then(|m| m.subscribed_topic_regex.clone());
     let assignment_state = existing.map_or(MemberAssignmentState::Stable, |m| m.assignment_state);
 
     let facade = ClassicMemberFacade {
@@ -171,12 +181,12 @@ pub(crate) fn upsert_classic_member(
     state.add_or_update_member(MemberState {
         member_id,
         instance_id,
-        rack_id: None,
+        rack_id,
         client_id,
         client_host,
         subscribed_topic_names: subscription_topics,
-        subscribed_topic_regex: None,
-        server_assignor: None,
+        subscribed_topic_regex,
+        server_assignor,
         rebalance_timeout,
         member_epoch,
         previous_member_epoch,

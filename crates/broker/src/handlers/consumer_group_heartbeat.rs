@@ -784,9 +784,26 @@ mod tests {
             ..Default::default()
         };
 
-        let resp = handle(&broker, req, VERSION, &ctx)
+        let joined = handle(&broker, req, VERSION, &ctx)
             .await
             .expect("ConsumerGroupHeartbeat handler");
+        assert!(joined.error_code == codes::NONE, "{joined:?}");
+        // Kafka writes the resolution after the join's batch, and the member's
+        // next heartbeat computes the target that holds its topics.
+        let resp = handle(
+            &broker,
+            ConsumerGroupHeartbeatRequest {
+                group_id: "g".into(),
+                member_id: "regex-member".into(),
+                member_epoch: joined.member_epoch,
+                rebalance_timeout_ms: -1,
+                ..Default::default()
+            },
+            VERSION,
+            &ctx,
+        )
+        .await
+        .expect("ConsumerGroupHeartbeat handler");
         assert!(resp.error_code == codes::NONE, "{resp:?}");
         let assigned: std::collections::HashSet<uuid::Uuid> = resp
             .assignment
@@ -920,7 +937,7 @@ mod tests {
             (broker_handle, _dir, broker, member),
             &[("orders-eu", first)]
         );
-        assert!(member.assigned == std::collections::HashSet::from([first]));
+        member.heartbeat_until_holding(&[first]).await;
 
         let node = krabka_raft::NodeId(broker_handle.node_id());
         let mut records = vec![describe_acl("orders-us")];
@@ -946,7 +963,7 @@ mod tests {
             (broker_handle, _dir, broker, member),
             &[("orders-eu", allowed), ("orders-us", revoked)]
         );
-        assert!(member.assigned == std::collections::HashSet::from([allowed, revoked]));
+        member.heartbeat_until_holding(&[allowed, revoked]).await;
 
         broker
             .controller

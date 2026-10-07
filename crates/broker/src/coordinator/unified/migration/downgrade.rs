@@ -18,22 +18,6 @@ use crate::coordinator::unified::{
     reconciler::ReconcileInput,
 };
 
-/// Can this consumer group be downgraded to a classic group?
-///
-/// Every remaining member must carry a classic facade. A native consumer
-/// member has no classic protocol list or session timeout to restore and makes
-/// the current group unrepresentable as classic state.
-pub(crate) fn consumer_is_convertible(state: &ConsumerState) -> bool {
-    consumer_downgrade_epoch(
-        state
-            .members
-            .values()
-            .all(|member| member.classic.is_some()),
-        state.group_epoch,
-    )
-    .is_some()
-}
-
 /// Converts a consumer group back into a classic group during a KIP-848
 /// downgrade.
 ///
@@ -44,16 +28,28 @@ pub(crate) fn consumer_is_convertible(state: &ConsumerState) -> bool {
 /// the kind-agnostic `Group` container, and this function does not change
 /// them.
 ///
-/// Precondition: every member is a hosted classic member, that is
-/// `classic.is_some()`. That holds once the last native consumer-protocol
-/// member has left.
+/// The `leaving` members, which a fence removes, are left out, as Kafka's
+/// `ClassicGroup.fromConsumerGroup` leaves out its `leavingMembers`.
+///
+/// Precondition: every other member is a hosted classic member, that is
+/// `classic.is_some()`.
 pub(crate) fn convert_consumer_to_classic(
     state: &ConsumerState,
+    leaving: &[String],
     image: &ReconcileInput,
 ) -> ClassicState {
     let mut classic = ClassicState::new(state.group_id.clone());
     classic.protocol_type = Some("consumer".into());
-    for (mid, m) in &state.members {
+    let mut members: Vec<(
+        &String,
+        &crate::coordinator::unified::consumer_state::MemberState,
+    )> = state
+        .members
+        .iter()
+        .filter(|(member_id, _)| !leaving.contains(member_id))
+        .collect();
+    members.sort_unstable_by_key(|(member_id, _)| member_id.as_str());
+    for (mid, m) in members {
         let facade = m
             .classic
             .as_ref()
@@ -93,6 +89,7 @@ pub(crate) fn convert_consumer_to_classic(
         state
             .members
             .values()
+            .filter(|member| !leaving.contains(&member.member_id))
             .all(|member| member.classic.is_some()),
         state.group_epoch,
     )
@@ -159,23 +156,6 @@ mod tests {
     use crate::coordinator::unified::persistence_next_gen::NextGenKey;
 
     #[test]
-    fn downgrade_requires_every_member_to_have_a_classic_facade() {
-        use std::time::{Duration, Instant};
-
-        use crate::coordinator::unified::consumer_state::MemberState;
-
-        let mut state = ConsumerState::new("g");
-        assert!(consumer_is_convertible(&state));
-        state.add_or_update_member(MemberState {
-            client_id: "c".into(),
-            client_host: "h".into(),
-            rebalance_timeout: Duration::from_secs(30),
-            ..MemberState::empty("native", Instant::now())
-        });
-        assert!(!consumer_is_convertible(&state));
-    }
-
-    #[test]
     fn downgrade_re_expresses_members_as_classic() {
         use std::time::{Duration, Instant};
 
@@ -230,7 +210,7 @@ mod tests {
             .per_member
             .insert("m1".into(), [(t1, vec![0, 1])].into());
 
-        let classic = convert_consumer_to_classic(&state, &image);
+        let classic = convert_consumer_to_classic(&state, &[], &image);
         assert!(classic.group_id == "g");
         assert!(classic.generation_id == 7);
         let member = classic.members.get("m1").expect("member preserved");

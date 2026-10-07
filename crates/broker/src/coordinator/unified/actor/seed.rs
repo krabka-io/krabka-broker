@@ -208,7 +208,6 @@ pub(super) fn apply_seed(state: &mut GroupState, seed: GroupSeed, image: &Reconc
     // group reaches its next target, and an unchanged one keeps the stored
     // target.
     state.request_metadata_refresh();
-    state.dirty = false;
 }
 
 #[cfg(test)]

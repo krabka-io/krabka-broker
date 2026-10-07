@@ -17,7 +17,7 @@ mod upgrade;
 
 pub(crate) use self::{
     assignment::target_to_consumer_assignment,
-    downgrade::{consumer_is_convertible, convert_consumer_to_classic, downgrade_pending_records},
+    downgrade::{convert_consumer_to_classic, downgrade_pending_records},
     hosted_classic::{
         ClassicMemberRegistration, build_hosted_classic_join_result, serve_classic_heartbeat,
         serve_classic_sync, upsert_classic_member,

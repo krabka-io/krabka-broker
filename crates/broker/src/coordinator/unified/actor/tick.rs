@@ -7,16 +7,14 @@
 use std::time::Instant;
 
 use super::{
-    ActorServices, MetadataProvider, ParkedWaiters, chrono_now_ms,
-    downgrade::maybe_downgrade,
-    member_state::run_reconcile,
-    persistence::{flush_classic_metadata, flush_pending, snapshot_pending_after_change},
-    regex_resolution::delete_unsubscribed_regexes,
+    ActorServices, ParkedWaiters, chrono_now_ms,
+    downgrade::{downgrade_fencing, downgrades_without},
+    heartbeat::fence_members,
+    persistence::{flush_classic_metadata, flush_pending},
     waiters::settle_removed_classic_waiters,
 };
 use crate::coordinator::unified::{
-    GroupCoordinator, classic_state::ClassicGroup as ClassicState, config::NextGenConfig,
-    consumer_state::GroupState, group::CoordinatorGroup, offsets_log::OffsetsLog,
+    classic_state::ClassicGroup as ClassicState, group::CoordinatorGroup,
 };
 
 pub(super) async fn handle_actor_tick(
@@ -25,30 +23,10 @@ pub(super) async fn handle_actor_tick(
     services: ActorServices<'_>,
 ) -> bool {
     let group_id = group.group_id.clone();
-    if let Some(state) = group.as_consumer_mut() {
-        if handle_session_tick(
-            state,
-            services.config,
-            services.metadata,
-            services.offsets_log,
-            services.coordinator,
-        )
-        .await
-        .is_err()
-        {
-            return false;
-        }
-        if let Err(error) = maybe_downgrade(
-            group,
-            services.config,
-            services.metadata,
-            services.offsets_log,
-            services.coordinator,
-        )
-        .await
-        {
+    if group.as_consumer().is_some() {
+        if let Err(error) = handle_session_tick(group, services).await {
             tracing::warn!(%group_id, %error,
-                "next-gen actor exiting after tick downgrade log-write failure");
+                "next-gen actor exiting after tick log-write failure");
             return false;
         }
     } else if let Some(state) = group.as_classic_mut() {
@@ -133,40 +111,57 @@ async fn settle_classic_removal(
     true
 }
 
-/// Runs on every heartbeat-interval tick. It evicts expired members and writes
-/// the resulting tombstones to `__consumer_offsets`. It returns `Err` when the
-/// log write fails, and the actor must then exit.
+/// Runs on every heartbeat-interval tick. Each member whose session expired,
+/// or whose rebalance timeout fired with partitions still to revoke, is
+/// fenced on its own, with a batch of its own, as each of Kafka's timers runs
+/// `consumerGroupFenceMember` for its member. A fence that leaves only
+/// classic members downgrades the group instead, and the downgraded group
+/// fences no more. It returns `Err` when a log write fails, and the actor
+/// must then exit.
 async fn handle_session_tick(
-    state: &mut GroupState,
-    config: &NextGenConfig,
-    metadata: &dyn MetadataProvider,
-    offsets_log: &dyn OffsetsLog,
-    coordinator: &GroupCoordinator,
+    group: &mut CoordinatorGroup,
+    services: ActorServices<'_>,
 ) -> Result<(), crate::error::BrokerError> {
     let now = Instant::now();
-    let mut evicted = state.evict_expired(now, config.session_timeout);
+    let Some(state) = group.as_consumer_mut() else {
+        return Ok(());
+    };
+    let mut fenced = state.expired_members(now, services.config.session_timeout);
     // KIP-848: a member that did not revoke its partitions within its
     // rebalance timeout is fenced like a member whose session expired.
-    evicted.extend(state.fence_rebalance_timeouts(now));
-    if evicted.is_empty() {
-        return Ok(());
+    for member_id in state.rebalance_timeouts_due(now) {
+        if !fenced.contains(&member_id) {
+            fenced.push(member_id);
+        }
     }
-    // `evict_expired` → `remove_member` already set `dirty`. Let the
-    // reconciler own the single `bump_epoch` (via `reconcile_if_dirty`); an
-    // explicit pre-bump here would double-advance `group_epoch` per eviction.
-    let regex_records = delete_unsubscribed_regexes(state);
-    run_reconcile(state, config, metadata);
-    let mut pending = snapshot_pending_after_change(state, &[], true);
-    pending.resolved_regexes = regex_records;
-    crate::coordinator::unified::persistence::tombstone_members!(pending, &evicted);
-    let now_ms = chrono_now_ms();
-    if let Err(e) = flush_pending(state, pending, offsets_log, coordinator, now_ms).await {
-        tracing::warn!(
-            group_id = %state.group_id,
-            error = %e,
-            "next-gen actor exiting after tick log-write failure",
-        );
-        return Err(e);
+    for member_id in fenced {
+        let Some(state) = group.as_consumer_mut() else {
+            return Ok(());
+        };
+        if !state.members.contains_key(&member_id) {
+            continue;
+        }
+        let member_ids = [member_id];
+        if downgrades_without(state, services.config, &member_ids) {
+            return downgrade_fencing(
+                group,
+                &member_ids,
+                services.config,
+                services.metadata,
+                services.offsets_log,
+                services.coordinator,
+            )
+            .await;
+        }
+        let pending = fence_members(state, services.metadata, &member_ids);
+        flush_pending(
+            state,
+            pending,
+            services.offsets_log,
+            services.coordinator,
+            chrono_now_ms(),
+        )
+        .await?;
     }
     Ok(())
 }
@@ -182,14 +177,18 @@ mod tests {
     use crate::{
         codes,
         coordinator::unified::{
+            GroupCoordinator,
             actor::{
-                GroupActorMessage, GroupKindTag, RegexResolution,
+                GroupActorMessage, GroupKindTag, PendingRecords, RegexResolution,
                 test_support::{
                     completing_classic_group, empty_metadata, last_classic_metadata,
                     make_coordinator, parked_follower, rpc, subscribed_member,
                 },
             },
             classic_state::GroupState as ClassicGroupState,
+            config::NextGenConfig,
+            consumer_state::GroupState,
+            group::GroupKind,
             offsets_log::fake::InMemoryOffsetsLog,
         },
     };
@@ -214,14 +213,12 @@ mod tests {
         check!(persisted.members.is_empty());
     }
 
-    /// Regression for the epoch double-bump: a single session-timeout eviction
-    /// must advance `group_epoch` by exactly 1. `handle_session_tick` has no
-    /// explicit `state.bump_epoch()`, so the reconciler (`reconcile_if_dirty`)
-    /// is the only place that raises the epoch.
+    /// Kafka runs a session timer per member, and each one that fires runs
+    /// `consumerGroupFenceMember` for its member alone. Two members that
+    /// expire together are fenced in two batches, each with the member's
+    /// tombstones and an epoch bump, and no target is computed.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn single_eviction_advances_epoch_by_one() {
-        use crate::coordinator::unified::consumer_state::GroupState;
-
+    async fn each_expired_member_is_fenced_in_a_batch_of_its_own() {
         let (coord, log) = make_coordinator();
         // Tiny session timeout so a member whose `last_seen` is a few ms in
         // the past counts as expired — avoids subtracting a large duration
@@ -232,43 +229,71 @@ mod tests {
             ..NextGenConfig::assigning_at_once()
         };
         let metadata = empty_metadata();
-
-        // Seed a member and reconcile once so the join settles into a clean
-        // (non-dirty) baseline epoch.
         let mut state = GroupState::new("g");
-        let mut m = subscribed_member(
-            "m1",
-            &["t"],
-            crate::coordinator::unified::ClientIdentity {
-                id: "client-a",
-                host: "h",
-            },
-            Instant::now(),
+        for member_id in ["m1", "m2"] {
+            let mut m = subscribed_member(
+                member_id,
+                &["t"],
+                crate::coordinator::unified::ClientIdentity {
+                    id: "client-a",
+                    host: "h",
+                },
+                Instant::now(),
+            );
+            m.last_seen = Instant::now()
+                .checked_sub(Duration::from_millis(50))
+                .expect("50ms is always within Instant range");
+            state.add_or_update_member(m);
+        }
+        state.group_epoch = 2;
+        state.target.epoch = 2;
+        let mut group = CoordinatorGroup::seeded(
+            "g",
+            GroupKind::Consumer(state),
+            std::collections::HashMap::new(),
         );
-        // Force the member to look session-expired. 50ms is always within
-        // `Instant`'s range (no underflow on any host) yet far exceeds the
-        // 1ms `session_timeout` set above.
-        m.last_seen = Instant::now()
-            .checked_sub(Duration::from_millis(50))
-            .expect("50ms is always within Instant range");
-        state.add_or_update_member(m);
-        run_reconcile(&mut state, &config, &*metadata);
-        assert!(!state.dirty, "baseline must be clean before eviction");
-        let epoch_before = state.group_epoch;
+        let services = ActorServices {
+            config: &config,
+            metadata: &*metadata,
+            offsets_log: log.as_ref(),
+            coordinator: &coord,
+        };
 
-        // One eviction tick.
-        handle_session_tick(&mut state, &config, &*metadata, &*log, &coord)
+        handle_session_tick(&mut group, services)
             .await
             .expect("tick should succeed");
 
-        assert!(
-            state.members.is_empty(),
-            "expired member must have been evicted"
-        );
-        assert!(
-            state.group_epoch == epoch_before + 1,
-            "a single eviction must advance the group epoch by exactly 1"
-        );
+        let fence = |member_id: &str, epoch| {
+            PendingRecords {
+                member_metadata: vec![(member_id.into(), None)],
+                target_per_member: vec![(member_id.into(), None)],
+                current_per_member: vec![(member_id.into(), None)],
+                group_metadata: Some(
+                    crate::coordinator::unified::persistence_next_gen::GroupMetadataValue {
+                        epoch,
+                        metadata_hash: 0,
+                    },
+                ),
+                ..PendingRecords::default()
+            }
+            .to_batch("g", 0)
+            .unwrap()
+            .records
+        };
+        let written: Vec<_> = log
+            .batches()
+            .await
+            .into_iter()
+            .map(|batch| batch.records)
+            .collect();
+        let mut expected = vec![fence("m1", 3), fence("m2", 4)];
+        if written.first().is_some_and(|batch| batch != &expected[0]) {
+            // The members expire together: either may be fenced first.
+            expected = vec![fence("m2", 3), fence("m1", 4)];
+        }
+        check!(written == expected);
+        let state = group.as_consumer().unwrap();
+        check!((state.members.len(), state.group_epoch, state.target.epoch) == (0, 4, 2));
     }
 
     /// KIP-848: Kafka fences a member that does not revoke its partitions
@@ -381,9 +406,25 @@ mod tests {
             let second = if row.revokes { kept } else { vec![0, 1] };
             heartbeat(&mut state, "m1", Some(second));
 
-            handle_session_tick(&mut state, &config, &metadata, &*log, &coord)
+            let mut group = CoordinatorGroup::seeded(
+                "g",
+                GroupKind::Consumer(state),
+                std::collections::HashMap::new(),
+            );
+            let services = ActorServices {
+                config: &config,
+                metadata: &metadata,
+                offsets_log: log.as_ref(),
+                coordinator: &coord,
+            };
+            handle_session_tick(&mut group, services)
                 .await
                 .expect("tick");
+            let GroupKind::Consumer(mut state) =
+                std::mem::replace(group.kind_mut(), GroupKind::Consumer(GroupState::new("g")))
+            else {
+                panic!("the group stays a consumer group");
+            };
 
             check!(
                 state.members.contains_key("m1") == row.m1_present_after,

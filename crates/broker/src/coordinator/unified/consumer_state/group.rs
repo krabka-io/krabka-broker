@@ -8,8 +8,8 @@
 
 use std::{
     cmp::Ordering,
-    collections::{HashMap, HashSet},
-    time::Instant,
+    collections::HashMap,
+    time::{Duration, Instant},
 };
 
 use krabka_protocol::primitives::uuid::Uuid;
@@ -37,7 +37,6 @@ pub struct GroupState {
     pub members: HashMap<String, MemberState>,
     pub instance_to_member: HashMap<String, String>,
     pub target: TargetAssignment,
-    pub dirty: bool,
     /// The armed rebalance timeouts, by member id: the instant each one fires.
     /// Kafka's `scheduleConsumerGroupRebalanceTimeout` keeps the same deadline
     /// in a timer.
@@ -92,11 +91,12 @@ impl GroupState {
                 epoch: INITIAL_GROUP_EPOCH,
                 per_member: HashMap::new(),
             },
-            dirty: false,
             rebalance_deadlines: HashMap::new(),
             resolved_regexes: HashMap::new(),
             metadata_hash: 0,
-            metadata_refresh_requested: false,
+            // Kafka's `DeadlineAndEpoch.EMPTY`: a new group's metadata starts
+            // expired, so its first heartbeat computes the metadata hash.
+            metadata_refresh_requested: true,
             assignment_timestamp_ms: 0,
             has_subscription_metadata_record: false,
             presence: LogPresence::Absent,
@@ -130,7 +130,15 @@ impl GroupState {
         self.assignment_timestamp_ms
     }
 
-    crate::coordinator::unified::member_helpers::bump_group_epoch!(self; self.dirty = true;);
+    crate::coordinator::unified::member_helpers::bump_group_epoch!(self;);
+
+    /// `true` while the group epoch is ahead of the target assignment epoch:
+    /// Kafka's `maybeUpdateTargetAssignment` then computes a new target at
+    /// the next heartbeat that the assignment interval allows.
+    #[must_use]
+    pub fn target_is_stale(&self) -> bool {
+        self.group_epoch > self.target.epoch
+    }
 
     /// Kafka's `ConsumerGroup.validateOffsetCommit`, with the per-partition
     /// validator of `createAssignmentEpochValidator` (KIP-1251) run over
@@ -211,20 +219,7 @@ impl GroupState {
         if let Some(iid) = m.instance_id.clone() {
             self.instance_to_member.insert(iid, m.member_id.clone());
         }
-        let cached: Option<(HashSet<String>, Option<String>)> =
-            self.members.get(&m.member_id).map(|prev| {
-                (
-                    prev.subscribed_topic_names.clone(),
-                    prev.subscribed_topic_regex.clone(),
-                )
-            });
-        let subscription_changed = cached.as_ref().is_none_or(|(names, regex)| {
-            names != &m.subscribed_topic_names || regex != &m.subscribed_topic_regex
-        });
         self.members.insert(m.member_id.clone(), m);
-        if subscription_changed {
-            self.dirty = true;
-        }
     }
 
     pub fn remove_member(&mut self, member_id: &str) -> Option<MemberState> {
@@ -235,7 +230,6 @@ impl GroupState {
         {
             self.instance_to_member.remove(iid);
         }
-        self.dirty = true;
         Some(m)
     }
 
@@ -296,6 +290,27 @@ impl GroupState {
     pub fn record_metadata_hash(&mut self, hash: i64) {
         self.metadata_hash = hash;
         self.metadata_refresh_requested = false;
+    }
+
+    /// Records `hash` as the group's metadata hash and leaves a requested
+    /// refresh as it is, as the replay of the epoch record that Kafka's
+    /// `consumerGroupFenceMembers` writes does.
+    pub fn set_metadata_hash(&mut self, hash: i64) {
+        self.metadata_hash = hash;
+    }
+
+    /// The members whose session expired at `now`, without removing them:
+    /// each one is fenced on its own, as each of Kafka's session timers fences
+    /// its member (`scheduleConsumerGroupSessionTimeout`).
+    #[must_use]
+    pub fn expired_members(&self, now: Instant, session_timeout: Duration) -> Vec<String> {
+        crate::coordinator::unified::expired_member_ids(
+            self.members
+                .iter()
+                .map(|(id, member)| (id.as_str(), member.last_seen)),
+            now,
+            session_timeout,
+        )
     }
 
     crate::coordinator::unified::member_helpers::evict_expired!();
@@ -362,6 +377,17 @@ impl GroupState {
     /// pass also cancels the deadlines that no longer apply, so a past
     /// deadline never stays armed.
     pub fn fence_rebalance_timeouts(&mut self, now: Instant) -> Vec<String> {
+        let fenced = self.rebalance_timeouts_due(now);
+        for member_id in &fenced {
+            self.remove_member(member_id);
+        }
+        fenced
+    }
+
+    /// The members whose rebalance timeout fired at `now` while they still
+    /// had partitions to revoke, sorted, without removing them. See
+    /// [`Self::fence_rebalance_timeouts`].
+    pub fn rebalance_timeouts_due(&mut self, now: Instant) -> Vec<String> {
         self.prune_rebalance_timeouts();
         let unarmed_classic: Vec<String> = self
             .members
@@ -383,9 +409,6 @@ impl GroupState {
             .map(|(member_id, _)| member_id.clone())
             .collect();
         fenced.sort_unstable();
-        for member_id in &fenced {
-            self.remove_member(member_id);
-        }
         fenced
     }
 
@@ -459,7 +482,7 @@ impl GroupState {
     pub fn state_name(&self) -> &'static str {
         if self.members.is_empty() {
             "Empty"
-        } else if self.group_epoch > self.target.epoch || self.dirty {
+        } else if self.target_is_stale() {
             "Assigning"
         } else if self.members.values().any(|m| {
             m.assignment_state != MemberAssignmentState::Stable
@@ -491,53 +514,34 @@ mod tests {
             m.assignment_state = assignment_state;
             m
         };
-        // (group epoch, target epoch, dirty, members, expected state). A dirty
-        // group has a group epoch that is not bumped yet: the bump comes with
-        // the target, which a group inside its assignment interval still owes.
+        // (group epoch, target epoch, members, expected state)
         let rows = [
-            (3, 3, false, vec![], "Empty"),
-            (3, 3, true, vec![], "Empty"),
+            (3, 3, vec![], "Empty"),
+            (4, 3, vec![], "Empty"),
             (
                 4,
                 3,
-                false,
                 vec![at(3, MemberAssignmentState::Stable)],
                 "Assigning",
             ),
             (
                 3,
                 3,
-                true,
-                vec![at(3, MemberAssignmentState::Stable)],
-                "Assigning",
-            ),
-            (
-                3,
-                3,
-                false,
                 vec![at(2, MemberAssignmentState::Stable)],
                 "Reconciling",
             ),
             (
                 3,
                 3,
-                false,
                 vec![at(3, MemberAssignmentState::UnreleasedPartitions)],
                 "Reconciling",
             ),
-            (
-                3,
-                3,
-                false,
-                vec![at(3, MemberAssignmentState::Stable)],
-                "Stable",
-            ),
+            (3, 3, vec![at(3, MemberAssignmentState::Stable)], "Stable"),
         ];
-        for (group_epoch, target_epoch, dirty, members, expected) in rows {
+        for (group_epoch, target_epoch, members, expected) in rows {
             let mut g = GroupState::new("g");
             g.group_epoch = group_epoch;
             g.target.epoch = target_epoch;
-            g.dirty = dirty;
             for m in members {
                 g.members.insert(m.member_id.clone(), m);
             }
@@ -887,45 +891,6 @@ mod tests {
     }
 
     #[test]
-    fn add_member_marks_dirty_first_time() {
-        let mut g = GroupState::new("g");
-        g.add_or_update_member(member("m1"));
-        assert!(g.dirty);
-    }
-
-    #[test]
-    fn re_add_same_subscription_keeps_clean_after_reset() {
-        let mut g = GroupState::new("g");
-        g.add_or_update_member(member("m1"));
-        g.dirty = false;
-        g.add_or_update_member(member("m1"));
-        assert!(!g.dirty);
-    }
-
-    #[test]
-    fn subscription_change_marks_dirty() {
-        let mut g = GroupState::new("g");
-        g.add_or_update_member(member("m1"));
-        g.dirty = false;
-        let mut m = member("m1");
-        m.subscribed_topic_names.insert("t".into());
-        g.add_or_update_member(m);
-        assert!(g.dirty);
-    }
-
-    #[test]
-    fn remove_member_marks_dirty() {
-        let mut g = GroupState::new("g");
-        g.add_or_update_member(member("m1"));
-        g.dirty = false;
-        g.remove_member("m1");
-        assert!(g.dirty);
-    }
-
-    /// Kafka's `canComputeNextTargetAssignment`: no previous assignment, or a
-    /// zero interval, never waits; otherwise the next assignment waits until
-    /// the interval has elapsed since the last one.
-    #[test]
     fn the_assignment_interval_holds_the_next_assignment_back() {
         let assigned_at = 1_000_000;
         let second = Duration::from_secs(1);
@@ -1124,15 +1089,13 @@ mod tests {
     }
 
     #[test]
-    fn bump_epoch_increments_and_dirties() {
+    fn bump_epoch_increments_and_stales_the_target() {
         let mut g = GroupState::new("g");
         // Kafka's `ModernGroup` starts at group epoch 1 and
         // `TargetAssignmentMetadata.INITIAL` at assignment epoch 1.
-        assert!((g.group_epoch, g.target.epoch) == (1, 1));
-        g.dirty = false;
+        assert!((g.group_epoch, g.target.epoch, g.target_is_stale()) == (1, 1, false));
         assert!(g.bump_epoch());
-        assert!(g.group_epoch == 2);
-        assert!(g.dirty);
+        assert!((g.group_epoch, g.target_is_stale()) == (2, true));
     }
 
     #[test]

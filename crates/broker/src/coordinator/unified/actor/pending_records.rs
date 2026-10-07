@@ -103,7 +103,7 @@ pub(crate) fn group_tombstone_keys(
     keys.iter().map(encode_key).collect()
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, PartialEq)]
 pub(crate) struct PendingRecords {
     pub group_metadata: Option<GroupMetadataValue>,
     /// The regular expressions whose resolution the transition writes
@@ -129,6 +129,9 @@ pub(crate) struct PendingRecords {
     /// Write the classic k2 `GroupMetadata` value (downgrade flip).
     pub classic_group_metadata:
         Option<crate::coordinator::unified::persistence::GroupMetadataValue>,
+    /// The records that follow these in the same batch, such as a
+    /// heartbeat's own records after the records of Kafka's `replaceMember`.
+    pub then: Option<Box<PendingRecords>>,
 }
 
 impl PendingRecords {
@@ -143,6 +146,29 @@ impl PendingRecords {
             && self.partition_metadata == PartitionMetadataWrite::Keep
             && self.group_tombstone.is_none()
             && self.classic_group_metadata.is_none()
+            && self.then.as_ref().is_none_or(|then| then.is_empty())
+    }
+
+    /// Whether these records, or the records that follow them, tombstone the
+    /// deprecated k4 record on a metadata update.
+    pub fn tombstones_partition_metadata(&self) -> bool {
+        self.partition_metadata == PartitionMetadataWrite::Tombstone
+            || self
+                .then
+                .as_ref()
+                .is_some_and(|then| then.tombstones_partition_metadata())
+    }
+
+    /// Appends `next` after these records and the records already chained
+    /// after them.
+    #[must_use]
+    pub fn followed_by(mut self, next: PendingRecords) -> PendingRecords {
+        let mut tail = &mut self;
+        while tail.then.is_some() {
+            tail = tail.then.as_mut().expect("checked above");
+        }
+        tail.then = Some(Box::new(next));
+        self
     }
 
     /// Encodes the delta as the one batch that `OffsetsLog::append` takes, in
@@ -170,6 +196,19 @@ impl PendingRecords {
     /// field cannot carry.
     pub fn to_batch(&self, group_id: &str, now_ms: i64) -> Result<RecordBatch, BrokerError> {
         let mut batch = OffsetRecordBatchBuilder::default();
+        let mut next = Some(self);
+        while let Some(records) = next {
+            records.push_records(group_id, &mut batch)?;
+            next = records.then.as_deref();
+        }
+        Ok(batch.finish(now_ms))
+    }
+
+    fn push_records(
+        &self,
+        group_id: &str,
+        batch: &mut OffsetRecordBatchBuilder,
+    ) -> Result<(), BrokerError> {
         let key = |key: NextGenKey| encode_key(&key);
         let group = || group_id.to_owned();
 
@@ -250,11 +289,11 @@ impl PendingRecords {
                 key(NextGenKey::GroupMetadata { group_id: group() })?,
                 Some(v.encode()),
             );
-            // Kafka's `updateSubscriptionMetadata` adds the k4 tombstone right
-            // after the epoch record.
-            if self.partition_metadata == PartitionMetadataWrite::Tombstone {
-                batch.push(partition_metadata_key(group_id)?, None);
-            }
+        }
+        // Kafka's `updateSubscriptionMetadata` adds the k4 tombstone right
+        // after the epoch record, which it writes only for a bump.
+        if self.partition_metadata == PartitionMetadataWrite::Tombstone {
+            batch.push(partition_metadata_key(group_id)?, None);
         }
         for (member_id, v) in &self.target_per_member {
             if is_removed(member_id) && v.is_none() {
@@ -301,12 +340,19 @@ impl PendingRecords {
                 Some(v.encode_value()?),
             );
         }
-
-        Ok(batch.finish(now_ms))
+        Ok(())
     }
 
     /// Apply exactly this durable next-gen record delta to the respawn cache.
-    pub(super) fn apply_to_cache(self, coordinator: &GroupCoordinator, group_id: &str) {
+    pub(super) fn apply_to_cache(mut self, coordinator: &GroupCoordinator, group_id: &str) {
+        let then = self.then.take();
+        self.apply_own_to_cache(coordinator, group_id);
+        if let Some(then) = then {
+            then.apply_to_cache(coordinator, group_id);
+        }
+    }
+
+    fn apply_own_to_cache(self, coordinator: &GroupCoordinator, group_id: &str) {
         if self.group_tombstone.is_some() {
             coordinator.remove_cached_seed(group_id);
             return;
@@ -365,7 +411,7 @@ mod tests {
     use crate::{
         coordinator::unified::{
             actor::{
-                persistence::snapshot_pending_after_change,
+                persistence::full_pending_records,
                 test_support::{make_coordinator, subscribed_member},
             },
             consumer_state::GroupState,
@@ -470,6 +516,7 @@ mod tests {
                     assignment: bytes::Bytes::new(),
                 }],
             }),
+            then: None,
         }
     }
 
@@ -579,7 +626,7 @@ mod tests {
             .insert("m1".to_string(), maplit::hashmap! {topic => vec![0, 1, 2]});
         state.add_or_update_member(m);
 
-        let mut pending = snapshot_pending_after_change(&state, &["m1".to_string()], true);
+        let mut pending = full_pending_records(&state);
         let resolution = p::RegularExpressionValue {
             topics: vec!["t".to_string()],
             version: 9,
@@ -602,7 +649,7 @@ mod tests {
                 client_id: "client-a".to_string(),
                 client_host: "h".to_string(),
                 subscribed_topic_names: vec!["t".to_string()],
-                subscribed_topic_regex: None,
+                subscribed_topic_regex: Some(String::new()),
                 server_assignor: None,
                 rebalance_timeout_ms: 60_000,
                 classic: Some(p::ClassicMemberMetadata {
@@ -708,6 +755,7 @@ mod tests {
                 member_id: member(id),
             })
         };
+        let k4 = ng(NextGenKey::PartitionMetadata { group_id: group() });
         let k6 = ng(NextGenKey::TargetAssignmentMetadata { group_id: group() });
         let k7 = |id: &str| {
             ng(NextGenKey::TargetAssignmentMember {
@@ -806,6 +854,51 @@ mod tests {
                     (k6.clone(), false),
                     (k8("m"), false),
                 ],
+            ),
+            // Kafka's `replaceMember` records come first in the batch, then
+            // the heartbeat's own.
+            (
+                "a static replacement precedes the heartbeat's records",
+                PendingRecords {
+                    member_metadata: vec![
+                        ("leaves".into(), None),
+                        ("stays".into(), Some(metadata.clone())),
+                    ],
+                    target_per_member: vec![
+                        ("leaves".into(), None),
+                        ("stays".into(), Some(target.clone())),
+                    ],
+                    current_per_member: vec![
+                        ("leaves".into(), None),
+                        ("stays".into(), Some(current.clone())),
+                    ],
+                    ..Default::default()
+                }
+                .followed_by(PendingRecords {
+                    member_metadata: vec![("stays".into(), Some(metadata.clone()))],
+                    current_per_member: vec![("stays".into(), Some(current.clone()))],
+                    ..Default::default()
+                }),
+                vec![
+                    (k8("leaves"), true),
+                    (k7("leaves"), true),
+                    (k5("leaves"), true),
+                    (k5("stays"), false),
+                    (k7("stays"), false),
+                    (k8("stays"), false),
+                    (k5("stays"), false),
+                    (k8("stays"), false),
+                ],
+            ),
+            // `updateSubscriptionMetadata` without a bump: only the k4
+            // tombstone.
+            (
+                "a metadata refresh without a bump tombstones only the k4 record",
+                PendingRecords {
+                    partition_metadata: PartitionMetadataWrite::Tombstone,
+                    ..Default::default()
+                },
+                vec![(k4.clone(), true)],
             ),
         ];
         for (case, pending, expected) in rows {

@@ -9,14 +9,15 @@
 use std::time::{Duration, Instant};
 
 use bytes::Bytes;
-use krabka_protocol::owned::join_group_request::JoinGroupRequest;
+use krabka_protocol::{owned::join_group_request::JoinGroupRequest, primitives::uuid::Uuid};
 use tokio::sync::oneshot;
 
 use super::{
     ActorServices, FALLBACK_REBALANCE_TIMEOUT_MS, FALLBACK_SESSION_TIMEOUT_MS, JoinResult,
     MetadataProvider, ParkedWaiters, chrono_now_ms,
-    member_state::{refresh_expired_metadata, run_reconcile},
-    persistence::{flush_classic_metadata, flush_pending, snapshot_pending_after_change},
+    member_state::{MemberChange, after_member_update},
+    persistence::{Recorder, flush_classic_metadata, flush_pending},
+    regex_resolution::RegexResolution,
     waiters::{complete_classic_rebalance, drain_followers_with, fence_replaced_classic_member},
 };
 use crate::{
@@ -210,11 +211,11 @@ struct HostedJoin<'a> {
 /// gets `MEMBER_ID_REQUIRED` with that id, and the group does not change until
 /// the member joins again with it.
 ///
-/// This function upserts the member into the next-gen state. When the member's
-/// subscription is new or changed, which makes the group dirty, it reconciles
-/// and persists the membership change exactly as `handle_heartbeat`'s
-/// first-join path does: `run_reconcile`, then `advance_member_epoch`, then
-/// `snapshot_pending_after_change`, then `flush_pending`.
+/// This function upserts the member into the next-gen state, then runs the
+/// steps of the consumer heartbeat that follow a member update, as Kafka
+/// does: the subscription metadata update that bumps the group epoch, the
+/// target assignment, and the member's reconciliation against the partitions
+/// its subscription says it owns. It writes the records of what changed.
 ///
 /// It replies on `reply` with the follower `JoinResult` of
 /// [`migration::build_hosted_classic_join_result`]. The member receives the
@@ -251,13 +252,13 @@ async fn classic_join_hosted(
     // which derives topics from a member's selected protocol metadata). The
     // matching protocol's name is echoed back as the result's `protocol_name`.
     let decoded = req.protocols.iter().find_map(|p| {
-        migration::decode_consumer_subscription(&p.metadata).map(|sub| (p.name.clone(), sub.topics))
+        migration::decode_consumer_subscription(&p.metadata).map(|sub| (p.name.clone(), sub))
     });
-    let (protocol_name, topics) = match decoded {
-        Some((name, topics)) => (Some(name), topics.into_iter().collect()),
+    let (protocol_name, subscription) = match decoded {
+        Some((name, subscription)) => (Some(name), subscription),
         None => (
             req.protocols.first().map(|p| p.name.clone()),
-            std::collections::HashSet::new(),
+            krabka_protocol::owned::consumer_protocol_subscription::ConsumerProtocolSubscription::default(),
         ),
     };
     let protocols: Vec<(String, Bytes)> = req
@@ -275,11 +276,35 @@ async fn classic_join_hosted(
     let state = group
         .as_consumer_mut()
         .expect("caller verified consumer kind");
+    let image = metadata.snapshot();
+    // Kafka's `toTopicPartitions(subscription.ownedPartitions(), image)`.
+    let mut owned: std::collections::HashMap<Uuid, Vec<i32>> = std::collections::HashMap::new();
+    for topic in &subscription.owned_partitions {
+        if let Some(topic_id) = image.topic_id_by_name.get(&topic.topic) {
+            owned
+                .entry(*topic_id)
+                .or_default()
+                .extend(&topic.partitions);
+        }
+    }
+    let before = state.members.get(&member_id).map(|member| {
+        (
+            member.subscribed_topic_names.clone(),
+            member.subscribed_topic_regex.clone(),
+        )
+    });
+    let topics: std::collections::HashSet<String> = subscription.topics.into_iter().collect();
+    let names_changed = before
+        .as_ref()
+        .map_or(!topics.is_empty(), |(names, _)| names != &topics);
+    let old_regex = before.and_then(|(_, regex)| regex);
+    let recorder = Recorder::start(state, &[&member_id]);
     migration::upsert_classic_member(
         state,
         migration::ClassicMemberRegistration {
             member_id: member_id.clone(),
             subscription_topics: topics,
+            rack_id: subscription.rack_id.filter(|rack| !rack.is_empty()),
             protocols,
             client_id: client_id.to_string(),
             client_host: client_host.to_string(),
@@ -288,23 +313,38 @@ async fn classic_join_hosted(
             instance_id: req.group_instance_id.clone(),
         },
     );
-    refresh_expired_metadata(state, metadata);
-    if state.dirty {
-        run_reconcile(state, config, metadata);
-        state.advance_member_epoch(&member_id);
-        let pending = snapshot_pending_after_change(state, std::slice::from_ref(&member_id), true);
-        if let Err(e) = flush_pending(state, pending, offsets_log, coordinator, now_ms).await {
-            tracing::warn!(
-                group_id = %state.group_id, error = %e,
-                "next-gen actor exiting after hosted classic-join log-write failure",
-            );
-            let _ = reply.send(JoinResult {
-                error_code: codes::COORDINATOR_LOAD_IN_PROGRESS,
-                member_id: req.member_id.clone(),
-                ..JoinResult::default()
-            });
-            return Err(e);
-        }
+    // Kafka's `classicGroupJoinToConsumerGroup` runs the steps of the consumer
+    // heartbeat that follow the member update; a classic member has no regex.
+    let update = after_member_update(
+        state,
+        config,
+        metadata,
+        MemberChange {
+            member_id: &member_id,
+            old_regex,
+            new_regex: None,
+            names_changed,
+            owned: Some(&owned),
+        },
+        &RegexResolution::never(config),
+    );
+    let mut pending = recorder.finish(
+        state,
+        update.target.as_deref(),
+        update.partition_metadata_tombstone,
+    );
+    pending.resolved_regexes = update.regex_records;
+    if let Err(e) = flush_pending(state, pending, offsets_log, coordinator, now_ms).await {
+        tracing::warn!(
+            group_id = %state.group_id, error = %e,
+            "next-gen actor exiting after hosted classic-join log-write failure",
+        );
+        let _ = reply.send(JoinResult {
+            error_code: codes::COORDINATOR_LOAD_IN_PROGRESS,
+            member_id: req.member_id.clone(),
+            ..JoinResult::default()
+        });
+        return Err(e);
     }
     let member = state
         .members
@@ -764,9 +804,9 @@ mod tests {
         }
     }
 
-    /// The generation that a hosted member's `JoinGroup` gives is the epoch
-    /// that its `OffsetCommit` passes the fence with, also after other members
-    /// moved the group epoch past the member epoch.
+    /// The generation that a hosted member's `JoinGroup` gives is its member
+    /// epoch, which its `OffsetCommit` passes the fence with, also after other
+    /// members moved the group epoch.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn a_hosted_member_commits_at_the_generation_its_join_gives() {
         use crate::coordinator::unified::{
@@ -788,10 +828,7 @@ mod tests {
         let second = rpc::consumer_heartbeat(&handle, "native-2", 0, Some("t")).await;
         assert!(second.error_code == codes::NONE);
         let rejoined = rpc::classic_join(&handle, "m-classic", "t").await;
-        let rx = rpc::begin(&handle, |tx| GroupActorMessage::Describe { reply: tx }).await;
-        let group_epoch = rx.await.unwrap().group_epoch;
         let member = rpc::describe_member(&handle, "m-classic").await;
-        assert!(member.member_epoch < group_epoch);
 
         check!(rejoined == follower_join("m-classic", member.member_epoch));
         check!(

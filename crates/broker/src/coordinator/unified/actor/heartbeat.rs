@@ -22,18 +22,15 @@ use self::identity::{
 };
 use super::{
     ActorServices, ErrorCode, FALLBACK_HEARTBEAT_INTERVAL_MS, MetadataProvider, chrono_now_ms,
-    downgrade::maybe_downgrade,
+    downgrade::{downgrade_fencing, downgrades_without},
     member_state::{
-        check_subscribed_topic_regex, reported_owned, run_reconcile, try_build_member,
-        update_member_state,
+        MemberChange, after_member_update, check_subscribed_topic_regex, reported_owned,
+        try_build_member, update_member_state,
     },
     pending_records::PendingRecords,
-    persistence::{
-        current_assignment_value, flush_pending, snapshot_pending_after_change,
-        target_assignment_value,
-    },
+    persistence::{Recorder, current_assignment_value, flush_pending, target_assignment_value},
     regex_resolution::{
-        RegexResolution, delete_unsubscribed_regexes, maybe_update_regular_expressions,
+        RegexResolution, Resolutions, apply_regex_result, delete_unsubscribed_regexes,
     },
 };
 use crate::{
@@ -44,7 +41,7 @@ use crate::{
         consumer_state::GroupState,
         first_join_member_id,
         group::{CoordinatorGroup, GroupKind},
-        migration,
+        migration, reconciler,
         regex_resolver::TopicRegexResolver,
     },
 };
@@ -87,6 +84,12 @@ pub(super) async fn handle_actor_heartbeat(
             return true;
         }
     }
+    // Kafka's `getOrMaybeCreateConsumerGroup` writes the records that replace a
+    // classic group in the heartbeat's own batch, and the whole batch fails
+    // or commits together. The classic group comes back when the heartbeat
+    // is refused.
+    let mut prefix: Option<PendingRecords> = None;
+    let mut classic_before: Option<GroupKind> = None;
     if group
         .as_classic()
         .is_some_and(|classic| classic.members.is_empty())
@@ -95,45 +98,24 @@ pub(super) async fn handle_actor_heartbeat(
         // that only holds committed offsets, is deleted whatever the policy
         // and protocol type, and a new consumer group takes its id. The
         // committed offsets stay with the group id.
-        if super::retention::append_tombstones(
-            services.offsets_log,
-            &group.group_id,
-            &[],
-            Some(&group.kind),
-            chrono_now_ms(),
-        )
-        .await
-        .is_err()
-        {
-            let _ = reply.send(ConsumerGroupHeartbeatResponse {
-                error_code: codes::COORDINATOR_LOAD_IN_PROGRESS,
-                ..Default::default()
-            });
-            return true;
-        }
-        *group.kind_mut() = GroupKind::Consumer(GroupState::new(group.group_id.clone()));
-    }
-    if group.is_classic() {
-        let classic = group.as_classic().expect("classic kind");
-        let mut new_state = migration::convert_classic_to_consumer(classic);
-        let pending = migration::upgrade_pending_records(&new_state);
-        if flush_pending(
-            &mut new_state,
-            pending,
-            services.offsets_log,
-            services.coordinator,
-            chrono_now_ms(),
-        )
-        .await
-        .is_err()
-        {
-            let _ = reply.send(ConsumerGroupHeartbeatResponse {
-                error_code: codes::COORDINATOR_LOAD_IN_PROGRESS,
-                ..Default::default()
-            });
-            return false;
-        }
-        *group.kind_mut() = GroupKind::Consumer(new_state);
+        prefix = Some(PendingRecords {
+            classic_group_metadata_tombstone: true,
+            ..PendingRecords::default()
+        });
+        let fresh = GroupState::new(group.group_id.clone());
+        classic_before = Some(std::mem::replace(
+            group.kind_mut(),
+            GroupKind::Consumer(fresh),
+        ));
+    } else if let Some(classic) = group.as_classic() {
+        // `convertToConsumerGroup`.
+        let new_state =
+            migration::convert_classic_to_consumer(classic, &services.metadata.snapshot());
+        prefix = Some(migration::upgrade_pending_records(&new_state));
+        classic_before = Some(std::mem::replace(
+            group.kind_mut(),
+            GroupKind::Consumer(new_state),
+        ));
     }
 
     let Some(state) = group.as_consumer_mut() else {
@@ -160,8 +142,45 @@ pub(super) async fn handle_actor_heartbeat(
         });
         return true;
     }
-    match handle_heartbeat(state, services, &request, client, regex_resolver).await {
+    // Kafka's `consumerGroupFenceMembers` downgrades the group, in place of
+    // the fence, when the leaving member is its last native one.
+    if request.member_epoch == LEAVE_GROUP_MEMBER_EPOCH
+        && let Ok(member) = resolve_leaving_member(state, &request)
+    {
+        let fenced = [member.member_id.clone()];
+        if downgrades_without(state, services.config, &fenced) {
+            if let Err(error) = downgrade_fencing(
+                group,
+                &fenced,
+                services.config,
+                services.metadata,
+                services.offsets_log,
+                services.coordinator,
+            )
+            .await
+            {
+                tracing::warn!(group_id = %group.group_id, %error,
+                    "next-gen actor exiting after downgrade log-write failure");
+                let _ = reply.send(ConsumerGroupHeartbeatResponse {
+                    error_code: codes::COORDINATOR_LOAD_IN_PROGRESS,
+                    ..Default::default()
+                });
+                return false;
+            }
+            let _ = reply.send(ConsumerGroupHeartbeatResponse {
+                member_id: Some(request.member_id.clone()),
+                ..base_resp(codes::NONE, request.member_epoch)
+            });
+            return true;
+        }
+    }
+    match handle_heartbeat(state, services, &request, client, regex_resolver, prefix).await {
         Ok(response) => {
+            if response.error_code != codes::NONE
+                && let Some(kind) = classic_before
+            {
+                *group.kind_mut() = kind;
+            }
             let _ = reply.send(response);
         }
         Err(error) => {
@@ -174,19 +193,6 @@ pub(super) async fn handle_actor_heartbeat(
             return false;
         }
     }
-    if let Err(error) = maybe_downgrade(
-        group,
-        services.config,
-        services.metadata,
-        services.offsets_log,
-        services.coordinator,
-    )
-    .await
-    {
-        tracing::warn!(group_id = %group.group_id, %error,
-            "next-gen actor exiting after downgrade log-write failure");
-        return false;
-    }
     true
 }
 
@@ -195,11 +201,24 @@ pub(super) async fn handle_actor_heartbeat(
 pub(crate) struct HeartbeatStep {
     pub response: ConsumerGroupHeartbeatResponse,
     pub pending: PendingRecords,
+    /// What the heartbeat's regex resolution found. The caller applies it
+    /// after the heartbeat's batch, as Kafka's `handleRegularExpressionsResult`
+    /// does, and writes its records in a batch of their own.
+    pub resolutions: Option<Resolutions>,
 }
 
-/// The pure, synchronous heartbeat decision core: assignor selection and epoch
-/// validation, member upsert or leave, `update_member_state`, `run_reconcile`,
-/// `reconcile_member`, and the response build.
+impl HeartbeatStep {
+    fn answer(response: ConsumerGroupHeartbeatResponse) -> Self {
+        Self {
+            response,
+            pending: PendingRecords::default(),
+            resolutions: None,
+        }
+    }
+}
+
+/// The pure, synchronous heartbeat decision core: Kafka's
+/// `consumerGroupHeartbeat`, from the member lookup to the response.
 ///
 /// This function holds no `.await` and does no I/O. `handle_heartbeat` calls
 /// it, then flushes `pending` to the log. It is a separate function so that
@@ -219,7 +238,7 @@ pub(crate) fn step_heartbeat(
     if req.member_epoch == LEAVE_GROUP_MEMBER_EPOCH
         || req.member_epoch == LEAVE_GROUP_STATIC_MEMBER_EPOCH
     {
-        return leave_step(state, config, metadata, req);
+        return leave_step(state, metadata, req);
     }
 
     // ─── Validate assignor selection ─────────────────────────────
@@ -228,10 +247,7 @@ pub(crate) fn step_heartbeat(
         .as_deref()
         .is_some_and(|name| !config.assignor_enabled(name))
     {
-        return HeartbeatStep {
-            response: error_resp(codes::UNSUPPORTED_ASSIGNOR),
-            pending: PendingRecords::default(),
-        };
+        return HeartbeatStep::answer(error_resp(codes::UNSUPPORTED_ASSIGNOR));
     }
 
     // Kafka's `throwIfConsumerGroupIsFull`: only a member id the group does
@@ -258,69 +274,72 @@ pub(crate) fn step_heartbeat(
         Err(error) => return rejected(error),
     };
 
-    // ─── First-join path ─────────────────────────────────────────
+    // ─── First join ──────────────────────────────────────────────
+    // Kafka's `getOrMaybeCreateMember` creates the member with its defaults,
+    // and the heartbeat then updates it like any other member: the topic
+    // names change from none, and the pattern from none.
     if resolved == Resolved::New {
-        let m = match try_build_member(&member_id, req, client, now) {
+        let mut m = match try_build_member(&member_id, req, client, now) {
             Ok(m) => m,
-            Err(message) => {
-                return HeartbeatStep {
-                    response: invalid_regex_resp(message),
-                    pending: PendingRecords::default(),
-                };
-            }
+            Err(message) => return HeartbeatStep::answer(invalid_regex_resp(message)),
         };
-        // Kafka's `maybeUpdateRegularExpressions`, before the member reaches
-        // the group's counts: a new pattern is resolved for the group.
-        let mut regex_records = Vec::new();
-        maybe_update_regular_expressions(
-            state,
-            None,
-            m.subscribed_topic_regex.as_deref(),
-            regexes,
-            &mut regex_records,
-        );
+        let recorder = Recorder::start(state, &[&member_id]);
+        let new_regex = m.subscribed_topic_regex.take();
+        let names_changed = !m.subscribed_topic_names.is_empty();
         state.add_or_update_member(m);
-        run_reconcile(state, config, metadata);
-        // Compute the new member's current assignment (grants free target
-        // partitions, withholds those still held by others) and move it to the
-        // target epoch before responding.
         let owned = reported_owned(req);
-        state.reconcile_member(&member_id, owned.as_ref(), true, metadata);
+        let update = after_member_update(
+            state,
+            config,
+            metadata,
+            MemberChange {
+                member_id: &member_id,
+                old_regex: None,
+                new_regex,
+                names_changed,
+                owned: owned.as_ref(),
+            },
+            regexes,
+        );
         state.track_rebalance_timeout(&member_id, now);
-        let mut pending =
-            snapshot_pending_after_change(state, std::slice::from_ref(&member_id), true);
-        pending.resolved_regexes = regex_records;
+        let mut pending = recorder.finish(
+            state,
+            update.target.as_deref(),
+            update.partition_metadata_tombstone,
+        );
+        pending.resolved_regexes = update.regex_records;
         let response = build_assignment_resp(state, &member_id, config, true);
-        return HeartbeatStep { response, pending };
+        return HeartbeatStep {
+            response,
+            pending,
+            resolutions: update.resolutions,
+        };
     }
 
     // ─── Static replacement ──────────────────────────────────────
     // Kafka's `getOrMaybeSubscribeStaticConsumerGroupMember`: the new member
     // takes the released member's subscription, target and assignment under
-    // its own id, at epoch 0, and the released member goes.
+    // its own id, at epoch 0, and the released member goes. Kafka's
+    // `replaceMember` writes those records first in the batch.
     let assigned_before = state
         .members
         .get(&member_id)
         .map(|member| member.assigned_partitions.clone());
-    let replaced = match &resolved {
+    let replacement = match &resolved {
         Resolved::Replaces { previous } => {
             if let Some(check) = req
                 .subscribed_topic_regex
                 .as_deref()
                 .and_then(|pattern| check_subscribed_topic_regex(pattern).err())
             {
-                return HeartbeatStep {
-                    response: invalid_regex_resp(check),
-                    pending: PendingRecords::default(),
-                };
+                return HeartbeatStep::answer(invalid_regex_resp(check));
             }
-            state.replace_static_member(previous, &member_id);
-            Some(previous.clone())
+            Some(replace_static_member(state, previous, &member_id))
         }
         Resolved::New | Resolved::Existing => None,
     };
 
-    // ─── Steady-state: update last_seen / subscription / owned ───
+    // ─── Steady state ────────────────────────────────────────────
     let request_for_member;
     let req = if req.member_id == member_id {
         req
@@ -331,29 +350,29 @@ pub(crate) fn step_heartbeat(
         };
         &request_for_member
     };
-    let previous_target_epoch = state.target.epoch;
+    let recorder = Recorder::start(state, &[&member_id]);
     let update = match update_member_state(state, config, metadata, req, client, now, regexes) {
         Ok(update) => update,
-        Err(message) => {
-            return HeartbeatStep {
-                response: invalid_regex_resp(message),
-                pending: PendingRecords::default(),
-            };
-        }
+        Err(message) => return HeartbeatStep::answer(invalid_regex_resp(message)),
     };
     state.track_rebalance_timeout(&member_id, now);
-    let mut pending = if update.changed || replaced.is_some() {
-        snapshot_pending_after_change(
-            state,
-            std::slice::from_ref(&member_id),
-            state.target.epoch != previous_target_epoch,
-        )
-    } else {
-        PendingRecords::default()
-    };
+    let mut target = update.target;
+    // Kafka computes the target before it replays the replacement records, so
+    // the new member id holds no target yet and gets a target record.
+    if let (Some(changed), Some(_)) = (target.as_mut(), replacement.as_ref())
+        && !changed.contains(&member_id)
+    {
+        changed.push(member_id.clone());
+        changed.sort_unstable();
+    }
+    let mut pending = recorder.finish(
+        state,
+        target.as_deref(),
+        update.partition_metadata_tombstone,
+    );
     pending.resolved_regexes = update.regex_records;
-    if let Some(previous) = replaced {
-        replacement_records(state, &mut pending, &previous, &member_id);
+    if let Some(replacement) = replacement {
+        pending = replacement.followed_by(pending);
     }
     // Kafka sends the assignment only on a join (epoch 0), on a full request,
     // or when the member's assigned partitions changed.
@@ -364,7 +383,11 @@ pub(crate) fn step_heartbeat(
             .map(|member| &member.assigned_partitions);
     let include_assignment = req.member_epoch == 0 || is_full_request(req) || assignment_changed;
     let response = build_assignment_resp(state, &member_id, config, include_assignment);
-    HeartbeatStep { response, pending }
+    HeartbeatStep {
+        response,
+        pending,
+        resolutions: update.resolutions,
+    }
 }
 
 /// Kafka's `isFullRequest`: a member sends every non-optional field when it
@@ -375,56 +398,46 @@ fn is_full_request(req: &ConsumerGroupHeartbeatRequest) -> bool {
         && req.topic_partitions.is_some()
 }
 
-/// Adds the records of a static replacement that the snapshot does not hold:
-/// the new member's target, and the tombstones of the released member, as
-/// Kafka's `replaceMember` writes them.
-fn replacement_records(
-    state: &GroupState,
-    pending: &mut PendingRecords,
+/// Kafka's `replaceMember`: moves the static member `previous` to
+/// `member_id` at epoch 0 and returns its records, the released member's
+/// tombstones, then the new member's subscription, target and current
+/// assignment.
+fn replace_static_member(
+    state: &mut GroupState,
     previous: &str,
     member_id: &str,
-) {
-    if !pending
-        .target_per_member
-        .iter()
-        .any(|(id, _)| id == member_id)
-    {
-        let target = state
-            .target
-            .per_member
-            .get(member_id)
-            .cloned()
-            .unwrap_or_default();
-        pending.target_per_member.push((
-            member_id.to_string(),
-            Some(target_assignment_value(&target)),
-        ));
-    }
-    if previous != member_id {
-        pending.member_metadata.push((previous.to_string(), None));
-        pending.target_per_member.push((previous.to_string(), None));
-        pending
-            .current_per_member
-            .push((previous.to_string(), None));
-    }
+) -> PendingRecords {
+    let recorder = Recorder::start(state, &[previous, member_id]);
+    state.replace_static_member(previous, member_id);
+    let mut pending = recorder.finish(state, None, false);
+    let target = state
+        .target
+        .per_member
+        .get(member_id)
+        .cloned()
+        .unwrap_or_default();
+    pending.target_per_member.push((
+        member_id.to_string(),
+        Some(target_assignment_value(&target)),
+    ));
+    pending
 }
 
 /// Pure form of the leave path (`member_epoch` -1 or -2), after Kafka's
 /// `consumerGroupLeave`.
 ///
-/// A dynamic member, or a static member that sends -1, is removed: the group
-/// reconciles the survivors and writes their records plus the departed
-/// member's tombstones. A static member that sends -2 stays in the group at
-/// epoch -2 with its assignment, so a new member with the same instance id can
-/// take its place; only its current assignment record is written.
+/// A dynamic member, or a static member that sends -1, is fenced: Kafka's
+/// `consumerGroupFenceMembers` tombstones its records and its unused regular
+/// expressions and bumps the group epoch; the next heartbeat computes the
+/// target. A static member that sends -2 stays in the group at epoch -2 with
+/// its assignment, so a new member with the same instance id can take its
+/// place; only its current assignment record is written.
 ///
 /// The response echoes the request's member id and epoch. A member the group
 /// does not hold, or an instance id that another member owns, gets Kafka's
-/// error.
-/// The async caller flushes the returned `pending`.
+/// error. The async caller flushes the returned `pending`.
 fn leave_step(
     state: &mut GroupState,
-    config: &NextGenConfig,
     metadata: &dyn MetadataProvider,
     req: &ConsumerGroupHeartbeatRequest,
 ) -> HeartbeatStep {
@@ -432,61 +445,76 @@ fn leave_step(
         Ok(member) => member.member_id.clone(),
         Err(error) => return rejected(error),
     };
-    if req.instance_id.is_some() && req.member_epoch == LEAVE_GROUP_STATIC_MEMBER_EPOCH {
-        state.release_static_member(&member_id);
-        let pending = PendingRecords {
-            current_per_member: state
-                .members
-                .get(&member_id)
-                .map(|member| (member_id.clone(), Some(current_assignment_value(member))))
-                .into_iter()
-                .collect(),
-            ..PendingRecords::default()
+    let pending =
+        if req.instance_id.is_some() && req.member_epoch == LEAVE_GROUP_STATIC_MEMBER_EPOCH {
+            state.release_static_member(&member_id);
+            PendingRecords {
+                current_per_member: state
+                    .members
+                    .get(&member_id)
+                    .map(|member| (member_id.clone(), Some(current_assignment_value(member))))
+                    .into_iter()
+                    .collect(),
+                ..PendingRecords::default()
+            }
+        } else {
+            fence_members(state, metadata, &[member_id])
         };
-        return HeartbeatStep {
-            response: ConsumerGroupHeartbeatResponse {
-                member_id: Some(member_id),
-                ..base_resp(codes::NONE, LEAVE_GROUP_STATIC_MEMBER_EPOCH)
-            },
-            pending,
-        };
-    }
-    state.remove_member(&member_id);
-    // Kafka's `maybeDeleteResolvedRegularExpressions`: a regular expression
-    // that only this member used goes with it.
-    let regex_records = delete_unsubscribed_regexes(state);
-    run_reconcile(state, config, metadata);
-    let mut pending = snapshot_pending_after_change(state, &[], true);
-    pending.resolved_regexes = regex_records;
-    pending.member_metadata.push((member_id.clone(), None));
-    pending.target_per_member.push((member_id.clone(), None));
-    pending.current_per_member.push((member_id, None));
     HeartbeatStep {
         response: ConsumerGroupHeartbeatResponse {
             member_id: Some(req.member_id.clone()),
             ..base_resp(codes::NONE, req.member_epoch)
         },
         pending,
+        resolutions: None,
     }
+}
+
+/// Kafka's `consumerGroupFenceMembers` for a group that does not downgrade:
+/// removes `member_ids`, with the tombstones of `removeMember` for each and
+/// of `maybeDeleteResolvedRegularExpressions`, then bumps the group epoch with
+/// the metadata hash of the remaining subscriptions. The target waits for the
+/// next heartbeat.
+pub(super) fn fence_members(
+    state: &mut GroupState,
+    metadata: &dyn MetadataProvider,
+    member_ids: &[String],
+) -> PendingRecords {
+    if member_ids.is_empty() {
+        return PendingRecords::default();
+    }
+    let recorder = Recorder::start(state, member_ids);
+    for member_id in member_ids {
+        state.remove_member(member_id);
+    }
+    let regex_records = delete_unsubscribed_regexes(state);
+    if reconciler::bump_with_metadata_hash(state, &metadata.snapshot()).is_err() {
+        tracing::warn!(group_id = %state.group_id, "the group epoch is exhausted");
+    }
+    let mut pending = recorder.finish(state, None, false);
+    pending.resolved_regexes = regex_records;
+    pending
 }
 
 /// The error response of a refused heartbeat, with Kafka's message.
 fn rejected(error: HeartbeatError) -> HeartbeatStep {
-    HeartbeatStep {
-        response: ConsumerGroupHeartbeatResponse {
-            error_message: Some(error.message),
-            ..error_resp(error.code)
-        },
-        pending: PendingRecords::default(),
-    }
+    HeartbeatStep::answer(ConsumerGroupHeartbeatResponse {
+        error_message: Some(error.message),
+        ..error_resp(error.code)
+    })
 }
 
+/// Runs [`step_heartbeat`] and writes its records after `prefix`, the records
+/// of a classic group that the heartbeat replaces, in one batch. A refused
+/// heartbeat writes nothing. What the heartbeat's regex resolution found is
+/// applied and written next, in a batch of its own.
 async fn handle_heartbeat(
     state: &mut GroupState,
     services: ActorServices<'_>,
     req: &ConsumerGroupHeartbeatRequest,
     client: ClientIdentity<'_>,
     regex_resolver: &dyn TopicRegexResolver,
+    prefix: Option<PendingRecords>,
 ) -> Result<ConsumerGroupHeartbeatResponse, crate::error::BrokerError> {
     let now = Instant::now();
     let now_ms = chrono_now_ms();
@@ -505,14 +533,32 @@ async fn handle_heartbeat(
         now,
         &regexes,
     );
+    if step.response.error_code != codes::NONE {
+        return Ok(step.response);
+    }
+    let pending = match prefix {
+        Some(prefix) => prefix.followed_by(step.pending),
+        None => step.pending,
+    };
     flush_pending(
         state,
-        step.pending,
+        pending,
         services.offsets_log,
         services.coordinator,
         now_ms,
     )
     .await?;
+    if let Some(resolved) = step.resolutions {
+        let result = apply_regex_result(state, resolved, &services.metadata.snapshot());
+        flush_pending(
+            state,
+            result,
+            services.offsets_log,
+            services.coordinator,
+            chrono_now_ms(),
+        )
+        .await?;
+    }
     Ok(step.response)
 }
 

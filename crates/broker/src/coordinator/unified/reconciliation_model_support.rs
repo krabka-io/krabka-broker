@@ -109,7 +109,7 @@ macro_rules! rebuild_model_group {
             use $crate::coordinator::unified::actor::reconciliation_model_support::{modeled_member, insert_modeled_member};
             let mut group = $crate::coordinator::unified::consumer_state::GroupState::new("g");
             group.group_epoch = $state.group_epoch;
-            group.dirty = $state.dirty;
+            group.record_metadata_hash($state.metadata_hash);
             group.target.epoch = $state.target_epoch;
             let now = std::time::Instant::now();
             for $member in &$state.members {
@@ -175,7 +175,8 @@ macro_rules! group_projection {
         #[derive(Clone, PartialEq, Eq, Hash, Debug)]
         $visibility struct $name {
             $visibility group_epoch: i32,
-            $visibility dirty: bool,
+            /// The metadata hash that the group recorded last.
+            $visibility metadata_hash: i64,
             $visibility target_epoch: i32,
             /// Coordinator-side members, sorted by id.
             $visibility members: Vec<$member>,
@@ -191,9 +192,9 @@ macro_rules! group_projection {
         impl $name {
             $visibility fn empty($($extra: $ty,)*) -> Self {
                 Self {
-                    group_epoch: 0,
-                    dirty: false,
-                    target_epoch: 0,
+                    group_epoch: $crate::coordinator::unified::INITIAL_GROUP_EPOCH,
+                    metadata_hash: 0,
+                    target_epoch: $crate::coordinator::unified::INITIAL_GROUP_EPOCH,
                     members: vec![],
                     client_owned: vec![],
                     advertised: vec![],
@@ -210,7 +211,7 @@ macro_rules! group_projection {
                 use $crate::coordinator::unified::actor::reconciliation_model_support::owned_to_vec;
                 Self {
                     group_epoch: group.group_epoch,
-                    dirty: group.dirty,
+                    metadata_hash: group.metadata_hash(),
                     target_epoch: group.target.epoch,
                     members,
                     client_owned: owned_to_vec(owned),

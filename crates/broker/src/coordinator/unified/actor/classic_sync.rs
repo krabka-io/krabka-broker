@@ -9,7 +9,7 @@ use tokio::sync::oneshot;
 
 use super::{
     ActorServices, ParkedWaiters, SyncResult, chrono_now_ms,
-    persistence::{flush_classic_metadata, flush_pending, snapshot_pending_after_change},
+    persistence::{Recorder, flush_classic_metadata, flush_pending},
     waiters::drain_parked_followers,
 };
 use crate::{
@@ -61,9 +61,14 @@ async fn hosted_classic_sync(
         .get(&request.member_id)
         .cloned()
         .unwrap_or_default();
-    let Some(member) = state.members.get_mut(&request.member_id) else {
+    if !state.members.contains_key(&request.member_id) {
         return result;
-    };
+    }
+    let recorder = Recorder::start(state, std::slice::from_ref(&request.member_id));
+    let member = state
+        .members
+        .get_mut(&request.member_id)
+        .expect("checked above");
     // A re-sync that changes nothing writes nothing.
     if member.assigned_partitions == synced
         && member.partitions_pending_revocation.is_empty()
@@ -86,8 +91,7 @@ async fn hosted_classic_sync(
     // member's epoch, which its join moved to the target epoch.
     let epoch = member.member_epoch;
     member.stamp_assignment_epochs(epoch);
-    let pending =
-        snapshot_pending_after_change(state, std::slice::from_ref(&request.member_id), false);
+    let pending = recorder.finish(state, None, false);
     if let Err(error) = flush_pending(
         state,
         pending,
@@ -391,41 +395,29 @@ mod tests {
         check!(resync.assignment == sync.assignment);
     }
 
-    /// A failed append must leave the member exactly as it was. The blob it
-    /// would have received is its whole target, so recording that grant while
-    /// the k8 record proving it never reached the log would tell the next
-    /// coordinator the member had synced when it had not — and free a
-    /// partition the member never took ownership of for its next owner.
+    /// Kafka's `classicGroupJoinToConsumerGroup` reconciles a hosted member's
+    /// assignment in its join, and its `classicGroupSyncToConsumerGroup`
+    /// writes no record: the sync after a join that reconciled the member
+    /// returns the member's assignment and appends nothing, and the member is
+    /// in sync.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn hosted_classic_sync_append_failure_rolls_back_and_can_retry() {
+    async fn a_sync_after_a_reconciling_join_writes_nothing() {
         let (coord, log) = upgrade_coordinator();
         let (handle, join) = upgrade_and_rejoin_classic(&coord).await;
         let before = rpc::describe_member(&handle, "m-classic").await;
         let batches_before = log.batches().await.len();
 
-        log.fail_next
-            .store(true, std::sync::atomic::Ordering::SeqCst);
-        let failed = rpc::classic_sync(&handle, "m-classic", join.generation_id).await;
+        let synced = rpc::classic_sync(&handle, "m-classic", join.generation_id).await;
 
-        check!(failed.error_code == codes::COORDINATOR_LOAD_IN_PROGRESS);
-        let after = rpc::describe_member(&handle, "m-classic").await;
-        check!(after.assigned_partitions == before.assigned_partitions);
-        check!(log.batches().await.len() == batches_before);
+        check!(synced.error_code == codes::NONE);
         check!(
-            rpc::classic_heartbeat(&handle, "m-classic").await == codes::REBALANCE_IN_PROGRESS,
-            "a member whose sync never reached the log still owes one"
-        );
-
-        // The retry finds the group as the failed attempt found it, so it
-        // grants the same target and this time the member is in sync.
-        let retry = rpc::classic_sync(&handle, "m-classic", join.generation_id).await;
-        check!(retry.error_code == codes::NONE);
-        check!(
-            !decode_assignment(&retry.assignment)
+            !decode_assignment(&synced.assignment)
                 .assigned_partitions
                 .is_empty()
         );
-        check!(log.batches().await.len() > batches_before);
+        let after = rpc::describe_member(&handle, "m-classic").await;
+        check!(after.assigned_partitions == before.assigned_partitions);
+        check!(log.batches().await.len() == batches_before);
         check!(rpc::classic_heartbeat(&handle, "m-classic").await == codes::NONE);
     }
 }

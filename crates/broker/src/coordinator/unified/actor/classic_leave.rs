@@ -15,9 +15,9 @@ use tokio::sync::oneshot;
 
 use super::{
     ActorServices, ErrorCode, ParkedWaiters, chrono_now_ms,
-    downgrade::maybe_downgrade,
-    member_state::run_reconcile,
-    persistence::{flush_classic_metadata, flush_pending, snapshot_pending_after_change},
+    downgrade::{downgrade_fencing, downgrades_without},
+    heartbeat::fence_members,
+    persistence::{flush_classic_metadata, flush_pending},
     retention::append_tombstones,
     waiters::settle_removed_classic_waiters,
 };
@@ -82,13 +82,26 @@ pub(super) async fn handle_classic_leave_message(
     if removed.is_empty() {
         return Ok(responses);
     }
-    for member_id in &removed {
-        state.remove_member(member_id);
+    // Kafka's `consumerGroupFenceMembers`: the members leave in one batch, or
+    // the group downgrades in their place when only classic members remain.
+    if downgrades_without(state, services.config, &removed) {
+        downgrade_fencing(
+            group,
+            &removed,
+            services.config,
+            services.metadata,
+            services.offsets_log,
+            services.coordinator,
+        )
+        .await
+        .map_err(|error| {
+            tracing::warn!(group_id = %group.group_id, %error,
+                "hosted classic LeaveGroup downgrade log write failed");
+            codes::COORDINATOR_LOAD_IN_PROGRESS
+        })?;
+        return Ok(responses);
     }
-    run_reconcile(state, services.config, services.metadata);
-    let mut pending = snapshot_pending_after_change(state, &[], true);
-    crate::coordinator::unified::persistence::tombstone_members!(pending, &removed);
-
+    let pending = fence_members(state, services.metadata, &removed);
     flush_pending(
         state,
         pending,
@@ -100,19 +113,6 @@ pub(super) async fn handle_classic_leave_message(
     .map_err(|error| {
         tracing::warn!(group_id = %state.group_id, %error,
             "hosted classic LeaveGroup log write failed");
-        codes::COORDINATOR_LOAD_IN_PROGRESS
-    })?;
-    maybe_downgrade(
-        group,
-        services.config,
-        services.metadata,
-        services.offsets_log,
-        services.coordinator,
-    )
-    .await
-    .map_err(|error| {
-        tracing::warn!(group_id = %group.group_id, %error,
-            "hosted classic LeaveGroup downgrade log write failed");
         codes::COORDINATOR_LOAD_IN_PROGRESS
     })?;
     Ok(responses)

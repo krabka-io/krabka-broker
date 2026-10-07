@@ -56,9 +56,35 @@ impl GroupState {
     /// member's assignment: the member is told about its new, smaller
     /// assignment by its own next heartbeat, and it stays behind the target
     /// epoch until it acknowledges the revocation. See [`Self::reconcile_member`].
-    pub fn install_target(&mut self, per_member: HashMap<String, Partitions>) {
+    ///
+    /// Every member gets a target, an empty one when the assignor gave it
+    /// nothing, as Kafka's `TargetAssignmentBuilder.newMemberAssignment` does.
+    /// It returns the members whose target differs from the one they held, a
+    /// member that held none included, sorted: the members for which Kafka's
+    /// builder writes a target assignment record.
+    pub fn install_target(&mut self, mut per_member: HashMap<String, Partitions>) -> Vec<String> {
+        let mut changed = Vec::new();
+        let mut target = HashMap::with_capacity(self.members.len());
+        for member_id in self.members.keys() {
+            let mut assignment = per_member.remove(member_id).unwrap_or_default();
+            assignment.retain(|_, partitions| !partitions.is_empty());
+            for partitions in assignment.values_mut() {
+                partitions.sort_unstable();
+            }
+            if !self
+                .target
+                .per_member
+                .get(member_id)
+                .is_some_and(|held| same_assignment(held, &assignment))
+            {
+                changed.push(member_id.clone());
+            }
+            target.insert(member_id.clone(), assignment);
+        }
+        changed.sort_unstable();
         self.target.epoch = self.group_epoch;
-        self.target.per_member = per_member;
+        self.target.per_member = target;
+        changed
     }
 
     /// Kafka's `GroupMetadataManager.maybeReconcile` and
@@ -384,6 +410,18 @@ impl GroupState {
 
 /// Kafka's `ownsRevokedPartitions`: `true` when the heartbeat reports any of
 /// the `pending` partitions, or reports nothing at all.
+/// Kafka's `Assignment.equals`: the same partitions of the same topics,
+/// whatever their order.
+pub(crate) fn same_assignment(a: &Partitions, b: &Partitions) -> bool {
+    let set = |assignment: &Partitions| -> HashSet<(Uuid, i32)> {
+        assignment
+            .iter()
+            .flat_map(|(topic_id, partitions)| partitions.iter().map(|p| (*topic_id, *p)))
+            .collect()
+    };
+    set(a) == set(b)
+}
+
 fn owns_any(owned: Option<&Partitions>, pending: &Partitions) -> bool {
     owned.is_none_or(|owned| {
         owned.iter().any(|(topic_id, parts)| {

@@ -168,12 +168,24 @@ async fn replay_keeps_the_topics_a_regex_resolved_to_and_finds_new_ones() {
             .await
             .unwrap();
         assert!(resp.error_code == 0, "{resp:?}");
+        member_id = resp.member_id.unwrap();
+        // Kafka writes the pattern's resolution after the join's batch, so the
+        // member gets the topic at its next heartbeat.
+        let resp = client
+            .send(ConsumerGroupHeartbeatRequest {
+                group_id: "gre".into(),
+                member_id: member_id.clone(),
+                member_epoch: resp.member_epoch,
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert!(resp.error_code == 0, "{resp:?}");
         assert!(
             resp.assignment
                 .as_ref()
                 .is_some_and(|assignment| assignment.topic_partitions.len() == 1)
         );
-        member_id = resp.member_id.unwrap();
         initial_epoch = resp.member_epoch;
         broker.wait_until_group_member_count("gre", 1).await;
         broker.shutdown().await;

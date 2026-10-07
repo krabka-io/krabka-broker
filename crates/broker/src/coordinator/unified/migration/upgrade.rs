@@ -5,13 +5,15 @@
 //! classic members of a consumer group, and the atomic record batch that makes
 //! the flip durable.
 
-use std::{
-    collections::{HashMap, HashSet},
-    time::Instant,
-};
+use std::{collections::HashMap, time::Instant};
 
 use krabka_protocol::{
-    Decode, owned::consumer_protocol_subscription::ConsumerProtocolSubscription,
+    Decode,
+    owned::{
+        consumer_protocol_assignment::ConsumerProtocolAssignment,
+        consumer_protocol_subscription::ConsumerProtocolSubscription,
+    },
+    primitives::uuid::Uuid,
 };
 use krabka_verified::{
     GroupMigrationDirection, GroupMigrationRecordAction, classic_upgrade_epoch,
@@ -23,6 +25,7 @@ use crate::coordinator::unified::{
     classic_state::ClassicGroup as ClassicState,
     consumer_state::{ClassicMemberFacade, GroupState as ConsumerState, MemberState},
     persistence_next_gen::MemberAssignmentState,
+    reconciler::{self, ReconcileInput},
 };
 
 /// Decodes a classic member's `protocol_metadata` blob as a
@@ -108,23 +111,27 @@ pub(crate) fn validate_online_upgrade(
 }
 
 /// Converts a classic group into a consumer group that **hosts its classic
-/// members** during a KIP-848 upgrade.
+/// members** during a KIP-848 upgrade, as Kafka's
+/// `ConsumerGroup.fromClassicGroup` does.
 ///
-/// Each classic member becomes a [`MemberState`] that carries a
-/// [`ClassicMemberFacade`]. This function decodes the member's subscription
-/// from its `ConsumerProtocolSubscription` metadata, which holds topic names.
-/// The reconciler resolves those names to topic IDs against the metadata
-/// image. The function marks the group dirty, so the next reconcile computes
-/// the unified target.
+/// The group epoch and the target assignment epoch are the classic
+/// generation, with an unknown assignment time (0). Each classic member
+/// becomes a stable [`MemberState`] at the generation, previous epoch
+/// included, with a [`ClassicMemberFacade`], the topic names and rack of its
+/// `ConsumerProtocolSubscription`, and its last assignment, read from its
+/// `ConsumerProtocolAssignment` against `image`, as both its assignment (at
+/// the generation) and its target. The group records the metadata hash of its
+/// subscribed topics.
 ///
 /// Precondition: the caller has checked [`classic_is_convertible`]. Committed
 /// offsets live on the kind-agnostic `Group` container, and this function does
 /// not change them.
-pub(crate) fn convert_classic_to_consumer(classic: &ClassicState) -> ConsumerState {
+pub(crate) fn convert_classic_to_consumer(
+    classic: &ClassicState,
+    image: &ReconcileInput,
+) -> ConsumerState {
     let mut state = ConsumerState::new(classic.group_id.clone());
-    // Seed the group epoch from the classic generation so epochs stay
-    // monotonic across the flip; the first reconcile bumps it.
-    state.group_epoch = classic_upgrade_epoch(
+    let generation = classic_upgrade_epoch(
         classic.protocol_type.as_deref() == Some("consumer"),
         classic
             .members
@@ -133,9 +140,14 @@ pub(crate) fn convert_classic_to_consumer(classic: &ClassicState) -> ConsumerSta
         classic.generation_id,
     )
     .expect("upgrade precondition: classic group is representable");
+    state.group_epoch = generation;
+    state.target.epoch = generation;
     for m in classic.members.values() {
-        let names: HashSet<String> = decode_consumer_subscription(&m.protocol_metadata)
-            .map(|s| s.topics.into_iter().collect())
+        let subscription = decode_consumer_subscription(&m.protocol_metadata).unwrap_or_default();
+        let assigned = m
+            .assignment
+            .as_ref()
+            .map(|blob| decode_consumer_assignment(blob, image))
             .unwrap_or_default();
         let facade = ClassicMemberFacade {
             generation_id: classic.generation_id,
@@ -144,28 +156,70 @@ pub(crate) fn convert_classic_to_consumer(classic: &ClassicState) -> ConsumerSta
             last_synced_assignment: m.assignment.clone().unwrap_or_default(),
             awaiting_sync: true,
         };
+        let assignment_epochs = assigned
+            .iter()
+            .map(|(topic_id, partitions)| {
+                (
+                    *topic_id,
+                    partitions.iter().map(|p| (*p, generation)).collect(),
+                )
+            })
+            .collect();
+        state
+            .target
+            .per_member
+            .insert(m.id.clone(), assigned.clone());
         state.add_or_update_member(MemberState {
             member_id: m.id.clone(),
             instance_id: m.group_instance_id.clone(),
-            rack_id: None,
+            rack_id: subscription.rack_id.filter(|rack| !rack.is_empty()),
             client_id: m.client_id.clone(),
             client_host: m.host.clone(),
-            subscribed_topic_names: names,
+            subscribed_topic_names: subscription.topics.into_iter().collect(),
             subscribed_topic_regex: None,
             server_assignor: None,
             rebalance_timeout: m.rebalance_timeout,
-            member_epoch: state.group_epoch,
-            previous_member_epoch: 0,
+            member_epoch: generation,
+            previous_member_epoch: generation,
             assignment_state: MemberAssignmentState::Stable,
-            assigned_partitions: HashMap::new(),
+            assigned_partitions: assigned,
             partitions_pending_revocation: HashMap::new(),
-            assignment_epochs: HashMap::new(),
+            assignment_epochs,
             last_seen: Instant::now(),
             classic: Some(facade),
         });
     }
-    state.dirty = true;
+    let hash = reconciler::metadata_hash(&state, image);
+    state.record_metadata_hash(hash);
+    // A converted group's metadata is fresh, as Kafka's `fromClassicGroup`
+    // computes the hash from the current image; the heartbeat that converts
+    // it refreshes nothing more.
     state
+}
+
+/// Kafka's `toTopicPartitionMap` of a classic member's
+/// `ConsumerProtocolAssignment`: the partitions of each topic that `image`
+/// knows, by topic id. An empty or undecodable blob assigns nothing.
+fn decode_consumer_assignment(blob: &[u8], image: &ReconcileInput) -> HashMap<Uuid, Vec<i32>> {
+    use bytes::Buf;
+    let mut assigned: HashMap<Uuid, Vec<i32>> = HashMap::new();
+    if blob.len() < 2 {
+        return assigned;
+    }
+    let mut cur = blob;
+    let version = cur.get_i16();
+    let Ok(assignment) = ConsumerProtocolAssignment::decode(&mut cur, version) else {
+        return assigned;
+    };
+    for topic in assignment.assigned_partitions {
+        if let Some(topic_id) = image.topic_id_by_name.get(&topic.topic) {
+            let partitions = assigned.entry(*topic_id).or_default();
+            partitions.extend(topic.partitions);
+            partitions.sort_unstable();
+            partitions.dedup();
+        }
+    }
+    assigned
 }
 
 /// The atomic record batch for an upgrade. It tombstones the classic k2
@@ -267,7 +321,7 @@ mod tests {
         g.add_member(source_m1.clone());
         g.add_member(consumer_member("m2", subscription_blob(&["t1", "t2"])));
 
-        let state = convert_classic_to_consumer(&g);
+        let state = convert_classic_to_consumer(&g, &ReconcileInput::default());
         assert!(state.group_id == "g");
         assert!(state.group_epoch == 3); // seeded from classic generation
         assert!(state.members.len() == 2);
@@ -287,8 +341,9 @@ mod tests {
         // m2 subscribed to both topics.
         let m2 = &state.members["m2"];
         assert!(m2.subscribed_topic_names.len() == 2);
-        // Marked dirty so the next reconcile computes the unified target.
-        assert!(state.dirty);
+        // Kafka's `fromClassicGroup`: the target is the last assignment, at
+        // the generation.
+        assert!((state.target.epoch, state.target_is_stale()) == (3, false));
     }
 
     #[test]
@@ -298,8 +353,8 @@ mod tests {
         g.generation_id = -1;
         g.add_member(consumer_member("m1", subscription_blob(&["t1"])));
 
-        let first = convert_classic_to_consumer(&g);
-        let second = convert_classic_to_consumer(&g);
+        let first = convert_classic_to_consumer(&g, &ReconcileInput::default());
+        let second = convert_classic_to_consumer(&g, &ReconcileInput::default());
         check!(first.group_epoch == 0);
         let first_batch = upgrade_pending_records(&first).to_batch("g", 7).unwrap();
         let second_batch = upgrade_pending_records(&second).to_batch("g", 7).unwrap();
@@ -307,7 +362,9 @@ mod tests {
         assert!(first_batch.records == second_batch.records);
 
         g.generation_id = i32::MAX;
-        assert!(convert_classic_to_consumer(&g).group_epoch == i32::MAX);
+        assert!(
+            convert_classic_to_consumer(&g, &ReconcileInput::default()).group_epoch == i32::MAX
+        );
     }
 
     /// Kafka's `validateOnlineUpgrade`, row by row: (label, protocol type,

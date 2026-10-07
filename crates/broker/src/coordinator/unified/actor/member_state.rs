@@ -15,7 +15,7 @@ use krabka_protocol::{
 use super::{
     FALLBACK_REBALANCE_TIMEOUT_MS, MetadataProvider,
     regex_resolution::{
-        RegexRecord, RegexResolution, RegexUpdate, maybe_update_regular_expressions,
+        RegexRecord, RegexResolution, RegexUpdate, Resolutions, maybe_update_regular_expressions,
     },
     views::preferred_server_assignor,
 };
@@ -24,7 +24,7 @@ use crate::coordinator::unified::{
     assignor::Assignor,
     config::NextGenConfig,
     consumer_state::{GroupState, MemberState},
-    reconciler::{self, ReconcileOutcome},
+    reconciler,
 };
 
 /// The partitions a member reports that it owns in its heartbeat, or `None`
@@ -70,13 +70,19 @@ pub(super) fn check_subscribed_topic_regex(pattern: &str) -> Result<(), String> 
     })
 }
 
-/// What a steady-state heartbeat did to a member and to the regular
-/// expressions of its group.
+/// What a heartbeat's member update did to the group, for the records and the
+/// regex resolution that follow it.
 pub(super) struct MemberUpdate {
-    /// `true` when a change happened that needs a log write.
-    pub(super) changed: bool,
-    /// The `ConsumerGroupRegularExpression` records the heartbeat wrote.
+    /// The `ConsumerGroupRegularExpression` tombstones the heartbeat wrote.
     pub(super) regex_records: Vec<RegexRecord>,
+    /// What the heartbeat's regex resolution found, which the group applies
+    /// in a batch of its own after the heartbeat's.
+    pub(super) resolutions: Option<Resolutions>,
+    /// The heartbeat ran Kafka's `updateSubscriptionMetadata` for a group
+    /// whose log holds the deprecated k4 record, which it tombstones.
+    pub(super) partition_metadata_tombstone: bool,
+    /// The members whose target changed, when the heartbeat computed one.
+    pub(super) target: Option<Vec<String>>,
 }
 
 /// Kafka's `isNotEmpty` gate on a subscribed regular expression: the empty
@@ -85,9 +91,15 @@ pub(super) fn non_empty_regex(pattern: &str) -> Option<String> {
     (!pattern.is_empty()).then(|| pattern.to_owned())
 }
 
-/// Applies steady-state member updates and runs reconciliation. It returns
-/// what changed, and the `INVALID_REGULAR_EXPRESSION` message when the
-/// heartbeat carries a `SubscribedTopicRegex` that does not compile.
+/// Steps 1 to 3 of Kafka's `consumerGroupHeartbeat` for the member
+/// `req.member_id`, which the group already holds (a new member included):
+/// the member update, the regular expression update, the subscription
+/// metadata update that bumps the group epoch, the target assignment of a
+/// group whose epoch is ahead of its target, and the member's
+/// reconciliation. `regex_before` is the member's pattern before the
+/// heartbeat. It returns what the heartbeat did, and the
+/// `INVALID_REGULAR_EXPRESSION` message when the heartbeat carries a
+/// `SubscribedTopicRegex` that does not compile.
 pub(super) fn update_member_state(
     state: &mut GroupState,
     config: &NextGenConfig,
@@ -117,132 +129,153 @@ pub(super) fn update_member_state(
     {
         check_subscribed_topic_regex(pattern)?;
     }
-    // Kafka's `maybeUpdateRegularExpressions`, before the member's new pattern
-    // reaches the group's counts.
-    let mut regex_records = Vec::new();
-    let regex_update = maybe_update_regular_expressions(
-        state,
-        old_regex.as_deref(),
-        new_regex.as_deref(),
-        regexes,
-        &mut regex_records,
-    );
-    let mut member_metadata_changed = false;
-    // Kafka's `hasSubscriptionChanged`: the heartbeat changed the subscribed
-    // topic names or the subscribed regex.
     let mut names_changed = false;
     if let Some(m) = state.members.get_mut(&req.member_id) {
         m.last_seen = now;
-        member_metadata_changed |= client.update_metadata(&mut m.client_id, &mut m.client_host);
+        client.update_metadata(&mut m.client_id, &mut m.client_host);
         // Kafka's `maybeUpdateRackId` and `maybeUpdateServerAssignorName`: an
         // absent value keeps the stored one. Neither changes the group epoch.
-        member_metadata_changed |=
-            super::super::member_helpers::update_present(&mut m.rack_id, req.rack_id.as_ref());
-        member_metadata_changed |= super::super::member_helpers::update_present(
+        super::super::member_helpers::update_present(&mut m.rack_id, req.rack_id.as_ref());
+        super::super::member_helpers::update_present(
             &mut m.server_assignor,
             req.server_assignor.as_ref(),
         );
         // Kafka's `maybeUpdateRebalanceTimeoutMs(ofSentinel(..))`: -1 keeps the
         // stored timeout, and any other value replaces it.
         if let Ok(millis) = u64::try_from(req.rebalance_timeout_ms) {
-            let timeout = Duration::from_millis(millis);
-            if m.rebalance_timeout != timeout {
-                m.rebalance_timeout = timeout;
-                member_metadata_changed = true;
-            }
+            m.rebalance_timeout = Duration::from_millis(millis);
         }
         if let Some(ref names) = req.subscribed_topic_names {
             let set: std::collections::HashSet<String> = names.iter().cloned().collect();
             if set != m.subscribed_topic_names {
                 m.subscribed_topic_names = set;
                 names_changed = true;
-                member_metadata_changed = true;
             }
         }
-        if new_regex != m.subscribed_topic_regex {
-            m.subscribed_topic_regex = new_regex;
-            member_metadata_changed = true;
-        }
+    }
+    let owned = reported_owned(req);
+    Ok(after_member_update(
+        state,
+        config,
+        metadata,
+        MemberChange {
+            member_id: &req.member_id,
+            old_regex,
+            new_regex,
+            names_changed,
+            owned: owned.as_ref(),
+        },
+        regexes,
+    ))
+}
+
+/// A member update that the rest of Kafka's `consumerGroupHeartbeat` follows.
+pub(super) struct MemberChange<'a> {
+    pub(super) member_id: &'a str,
+    /// The member's pattern before the heartbeat.
+    pub(super) old_regex: Option<String>,
+    /// The member's pattern after the heartbeat.
+    pub(super) new_regex: Option<String>,
+    /// The heartbeat changed the member's subscribed topic names.
+    pub(super) names_changed: bool,
+    /// What the member reports owning, or `None` when it reports nothing.
+    pub(super) owned: Option<&'a HashMap<Uuid, Vec<i32>>>,
+}
+
+/// The steps of Kafka's `consumerGroupHeartbeat` that follow the member
+/// update: the regular expression update, the subscription metadata update
+/// that bumps the group epoch, the target assignment, and the member's
+/// reconciliation against what it owns.
+pub(super) fn after_member_update(
+    state: &mut GroupState,
+    config: &NextGenConfig,
+    metadata: &dyn MetadataProvider,
+    change: MemberChange<'_>,
+    regexes: &RegexResolution<'_>,
+) -> MemberUpdate {
+    let MemberChange {
+        member_id,
+        old_regex,
+        new_regex,
+        names_changed,
+        owned,
+    } = change;
+    // Kafka's `maybeUpdateRegularExpressions`, before the member's new pattern
+    // reaches the group's counts.
+    let mut regex_records = Vec::new();
+    let (regex_update, resolutions) = maybe_update_regular_expressions(
+        state,
+        old_regex.as_deref(),
+        new_regex.as_deref(),
+        regexes,
+        &mut regex_records,
+    );
+    if let Some(m) = state.members.get_mut(member_id) {
+        m.subscribed_topic_regex = new_regex;
     }
     let subscription_changed = names_changed || regex_update.regex_updated();
     // Kafka bumps the group epoch when the member changed its names, or its
     // pattern to one that the group resolved. A pattern that is not resolved
     // yet waits for its resolution, which bumps the epoch when it finds
     // topics.
-    if names_changed || regex_update == RegexUpdate::UpdatedAndResolved {
-        state.dirty = true;
-    }
-    refresh_expired_metadata(state, metadata);
-    // A new target makes the log write the group epoch and the target records.
-    // A group that waits for its assignment interval stays dirty with nothing
-    // new to write, so its heartbeats write only what they change.
-    let target_recomputed = run_reconcile(state, config, metadata);
+    let bump = names_changed || regex_update == RegexUpdate::UpdatedAndResolved;
+    let partition_metadata_tombstone = update_subscription(state, metadata, bump);
+    let target = maybe_update_target(state, config, metadata);
     // Kafka's `maybeReconcile`: reconcile this member's current assignment
     // against the (possibly new) target and what it reports owning, in this
     // heartbeat only. A heartbeat without `topic_partitions` reports no change,
     // so the member still owns what it holds.
-    let owned = reported_owned(req);
-    let assignment_changed = state.reconcile_member(
-        &req.member_id,
-        owned.as_ref(),
-        subscription_changed,
-        metadata,
-    );
-    Ok(MemberUpdate {
-        changed: member_metadata_changed
-            || target_recomputed
-            || assignment_changed
-            || !regex_records.is_empty(),
+    state.reconcile_member(member_id, owned, subscription_changed, metadata);
+    MemberUpdate {
         regex_records,
-    })
-}
-
-/// Kafka's `group.hasMetadataExpired(currentTimeMs)` check in
-/// `consumerGroupHeartbeat` and `classicGroupJoinToConsumerGroup`: a group
-/// whose subscribed topics changed computes its metadata hash again, and a new
-/// hash marks it dirty.
-///
-/// A dirty group skips the check, because its reconcile computes the target
-/// and the hash from the current metadata anyway.
-pub(super) fn refresh_expired_metadata(state: &mut GroupState, metadata: &dyn MetadataProvider) {
-    if state.dirty || !state.metadata_refresh_requested() {
-        return;
+        resolutions,
+        partition_metadata_tombstone,
+        target,
     }
-    reconciler::refresh_metadata(state, &metadata.snapshot());
 }
 
-/// Recomputes the target of a dirty group, and returns `true` when it did. A
-/// group that waits for its assignment interval keeps its target and stays
-/// dirty, so a later heartbeat computes it.
-pub(super) fn run_reconcile(
+/// Kafka's `updateSubscriptionMetadata` where `consumerGroupHeartbeat` and
+/// `classicGroupJoinToConsumerGroup` run it: when the heartbeat changed the
+/// subscription (`bump`) or the group's metadata expired. It returns whether
+/// the transition tombstones the deprecated k4 record, which Kafka does each
+/// time it runs for a group whose log holds one.
+pub(super) fn update_subscription(
+    state: &mut GroupState,
+    metadata: &dyn MetadataProvider,
+    bump: bool,
+) -> bool {
+    if !bump && !state.metadata_refresh_requested() {
+        return false;
+    }
+    let tombstone = state.has_subscription_metadata_record();
+    if reconciler::update_subscription_metadata(state, &metadata.snapshot(), bump).is_err() {
+        tracing::warn!(group_id = %state.group_id, "the group epoch is exhausted");
+    }
+    tombstone
+}
+
+/// Kafka's `maybeUpdateTargetAssignment`: a group whose epoch is ahead of its
+/// target computes a new target, unless its assignment interval since the
+/// last one has not elapsed. It returns the members whose target changed
+/// when it computed one.
+pub(super) fn maybe_update_target(
     state: &mut GroupState,
     config: &NextGenConfig,
     metadata: &dyn MetadataProvider,
-) -> bool {
-    // `metadata.snapshot()` rebuilds HashMaps over every cluster topic /
-    // partition — far too expensive to run on a steady-state no-op
-    // heartbeat. `reconcile_if_dirty` early-returns when `!dirty`, so gate
-    // the snapshot on the same condition: only pay for it when we will
-    // actually recompute. Behavior when dirty is identical to before.
-    if !state.dirty {
-        return false;
-    }
-    // Kafka's `maybeUpdateTargetAssignment`: the target assignment waits for
-    // the group's assignment interval.
-    if state.assignment_delayed(
-        config.assignment_interval,
-        crate::coordinator::unified::wall_clock_ms(),
-    ) {
-        return false;
+) -> Option<Vec<String>> {
+    if !state.target_is_stale()
+        || state.assignment_delayed(
+            config.assignment_interval,
+            crate::coordinator::unified::wall_clock_ms(),
+        )
+    {
+        return None;
     }
     let input = metadata.snapshot();
     let assignor = pick_assignor(state, config);
-    let recomputed =
-        reconciler::reconcile_if_dirty(state, &input, &*assignor) == ReconcileOutcome::Recomputed;
-    if recomputed {
-        state.record_assignment(crate::coordinator::unified::wall_clock_ms());
-    }
-    recomputed
+    let changed = reconciler::compute_target(state, &input, &*assignor);
+    state.record_assignment(crate::coordinator::unified::wall_clock_ms());
+    Some(changed)
 }
 
 /// Kafka's `maybeUpdateTargetAssignment`: the group runs the assignor that the
@@ -318,6 +351,7 @@ mod tests {
     use crate::coordinator::unified::{
         actor::{
             heartbeat::step_heartbeat,
+            regex_resolution::apply_regex_result,
             test_support::{StaticMetadata, empty_metadata},
         },
         assignor::{Assignment, GroupSpec, TopicMetadata},
@@ -327,8 +361,12 @@ mod tests {
         regex_resolver::FixedRegexResolver,
     };
 
+    /// Kafka's `consumerGroupHeartbeat` for a subscription change: the
+    /// targets that changed and the target metadata, and the current
+    /// assignment of the member that heartbeats only. Another member's
+    /// assignment moves at its own heartbeat.
     #[test]
-    fn subscription_change_persists_every_reconciled_assignment() {
+    fn a_subscription_change_writes_the_changed_targets_and_its_own_assignment() {
         let config = NextGenConfig::assigning_at_once();
         let first_topic = Uuid([10; 16]);
         let second_topic = Uuid([11; 16]);
@@ -345,7 +383,8 @@ mod tests {
         };
         let mut state =
             super::super::test_support::subscribed_consumer_group("g", &["m1", "m2"], &["first"]);
-        run_reconcile(&mut state, &config, &metadata);
+        state.bump_epoch();
+        maybe_update_target(&mut state, &config, &metadata);
         state.advance_member_epoch("m1");
         state.advance_member_epoch("m2");
         let member_epoch = state.group_epoch;
@@ -387,7 +426,7 @@ mod tests {
 
         check!(step.pending.target_metadata.is_some());
         check!(target_ids == vec!["m1", "m2"]);
-        assert!(current_ids == vec!["m1", "m2"]);
+        assert!(current_ids == vec!["m2"]);
     }
 
     /// A heartbeat may list a topic twice. The partitions of its entries add
@@ -449,7 +488,6 @@ mod tests {
         member.partitions_pending_revocation = [(topic, vec![2])].into();
         state.add_or_update_member(member);
         state.group_epoch = 6;
-        state.dirty = false;
         state.install_target([("m1".to_owned(), [(topic, vec![0])].into())].into());
 
         let step = step_heartbeat(
@@ -559,7 +597,8 @@ mod tests {
             },
             Instant::now(),
         ));
-        run_reconcile(&mut state, &config, metadata);
+        state.bump_epoch();
+        maybe_update_target(&mut state, &config, metadata);
         state.advance_member_epoch("m1");
         state
     }
@@ -624,7 +663,7 @@ mod tests {
     }
 
     /// A pattern change to something that does not compile leaves the existing
-    /// member exactly as it was: same pattern, same epoch, group not dirty.
+    /// member exactly as it was: same pattern, same epoch, same group epoch.
     #[test]
     fn invalid_regex_on_pattern_change_leaves_member_untouched() {
         let config = NextGenConfig::assigning_at_once();
@@ -662,7 +701,6 @@ mod tests {
             );
             check!(member.client_id == "client", "{pattern}");
             check!(member.member_epoch == member_epoch, "{pattern}");
-            check!(!state.dirty, "{pattern}");
             assert!(state.group_epoch == group_epoch, "{pattern}");
         }
     }
@@ -698,6 +736,31 @@ mod tests {
 
         check!(step.response.error_code == 0);
         check!(step.response.error_message.is_none());
+        // The resolution's batch follows the join's, and the next heartbeat
+        // assigns what it found.
+        apply_regex_result(
+            &mut state,
+            step.resolutions.expect("the join resolves its pattern"),
+            &metadata.input,
+        );
+        let member_epoch = state.members["m1"].member_epoch;
+        step_heartbeat(
+            &mut state,
+            &config,
+            &metadata,
+            &ConsumerGroupHeartbeatRequest {
+                group_id: "g".into(),
+                member_id: "m1".into(),
+                member_epoch,
+                ..Default::default()
+            },
+            ClientIdentity {
+                id: "client",
+                host: "host",
+            },
+            Instant::now(),
+            &RegexResolution::with(&resolver),
+        );
         let assigned: Vec<i32> = state.members["m1"]
             .assigned_partitions
             .values()
@@ -738,7 +801,7 @@ mod tests {
                 id: "client",
                 host: "host",
             };
-            step_heartbeat(
+            let joined = step_heartbeat(
                 &mut state,
                 &config,
                 &metadata,
@@ -746,6 +809,11 @@ mod tests {
                 client,
                 Instant::now(),
                 &RegexResolution::with(&resolver),
+            );
+            apply_regex_result(
+                &mut state,
+                joined.resolutions.expect("the join resolves its pattern"),
+                &metadata.input,
             );
             let member_epoch = state.members["m1"].member_epoch;
 

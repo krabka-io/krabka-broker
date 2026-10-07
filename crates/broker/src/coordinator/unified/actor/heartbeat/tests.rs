@@ -15,6 +15,7 @@ use crate::coordinator::unified::{
         },
     },
     offsets_log::fake::InMemoryOffsetsLog,
+    persistence_next_gen::GroupMetadataValue,
     reconciler::ReconcileInput,
 };
 
@@ -520,7 +521,6 @@ fn identity_group() -> GroupState {
         );
     }
     state.target.epoch = 5;
-    state.dirty = false;
     state
 }
 
@@ -543,6 +543,12 @@ fn heartbeat_identity_rules_follow_kafka() {
 
     for row in identity_rows() {
         let mut state = identity_group();
+        // The group recorded the hash of its topics, so its first heartbeat's
+        // refresh finds nothing new.
+        state.record_metadata_hash(crate::coordinator::unified::reconciler::metadata_hash(
+            &state,
+            &metadata.input,
+        ));
         if row.release_s1_first {
             let released = step_heartbeat(
                 &mut state,
@@ -651,13 +657,22 @@ fn static_replacement_writes_new_records_and_tombstones_the_released_member() {
     );
     check!(replaced.response.error_code == codes::NONE);
     check!(replaced.response.member_epoch == joined.response.member_epoch);
+    // Kafka's `replaceMember` records come first: the released member's
+    // tombstones and the copy under the new id.
     let expected = vec![("s1".to_string(), false), ("s2".to_string(), true)];
     check!(written(&replaced.pending.member_metadata) == expected);
     check!(written(&replaced.pending.target_per_member) == expected);
     check!(written(&replaced.pending.current_per_member) == expected);
-    // The restarted process's join fields replace the released member's.
-    let metadata_of_s2 = replaced
+    // Then the heartbeat's own: the restarted process's join fields replace
+    // the released member's, and the copy reconciles from epoch 0.
+    let own = replaced
         .pending
+        .then
+        .as_deref()
+        .expect("the heartbeat's records");
+    check!(written(&own.member_metadata) == vec![("s2".to_string(), true)]);
+    check!(written(&own.current_per_member) == vec![("s2".to_string(), true)]);
+    let metadata_of_s2 = own
         .member_metadata
         .iter()
         .find_map(|(id, value)| (id == "s2").then_some(value.as_ref()).flatten())
@@ -703,8 +718,12 @@ async fn leave_emits_tombstone_batch() {
     crate::coordinator::unified::test_support::assert_next_tombstone_batch(&log, pre_leave).await;
 }
 
+/// Kafka's `consumerGroupFenceMembers`: a leave writes the leaver's
+/// tombstones and the group epoch, and computes no target. The next
+/// heartbeat of a survivor computes the target, writes the targets that
+/// changed and the target metadata, and reconciles the survivor.
 #[test]
-fn leave_reconciles_and_persists_survivor_assignments() {
+fn a_leave_bumps_the_epoch_and_the_next_heartbeat_assigns() {
     let config = NextGenConfig::assigning_at_once();
     let topic_id = Uuid([8; 16]);
     let metadata = StaticMetadata {
@@ -714,48 +733,87 @@ fn leave_reconciles_and_persists_survivor_assignments() {
             ..Default::default()
         },
     };
-    let mut state =
-        super::super::test_support::subscribed_consumer_group("g", &["m1", "m2"], &["t"]);
-    run_reconcile(&mut state, &config, &metadata);
-    let epoch_before = state.group_epoch;
+    let client = crate::coordinator::unified::ClientIdentity {
+        id: "client",
+        host: "host",
+    };
+    let join = |member_id: &str| ConsumerGroupHeartbeatRequest {
+        group_id: "g".into(),
+        member_id: member_id.into(),
+        member_epoch: 0,
+        subscribed_topic_names: Some(vec!["t".into()]),
+        rebalance_timeout_ms: 60_000,
+        topic_partitions: Some(vec![]),
+        ..Default::default()
+    };
+    let mut state = GroupState::new("g");
+    let step = |state: &mut GroupState, req: &ConsumerGroupHeartbeatRequest| {
+        step_heartbeat(
+            state,
+            &config,
+            &metadata,
+            req,
+            client,
+            Instant::now(),
+            &RegexResolution::none(),
+        )
+    };
+    step(&mut state, &join("m1"));
+    step(&mut state, &join("m2"));
+    let (epoch, target_epoch) = (state.group_epoch, state.target.epoch);
+    check!((epoch, target_epoch) == (3, 3));
 
-    let step = step_heartbeat(
+    let leave = step(
         &mut state,
-        &config,
-        &metadata,
         &ConsumerGroupHeartbeatRequest {
             group_id: "g".into(),
             member_id: "m2".into(),
             member_epoch: -1,
             ..Default::default()
         },
-        crate::coordinator::unified::ClientIdentity {
-            id: "client",
-            host: "host",
-        },
-        Instant::now(),
-        &RegexResolution::none(),
     );
-
-    check!(state.group_epoch == epoch_before + 1);
-    check!(state.target.per_member["m1"][&topic_id] == vec![0, 1]);
     check!(
-        step.pending
+        leave.pending
+            == PendingRecords {
+                member_metadata: vec![("m2".into(), None)],
+                target_per_member: vec![("m2".into(), None)],
+                current_per_member: vec![("m2".into(), None)],
+                group_metadata: Some(GroupMetadataValue {
+                    epoch: 4,
+                    metadata_hash: state.metadata_hash(),
+                }),
+                ..PendingRecords::default()
+            }
+    );
+    check!((state.group_epoch, state.target.epoch) == (4, 3));
+
+    let m1_epoch = state.members["m1"].member_epoch;
+    let next = step(
+        &mut state,
+        &ConsumerGroupHeartbeatRequest {
+            group_id: "g".into(),
+            member_id: "m1".into(),
+            member_epoch: m1_epoch,
+            rebalance_timeout_ms: -1,
+            ..Default::default()
+        },
+    );
+    check!(state.target.epoch == 4);
+    check!(state.target.per_member["m1"][&topic_id] == vec![0, 1]);
+    check!(next.pending.group_metadata == None);
+    check!(
+        next.pending
+            .target_metadata
+            .map(|value| value.assignment_epoch)
+            == Some(4)
+    );
+    check!(
+        next.pending
             .target_per_member
             .iter()
-            .any(|(member_id, value)| member_id == "m1" && value.is_some())
-    );
-    check!(
-        step.pending
-            .current_per_member
-            .iter()
-            .any(|(member_id, value)| member_id == "m1" && value.is_some())
-    );
-    assert!(
-        step.pending
-            .member_metadata
-            .iter()
-            .any(|(member_id, value)| member_id == "m2" && value.is_none())
+            .map(|(member_id, _)| member_id.as_str())
+            .collect::<Vec<_>>()
+            == vec!["m1"]
     );
 }
 
