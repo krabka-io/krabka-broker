@@ -82,12 +82,10 @@ pub struct ShareGroupState {
     /// never misses state that an initialize may have written. An entry older
     /// than the retry interval is initialized again.
     pub initializing: HashMap<(Uuid, i32), i64>,
-    /// Kafka's `ModernGroup.metadataHash`: the [`topic_hash`] group hash of
+    /// Kafka's `ModernGroup.metadataHash`: the `topic_hash` group hash of
     /// the subscribed topics as the group last recorded it in
     /// `ShareGroupMetadataValue`. A heartbeat that computes another value
     /// bumps the group epoch.
-    ///
-    /// [`topic_hash`]: crate::coordinator::unified::topic_hash
     pub metadata_hash: i64,
     /// The topic name behind each topic id in [`Self::initialized`] and
     /// [`Self::initializing`].
