@@ -103,11 +103,18 @@ async fn fetch_over(
     };
     let mut body = Vec::with_capacity(32);
     req.encode_v0(&mut body);
+    // Negotiated from the `krabka.version` this observer has applied. Before
+    // its first fetch the image is empty, which reads as level 0: v0, the
+    // 1.0.0 baseline every controller serves.
+    let version = krabka_raft::private_request_version(
+        krabka_metadata::PrivateRpc::MetadataFetch,
+        Some(&image_tx.borrow()),
+    );
 
     let resp_body = match conn
         .raw_request(
             krabka_raft::API_KEY_METADATA_FETCH,
-            0,
+            version,
             bytes::Bytes::from(body),
         )
         .await

@@ -196,8 +196,8 @@ pub fn deserialize_metadata_snapshot_image(
 }
 pub use wire::{
     API_KEY_DELEGATION_TOKEN_MUTATION, API_KEY_METADATA_FETCH, API_KEY_SUBMIT_CHANGE,
-    DELEGATION_TOKEN_MUTATION_VERSION, KrabkaMetadataFetchRequest, KrabkaMetadataFetchResponse,
-    KrabkaSubmitChangeRequest, KrabkaSubmitChangeResponse, METADATA_FETCH_VERSION,
-    PRIVATE_CLUSTER_AUTHORIZATION_FAILED, PRIVATE_UNSUPPORTED_VERSION,
-    SUBMIT_CHANGE_UNCOMMITTED_TAIL, SUBMIT_CHANGE_VERSION,
+    KrabkaMetadataFetchRequest, KrabkaMetadataFetchResponse, KrabkaSubmitChangeRequest,
+    KrabkaSubmitChangeResponse, PRIVATE_BASELINE_VERSION, PRIVATE_CLUSTER_AUTHORIZATION_FAILED,
+    PRIVATE_UNSUPPORTED_VERSION, SUBMIT_CHANGE_UNCOMMITTED_TAIL, private_api_highest_version,
+    private_request_version,
 };

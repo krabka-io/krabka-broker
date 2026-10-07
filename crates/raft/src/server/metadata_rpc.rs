@@ -300,17 +300,20 @@ mod tests {
         assert2::assert!(err.leader_hint == -1);
     }
 
-    /// A private request at a version this build does not implement is
-    /// answered with `UNSUPPORTED_VERSION` in the v0 shape, and the body is
-    /// never decoded at the wrong version or applied.
+    /// A private request one past the highest version this build's
+    /// `krabka.version` table gives is answered with `UNSUPPORTED_VERSION` in
+    /// the v0 shape, and the body is never decoded at the wrong version or
+    /// applied.
     #[tokio::test]
     async fn dispatch_answers_an_unsupported_private_version() {
         let (engine, _dir) = single_voter_engine();
         wait_for_leader(&engine).await;
+        let past_max =
+            |api_key| crate::wire::private_api_highest_version(api_key).expect("a private api") + 1;
 
         let submit = dispatch(
             ApiKey(API_KEY_SUBMIT_CHANGE),
-            1,
+            past_max(API_KEY_SUBMIT_CHANGE),
             submit_change_body(&[topic_record("from-a-later-build")]),
             &engine,
         )
@@ -328,7 +331,7 @@ mod tests {
 
         let fetch = dispatch(
             ApiKey(API_KEY_METADATA_FETCH),
-            1,
+            past_max(API_KEY_METADATA_FETCH),
             metadata_fetch_body(0, 1024),
             &engine,
         )

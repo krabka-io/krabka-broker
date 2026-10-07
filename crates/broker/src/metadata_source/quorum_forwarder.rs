@@ -5,7 +5,7 @@
 
 use std::sync::Arc;
 
-use krabka_metadata::{MetadataImage, MetadataRecord};
+use krabka_metadata::{MetadataImage, MetadataRecord, PrivateRpc};
 use krabka_raft::{DelegationTokenMutation, NodeId, OutboundDialer, RaftError, SubmitChangeResult};
 use tokio::sync::watch;
 
@@ -43,13 +43,21 @@ impl QuorumForwarder {
         quorum_targets(&self.image.borrow(), &self.voters, &self.bootstrap_servers)
     }
 
+    /// The version of `rpc` to send: the one the `krabka.version` finalized
+    /// in the observer's image gives. Before the first fetch the image is
+    /// empty, which reads as level 0 and sends v0, the 1.0.0 baseline.
+    fn request_version(&self, rpc: PrivateRpc) -> i16 {
+        krabka_raft::private_request_version(rpc, Some(&self.image.borrow()))
+    }
+
     async fn try_submit(
         &self,
         target: NodeId,
         addr: &str,
-        api_key: i16,
+        rpc: PrivateRpc,
         body: &[u8],
     ) -> Result<krabka_raft::KrabkaSubmitChangeResponse, RaftError> {
+        let version = self.request_version(rpc);
         let opts = krabka_client_core::ConnectionOptions {
             client_id: self.client_id.clone(),
             dispatch_queue_capacity: self.client_dispatch_queue_capacity,
@@ -62,7 +70,7 @@ impl QuorumForwarder {
             .await
             .map_err(RaftError::Network)?;
         let resp_body = conn
-            .raw_request(api_key, 0, bytes::Bytes::copy_from_slice(body))
+            .raw_request(rpc.api_key(), version, bytes::Bytes::copy_from_slice(body))
             .await
             .map_err(RaftError::Network)?;
         conn.close();
@@ -117,7 +125,7 @@ impl MetadataWriter for QuorumForwarder {
         };
         for (target, addr) in order {
             match self
-                .try_submit(target, &addr, krabka_raft::API_KEY_SUBMIT_CHANGE, &body)
+                .try_submit(target, &addr, PrivateRpc::SubmitChange, &body)
                 .await
             {
                 Ok(resp) if resp.error_code == 0 => {
@@ -219,12 +227,7 @@ impl MetadataWriter for QuorumForwarder {
         };
         for (target, addr) in build_forward_order(&self.targets(), hint) {
             match self
-                .try_submit(
-                    target,
-                    &addr,
-                    krabka_raft::API_KEY_DELEGATION_TOKEN_MUTATION,
-                    &body,
-                )
+                .try_submit(target, &addr, PrivateRpc::DelegationTokenMutation, &body)
                 .await
             {
                 Ok(response) if response.error_code == 0 => {
@@ -430,6 +433,61 @@ mod tests {
                 .iter()
                 .any(|id| id == "forwarder-client")
         );
+        mock.stop();
+    }
+
+    /// Both forwards send the request version the `krabka.version` finalized
+    /// in the observer's image negotiates: v0 with the feature absent, which
+    /// is the empty image a node holds before its first fetch, and at levels
+    /// 0 and 1, which are the krabka-broker 1.0.0 formats.
+    #[tokio::test]
+    async fn quorum_forwarder_sends_the_negotiated_private_version() {
+        let sent = Arc::new(Mutex::new(Vec::new()));
+        let sent_for_mock = sent.clone();
+        let mock =
+            krabka_client_core::MockBroker::start(move |api_key, version, _corr_id, _body| {
+                if api_key == api_versions_request::API_KEY {
+                    return Some(api_versions_response_v0());
+                }
+                sent_for_mock.lock().unwrap().push((api_key, version));
+                Some(submit_change_response_body(0, -1))
+            })
+            .await;
+        let mut actual = Vec::new();
+        let mut expected = Vec::new();
+        for level in [None, Some(0), Some(1)] {
+            let mut image = MetadataImage::new(uuid::Uuid::nil());
+            if let Some(level) = level {
+                image.apply(&MetadataRecord::V1FeatureLevel(
+                    krabka_metadata::FeatureLevelRecord {
+                        name: krabka_metadata::krabka_version::KRABKA_VERSION_FEATURE.into(),
+                        level,
+                    },
+                ));
+            }
+            let (_image_tx, image_rx) = watch::channel(Arc::new(image));
+            let forwarder = QuorumForwarder {
+                image: image_rx,
+                ..forwarder(mock.addr, Arc::new(Mutex::new(Vec::new())), Some(NodeId(1)))
+            };
+            forwarder
+                .submit_change(vec![topic_record("negotiated")])
+                .await
+                .expect("applied");
+            forwarder
+                .submit_delegation_token_mutations(vec![])
+                .await
+                .expect("applied");
+            actual.push((level, std::mem::take(&mut *sent.lock().unwrap())));
+            expected.push((
+                level,
+                vec![
+                    (krabka_raft::API_KEY_SUBMIT_CHANGE, 0),
+                    (krabka_raft::API_KEY_DELEGATION_TOKEN_MUTATION, 0),
+                ],
+            ));
+        }
+        assert2::assert!(actual == expected);
         mock.stop();
     }
 
