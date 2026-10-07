@@ -377,9 +377,10 @@ mod tests {
     /// Kafka's `Feature.PRODUCTION_FEATURES` names, sorted: what a formatter
     /// that meets an unknown `--feature` name lists. It has no
     /// `metadata.version`.
+    /// krabka adds its own `krabka.version`, which this build supports.
     const SUPPORTED_FEATURES: &str = "eligible.leader.replicas.version, group.version, \
-                                      kraft.version, share.version, streams.version, \
-                                      transaction.version";
+                                      krabka.version, kraft.version, share.version, \
+                                      streams.version, transaction.version";
 
     /// The releases `MetadataVersion.metadataVersionsToString` lists while
     /// unstable feature versions are off.
@@ -450,8 +451,8 @@ mod tests {
             (
                 ("bogus.version", 1),
                 "Unsupported feature: bogus.version. Supported features are: \
-                 eligible.leader.replicas.version, group.version, kraft.version, \
-                 share.version, streams.version, transaction.version",
+                 eligible.leader.replicas.version, group.version, krabka.version, \
+                 kraft.version, share.version, streams.version, transaction.version",
             ),
             (
                 ("transaction.version", 9),
@@ -776,6 +777,71 @@ mod tests {
             );
             check!(seeded == want, "{release:?} {features:?} {unstable:?}");
         }
+    }
+
+    /// `krabka.version` bootstraps at its latest production level, 1, unless
+    /// `--feature krabka.version=N` overrides it, as `kafka-storage format
+    /// --feature` overrides a Kafka feature. Level 0 seeds no record, as Kafka
+    /// omits every level-0 feature from `bootstrap.checkpoint`, and a level
+    /// past the supported range is `Feature.fromFeatureLevel`'s refusal.
+    #[test]
+    fn krabka_version_bootstraps_at_its_latest_level_unless_overridden() {
+        let feature = |name: &str, level| {
+            MetadataRecord::V1FeatureLevel(krabka_metadata::FeatureLevelRecord {
+                name: name.into(),
+                level,
+            })
+        };
+        // The latest production release's defaults, Kafka 4.3's.
+        let release_defaults = vec![
+            feature("metadata.version", LATEST_PRODUCTION_METADATA_VERSION),
+            feature("group.version", 1),
+            feature("transaction.version", 2),
+            feature("share.version", 1),
+            feature("streams.version", 1),
+            feature("eligible.leader.replicas.version", 1),
+        ];
+        let with_krabka = |level| {
+            let mut records = release_defaults.clone();
+            records.push(feature("krabka.version", level));
+            records
+        };
+        let krabka = |level| vec![("krabka.version".to_owned(), level)];
+        // (case, --feature flags, the seeded records or the error)
+        let cases: [(
+            &str,
+            Vec<(String, i16)>,
+            Result<Vec<MetadataRecord>, String>,
+        ); 4] = [
+            ("no override", vec![], Ok(with_krabka(1))),
+            ("override to 1", krabka(1), Ok(with_krabka(1))),
+            ("override to 0", krabka(0), Ok(release_defaults.clone())),
+            (
+                "override past the range",
+                krabka(2),
+                Err("No feature:krabka.version with feature level 2".to_owned()),
+            ),
+        ];
+        let actual: Vec<_> = cases
+            .iter()
+            .map(|(case, features, _)| {
+                let seeded = resolve_format_features(None, features, STRICT).map(
+                    |(bootstrap_mv, overrides)| {
+                        krabka_metadata::bootstrap_feature_records_with_overrides(
+                            bootstrap_mv,
+                            &overrides,
+                        )
+                    },
+                );
+                (*case, seeded)
+            })
+            .collect();
+        let expected: Vec<_> = cases
+            .into_iter()
+            .map(|(case, _, want)| (case, want))
+            .collect();
+        check!(actual == expected);
+        check!(parse_feature_spec("krabka.version=0") == Ok(("krabka.version".to_owned(), 0)));
     }
 
     #[test]

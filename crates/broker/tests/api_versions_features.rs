@@ -104,6 +104,20 @@ async fn v3_response_advertises_supported_and_bootstrapped_finalized_features() 
         finalized_transaction_version.max_version_level == 2,
         "{resp:?}"
     );
+    // The krabka-owned `krabka.version` is advertised over [0, 1] and
+    // bootstrapped at its latest production level, 1.
+    let kv = resp
+        .supported_features
+        .iter()
+        .find(|f| f.name == "krabka.version")
+        .expect("krabka.version advertised in supported_features");
+    assert!((kv.min_version, kv.max_version) == (0, 1), "{resp:?}");
+    let finalized_krabka_version = resp
+        .finalized_features
+        .iter()
+        .find(|f| f.name == "krabka.version")
+        .expect("krabka.version finalized at bootstrap");
+    assert!(finalized_krabka_version.max_version_level == 1, "{resp:?}");
     assert!(
         resp.finalized_features_epoch >= 0,
         "self-bootstrapped broker finalizes defaults so epoch must be >= 0: {resp:?}"

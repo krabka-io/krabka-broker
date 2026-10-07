@@ -179,6 +179,22 @@ mod tests {
                 ],
                 vec![finalized("metadata.version", 25)],
             ),
+            // The krabka-owned `krabka.version` is finalized like any other
+            // feature, and in name order.
+            (
+                1,
+                vec![("metadata.version", 30), ("krabka.version", 1)],
+                vec![
+                    finalized("krabka.version", 1),
+                    finalized("kraft.version", 1),
+                    finalized("metadata.version", 30),
+                ],
+            ),
+            (
+                0,
+                vec![("metadata.version", 30), ("krabka.version", 0)],
+                vec![finalized("metadata.version", 30)],
+            ),
         ] {
             check!(
                 finalized_feature_keys(&image(kraft_version, &levels)) == expected,

@@ -34,6 +34,7 @@ pub(crate) fn supported_features_fixture(input: TokenStream) -> Result<TokenStre
                 {{ supported }}("streams.version", 0, 1),
                 {{ supported }}("eligible.leader.replicas.version", 0, 1),
                 {{ supported }}("kraft.version", 0, 1),
+                {{ supported }}("krabka.version", 0, 1),
             ]
         }
     })

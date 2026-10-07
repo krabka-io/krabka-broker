@@ -282,4 +282,41 @@ mod tests {
             .collect();
         assert!(actual == expected);
     }
+
+    /// The whole feature map a node registers with, as Kafka's
+    /// `BrokerFeatures.createDefault` builds it: every registry feature,
+    /// `krabka.version` among them, plus the registration-only KIP-1155
+    /// capability.
+    #[test]
+    fn registration_advertises_every_feature_with_krabka_version() {
+        use std::collections::BTreeMap;
+
+        use UnstableFeatureVersions::{Disabled, Enabled};
+        use krabka_metadata::metadata_version::{METADATA_VERSION_MAX, METADATA_VERSION_MIN};
+
+        let expected = |metadata_max: i16, share_max: i16| {
+            BTreeMap::from(
+                [
+                    ("eligible.leader.replicas.version", (0, 1)),
+                    ("group.version", (0, 1)),
+                    ("krabka.metadata.downgrade", (1, 1)),
+                    ("krabka.version", (0, 1)),
+                    ("kraft.version", (0, 1)),
+                    ("metadata.version", (METADATA_VERSION_MIN, metadata_max)),
+                    ("share.version", (0, share_max)),
+                    ("streams.version", (0, 1)),
+                    ("transaction.version", (0, 2)),
+                ]
+                .map(|(name, range)| (name.to_owned(), range)),
+            )
+        };
+        let actual = [Disabled, Enabled].map(supported_feature_ranges);
+        assert!(
+            actual
+                == [
+                    expected(LATEST_PRODUCTION_METADATA_VERSION, 1),
+                    expected(METADATA_VERSION_MAX, 2),
+                ]
+        );
+    }
 }
