@@ -86,6 +86,10 @@ pub struct StreamsGroupSeed {
     /// The `LastAssignmentConfigs` of the last group metadata record, by key;
     /// empty for a null list.
     pub last_assignment_configs: std::collections::BTreeMap<String, String>,
+    /// The KIP-1331 description epochs (Kafka trunk's tags 2 and 3) of the
+    /// last group metadata record, -1 each when it carried none. A replay
+    /// keeps them whatever mode the broker writes in.
+    pub description_epochs: streams::persistence::DescriptionEpochs,
     pub assignment_epoch: i32,
     /// The `AssignmentTimestamp` of the last target assignment metadata
     /// record, 0 when unknown.

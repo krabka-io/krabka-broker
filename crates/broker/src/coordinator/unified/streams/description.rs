@@ -34,11 +34,12 @@ pub use self::{
 /// group: Kafka trunk's `StreamsGroup.storedDescriptionTopologyEpoch` and
 /// `failedDescriptionTopologyEpoch`.
 ///
-/// Kafka trunk persists both as tags 2 and 3 of `StreamsGroupMetadataValue`.
-/// Kafka 4.3.1 has neither the tags nor KIP-1331, and the broker writes
-/// `__consumer_offsets` as 4.3.1 does, so the group keeps them in memory
-/// only, next to the in-memory plugin's description. A group that its actor
-/// loads again holds no description and no epoch, and asks a member again.
+/// Kafka trunk persists both as tags 2 and 3 of `StreamsGroupMetadataValue`,
+/// and moves them away from [`Self::NONE`] only through its plugin, so it
+/// writes the tags only while `group.streams.topology.description.plugin.class`
+/// is set. Kafka 4.3.1 has neither the tags nor KIP-1331. The broker writes
+/// the tags under the same condition, and so writes the 4.3.1 record while no
+/// plugin is configured; it reads them back in either case.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, krabka_macros::FieldDefaults)]
 pub struct DescriptionEpochs {
     /// The topology epoch whose description the plugin holds,

@@ -129,6 +129,12 @@ async fn streams_group_records_replay_into_seed() {
                     key: "num.standby.replicas".into(),
                     value: "0".into(),
                 }]),
+                // A record that a broker with the topology description plugin
+                // wrote, as Kafka trunk does: one without the plugin keeps it.
+                description: sp::DescriptionEpochs {
+                    stored: 2,
+                    failed: -1,
+                },
             }
             .encode(),
         ),
@@ -174,6 +180,13 @@ async fn streams_group_records_replay_into_seed() {
     let seed = coord.cached_streams_seed("stg").expect("seed cached");
     check!(seed.group_epoch == 7);
     check!(seed.validated_topology_epoch == 2);
+    check!(
+        seed.description_epochs
+            == sp::DescriptionEpochs {
+                stored: 2,
+                failed: -1
+            }
+    );
     check!(
         seed.last_assignment_configs
             == maplit::btreemap! {"num.standby.replicas".to_string() => "0".to_string()}

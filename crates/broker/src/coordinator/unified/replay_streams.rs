@@ -114,7 +114,9 @@ impl GroupCoordinator {
     /// Applies a `StreamsGroupMetadataValue`, as Kafka's
     /// `GroupMetadataManager.replay` of the record does: the group epoch, the
     /// metadata hash, the validated topology epoch, and the last assignment
-    /// configuration, empty for a null list.
+    /// configuration, empty for a null list. It also keeps Kafka trunk's
+    /// KIP-1331 description epochs, which 4.3.1 keeps as unknown tags, in
+    /// either write mode.
     ///
     /// # Errors
     ///
@@ -144,6 +146,7 @@ impl GroupCoordinator {
             seed.validated_topology_epoch = value.validated_topology_epoch;
             seed.last_assignment_configs
                 .clone_from(&last_assignment_configs);
+            seed.description_epochs = value.description;
         });
         Ok(())
     }
@@ -449,6 +452,7 @@ mod tests {
                             })
                             .collect()
                     }),
+                    description: streams::persistence::DescriptionEpochs::default(),
                 },
             ),
             Record::Member(member) => {

@@ -148,6 +148,7 @@ mod tests {
                 metadata_hash: 0,
                 validated_topology_epoch: -1,
                 last_assignment_configs: None,
+                description: super::super::DescriptionEpochs::default(),
             }),
             topology: Some(StreamsGroupTopologyValue::default()),
             ..Default::default()
@@ -173,6 +174,7 @@ mod tests {
                 metadata_hash: 0,
                 validated_topology_epoch: -1,
                 last_assignment_configs: None,
+                description: super::super::DescriptionEpochs::default(),
             }),
             member_metadata: vec![("m".into(), None)],
             topology: Some(StreamsGroupTopologyValue::default()),

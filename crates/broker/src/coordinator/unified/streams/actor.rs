@@ -356,8 +356,16 @@ struct ActorState {
     /// it.
     assignment_timestamp_ms: i64,
     /// KIP-1331: what the topology description plugin holds for the group.
-    /// It is not persisted: see [`DescriptionEpochs`].
+    /// A group metadata record carries it only in trunk mode: see
+    /// [`Self::trunk_records`].
     description_epochs: DescriptionEpochs,
+    /// Whether the group writes Kafka trunk's KIP-1331 tags 2 and 3 of its
+    /// group metadata record: whether
+    /// `group.streams.topology.description.plugin.class` is set. Kafka trunk
+    /// moves the description epochs away from -1, and so writes the tags,
+    /// only through its plugin paths; without a plugin the group writes the
+    /// record as Kafka 4.3.1 does, whatever epochs a replayed record held.
+    trunk_records: bool,
     /// The description that the in-memory plugin holds for the group. It is
     /// not persisted: the plugin loses it with the broker.
     description: Option<StoredDescription>,
@@ -380,6 +388,7 @@ impl ActorState {
             initial_rebalance_deadline: None,
             assignment_timestamp_ms: 0,
             description_epochs: DescriptionEpochs::default(),
+            trunk_records: false,
             description: None,
             description_backoff: SolicitationBackoff::default(),
         }
@@ -450,6 +459,7 @@ async fn actor_loop(
         |image| resolve_group_config_from_image(&default_config, &image, &group_id),
     );
     let mut actor = ActorState::new(group_id);
+    actor.trunk_records = config.topology_description_plugin.is_configured();
     let mut tick = session_tick(&config);
     loop {
         let wake = tokio::select! {
@@ -472,6 +482,7 @@ async fn actor_loop(
                 resolve_group_config_from_image(&default_config, &image, &actor.state.group_id);
             if next != config {
                 config = next;
+                actor.trunk_records = config.topology_description_plugin.is_configured();
                 tick = session_tick(&config);
             }
         }
@@ -568,6 +579,7 @@ async fn actor_loop(
                 // `LastAssignmentConfigs` of the last bump.
                 if next != config {
                     config = next;
+                    actor.trunk_records = config.topology_description_plugin.is_configured();
                     tick = session_tick(&config);
                 }
             }
@@ -724,7 +736,20 @@ async fn handle_message(
             let _ = reply.send(view);
         }
         StreamsGroupActorMessage::PushDescription { push, reply } => {
-            let _ = reply.send(description::handle_push(actor, &push));
+            match description::handle_push(actor, offsets_log, coordinator, &push).await {
+                Ok(answer) => {
+                    let _ = reply.send(answer);
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        group_id = %actor.state.group_id,
+                        error = %e,
+                        "streams-group actor exiting after log-write failure",
+                    );
+                    let _ = reply.send((write_failure_code(&e), None));
+                    return Step::Stop;
+                }
+            }
         }
         StreamsGroupActorMessage::ValidateCommit {
             member_id,

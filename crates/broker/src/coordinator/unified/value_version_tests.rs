@@ -119,6 +119,7 @@ fn every_coordinator_value_refuses_an_unknown_version() {
                 metadata_hash: 2,
                 validated_topology_epoch: -1,
                 last_assignment_configs: None,
+                description: st::DescriptionEpochs::default(),
             }
             .encode(),
             |b| st::StreamsGroupMetadataValue::decode(b).map(|_| ()),

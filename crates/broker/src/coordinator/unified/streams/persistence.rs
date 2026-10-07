@@ -37,8 +37,8 @@ pub use self::{
         StreamsMemberWireState,
     },
     epochs::{
-        LastAssignmentConfig, NO_VALIDATED_TOPOLOGY_EPOCH, StreamsGroupMetadataValue,
-        StreamsGroupTargetAssignmentMetadataValue,
+        DescriptionEpochs, LastAssignmentConfig, NO_VALIDATED_TOPOLOGY_EPOCH,
+        StreamsGroupMetadataValue, StreamsGroupTargetAssignmentMetadataValue,
     },
     keys::{
         KEY_STREAMS_CURRENT_MEMBER_ASSIGNMENT, KEY_STREAMS_GROUP_METADATA,

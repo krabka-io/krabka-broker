@@ -106,6 +106,8 @@ fn streams_group_seed(member_id: &str) -> crate::coordinator::unified::StreamsGr
         metadata_hash: 0,
         validated_topology_epoch: 0,
         last_assignment_configs: std::collections::BTreeMap::new(),
+        description_epochs:
+            crate::coordinator::unified::streams::persistence::DescriptionEpochs::default(),
         assignment_epoch: 6,
         assignment_timestamp_ms: 0,
         topology: None,

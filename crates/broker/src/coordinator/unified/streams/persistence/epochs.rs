@@ -16,16 +16,20 @@
 //!   `LastAssignmentConfig { Key: string, Value: string }`, default null). As
 //!   Kafka's generated writer does, it writes each tagged field only when it is
 //!   not its default. Kafka trunk adds KIP-1331's
-//!   `StoredDescriptionTopologyEpoch` (tag 2) and
-//!   `FailedDescriptionTopologyEpoch` (tag 3); 4.3.1 does not have them, so the
-//!   broker neither writes them nor reads them, and a read skips them as the
-//!   unknown tags they are to 4.3.1.
+//!   `StoredDescriptionTopologyEpoch` (int32, tag 2, default -1) and
+//!   `FailedDescriptionTopologyEpoch` (int32, tag 3, default -1), which the
+//!   value keeps as [`DescriptionEpochs`]. Kafka 4.3.1 does not have them. A
+//!   read always keeps them, as 4.3.1 keeps the unknown tagged fields it
+//!   reads, and the writer leaves them at -1, and so out of the record,
+//!   unless the topology description plugin is configured: see
+//!   `ActorState::trunk_records`.
 //! - `StreamsGroupTargetAssignmentMetadataValue`: `AssignmentEpoch` (int32),
 //!   then the tagged `AssignmentTimestamp` (int64, tag 0, default 0) from
 //!   KIP-1263, which Kafka's generated writer omits when it is 0.
 
 use bytes::{BufMut, Bytes, BytesMut};
 
+pub use crate::coordinator::unified::streams::description::DescriptionEpochs;
 use crate::{
     coordinator::unified::persistence::{
         flex::{
@@ -41,6 +45,10 @@ use crate::{
 const TAG_VALIDATED_TOPOLOGY_EPOCH: u32 = 0;
 /// The tag of `LastAssignmentConfigs`.
 const TAG_LAST_ASSIGNMENT_CONFIGS: u32 = 1;
+/// The tag of Kafka trunk's `StoredDescriptionTopologyEpoch` (KIP-1331).
+const TAG_STORED_DESCRIPTION_TOPOLOGY_EPOCH: u32 = 2;
+/// The tag of Kafka trunk's `FailedDescriptionTopologyEpoch` (KIP-1331).
+const TAG_FAILED_DESCRIPTION_TOPOLOGY_EPOCH: u32 = 3;
 
 /// The schema default of `ValidatedTopologyEpoch`: no validated topology.
 pub const NO_VALIDATED_TOPOLOGY_EPOCH: i32 = -1;
@@ -69,6 +77,9 @@ pub struct StreamsGroupMetadataValue {
     /// Kafka's `LastAssignmentConfigs`, in the order of the record, or `None`
     /// for the null default.
     pub last_assignment_configs: Option<Vec<LastAssignmentConfig>>,
+    /// Kafka trunk's KIP-1331 tags 2 and 3, each written only when it is not
+    /// [`DescriptionEpochs::NONE`].
+    pub description: DescriptionEpochs,
 }
 
 impl StreamsGroupMetadataValue {
@@ -95,6 +106,20 @@ impl StreamsGroupMetadataValue {
             }
             tags.push((TAG_LAST_ASSIGNMENT_CONFIGS, payload.freeze()));
         }
+        for (tag, epoch) in [
+            (
+                TAG_STORED_DESCRIPTION_TOPOLOGY_EPOCH,
+                self.description.stored,
+            ),
+            (
+                TAG_FAILED_DESCRIPTION_TOPOLOGY_EPOCH,
+                self.description.failed,
+            ),
+        ] {
+            if epoch != DescriptionEpochs::NONE {
+                tags.push((tag, Bytes::copy_from_slice(&epoch.to_be_bytes())));
+            }
+        }
         put_tagged_fields(&mut buf, tags);
         buf.freeze()
     }
@@ -107,6 +132,7 @@ impl StreamsGroupMetadataValue {
         let metadata_hash = get_i64(&mut buf)?;
         let mut validated_topology_epoch = NO_VALIDATED_TOPOLOGY_EPOCH;
         let mut last_assignment_configs = None;
+        let mut description = DescriptionEpochs::default();
         read_tagged(&mut buf, |tag, payload| match tag {
             TAG_VALIDATED_TOPOLOGY_EPOCH => {
                 validated_topology_epoch = krabka_protocol::primitives::fixed::get_i32(payload)?;
@@ -116,6 +142,14 @@ impl StreamsGroupMetadataValue {
                 last_assignment_configs = get_last_assignment_configs(payload)?;
                 Ok(true)
             }
+            TAG_STORED_DESCRIPTION_TOPOLOGY_EPOCH => {
+                description.stored = krabka_protocol::primitives::fixed::get_i32(payload)?;
+                Ok(true)
+            }
+            TAG_FAILED_DESCRIPTION_TOPOLOGY_EPOCH => {
+                description.failed = krabka_protocol::primitives::fixed::get_i32(payload)?;
+                Ok(true)
+            }
             _ => Ok(false),
         })?;
         Ok(Self {
@@ -123,6 +157,7 @@ impl StreamsGroupMetadataValue {
             metadata_hash,
             validated_topology_epoch,
             last_assignment_configs,
+            description,
         })
     }
 }
@@ -179,6 +214,7 @@ mod tests {
     fn group_metadata_bytes_match_kafka_schema() {
         const HEAD: &[u8] = b"\x00\x00\x00\x00\x00\x07\x01\x02\x03\x04\x05\x06\x07\x08";
         let value = |validated, configs: Option<&[(&str, &str)]>| StreamsGroupMetadataValue {
+            description: DescriptionEpochs::default(),
             epoch: 7,
             metadata_hash: 0x0102_0304_0506_0708,
             validated_topology_epoch: validated,
@@ -222,15 +258,53 @@ mod tests {
                 "{row}"
             );
         }
+    }
 
-        // Kafka trunk's KIP-1331 tags 2 and 3 are unknown to 4.3.1, which
-        // skips them.
-        let with_trunk_tags = [
-            HEAD,
-            b"\x02\x02\x04\x00\x00\x00\x04\x03\x04\x00\x00\x00\x03",
-        ]
-        .concat();
-        assert!(StreamsGroupMetadataValue::decode(&with_trunk_tags).unwrap() == value(-1, None));
+    /// Kafka trunk's KIP-1331 tags 2 and 3 follow the 4.3.1 tags, each only
+    /// when it is not -1. A value that holds neither, which is what the
+    /// broker writes unless the topology description plugin is configured,
+    /// is byte for byte the 4.3.1 record; a record with them decodes whole
+    /// whatever the broker writes.
+    #[test]
+    fn group_metadata_trunk_tags_match_kafka_trunk() {
+        const HEAD: &[u8] = b"\x00\x00\x00\x00\x00\x07\x01\x02\x03\x04\x05\x06\x07\x08";
+        let value = |stored, failed| StreamsGroupMetadataValue {
+            epoch: 7,
+            metadata_hash: 0x0102_0304_0506_0708,
+            validated_topology_epoch: 4,
+            last_assignment_configs: None,
+            description: DescriptionEpochs { stored, failed },
+        };
+        let rows: [(&str, StreamsGroupMetadataValue, &[u8]); 4] = [
+            (
+                "4.3.1: no description epoch",
+                value(-1, -1),
+                b"\x01\x00\x04\x00\x00\x00\x04",
+            ),
+            (
+                "trunk: a stored description",
+                value(4, -1),
+                b"\x02\x00\x04\x00\x00\x00\x04\x02\x04\x00\x00\x00\x04",
+            ),
+            (
+                "trunk: an uncertain store and a failed epoch",
+                value(-2, 3),
+                b"\x03\x00\x04\x00\x00\x00\x04\x02\x04\xff\xff\xff\xfe\x03\x04\x00\x00\x00\x03",
+            ),
+            (
+                "trunk: a failed epoch alone",
+                value(-1, 0),
+                b"\x02\x00\x04\x00\x00\x00\x04\x03\x04\x00\x00\x00\x00",
+            ),
+        ];
+        for (row, value, trailer) in rows {
+            let bytes = value.encode();
+            assert!(bytes[..] == [HEAD, trailer].concat()[..], "{row}");
+            assert!(
+                StreamsGroupMetadataValue::decode(&bytes).unwrap() == value,
+                "{row}"
+            );
+        }
     }
 
     #[test]
@@ -253,6 +327,10 @@ mod tests {
                 key: "num.standby.replicas".into(),
                 value: "1".into(),
             }]),
+            description: DescriptionEpochs {
+                stored: 2,
+                failed: -1,
+            },
         };
         assert!(StreamsGroupMetadataValue::decode(&v.encode()).unwrap() == v);
     }
@@ -316,6 +394,7 @@ mod tests {
             metadata_hash: 0,
             validated_topology_epoch: NO_VALIDATED_TOPOLOGY_EPOCH,
             last_assignment_configs: None,
+            description: DescriptionEpochs::default(),
         }
         .encode();
         assert!(StreamsGroupMetadataValue::decode(&g[..g.len() - 1]).is_err());

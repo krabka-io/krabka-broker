@@ -14,7 +14,7 @@ use crate::coordinator::unified::{
     offsets_log::OffsetsLog,
     streams::{
         persistence::{
-            LastAssignmentConfig, PendingStreamsRecords, StreamsEndpoint,
+            DescriptionEpochs, LastAssignmentConfig, PendingStreamsRecords, StreamsEndpoint,
             StreamsGroupCurrentMemberAssignmentValue, StreamsGroupMemberMetadataValue,
             StreamsGroupMetadataValue, StreamsGroupTargetAssignmentMemberValue,
             StreamsGroupTargetAssignmentMetadataValue,
@@ -75,7 +75,10 @@ pub(super) fn snapshot_pending_after_change(
 
 /// Kafka's `newStreamsGroupMetadataRecord`: the group epoch, the metadata
 /// hash, the validated topology epoch, and the assignment configuration as a
-/// list in key order, which Kafka never writes as null.
+/// list in key order, which Kafka never writes as null. In trunk mode it also
+/// carries the KIP-1331 description epochs, as Kafka trunk's record does;
+/// otherwise it leaves them at -1, out of the record, as Kafka 4.3.1 has no
+/// such tags.
 pub(super) fn group_metadata_value(actor: &ActorState) -> StreamsGroupMetadataValue {
     StreamsGroupMetadataValue {
         epoch: actor.state.group_epoch,
@@ -91,6 +94,11 @@ pub(super) fn group_metadata_value(actor: &ActorState) -> StreamsGroupMetadataVa
                 })
                 .collect(),
         ),
+        description: if actor.trunk_records {
+            actor.description_epochs
+        } else {
+            DescriptionEpochs::default()
+        },
     }
 }
 
@@ -252,6 +260,7 @@ pub(super) fn snapshot_seed(actor: &ActorState) -> StreamsGroupSeed {
         metadata_hash: actor.metadata_hash,
         validated_topology_epoch: actor.validated_topology_epoch,
         last_assignment_configs: actor.last_assignment_configs.clone(),
+        description_epochs: actor.description_epochs,
         assignment_epoch: state.target.epoch,
         assignment_timestamp_ms: actor.assignment_timestamp_ms,
         topology: actor.topology.clone(),
@@ -268,6 +277,7 @@ pub(super) fn apply_seed(actor: &mut ActorState, seed: StreamsGroupSeed) {
     state.group_epoch = seed.group_epoch;
     actor.metadata_hash = seed.metadata_hash;
     actor.validated_topology_epoch = seed.validated_topology_epoch;
+    actor.description_epochs = seed.description_epochs;
     actor.last_assignment_configs = seed.last_assignment_configs;
     state.target.epoch = seed.assignment_epoch;
     state.assignment_epoch = seed.assignment_epoch;
@@ -395,6 +405,10 @@ mod tests {
             last_assignment_configs: maplit::btreemap! {
                 "num.standby.replicas".to_string() => "1".to_string(),
             },
+            description_epochs: DescriptionEpochs {
+                stored: 2,
+                failed: -1,
+            },
             assignment_epoch: 4,
             assignment_timestamp_ms: 0,
             topology: Some(StreamsGroupTopologyValue {
@@ -410,6 +424,13 @@ mod tests {
         check!(actor.state.group_epoch == 4);
         check!(actor.metadata_hash == 11);
         check!(actor.validated_topology_epoch == 2);
+        check!(
+            actor.description_epochs
+                == DescriptionEpochs {
+                    stored: 2,
+                    failed: -1,
+                }
+        );
         check!(
             actor.last_assignment_configs
                 == maplit::btreemap! {
