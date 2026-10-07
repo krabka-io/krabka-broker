@@ -1,6 +1,28 @@
+use std::path::PathBuf;
+
 use thiserror::Error;
 
 use crate::types::NodeId;
+
+/// What is wrong with a node-local file whose layout carries a version
+/// marker. [`RaftError::PersistedFormat`] names the file.
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+pub enum PersistedFormatError {
+    /// The file has the layout a krabka build before 1.0 wrote, with no
+    /// version marker. 1.0 reads no 0.x data, so the node is reformatted.
+    #[error(
+        "has no version marker, so a krabka build before 1.0 wrote it; reformat this node \
+         with krabka-format"
+    )]
+    MissingVersion,
+    /// The version marker names a version this build does not read, such as
+    /// one a later build wrote.
+    #[error("has version {found}, and this build reads versions {min} to {max}")]
+    UnsupportedVersion { found: i64, min: i64, max: i64 },
+    /// The file does not parse at a version this build reads.
+    #[error("does not parse: {0}")]
+    Malformed(String),
+}
 
 #[derive(Debug, Error)]
 #[non_exhaustive]
@@ -82,6 +104,23 @@ pub enum RaftError {
 
     #[error("deserialization: {0}")]
     SerdeFailedDecode(#[from] wincode::error::ReadError),
+
+    /// A node-local file in the metadata partition directory has a version
+    /// this build does not read, or does not parse. The node does not start
+    /// on it.
+    #[error("{artifact} file {}: {problem}", .path.display())]
+    PersistedFormat {
+        /// The file's name, such as `quorum-state`.
+        artifact: &'static str,
+        path: PathBuf,
+        problem: PersistedFormatError,
+    },
+
+    /// A peer answered a krabka-private controller RPC with
+    /// `UNSUPPORTED_VERSION`: it does not implement `version` of `api_key`.
+    /// A mixed-version cluster meets it during a rolling upgrade.
+    #[error("the peer does not implement version {version} of krabka-private api {api_key}")]
+    UnsupportedPrivateVersion { api_key: i16, version: i16 },
 
     #[error("startup misconfiguration: {0}")]
     Startup(String),

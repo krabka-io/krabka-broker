@@ -8,14 +8,17 @@ use assert2::{assert, check};
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 
 use super::*;
-use crate::kraft::controller::{
-    control_state::voter_set_to_wire,
-    quorum_state_file::{load_quorum_state, save_quorum_state},
-    records::typed_control_batch,
-    recovery::{control_state_at, replay_committed, replay_control_records},
-    test_support::{
-        await_leader, open_test_controller, submit_change_with_timeout, test_kraft_config,
-        topic_record, voter_set,
+use crate::{
+    error::PersistedFormatError,
+    kraft::controller::{
+        control_state::voter_set_to_wire,
+        quorum_state_file::{load_quorum_state, save_quorum_state},
+        records::typed_control_batch,
+        recovery::{control_state_at, replay_committed, replay_control_records},
+        test_support::{
+            await_leader, open_test_controller, submit_change_with_timeout, test_kraft_config,
+            topic_record, voter_set,
+        },
     },
 };
 
@@ -280,35 +283,6 @@ async fn snapshot_then_restart_recovers_image() {
 }
 
 #[tokio::test]
-async fn open_with_legacy_54_byte_quorum_state_advances_hwm() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let data_dir = dir.path().to_path_buf();
-    let cluster_id = uuid::Uuid::new_v4();
-    let voters = voter_set(&[NodeId(1)]);
-
-    {
-        let mut log =
-            KraftLog::open(&data_dir, &crate::MetadataLogConfig::default()).expect("open log");
-        let mut batch = crate::kraft::controller::records::metadata_record_batch(
-            0,
-            &[bytes::Bytes::from_static(b"test")],
-        )
-        .expect("batch");
-        log.append(&mut batch, 0).expect("append");
-        assert2::assert!(log.hwm() == 0);
-        assert2::assert!(log.log_end_offset() > 0);
-    }
-
-    std::fs::write(data_dir.join(QUORUM_STATE_FILE), [0u8; 54]).expect("write 54 bytes");
-
-    let ctrl = open_test_controller(data_dir, cluster_id, voters).expect("open");
-
-    let hwm = ctrl.quorum_state().await.unwrap().high_watermark;
-    assert2::assert!(hwm > 0);
-    ctrl.shutdown().await;
-}
-
-#[tokio::test]
 async fn quorum_state_file_round_trips() {
     let dir = tempfile::tempdir().expect("tempdir");
     let cid = uuid::Uuid::from_u128(9);
@@ -399,7 +373,7 @@ fn quorum_state_level_one_round_trips_the_no_vote_sentinel() {
 }
 
 #[test]
-fn load_quorum_state_rejects_malformed_or_version_mismatched_fields() {
+fn load_quorum_state_refuses_malformed_or_version_mismatched_fields() {
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join(QUORUM_STATE_FILE);
     let cluster_id = uuid::Uuid::from_u128(9);
@@ -447,18 +421,20 @@ fn load_quorum_state_rejects_malformed_or_version_mismatched_fields() {
         v1(0, 1, "not-base64", ""),
         v1(0, -1, &non_nil_directory, ""),
         v1(0, 1, &nil_directory, ",\"clusterId\":\"unexpected\""),
-        format!(
-            "{{\"leaderId\":7,\"leaderEpoch\":0,\"votedId\":-1,\
-             \"votedDirectoryId\":\"{nil_directory}\",\"data_version\":2}}"
-        ),
     ];
 
     for json in cases {
-        std::fs::write(&path, json).expect("write malformed state");
+        std::fs::write(&path, &json).expect("write malformed state");
         check!(
-            load_quorum_state(dir.path(), cluster_id, &voters)
-                .expect("malformed state is ignored")
-                .is_none()
+            matches!(
+                load_quorum_state(dir.path(), cluster_id, &voters),
+                Err(RaftError::PersistedFormat {
+                    artifact: QUORUM_STATE_FILE,
+                    problem: PersistedFormatError::Malformed(_),
+                    ..
+                })
+            ),
+            "{json}"
         );
     }
 }
@@ -534,13 +510,121 @@ fn load_quorum_state_reports_unreadable_non_missing_file_errors() {
     assert2::assert!(matches!(loaded, Err(RaftError::Storage(_))));
 }
 
+/// The exact bytes of a `data_version` 1 quorum-state file: epoch 5, a vote
+/// for node 2 in directory `00000000-0000-0000-0000-000000000003`, no leader.
+/// Kafka's `QuorumStateDataJsonConverter` writes these fields in this order,
+/// and a change to them is a change to the 1.x on-disk contract.
+const QUORUM_STATE_V1_FIXTURE: &str = "{\"leaderId\":-1,\"leaderEpoch\":5,\"votedId\":2,\
+     \"votedDirectoryId\":\"AAAAAAAAAAAAAAAAAAAAAw\",\"data_version\":1}";
+
 #[test]
-fn load_quorum_state_ignores_truncated_file_without_panicking() {
+fn quorum_state_v1_matches_the_fixture_and_decodes_back() {
     let dir = tempfile::tempdir().expect("tempdir");
-    std::fs::write(dir.path().join(QUORUM_STATE_FILE), [0u8; 53]).expect("write short state");
+    let voters = voter_set(&[NodeId(1), NodeId(2)]);
+    let mut state = QuorumState::bootstrap(uuid::Uuid::from_u128(9), voters.clone());
+    state.kraft_version = 1;
+    state.leader_epoch = 5;
+    state.voted_key = Some(ReplicaKey {
+        id: NodeId(2),
+        directory_id: uuid::Uuid::from_u128(3),
+    });
 
-    let loaded = load_quorum_state(dir.path(), uuid::Uuid::nil(), &voter_set(&[NodeId(1)]))
-        .expect("short file is ignored");
+    save_quorum_state(dir.path(), &state).expect("save");
+    let written = std::fs::read_to_string(dir.path().join(QUORUM_STATE_FILE)).expect("read");
+    check!(written == QUORUM_STATE_V1_FIXTURE);
 
-    assert2::assert!(loaded.is_none());
+    let loaded = load_quorum_state(dir.path(), state.cluster_id, &voters)
+        .expect("load the fixture")
+        .expect("present");
+    check!(loaded == state);
+}
+
+/// A `data_version` outside 0 and 1, or none at all, stops the load, as
+/// Kafka's `FileQuorumStateStore.readStateFromFile` throws on both.
+#[test]
+fn load_quorum_state_refuses_an_unknown_or_missing_data_version() {
+    let unsupported = |found| PersistedFormatError::UnsupportedVersion {
+        found,
+        min: 0,
+        max: 1,
+    };
+    let without_version = "{\"leaderId\":-1,\"leaderEpoch\":5,\"votedId\":2,\
+         \"votedDirectoryId\":\"AAAAAAAAAAAAAAAAAAAAAw\"}";
+    let cases = [
+        (
+            "future version",
+            QUORUM_STATE_V1_FIXTURE.replace("\"data_version\":1", "\"data_version\":2"),
+            unsupported(2),
+        ),
+        (
+            "negative version",
+            QUORUM_STATE_V1_FIXTURE.replace("\"data_version\":1", "\"data_version\":-1"),
+            unsupported(-1),
+        ),
+        (
+            "no data_version",
+            without_version.to_owned(),
+            PersistedFormatError::Malformed("it has no data_version field".into()),
+        ),
+        (
+            "data_version not an integer",
+            QUORUM_STATE_V1_FIXTURE.replace("\"data_version\":1", "\"data_version\":\"1\""),
+            PersistedFormatError::Malformed("its data_version is not an integer".into()),
+        ),
+        (
+            "not an object",
+            "[1]".to_owned(),
+            PersistedFormatError::Malformed("[1] is not a JSON object".into()),
+        ),
+    ];
+    for (case, json, want) in cases {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join(QUORUM_STATE_FILE);
+        std::fs::write(&path, json).expect("write quorum-state");
+
+        let loaded = load_quorum_state(
+            dir.path(),
+            uuid::Uuid::from_u128(9),
+            &voter_set(&[NodeId(1)]),
+        );
+
+        match loaded {
+            Err(RaftError::PersistedFormat {
+                artifact,
+                path: reported,
+                problem,
+            }) => {
+                check!(
+                    (artifact, reported, problem) == (QUORUM_STATE_FILE, path, want),
+                    "{case}"
+                );
+            }
+            other => panic!("{case}: expected a persisted-format error, got {other:?}"),
+        }
+    }
+}
+
+/// A file that is not JSON at all, such as the binary quorum state a build
+/// before 1.0 once wrote, or a zero-filled file, is refused rather than read
+/// as "no vote".
+#[test]
+fn load_quorum_state_refuses_a_file_that_is_not_json() {
+    for contents in [&[0u8; 53][..], &[0u8; 54][..], b"", b"{\"leaderId\""] {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(dir.path().join(QUORUM_STATE_FILE), contents).expect("write state");
+
+        let loaded = load_quorum_state(dir.path(), uuid::Uuid::nil(), &voter_set(&[NodeId(1)]));
+
+        check!(
+            matches!(
+                loaded,
+                Err(RaftError::PersistedFormat {
+                    artifact: QUORUM_STATE_FILE,
+                    problem: PersistedFormatError::Malformed(_),
+                    ..
+                })
+            ),
+            "{contents:?}"
+        );
+    }
 }

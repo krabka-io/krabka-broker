@@ -68,7 +68,7 @@ impl ControllerHandle {
         let resp_body = conn
             .raw_request(
                 crate::wire::API_KEY_METADATA_FETCH,
-                0,
+                crate::wire::METADATA_FETCH_VERSION,
                 bytes::Bytes::from(body),
             )
             .await
@@ -76,7 +76,15 @@ impl ControllerHandle {
         conn.close();
 
         let mut cur: &[u8] = &resp_body;
-        crate::wire::KrabkaMetadataFetchResponse::decode_v0(&mut cur).map_err(RaftError::Protocol)
+        let response = crate::wire::KrabkaMetadataFetchResponse::decode_v0(&mut cur)
+            .map_err(RaftError::Protocol)?;
+        if response.error_code == crate::wire::PRIVATE_UNSUPPORTED_VERSION {
+            return Err(RaftError::UnsupportedPrivateVersion {
+                api_key: crate::wire::API_KEY_METADATA_FETCH,
+                version: crate::wire::METADATA_FETCH_VERSION,
+            });
+        }
+        Ok(response)
     }
 }
 

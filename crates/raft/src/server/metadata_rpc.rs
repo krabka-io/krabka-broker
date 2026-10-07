@@ -300,6 +300,55 @@ mod tests {
         assert2::assert!(err.leader_hint == -1);
     }
 
+    /// A private request at a version this build does not implement is
+    /// answered with `UNSUPPORTED_VERSION` in the v0 shape, and the body is
+    /// never decoded at the wrong version or applied.
+    #[tokio::test]
+    async fn dispatch_answers_an_unsupported_private_version() {
+        let (engine, _dir) = single_voter_engine();
+        wait_for_leader(&engine).await;
+
+        let submit = dispatch(
+            ApiKey(API_KEY_SUBMIT_CHANGE),
+            1,
+            submit_change_body(&[topic_record("from-a-later-build")]),
+            &engine,
+        )
+        .await
+        .expect("submit dispatch");
+        check!(
+            decode_submit_change_response(&submit)
+                == KrabkaSubmitChangeResponse {
+                    error_code: crate::wire::PRIVATE_UNSUPPORTED_VERSION,
+                    leader_hint: -1,
+                    result: Bytes::new(),
+                }
+        );
+        check!(engine.current_image().topic("from-a-later-build").is_none());
+
+        let fetch = dispatch(
+            ApiKey(API_KEY_METADATA_FETCH),
+            1,
+            metadata_fetch_body(0, 1024),
+            &engine,
+        )
+        .await
+        .expect("metadata fetch dispatch");
+        check!(
+            decode_metadata_fetch_response(&fetch)
+                == KrabkaMetadataFetchResponse {
+                    error_code: crate::wire::PRIVATE_UNSUPPORTED_VERSION,
+                    leader_hint: -1,
+                    leader_epoch: -1,
+                    log_start_offset: -1,
+                    high_watermark: -1,
+                    quorum_high_watermark: -1,
+                    snapshot_id: None,
+                    records: Bytes::new(),
+                }
+        );
+    }
+
     #[tokio::test]
     async fn dispatch_submit_change_encodes_metadata_rejection() {
         let (engine, _dir) = single_voter_engine();

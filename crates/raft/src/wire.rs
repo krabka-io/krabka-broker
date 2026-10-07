@@ -9,6 +9,13 @@
 //!
 //! Api keys: `1003` `SubmitChange` (forward), `1004` `MetadataFetch`
 //! (observer), and `1005` `DelegationTokenMutation` (guarded forward).
+//!
+//! The request header's `api_version` versions each body. Nodes of two 1.x
+//! builds exchange these during a rolling upgrade, so a receiver answers a
+//! version it does not implement with [`PRIVATE_UNSUPPORTED_VERSION`] in the
+//! v0 response shape, which every 1.x sender decodes. No `ApiVersions`
+//! response advertises these keys, so a sender cannot learn the peer's range
+//! and sends the version its own build implements.
 
 use bytes::{Buf, BufMut, Bytes};
 use krabka_protocol::ProtocolError;
@@ -50,6 +57,84 @@ pub const API_KEY_METADATA_FETCH: i16 = 1004;
 
 /// Generation-bound delegation-token mutation forwarded to the leader.
 pub const API_KEY_DELEGATION_TOKEN_MUTATION: i16 = 1005;
+
+/// The version of [`API_KEY_SUBMIT_CHANGE`] this build sends and the highest
+/// it serves: the v0 body below, around a wincode `Vec<MetadataRecord>`, and
+/// a response around a wincode [`crate::SubmitChangeResult`]. Part of the 1.x
+/// rolling-upgrade contract: a body change takes a new version, and a 1.x
+/// build keeps serving every earlier one.
+pub const SUBMIT_CHANGE_VERSION: i16 = 0;
+
+/// The version of [`API_KEY_METADATA_FETCH`] this build sends and the highest
+/// it serves. Part of the 1.x rolling-upgrade contract, as
+/// [`SUBMIT_CHANGE_VERSION`].
+pub const METADATA_FETCH_VERSION: i16 = 0;
+
+/// The version of [`API_KEY_DELEGATION_TOKEN_MUTATION`] this build sends and
+/// the highest it serves: the [`SUBMIT_CHANGE_VERSION`] framing around a
+/// wincode `Vec<DelegationTokenMutation>`. Part of the 1.x rolling-upgrade
+/// contract, as [`SUBMIT_CHANGE_VERSION`].
+pub const DELEGATION_TOKEN_MUTATION_VERSION: i16 = 0;
+
+/// The lowest version of every krabka-private API that this build serves.
+const PRIVATE_LOWEST_VERSION: i16 = 0;
+
+/// The `error_code` of a krabka-private response to a request at a version
+/// the receiver does not implement. It is Kafka's `UNSUPPORTED_VERSION`.
+pub const PRIVATE_UNSUPPORTED_VERSION: i16 = 35;
+
+/// The highest version of the krabka-private `api_key` this build serves, or
+/// `None` when `api_key` is not one of them.
+#[must_use]
+pub fn private_api_highest_version(api_key: i16) -> Option<i16> {
+    match api_key {
+        API_KEY_SUBMIT_CHANGE => Some(SUBMIT_CHANGE_VERSION),
+        API_KEY_METADATA_FETCH => Some(METADATA_FETCH_VERSION),
+        API_KEY_DELEGATION_TOKEN_MUTATION => Some(DELEGATION_TOKEN_MUTATION_VERSION),
+        _ => None,
+    }
+}
+
+/// The answer to a krabka-private request at `version` when this build does
+/// not serve that version: the v0 response of `api_key` with
+/// [`PRIVATE_UNSUPPORTED_VERSION`]. `None` when it serves `version`, or when
+/// `api_key` is not a krabka-private API.
+///
+/// # Errors
+/// Never in practice: the v0 error responses carry no payload.
+pub fn unsupported_version_response(
+    api_key: i16,
+    version: i16,
+) -> Result<Option<Bytes>, ProtocolError> {
+    let Some(highest) = private_api_highest_version(api_key) else {
+        return Ok(None);
+    };
+    if (PRIVATE_LOWEST_VERSION..=highest).contains(&version) {
+        return Ok(None);
+    }
+    let mut out = Vec::new();
+    if api_key == API_KEY_METADATA_FETCH {
+        KrabkaMetadataFetchResponse {
+            error_code: PRIVATE_UNSUPPORTED_VERSION,
+            leader_hint: -1,
+            leader_epoch: -1,
+            log_start_offset: -1,
+            high_watermark: -1,
+            quorum_high_watermark: -1,
+            snapshot_id: None,
+            records: Bytes::new(),
+        }
+        .encode_v0(&mut out)?;
+    } else {
+        KrabkaSubmitChangeResponse {
+            error_code: PRIVATE_UNSUPPORTED_VERSION,
+            leader_hint: -1,
+            result: Bytes::new(),
+        }
+        .encode_v0(&mut out)?;
+    }
+    Ok(Some(Bytes::from(out)))
+}
 
 fn require_remaining(buf: &[u8], required: usize) -> Result<(), ProtocolError> {
     match required.checked_sub(buf.remaining()) {
@@ -273,8 +358,186 @@ impl KrabkaMetadataFetchResponse {
 
 #[cfg(test)]
 mod tests {
+    use assert2::check;
 
     use super::*;
+
+    /// The v0 bodies of the krabka-private RPCs, byte for byte. A change to
+    /// one of them is a change to the 1.x rolling-upgrade contract.
+    #[test]
+    fn v0_bodies_match_their_golden_bytes() {
+        let directory = uuid::Uuid::from_u128(0x0102_0304_0506_0708_090a_0b0c_0d0e_0f10);
+        let mut submit_request = Vec::new();
+        KrabkaSubmitChangeRequest {
+            records: Bytes::from_static(b"\x01\x02\x03"),
+        }
+        .encode_v0(&mut submit_request)
+        .unwrap();
+        let mut submit_response = Vec::new();
+        KrabkaSubmitChangeResponse {
+            error_code: SUBMIT_CHANGE_UNCOMMITTED_TAIL,
+            leader_hint: 3,
+            result: Bytes::from_static(b"ok"),
+        }
+        .encode_v0(&mut submit_response)
+        .unwrap();
+        let mut fetch_request = Vec::new();
+        KrabkaMetadataFetchRequest {
+            fetch_offset: 42,
+            max_bytes: 1_048_576,
+            replica_id: 7,
+            replica_directory_id: directory,
+        }
+        .encode_v0(&mut fetch_request);
+        let mut fetch_response = Vec::new();
+        KrabkaMetadataFetchResponse {
+            error_code: 0,
+            leader_hint: 3,
+            leader_epoch: 4,
+            log_start_offset: 1,
+            high_watermark: 99,
+            quorum_high_watermark: 512,
+            snapshot_id: Some((64, 2)),
+            records: Bytes::from_static(b"\xaa"),
+        }
+        .encode_v0(&mut fetch_response)
+        .unwrap();
+
+        let cases: [(&str, Vec<u8>, &[u8]); 4] = [
+            (
+                "SubmitChange request",
+                submit_request,
+                &[0, 0, 0, 3, 1, 2, 3],
+            ),
+            (
+                "SubmitChange response",
+                submit_response,
+                &[0, 4, 0, 0, 0, 0, 0, 0, 0, 3, 0, 0, 0, 2, b'o', b'k'],
+            ),
+            (
+                "MetadataFetch request",
+                fetch_request,
+                &[
+                    0, 0, 0, 0, 0, 0, 0, 42, 0, 0x10, 0, 0, 0, 0, 0, 7, 1, 2, 3, 4, 5, 6, 7, 8, 9,
+                    10, 11, 12, 13, 14, 15, 16,
+                ],
+            ),
+            (
+                "MetadataFetch response",
+                fetch_response,
+                &[
+                    0, 0, // error_code
+                    0, 0, 0, 0, 0, 0, 0, 3, // leader_hint
+                    0, 0, 0, 4, // leader_epoch
+                    0, 0, 0, 0, 0, 0, 0, 1, // log_start_offset
+                    0, 0, 0, 0, 0, 0, 0, 99, // high_watermark
+                    0, 0, 0, 0, 0, 0, 2, 0, // quorum_high_watermark
+                    0, 0, 0, 0, 0, 0, 0, 64, // snapshot end offset
+                    0, 0, 0, 2, // snapshot epoch
+                    0, 0, 0, 1, 0xaa, // records
+                ],
+            ),
+        ];
+        for (case, encoded, golden) in cases {
+            check!(encoded == golden, "{case}");
+        }
+    }
+
+    /// The golden v0 bodies decode back to the values they were made from.
+    #[test]
+    fn golden_v0_bodies_decode_back() {
+        let mut cur: &[u8] = &[0, 0, 0, 3, 1, 2, 3];
+        check!(
+            KrabkaSubmitChangeRequest::decode_v0(&mut cur).unwrap()
+                == KrabkaSubmitChangeRequest {
+                    records: Bytes::from_static(b"\x01\x02\x03"),
+                }
+        );
+        let mut cur: &[u8] = &[0, 4, 0, 0, 0, 0, 0, 0, 0, 3, 0, 0, 0, 2, b'o', b'k'];
+        check!(
+            KrabkaSubmitChangeResponse::decode_v0(&mut cur).unwrap()
+                == KrabkaSubmitChangeResponse {
+                    error_code: SUBMIT_CHANGE_UNCOMMITTED_TAIL,
+                    leader_hint: 3,
+                    result: Bytes::from_static(b"ok"),
+                }
+        );
+        let mut cur: &[u8] = &[
+            0, 0, 0, 0, 0, 0, 0, 42, 0, 0x10, 0, 0, 0, 0, 0, 7, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11,
+            12, 13, 14, 15, 16,
+        ];
+        check!(
+            KrabkaMetadataFetchRequest::decode_v0(&mut cur).unwrap()
+                == KrabkaMetadataFetchRequest {
+                    fetch_offset: 42,
+                    max_bytes: 1_048_576,
+                    replica_id: 7,
+                    replica_directory_id: uuid::Uuid::from_u128(
+                        0x0102_0304_0506_0708_090a_0b0c_0d0e_0f10
+                    ),
+                }
+        );
+        let mut cur: &[u8] = &[
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 3, 0, 0, 0, 4, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0,
+            99, 0, 0, 0, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 64, 0, 0, 0, 2, 0, 0, 0, 1, 0xaa,
+        ];
+        check!(
+            KrabkaMetadataFetchResponse::decode_v0(&mut cur).unwrap()
+                == KrabkaMetadataFetchResponse {
+                    error_code: 0,
+                    leader_hint: 3,
+                    leader_epoch: 4,
+                    log_start_offset: 1,
+                    high_watermark: 99,
+                    quorum_high_watermark: 512,
+                    snapshot_id: Some((64, 2)),
+                    records: Bytes::from_static(b"\xaa"),
+                }
+        );
+    }
+
+    /// A receiver serves v0 of each private API and answers any other version
+    /// with `UNSUPPORTED_VERSION` in that API's v0 response shape.
+    #[test]
+    fn unsupported_versions_are_answered_in_the_v0_shape() {
+        let submit_refusal = KrabkaSubmitChangeResponse {
+            error_code: PRIVATE_UNSUPPORTED_VERSION,
+            leader_hint: -1,
+            result: Bytes::new(),
+        };
+        let mut submit_refusal_bytes = Vec::new();
+        submit_refusal.encode_v0(&mut submit_refusal_bytes).unwrap();
+        let fetch_refusal = KrabkaMetadataFetchResponse {
+            error_code: PRIVATE_UNSUPPORTED_VERSION,
+            leader_hint: -1,
+            leader_epoch: -1,
+            log_start_offset: -1,
+            high_watermark: -1,
+            quorum_high_watermark: -1,
+            snapshot_id: None,
+            records: Bytes::new(),
+        };
+        let mut fetch_refusal_bytes = Vec::new();
+        fetch_refusal.encode_v0(&mut fetch_refusal_bytes).unwrap();
+        let submit = Some(Bytes::from(submit_refusal_bytes));
+        let fetch = Some(Bytes::from(fetch_refusal_bytes));
+        let cases = [
+            (API_KEY_SUBMIT_CHANGE, 0, None),
+            (API_KEY_SUBMIT_CHANGE, 1, submit.clone()),
+            (API_KEY_SUBMIT_CHANGE, -1, submit.clone()),
+            (API_KEY_DELEGATION_TOKEN_MUTATION, 0, None),
+            (API_KEY_DELEGATION_TOKEN_MUTATION, 1, submit),
+            (API_KEY_METADATA_FETCH, 0, None),
+            (API_KEY_METADATA_FETCH, 1, fetch),
+            (1, 99, None),
+        ];
+        for (api_key, version, want) in cases {
+            check!(
+                unsupported_version_response(api_key, version).unwrap() == want,
+                "api {api_key} v{version}"
+            );
+        }
+    }
 
     fn assert_unexpected_eof<T: std::fmt::Debug>(result: Result<T, ProtocolError>, want: usize) {
         match result {

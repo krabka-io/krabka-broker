@@ -7,9 +7,23 @@ use uuid::Uuid;
 
 use super::QUORUM_STATE_FILE;
 use crate::{
-    error::RaftError,
+    error::{PersistedFormatError, RaftError},
     kraft::types::{NodeId, QuorumState, ReplicaKey},
 };
+
+/// The lowest `data_version` of Kafka's `QuorumStateData` this build reads,
+/// Kafka's `FileQuorumStateStore.LOWEST_SUPPORTED_VERSION`. It is part of the
+/// 1.x on-disk contract.
+pub(crate) const QUORUM_STATE_LOWEST_DATA_VERSION: i64 = 0;
+
+/// The highest `data_version` of Kafka's `QuorumStateData` this build reads
+/// and writes, Kafka's `FileQuorumStateStore.HIGHEST_SUPPORTED_VERSION`.
+/// `kraft.version` 0 writes `data_version` 0, and `kraft.version` 1 writes
+/// this one. It is part of the 1.x on-disk contract.
+pub(crate) const QUORUM_STATE_HIGHEST_DATA_VERSION: i64 = 1;
+
+/// The `data_version` field of Kafka's `QuorumStateData` JSON.
+const DATA_VERSION_FIELD: &str = "data_version";
 
 /// One entry of schema v0's `currentVoters` array.
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -121,8 +135,48 @@ pub fn save_quorum_state(dir: &std::path::Path, state: &QuorumState) -> Result<(
     Ok(())
 }
 
+/// Parses Kafka's `QuorumStateData` JSON as `FileQuorumStateStore.readStateFromFile`
+/// does: the document must be an object with a `data_version` between
+/// [`QUORUM_STATE_LOWEST_DATA_VERSION`] and
+/// [`QUORUM_STATE_HIGHEST_DATA_VERSION`], and then parse at that version.
+fn parse_quorum_state(bytes: &[u8]) -> Result<QuorumStateJson, PersistedFormatError> {
+    let malformed = PersistedFormatError::Malformed;
+    let document: serde_json::Value =
+        serde_json::from_slice(bytes).map_err(|error| malformed(error.to_string()))?;
+    let serde_json::Value::Object(fields) = &document else {
+        return Err(malformed(format!("{document} is not a JSON object")));
+    };
+    let data_version = fields
+        .get(DATA_VERSION_FIELD)
+        .ok_or_else(|| malformed(format!("it has no {DATA_VERSION_FIELD} field")))?
+        .as_i64()
+        .ok_or_else(|| malformed(format!("its {DATA_VERSION_FIELD} is not an integer")))?;
+    if !(QUORUM_STATE_LOWEST_DATA_VERSION..=QUORUM_STATE_HIGHEST_DATA_VERSION)
+        .contains(&data_version)
+    {
+        return Err(PersistedFormatError::UnsupportedVersion {
+            found: data_version,
+            min: QUORUM_STATE_LOWEST_DATA_VERSION,
+            max: QUORUM_STATE_HIGHEST_DATA_VERSION,
+        });
+    }
+    serde_json::from_value(document).map_err(|error| malformed(error.to_string()))
+}
+
 /// Load Kafka JSON `QuorumStateData`. The configured voter metadata supplies
 /// endpoints at level 0; level-1 membership is recovered from snapshots/log.
+///
+/// A missing file is `None`, a node that has not voted yet. A file that is
+/// there but that this build cannot read is an error, as Kafka's
+/// `FileQuorumStateStore.readElectionState` throws on an unreadable file and
+/// on a `data_version` outside its supported range. Treating it as absent
+/// would drop the vote this node cast in its current epoch, and the node
+/// could vote a second time in that epoch.
+///
+/// # Errors
+/// [`RaftError::Storage`] when the file cannot be read, and
+/// [`RaftError::PersistedFormat`] when it has an unsupported `data_version`,
+/// does not parse, or does not match `cluster_id` and `voters`.
 pub fn load_quorum_state(
     dir: &std::path::Path,
     cluster_id: Uuid,
@@ -134,9 +188,12 @@ pub fn load_quorum_state(
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(e) => return Err(RaftError::Storage(krabka_log::LogError::Io(e))),
     };
-    let Ok(data) = serde_json::from_slice::<QuorumStateJson>(&bytes) else {
-        return Ok(None);
+    let refuse = |problem| RaftError::PersistedFormat {
+        artifact: QUORUM_STATE_FILE,
+        path: path.clone(),
+        problem,
     };
+    let data = parse_quorum_state(&bytes).map_err(refuse)?;
     let data_version = data.data_version;
     let voted_directory_id = data
         .voted_directory_id
@@ -177,7 +234,12 @@ pub fn load_quorum_state(
         voted_directory_id == Some(Uuid::nil()),
     );
     let voted_key = match decision {
-        krabka_verified::QuorumStateLoadDecision::Reject => return Ok(None),
+        krabka_verified::QuorumStateLoadDecision::Reject => {
+            return Err(refuse(PersistedFormatError::Malformed(format!(
+                "its fields are not a valid data_version {data_version} record for cluster \
+                 {cluster_id} and the configured voters"
+            ))));
+        }
         krabka_verified::QuorumStateLoadDecision::RestoreNoVote => None,
         krabka_verified::QuorumStateLoadDecision::RestoreVote => Some(ReplicaKey {
             id: NodeId(

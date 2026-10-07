@@ -18,7 +18,7 @@ use uuid::Uuid;
 
 use super::{
     Engine, KraftConfig, KraftControlState, KraftController, METADATA_LOG_CLEAN_INTERVAL,
-    PendingDowngradeSnapshot, QUORUM_STATE_FILE,
+    PendingDowngradeSnapshot,
     activation::{Activation, check_bootstrap_records},
     checkpoint::{BOOTSTRAP_SNAPSHOT_ID, latest_checkpoint_id, load_latest_checkpoint},
     quorum_state_file::load_quorum_state,
@@ -263,16 +263,7 @@ impl KraftController {
         mut activation: Activation,
     ) -> Result<Self, RaftError> {
         std::fs::create_dir_all(&data_dir).map_err(krabka_log::LogError::Io)?;
-        let legacy_quorum_state = std::fs::metadata(data_dir.join(QUORUM_STATE_FILE))
-            .is_ok_and(|metadata| metadata.len() == 54);
-        let mut log = KraftLog::open(&data_dir, &metadata_log)?;
-        if legacy_quorum_state {
-            // The predecessor format treated a cleanly reopened log as fully
-            // committed. Capture that boundary once while migrating its
-            // binary quorum state; all subsequent restarts use the persisted
-            // high-watermark checkpoint.
-            log.advance_hwm(log.log_end_offset());
-        }
+        let log = KraftLog::open(&data_dir, &metadata_log)?;
 
         // Recover the image from the checkpoint plus only the durable committed
         // prefix. An uncommitted voter record can remain at the log end after a

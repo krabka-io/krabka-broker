@@ -95,7 +95,7 @@ pub use controller::{
     Controller, ControllerHandle, QuorumState, QuorumStateSnapshot, SnapshotRange, SnapshotSlice,
     metadata_log_nonempty,
 };
-pub use error::RaftError;
+pub use error::{PersistedFormatError, RaftError};
 pub use handshake::{
     AllowAllGrants, ClusterGrants, ClusterOperation, ControllerApiVersions, RaftConnection,
     RaftHandshakeError, RaftListenerHandshake,
@@ -196,7 +196,8 @@ pub fn deserialize_metadata_snapshot_image(
 }
 pub use wire::{
     API_KEY_DELEGATION_TOKEN_MUTATION, API_KEY_METADATA_FETCH, API_KEY_SUBMIT_CHANGE,
-    KrabkaMetadataFetchRequest, KrabkaMetadataFetchResponse, KrabkaSubmitChangeRequest,
-    KrabkaSubmitChangeResponse, PRIVATE_CLUSTER_AUTHORIZATION_FAILED,
-    SUBMIT_CHANGE_UNCOMMITTED_TAIL,
+    DELEGATION_TOKEN_MUTATION_VERSION, KrabkaMetadataFetchRequest, KrabkaMetadataFetchResponse,
+    KrabkaSubmitChangeRequest, KrabkaSubmitChangeResponse, METADATA_FETCH_VERSION,
+    PRIVATE_CLUSTER_AUTHORIZATION_FAILED, PRIVATE_UNSUPPORTED_VERSION,
+    SUBMIT_CHANGE_UNCOMMITTED_TAIL, SUBMIT_CHANGE_VERSION,
 };
