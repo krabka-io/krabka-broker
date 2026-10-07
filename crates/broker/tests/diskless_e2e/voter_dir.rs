@@ -12,7 +12,8 @@
 //! ```text
 //! <log.dir>/__diskless_wal_quorum/<topic>-<topic-id>-<partition>/voter-<node-id>/
 //!     00000000000000000000.log         the replicated batches
-//!     wal-durable-offset.checkpoint    "<start> <end>", fsynced after each append
+//!     wal-durable-offset.checkpoint    "0\n<start> <end>\n": the version line, then the
+//!                                      range, fsynced after each append
 //! ```
 //!
 //! The log is read through a **copy** of that directory. `Log::open` recovers
@@ -31,6 +32,10 @@ use crate::TOPIC;
 /// Name of the follower's durable-offset checkpoint, from
 /// `wal::quorum::follower::checkpoint`.
 const DURABLE_OFFSET_FILE: &str = "wal-durable-offset.checkpoint";
+
+/// The checkpoint's first line, its version, from
+/// `wal::quorum::follower::checkpoint::DURABLE_OFFSET_VERSION`.
+const CHECKPOINT_VERSION: &str = "0";
 
 /// The offset range one voter reports as fsynced: `[start, end)`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -54,11 +59,7 @@ pub(crate) fn voter_dir(log_dir: &Path, topic_id: Uuid, partition: i32, node: No
 /// its first checkpoint (or if it is not a voter for this shard at all).
 pub(crate) fn durable_range(dir: &Path) -> Option<DurableRange> {
     let raw = std::fs::read_to_string(dir.join(DURABLE_OFFSET_FILE)).ok()?;
-    let offsets: Vec<i64> = raw
-        .split_ascii_whitespace()
-        .map(str::parse::<i64>)
-        .collect::<Result<_, _>>()
-        .ok()?;
+    let offsets = checkpoint_offsets(&raw)?;
     match offsets.as_slice() {
         [start, end] => Some(DurableRange {
             start: *start,
@@ -66,6 +67,22 @@ pub(crate) fn durable_range(dir: &Path) -> Option<DurableRange> {
         }),
         _ => None,
     }
+}
+
+/// The offsets on the second line of a durable-offset checkpoint, or `None`
+/// unless its first line is the version, `0`. A half-written file reads as
+/// `None` too, and the caller polls again.
+fn checkpoint_offsets(raw: &str) -> Option<Vec<i64>> {
+    let mut lines = raw.lines();
+    if lines.next()? != CHECKPOINT_VERSION {
+        return None;
+    }
+    lines
+        .next()?
+        .split_ascii_whitespace()
+        .map(str::parse::<i64>)
+        .collect::<Result<_, _>>()
+        .ok()
 }
 
 /// The verbatim batch bytes this voter holds over `[start, end)`.

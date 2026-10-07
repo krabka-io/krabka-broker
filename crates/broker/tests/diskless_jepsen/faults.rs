@@ -33,6 +33,26 @@ use crate::{TOPIC, cluster::TestNode};
 /// `wal::quorum::follower::checkpoint`.
 const DURABLE_OFFSET_FILE: &str = "wal-durable-offset.checkpoint";
 
+/// The checkpoint's first line, its version, from
+/// `wal::quorum::follower::checkpoint::DURABLE_OFFSET_VERSION`.
+const CHECKPOINT_VERSION: &str = "0";
+
+/// The `[start, end]` on the second line of a durable-offset checkpoint, or
+/// `None` unless its first line is the version, `0`, and its second is two
+/// offsets. A half-written file reads as `None`, and the caller polls again.
+fn checkpoint_offsets(raw: &str) -> Option<[i64; 2]> {
+    let mut lines = raw.lines();
+    if lines.next()? != CHECKPOINT_VERSION {
+        return None;
+    }
+    let mut offsets = lines
+        .next()?
+        .split_ascii_whitespace()
+        .map(str::parse::<i64>);
+    let range = [offsets.next()?.ok()?, offsets.next()?.ok()?];
+    offsets.next().is_none().then_some(range)
+}
+
 /// What each fault left behind. The suite fills this in as it goes and checks
 /// it at the end, so a fault that turned into a no-op cannot pass unnoticed.
 #[derive(Debug, Default)]
@@ -117,7 +137,8 @@ pub(crate) async fn report_flush_state(node: &TestNode, failures: u64) {
 ///
 /// ```text
 /// <log.dir>/__diskless_wal_quorum/<topic>-<topic-id>-<partition>/voter-<node-id>/
-///     wal-durable-offset.checkpoint    "<start> <end>", fsynced after each append
+///     wal-durable-offset.checkpoint    "0\n<start> <end>\n": the version line, then the
+///                                      range, fsynced after each append
 /// ```
 ///
 /// The shard directory carries the topic id, which this suite never resolves,
@@ -136,14 +157,9 @@ pub(crate) async fn await_follower_checkpoint(node: &TestNode, expected_end: i64
                     let checkpoint = entry.path().join(&voter).join(DURABLE_OFFSET_FILE);
                     if entry.file_name().to_string_lossy().starts_with(TOPIC)
                         && let Ok(value) = std::fs::read_to_string(checkpoint)
+                        && checkpoint_offsets(&value) == Some([0, expected_end])
                     {
-                        let offsets = value
-                            .split_ascii_whitespace()
-                            .filter_map(|value| value.parse::<i64>().ok())
-                            .collect::<Vec<_>>();
-                        if offsets.as_slice() == [0, expected_end] {
-                            return;
-                        }
+                        return;
                     }
                 }
             }

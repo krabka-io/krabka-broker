@@ -296,6 +296,11 @@ mod tests {
 
     use super::*;
 
+    /// A record in the pre-1.0 layout carries its version inside the
+    /// wincode body, after `object_key`. The 1.x reader takes the body's
+    /// first two bytes, the low bytes of the little-endian `object_key`
+    /// length (7, so `0x07 0x00`), as the big-endian version 1792 and
+    /// refuses it before decoding anything else.
     #[test]
     fn previous_layout_is_rejected_as_an_unsupported_format() {
         #[derive(Serialize)]
@@ -330,8 +335,15 @@ mod tests {
         )
         .unwrap();
 
-        let error = WalFlushRecord::from_bytes(&bytes).unwrap_err();
-        assert!(error.contains("unsupported diskless WAL index format version 1"));
+        assert!(
+            WalFlushRecord::from_bytes(&bytes)
+                == Err(
+                    "unsupported diskless WAL index format version 1792: this build reads \
+                        version 2. A record written before krabka 1.0 has no version prefix \
+                        and is not readable; reformat the cluster"
+                        .to_owned()
+                )
+        );
     }
 
     #[test]
@@ -342,8 +354,9 @@ mod tests {
             entries: vec![],
         };
 
-        let error = record.to_bytes().unwrap_err();
-        assert!(error.contains("unsupported diskless WAL index format version 1"));
+        assert!(
+            record.to_bytes() == Err("unsupported diskless WAL index format version 1".to_owned())
+        );
     }
 
     fn entry(p: i32, f: i64, l: i64) -> WalIndexEntry {
