@@ -79,6 +79,7 @@ pub(super) fn snapshot_pending_after_change(
     let mut pending = PendingShareRecords {
         group_metadata: Some(ShareGroupMetadataValue {
             epoch: state.group_epoch,
+            metadata_hash: state.metadata_hash,
         }),
         ..Default::default()
     };
@@ -260,7 +261,10 @@ mod tests {
     // 32768 bytes makes the whole batch an error, not a panic in the actor.
     crate::coordinator::unified::persistence::key_string_boundaries!(PendingShareRecords, || {
         PendingShareRecords {
-            group_metadata: Some(ShareGroupMetadataValue { epoch: 1 }),
+            group_metadata: Some(ShareGroupMetadataValue {
+                epoch: 1,
+                metadata_hash: 0,
+            }),
             member_metadata: vec![("m".into(), None)],
             target_per_member: vec![("m".into(), None)],
             current_per_member: vec![("m".into(), None)],

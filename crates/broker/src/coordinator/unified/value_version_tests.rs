@@ -28,7 +28,11 @@ fn every_coordinator_value_refuses_an_unknown_version() {
     let rows: Vec<(&str, Bytes, Decoder)> = vec![
         (
             "ConsumerGroupMetadataValue",
-            ng::GroupMetadataValue { epoch: 1 }.encode(),
+            ng::GroupMetadataValue {
+                epoch: 1,
+                metadata_hash: 0,
+            }
+            .encode(),
             |b| ng::GroupMetadataValue::decode(b).map(|_| ()),
         ),
         (
@@ -76,7 +80,11 @@ fn every_coordinator_value_refuses_an_unknown_version() {
         ),
         (
             "ShareGroupMetadataValue",
-            sp::ShareGroupMetadataValue { epoch: 1 }.encode(),
+            sp::ShareGroupMetadataValue {
+                epoch: 1,
+                metadata_hash: 0,
+            }
+            .encode(),
             |b| sp::ShareGroupMetadataValue::decode(b).map(|_| ()),
         ),
         (

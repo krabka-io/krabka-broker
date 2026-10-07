@@ -27,20 +27,19 @@ impl MetadataProvider for ImageMetadataProvider {
         for topic in image.topics() {
             let proto_id = ProtoUuid(*topic.topic_id.as_bytes());
             topic_id_by_name.insert(topic.name.clone(), proto_id);
-            partitions_per_topic.insert(proto_id, topic.partitions);
-            // Collect the set of racks the partition's
-            // replicas are on, so the rack-aware UniformAssignor can
-            // prefer rack-collocated subscribers. Partitions whose
-            // replicas have no rack info don't get an entry — the
-            // assignor then falls back to its non-rack-aware path.
+            // Kafka's `KRaftCoordinatorMetadataImage.TopicMetadata` counts the
+            // partitions that the image holds.
+            partitions_per_topic.insert(proto_id, image.topic_partition_count(&topic.name));
+            // The rack of each replica whose broker has one, as Kafka's
+            // `partitionRacks` lists them: the metadata hash reads every
+            // entry, and the assignors read the set. Partitions whose
+            // replicas have no rack info don't get an entry.
             for pr in image.partitions_of(&topic.name) {
-                let mut racks: Vec<String> = pr
+                let racks: Vec<String> = pr
                     .replicas
                     .iter()
                     .filter_map(|&node_id| image.broker(node_id).and_then(|b| b.rack.clone()))
                     .collect();
-                racks.sort();
-                racks.dedup();
                 if !racks.is_empty() {
                     partition_racks.insert((proto_id, pr.partition), racks);
                 }
@@ -131,5 +130,59 @@ mod tests {
                 == Some(&vec!["rack-a".to_string(), "rack-b".to_string()])
         );
         check!(snapshot.partition_racks.get(&(proto_topic_id, 1)) == None);
+    }
+
+    /// The consumer and share groups hash the provider's snapshot, and the
+    /// streams groups hash the image itself: both must give Kafka's
+    /// `Utils.computeTopicHash`, which lists the rack of every replica, two
+    /// replicas on one rack included.
+    #[test]
+    fn the_snapshot_hashes_a_topic_as_the_image_does() {
+        use krabka_metadata::{BrokerRegistrationRecord, MetadataRecord, NodeId, PartitionRecord};
+
+        use crate::coordinator::unified::topic_hash::image_topic_hash;
+
+        let mut image = krabka_metadata::MetadataImage::new(real_uuid(9));
+        image.apply(&MetadataRecord::V1Topic(krabka_metadata::TopicRecord {
+            name: "input".into(),
+            topic_id: real_uuid(8),
+            partitions: 2,
+            replication_factor: 3,
+        }));
+        for (node_id, rack) in [
+            (1, Some("rack-b")),
+            (2, Some("rack-a")),
+            (3, Some("rack-b")),
+        ] {
+            image.apply(&MetadataRecord::V1BrokerRegistration(
+                BrokerRegistrationRecord {
+                    rack: rack.map(str::to_owned),
+                    ..crate::test_support::broker_registration(node_id)
+                },
+            ));
+        }
+        for (partition, replicas) in [(0, vec![1, 2, 3]), (1, vec![3])] {
+            image.apply(&MetadataRecord::V1Partition(PartitionRecord {
+                topic: "input".into(),
+                partition,
+                leader: NodeId(replicas[0]),
+                replicas: replicas.iter().copied().map(NodeId).collect(),
+                isr: replicas.iter().copied().map(NodeId).collect(),
+                directories: replicas.iter().map(|_| real_uuid(1)).collect(),
+                ..Default::default()
+            }));
+        }
+        let snapshot = ImageMetadataProvider {
+            controller: fixed_source(image.clone()),
+        }
+        .snapshot();
+
+        let from_image = image_topic_hash("input", &image);
+        check!(from_image.is_some());
+        check!(snapshot.topic_hash("input") == from_image);
+        check!(
+            snapshot.metadata_hash(["input", "absent"])
+                == crate::coordinator::unified::topic_hash::image_metadata_hash(["input"], &image)
+        );
     }
 }

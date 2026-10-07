@@ -83,7 +83,15 @@ fn replay(records: Vec<LogRecord>) -> Outcome {
 
 #[test]
 fn partition_metadata_replays_as_kafka_4_3_1_does() {
-    let epoch = |epoch: i32| Some(GroupMetadataValue { epoch }.encode());
+    let epoch = |epoch: i32| {
+        Some(
+            GroupMetadataValue {
+                epoch,
+                metadata_hash: 0,
+            }
+            .encode(),
+        )
+    };
     let marked = |group_epoch: i32| GroupSeed {
         group_epoch,
         has_subscription_metadata_record: true,

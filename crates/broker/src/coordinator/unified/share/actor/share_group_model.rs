@@ -50,7 +50,7 @@ const MAX_DEPTH: usize = 64;
 // considering a field -- into a failure instead of a silently smaller search
 // that still passes the upper bound. The *generated* count is deliberately not
 // pinned: it depends on dedupe timing across the BFS worker threads.
-const PINNED_UNIQUE_STATES: usize = 71_656;
+const PINNED_UNIQUE_STATES: usize = 55_096;
 const WITNESS_STALE_FENCED: u8 = 1 << 0;
 const WITNESS_FORWARD_FENCED: u8 = 1 << 1;
 const WITNESS_TIMEOUT: u8 = 1 << 2;
@@ -89,6 +89,7 @@ type MemberProjection = (String, i32, i32, Vec<String>, Vec<i32>, Instant);
 type DurableMemberProjection = (String, i32, i32, Vec<String>, Vec<i32>);
 type GroupProjection = (
     i32,
+    i64,
     i32,
     bool,
     u8,
@@ -131,6 +132,7 @@ impl State {
         target.sort();
         (
             self.group.group_epoch,
+            self.group.metadata_hash,
             self.group.target.epoch,
             self.group.dirty,
             self.clock,
@@ -223,6 +225,7 @@ fn assignments_in_metadata(state: &State) -> bool {
 
 type DurableProjection = (
     i32,
+    i64,
     i32,
     Vec<DurableMemberProjection>,
     Vec<(String, Vec<i32>)>,
@@ -262,7 +265,13 @@ fn durable_projection(group: &ShareGroupState) -> DurableProjection {
         })
         .collect();
     target.sort();
-    (group.group_epoch, group.target.epoch, members, target)
+    (
+        group.group_epoch,
+        group.metadata_hash,
+        group.target.epoch,
+        members,
+        target,
+    )
 }
 
 /// Reconciles the metadata heartbeat before advancing its member to a new target.

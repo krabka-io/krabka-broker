@@ -4,7 +4,7 @@
 //! state-machine work with no log or persister access.
 
 use std::{
-    collections::{BTreeMap, HashMap, HashSet},
+    collections::{HashMap, HashSet},
     time::{Duration, Instant},
 };
 
@@ -12,9 +12,7 @@ use krabka_protocol::primitives::uuid::Uuid;
 
 use crate::coordinator::unified::{
     actor::MetadataProvider,
-    assignor::{
-        GroupSpec, MemberSubscription, SubscriptionShape, TopicMetadata, subscription_type,
-    },
+    assignor::{GroupSpec, MemberSubscription, SubscriptionShape, subscription_type},
     reconciler::ReconcileInput,
     share::{
         assignor::ShareGroupAssignor,
@@ -40,13 +38,13 @@ pub(super) fn reconcile(
     assignment_interval: Duration,
 ) -> bool {
     let input = metadata.snapshot();
-    let subscribed = subscribed_metadata(state, &input);
-    let metadata_changed = state.subscribed_metadata.as_ref() != Some(&subscribed);
+    let metadata_hash = metadata_hash(state, &input);
+    let metadata_changed = metadata_hash != state.metadata_hash;
     let pending = state.target.epoch >= state.group_epoch && initialized_assignment_pending(state);
     if (state.dirty || metadata_changed || pending) && !state.bump_epoch() {
         return false;
     }
-    state.subscribed_metadata = Some(subscribed);
+    state.metadata_hash = metadata_hash;
     state.dirty = false;
     if state.target.epoch >= state.group_epoch
         || state.assignment_delayed(assignment_interval, Instant::now())
@@ -84,10 +82,7 @@ pub(super) fn reconcile(
         subscription_type: subscription_type(&shapes),
         members,
     };
-    let topics = TopicMetadata {
-        partitions_per_topic: input.partitions_per_topic,
-        partition_racks: input.partition_racks,
-    };
+    let topics = input.topic_metadata();
     let mut assignable: HashMap<Uuid, HashSet<i32>> = HashMap::new();
     for (topic_id, partition) in &state.initialized {
         assignable.entry(*topic_id).or_default().insert(*partition);
@@ -97,26 +92,15 @@ pub(super) fn reconcile(
     true
 }
 
-/// The subscribed topics of the group as the image shows them: each
-/// subscribed name the image holds, with its topic id and partition count.
-fn subscribed_metadata(
-    state: &ShareGroupState,
-    input: &ReconcileInput,
-) -> BTreeMap<String, ([u8; 16], i32)> {
-    state
-        .members
-        .values()
-        .flat_map(|m| m.subscribed_topic_names.iter())
-        .filter_map(|name| {
-            let topic_id = input.topic_id_by_name.get(name)?;
-            let partitions = input
-                .partitions_per_topic
-                .get(topic_id)
-                .copied()
-                .unwrap_or(0);
-            Some((name.clone(), (topic_id.0, partitions)))
-        })
-        .collect()
+/// Kafka's `ModernGroup.computeMetadataHash` over the topics that the
+/// members of `state` subscribe to.
+pub(super) fn metadata_hash(state: &ShareGroupState, input: &ReconcileInput) -> i64 {
+    input.metadata_hash(
+        state
+            .members
+            .values()
+            .flat_map(|m| m.subscribed_topic_names.iter().map(String::as_str)),
+    )
 }
 
 /// Kafka's `GroupMetadataManager.initializedAssignmentPending`: whether a
@@ -238,6 +222,77 @@ mod tests {
                 .cloned()
                 .unwrap_or_default();
             check!(got == target, "{step}");
+        }
+    }
+
+    /// Kafka replays `ShareGroupMetadataValue.MetadataHash` into the group,
+    /// and the first heartbeat after the load bumps the epoch only when the
+    /// hash of the current image differs. The hash it writes is Kafka's:
+    /// the golden values are hash4j 0.22.0's for topic `t`, id
+    /// `0505..05-0505..05`, with one and with two partitions and no racks.
+    #[test]
+    fn a_replayed_hash_decides_the_first_epoch_bump() {
+        use super::super::seed::apply_seed;
+        use crate::coordinator::unified::{
+            ShareGroupSeed,
+            share::persistence::{
+                ShareGroupCurrentMemberAssignmentValue, ShareGroupMemberMetadataValue,
+            },
+        };
+
+        const ONE_PARTITION: i64 = -1_770_207_100_006_454_364;
+        const TWO_PARTITIONS: i64 = -6_073_397_787_647_429_838;
+        let topic = Uuid([5; 16]);
+        // (case, the stored hash, partitions in the image at the load,
+        // (group epoch, hash) after the first heartbeat)
+        let rows = [
+            (
+                "the stored hash matches",
+                ONE_PARTITION,
+                1,
+                (3, ONE_PARTITION),
+            ),
+            ("the topic grew", ONE_PARTITION, 2, (4, TWO_PARTITIONS)),
+            ("no hash was stored", 0, 1, (4, ONE_PARTITION)),
+        ];
+        for (case, stored, partitions, expected) in rows {
+            let mut state = ShareGroupState::new("g");
+            apply_seed(
+                &mut state,
+                ShareGroupSeed {
+                    group_epoch: 3,
+                    metadata_hash: stored,
+                    target_epoch: 3,
+                    members: [(
+                        "m".to_owned(),
+                        ShareGroupMemberMetadataValue {
+                            rack_id: None,
+                            client_id: "client".into(),
+                            client_host: "host".into(),
+                            subscribed_topic_names: vec!["t".into()],
+                        },
+                    )]
+                    .into(),
+                    current_per_member: [(
+                        "m".to_owned(),
+                        ShareGroupCurrentMemberAssignmentValue {
+                            member_epoch: 3,
+                            previous_member_epoch: 2,
+                            assigned_partitions: vec![],
+                        },
+                    )]
+                    .into(),
+                    ..ShareGroupSeed::default()
+                },
+            );
+            check!(
+                reconcile(&mut state, &Metadata { topic, partitions }, Duration::ZERO),
+                "{case}"
+            );
+            check!(
+                (state.group_epoch, state.metadata_hash) == expected,
+                "{case}"
+            );
         }
     }
 

@@ -30,7 +30,11 @@ async fn share_group_records_replay_into_seed() {
                 group_id: "sg".into(),
             })
             .unwrap(),
-            sp::ShareGroupMetadataValue { epoch: 4 }.encode(),
+            sp::ShareGroupMetadataValue {
+                epoch: 4,
+                metadata_hash: 0,
+            }
+            .encode(),
         ),
         (
             sp::encode_share_key(&sp::ShareGroupKey::MemberMetadata {

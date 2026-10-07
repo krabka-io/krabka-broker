@@ -106,6 +106,7 @@ fn topic_partition_map(partitions: Vec<AssignedTopicPartitions>) -> HashMap<Uuid
 
 pub(super) fn apply_seed(state: &mut GroupState, seed: GroupSeed, image: &ReconcileInput) {
     state.group_epoch = seed.group_epoch;
+    state.record_metadata_hash(seed.metadata_hash);
     state.target.epoch = seed.target_epoch;
     state.set_has_subscription_metadata_record(seed.has_subscription_metadata_record);
     let group_generation = seed.group_epoch;
@@ -196,15 +197,14 @@ pub(super) fn apply_seed(state: &mut GroupState, seed: GroupSeed, image: &Reconc
     for member_id in member_ids {
         state.track_rebalance_timeout(&member_id, now);
     }
-    // Kafka persists the metadata hash in `ConsumerGroupMetadataValue`, and a
-    // loaded group refreshes its metadata at the first heartbeat, since its
-    // refresh deadline starts expired. A record without a hash reads as 0,
-    // so that heartbeat bumps the epoch and recomputes the target. Krabka
-    // does not persist the hash, so every loaded group is that case: its
-    // hash stays unknown (0) and it asks for a refresh. A subscribed topic
-    // that changed while no coordinator held the group then reaches the
-    // group's next target, instead of the stored target standing for
-    // metadata it was never computed from.
+    // Kafka replays the `MetadataHash` of `ConsumerGroupMetadataValue` into
+    // the group, and a loaded group refreshes its metadata at the first
+    // heartbeat, since its refresh deadline starts expired
+    // (`DeadlineAndEpoch.EMPTY`). That heartbeat computes the hash from the
+    // current image and bumps the epoch only when it differs from the stored
+    // one, so a subscribed topic that changed while no coordinator held the
+    // group reaches its next target, and an unchanged one keeps the stored
+    // target.
     state.request_metadata_refresh();
     state.dirty = false;
 }

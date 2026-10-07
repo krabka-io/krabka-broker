@@ -21,6 +21,7 @@ pub mod reconciler;
 pub mod regex_resolver;
 pub mod share;
 pub mod streams;
+pub(crate) mod topic_hash;
 
 mod admin_ops;
 mod group_coordinator;

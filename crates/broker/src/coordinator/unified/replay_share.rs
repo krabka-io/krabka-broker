@@ -30,12 +30,14 @@ impl GroupCoordinator {
             let mut seed = self.share_seeds.entry(group_id.into()).or_default();
             if replay_epoch_is_admissible(seed.group_epoch, v.epoch) {
                 seed.group_epoch = v.epoch;
+                seed.metadata_hash = v.metadata_hash;
             }
         }
         {
             let mut cached = self.share_seeds_cache.entry(group_id.into()).or_default();
             if replay_epoch_is_admissible(cached.group_epoch, v.epoch) {
                 cached.group_epoch = v.epoch;
+                cached.metadata_hash = v.metadata_hash;
             }
         }
     }
@@ -174,7 +176,10 @@ mod tests {
         };
         coord.replay_share_group_metadata(
             "sg",
-            share::persistence::ShareGroupMetadataValue { epoch: 1 },
+            share::persistence::ShareGroupMetadataValue {
+                epoch: 1,
+                metadata_hash: 0,
+            },
         );
         coord.replay_share_state_partition_metadata("sg", v.clone());
         // Some after a replay, with the same contents.
@@ -196,7 +201,10 @@ mod tests {
 
         coord.replay_share_group_metadata(
             "sg",
-            share::persistence::ShareGroupMetadataValue { epoch: 21 },
+            share::persistence::ShareGroupMetadataValue {
+                epoch: 21,
+                metadata_hash: -1_770_207_100_006_454_364,
+            },
         );
         coord.replay_share_member_metadata("sg", "share-member", member.clone());
         coord.replay_share_target_assignment_metadata(
@@ -210,6 +218,7 @@ mod tests {
 
         let expected = ShareGroupSeed {
             group_epoch: 21,
+            metadata_hash: -1_770_207_100_006_454_364,
             target_epoch: 22,
             members: maplit::hashmap! {"share-member".to_string() => member},
             target_per_member: maplit::hashmap! {"share-member".to_string() => target},
@@ -230,7 +239,10 @@ mod tests {
         coord.mark_share("sg");
         coord.replay_share_group_metadata(
             "sg",
-            share::persistence::ShareGroupMetadataValue { epoch: 2 },
+            share::persistence::ShareGroupMetadataValue {
+                epoch: 2,
+                metadata_hash: 0,
+            },
         );
         coord.replay_share_member_metadata("sg", "m", share_member("m"));
 

@@ -89,7 +89,10 @@ pub(crate) async fn reset_offsets(
     let prior_epoch = state.group_epoch;
     state.group_epoch = new_epoch;
     let epoch_bump = PendingShareRecords {
-        group_metadata: Some(ShareGroupMetadataValue { epoch: new_epoch }),
+        group_metadata: Some(ShareGroupMetadataValue {
+            epoch: new_epoch,
+            metadata_hash: state.metadata_hash,
+        }),
         ..Default::default()
     };
     if flush_pending(

@@ -221,9 +221,13 @@ mod tests {
         (orders, secret): (uuid::Uuid, uuid::Uuid),
         secret_partitions: Vec<i32>,
     ) {
-        broker
-            .group_coordinator
-            .replay_share_group_metadata(group, ShareGroupMetadataValue { epoch: 1 });
+        broker.group_coordinator.replay_share_group_metadata(
+            group,
+            ShareGroupMetadataValue {
+                epoch: 1,
+                metadata_hash: 0,
+            },
+        );
         broker
             .group_coordinator
             .replay_share_state_partition_metadata(

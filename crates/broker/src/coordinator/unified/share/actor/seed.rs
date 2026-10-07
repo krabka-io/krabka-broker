@@ -17,6 +17,7 @@ use crate::coordinator::unified::{
 
 pub(super) fn apply_seed(state: &mut ShareGroupState, seed: ShareGroupSeed) {
     state.group_epoch = seed.group_epoch;
+    state.metadata_hash = seed.metadata_hash;
     state.target.epoch = seed.target_epoch;
     for (mid, meta) in seed.members {
         let subs: HashSet<String> = meta.subscribed_topic_names.into_iter().collect();
@@ -90,6 +91,7 @@ pub(super) fn snapshot_seed(state: &ShareGroupState) -> ShareGroupSeed {
     }
     ShareGroupSeed {
         group_epoch: state.group_epoch,
+        metadata_hash: state.metadata_hash,
         target_epoch: state.target.epoch,
         members,
         target_per_member,

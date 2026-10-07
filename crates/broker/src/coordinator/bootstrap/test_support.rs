@@ -123,7 +123,11 @@ pub(super) fn consumer_group_records(
                 group_id: "g".into(),
             })
             .unwrap(),
-            ng::GroupMetadataValue { epoch }.encode(),
+            ng::GroupMetadataValue {
+                epoch,
+                metadata_hash: 0,
+            }
+            .encode(),
         ),
         (
             ng::encode_key(&ng::NextGenKey::MemberMetadata {

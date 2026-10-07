@@ -33,12 +33,14 @@ impl GroupCoordinator {
             let mut seed = self.seeds.entry(group_id.into()).or_default();
             if replay_epoch_is_admissible(seed.group_epoch, v.epoch) {
                 seed.group_epoch = v.epoch;
+                seed.metadata_hash = v.metadata_hash;
             }
         }
         {
             let mut cached = self.seeds_cache.entry(group_id.into()).or_default();
             if replay_epoch_is_admissible(cached.group_epoch, v.epoch) {
                 cached.group_epoch = v.epoch;
+                cached.metadata_hash = v.metadata_hash;
             }
         }
     }
@@ -186,7 +188,13 @@ mod tests {
         };
         let current = next_current(5);
 
-        coord.replay_group_metadata("g", persistence_next_gen::GroupMetadataValue { epoch: 11 });
+        coord.replay_group_metadata(
+            "g",
+            persistence_next_gen::GroupMetadataValue {
+                epoch: 11,
+                metadata_hash: -556_879_919_459_959_918,
+            },
+        );
         coord.replay_member_metadata("g", "member-a", member.clone());
         coord.replay_target_assignment_metadata(
             "g",
@@ -206,6 +214,7 @@ mod tests {
         let expected = GroupSeed {
             has_subscription_metadata_record: false,
             group_epoch: 11,
+            metadata_hash: -556_879_919_459_959_918,
             target_epoch: 12,
             members: maplit::hashmap! {"member-a".to_string() => member},
             target_per_member: maplit::hashmap! {"member-a".to_string() => target},
@@ -232,7 +241,13 @@ mod tests {
         coord.replay_regular_expression("g", "a.*", resolved(&["a"]));
         check!(coord.cached_seed("g").is_none());
 
-        coord.replay_group_metadata("g", persistence_next_gen::GroupMetadataValue { epoch: 1 });
+        coord.replay_group_metadata(
+            "g",
+            persistence_next_gen::GroupMetadataValue {
+                epoch: 1,
+                metadata_hash: 0,
+            },
+        );
         coord.replay_regular_expression("g", "a.*", resolved(&["a"]));
         coord.replay_regular_expression("g", "b.*", resolved(&["b"]));
         coord.replay_regular_expression("g", "a.*", resolved(&["a", "a2"]));
@@ -260,7 +275,13 @@ mod tests {
     fn group_tombstone_blocks_orphans_and_epoch_regression() {
         let coord = make_coord();
         coord.mark_next_gen("g");
-        coord.replay_group_metadata("g", persistence_next_gen::GroupMetadataValue { epoch: 4 });
+        coord.replay_group_metadata(
+            "g",
+            persistence_next_gen::GroupMetadataValue {
+                epoch: 4,
+                metadata_hash: 0,
+            },
+        );
         coord.replay_member_metadata("g", "m", next_member("m"));
         coord.replay_current_member_assignment("g", "m", next_current(4));
 
@@ -272,11 +293,23 @@ mod tests {
         check!(coord.cached_seed("g").is_none());
         check!(coord.group_type("g").is_none());
 
-        coord.replay_group_metadata("g", persistence_next_gen::GroupMetadataValue { epoch: 0 });
+        coord.replay_group_metadata(
+            "g",
+            persistence_next_gen::GroupMetadataValue {
+                epoch: 0,
+                metadata_hash: 0,
+            },
+        );
         coord.replay_member_metadata("g", "m", next_member("m"));
         coord.replay_current_member_assignment("g", "m", next_current(i32::MAX));
         coord.replay_current_member_assignment("g", "m", next_current(3));
-        coord.replay_group_metadata("g", persistence_next_gen::GroupMetadataValue { epoch: -1 });
+        coord.replay_group_metadata(
+            "g",
+            persistence_next_gen::GroupMetadataValue {
+                epoch: -1,
+                metadata_hash: 0,
+            },
+        );
         let seed = coord.cached_seed("g").unwrap();
         check!(seed.group_epoch == 0);
         assert!(seed.current_per_member["m"].member_epoch == i32::MAX);

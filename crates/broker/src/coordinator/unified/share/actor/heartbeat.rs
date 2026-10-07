@@ -43,7 +43,16 @@ pub(super) async fn handle_heartbeat(
 
     // ─── Leave path ──────────────────────────────────────────────
     if req.member_epoch == -1 {
-        return handle_leave(state, config, offsets_log, coordinator, req, now_ms).await;
+        return handle_leave(
+            state,
+            config,
+            metadata,
+            offsets_log,
+            coordinator,
+            req,
+            now_ms,
+        )
+        .await;
     }
 
     // ─── First-join path ─────────────────────────────────────────
@@ -159,6 +168,7 @@ fn update_member_state(
 async fn handle_leave(
     state: &mut ShareGroupState,
     config: &ShareGroupConfig,
+    metadata: &dyn MetadataProvider,
     offsets_log: &dyn OffsetsLog,
     coordinator: &GroupCoordinator,
     req: &ShareGroupHeartbeatRequest,
@@ -183,8 +193,12 @@ async fn handle_leave(
     if !state.bump_epoch() {
         return Ok(error_resp(codes::INVALID_REQUEST, config));
     }
+    // Kafka's `shareGroupFenceMember` writes the hash of the subscriptions
+    // that remain.
+    state.metadata_hash = super::assignment::metadata_hash(state, &metadata.snapshot());
     pending.group_metadata = Some(ShareGroupMetadataValue {
         epoch: state.group_epoch,
+        metadata_hash: state.metadata_hash,
     });
     flush_pending(state, pending, offsets_log, coordinator, now_ms).await?;
     // Initialize the partitions that the remaining members gained. The share

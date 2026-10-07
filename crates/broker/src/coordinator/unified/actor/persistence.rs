@@ -118,6 +118,7 @@ pub(super) fn snapshot_pending_after_change(
     let mut pending = PendingRecords {
         group_metadata: Some(GroupMetadataValue {
             epoch: state.group_epoch,
+            metadata_hash: state.metadata_hash(),
         }),
         partition_metadata: if state.has_subscription_metadata_record() {
             PartitionMetadataWrite::Tombstone
@@ -347,7 +348,13 @@ mod tests {
 
         let pending = full_pending_records(&state);
 
-        check!(pending.group_metadata == Some(GroupMetadataValue { epoch: 4 }));
+        check!(
+            pending.group_metadata
+                == Some(GroupMetadataValue {
+                    epoch: 4,
+                    metadata_hash: 0
+                })
+        );
         check!(
             pending.target_metadata
                 == Some(TargetAssignmentMetadataValue {
@@ -401,7 +408,13 @@ mod tests {
             key(NextGenKey::GroupMetadata {
                 group_id: "g".into(),
             }),
-            Some(GroupMetadataValue { epoch: 3 }.encode()),
+            Some(
+                GroupMetadataValue {
+                    epoch: 3,
+                    metadata_hash: 0,
+                }
+                .encode(),
+            ),
         );
 
         for expected in [

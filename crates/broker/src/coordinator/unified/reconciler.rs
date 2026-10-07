@@ -2,26 +2,83 @@
 //! signal: a subscription change, a member add or leave, a metadata change that
 //! [`refresh_metadata`] found, or an assignor selection change.
 
-use std::{
-    collections::{BTreeSet, HashMap, HashSet},
-    hash::{DefaultHasher, Hash, Hasher},
-};
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 use krabka_protocol::primitives::uuid::Uuid;
 
 use super::assignor::{
     Assignor, GroupSpec, MemberSubscription, SubscriptionShape, TopicMetadata, subscription_type,
 };
-use crate::coordinator::unified::consumer_state::{GroupState, MemberState};
+use crate::coordinator::unified::{
+    consumer_state::{GroupState, MemberState},
+    topic_hash,
+};
 
 #[derive(Debug, Clone, Default)]
 pub struct ReconcileInput {
     pub topic_id_by_name: HashMap<String, Uuid>,
     pub partitions_per_topic: HashMap<Uuid, i32>,
-    /// Per-`(topic_id, partition_index)` set of replica racks.
-    /// An empty or missing entry means there is no rack data for that
-    /// partition. The built-in assignors do not read it, as in Kafka.
+    /// Per-`(topic_id, partition_index)` rack of each replica whose broker
+    /// has one, repeats included: Kafka's
+    /// `CoordinatorMetadataImage.TopicMetadata.partitionRacks`. An empty or
+    /// missing entry means there is no rack data for that partition.
+    /// [`Self::topic_metadata`] gives the assignors the set of these racks,
+    /// which the built-in assignors do not read, as in Kafka.
     pub partition_racks: HashMap<(Uuid, i32), Vec<String>>,
+}
+
+impl ReconcileInput {
+    /// Kafka's `Utils.computeTopicHash` for the topic named `name`, or `None`
+    /// when the snapshot does not hold it.
+    #[must_use]
+    pub fn topic_hash(&self, name: &str) -> Option<i64> {
+        let topic_id = self.topic_id_by_name.get(name)?;
+        let partitions = self
+            .partitions_per_topic
+            .get(topic_id)
+            .copied()
+            .unwrap_or(0)
+            .max(0);
+        let racks: Vec<Vec<&str>> = (0..partitions)
+            .map(|partition| {
+                self.partition_racks
+                    .get(&(*topic_id, partition))
+                    .map(|racks| racks.iter().map(String::as_str).collect())
+                    .unwrap_or_default()
+            })
+            .collect();
+        Some(topic_hash::topic_hash(topic_id.0, name, racks.into_iter()))
+    }
+
+    /// Kafka's `ModernGroup.computeMetadataHash`: the group hash over the
+    /// topic hash of every topic in `topics` that the snapshot holds.
+    #[must_use]
+    pub fn metadata_hash<'a>(&self, topics: impl IntoIterator<Item = &'a str>) -> i64 {
+        let topics: BTreeSet<&str> = topics.into_iter().collect();
+        topic_hash::group_hash(
+            topics
+                .into_iter()
+                .filter_map(|topic| self.topic_hash(topic).map(|hash| (topic, hash))),
+        )
+    }
+
+    /// The assignors' view of the snapshot: the partition counts, and for each
+    /// partition the set of racks it has a replica on, as Kafka's
+    /// `SubscribedTopicDescriber.racksForPartition` gives it.
+    #[must_use]
+    pub fn topic_metadata(&self) -> TopicMetadata {
+        TopicMetadata {
+            partitions_per_topic: self.partitions_per_topic.clone(),
+            partition_racks: self
+                .partition_racks
+                .iter()
+                .map(|(partition, racks)| {
+                    let racks: BTreeSet<&String> = racks.iter().collect();
+                    (*partition, racks.into_iter().cloned().collect())
+                })
+                .collect(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -67,11 +124,7 @@ pub fn reconcile_if_dirty(
         members: subscriptions,
         subscription_type: subscription_type(&shapes),
     };
-    let topics = TopicMetadata {
-        partitions_per_topic: input.partitions_per_topic.clone(),
-        partition_racks: input.partition_racks.clone(),
-    };
-    let assignment = assignor.assign(&spec, &topics);
+    let assignment = assignor.assign(&spec, &input.topic_metadata());
     if !group.bump_epoch() {
         return ReconcileOutcome::EpochExhausted;
     }
@@ -81,48 +134,21 @@ pub fn reconcile_if_dirty(
     ReconcileOutcome::Recomputed
 }
 
-/// Kafka's `ModernGroup.computeMetadataHash`: one number over the metadata of
-/// every topic that the group subscribes to and `input` holds.
+/// Kafka's `ModernGroup.computeMetadataHash` for a consumer group: the
+/// [`topic_hash`] group hash over every topic that the group subscribes to and
+/// `input` holds.
 ///
 /// A member subscribes to its topic names and to the topics that its regex
-/// resolved to. Kafka's `Utils.computeTopicHash` hashes the id, the name, the
-/// partition count and the partition racks of a topic, and
-/// `Utils.computeGroupHash` combines the topic hashes in name order, or gives
-/// `0` when no subscribed topic exists. This hash reads the same fields from
-/// the reconcile snapshot, in the same order, and it is also `0` for no topic.
-/// The snapshot names each rack of a partition once, where Kafka lists the
-/// rack of each replica.
-///
-/// The hash stays in memory, so it does not need Kafka's bytes: the group
-/// only compares it with the hash that its current target was computed from.
+/// resolved to, which is what Kafka's `ConsumerGroup.subscribedTopicNames`
+/// counts.
 #[must_use]
-pub fn metadata_hash(group: &GroupState, input: &ReconcileInput) -> u64 {
+pub fn metadata_hash(group: &GroupState, input: &ReconcileInput) -> i64 {
     let mut topics: BTreeSet<&str> = BTreeSet::new();
     for member in group.members.values() {
         topics.extend(member.subscribed_topic_names.iter().map(String::as_str));
-        topics.extend(regex_topic_names(group, member, &input.topic_id_by_name));
+        topics.extend(group.regex_topics(member).map(String::as_str));
     }
-    let mut hasher = DefaultHasher::new();
-    let mut any_topic = false;
-    for name in topics {
-        let Some(topic_id) = input.topic_id_by_name.get(name) else {
-            continue;
-        };
-        any_topic = true;
-        let partitions = input
-            .partitions_per_topic
-            .get(topic_id)
-            .copied()
-            .unwrap_or(0);
-        (name, topic_id, partitions).hash(&mut hasher);
-        for partition in 0..partitions {
-            input
-                .partition_racks
-                .get(&(*topic_id, partition))
-                .hash(&mut hasher);
-        }
-    }
-    if any_topic { hasher.finish() } else { 0 }
+    input.metadata_hash(topics)
 }
 
 /// Computes the metadata hash again for a group whose metadata expired, as

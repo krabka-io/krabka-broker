@@ -5,7 +5,7 @@
 //! so members carry no assignment-ack state beyond a member epoch.
 
 use std::{
-    collections::{BTreeMap, HashMap, HashSet},
+    collections::{HashMap, HashSet},
     time::Instant,
 };
 
@@ -82,11 +82,13 @@ pub struct ShareGroupState {
     /// never misses state that an initialize may have written. An entry older
     /// than the retry interval is initialized again.
     pub initializing: HashMap<(Uuid, i32), i64>,
-    /// The subscribed topics of the group as the metadata image last showed
-    /// them: name to topic id and partition count. A change bumps the group
-    /// epoch, as Kafka's metadata hash does. `None` until the first
-    /// reconcile.
-    pub subscribed_metadata: Option<BTreeMap<String, ([u8; 16], i32)>>,
+    /// Kafka's `ModernGroup.metadataHash`: the [`topic_hash`] group hash of
+    /// the subscribed topics as the group last recorded it in
+    /// `ShareGroupMetadataValue`. A heartbeat that computes another value
+    /// bumps the group epoch.
+    ///
+    /// [`topic_hash`]: crate::coordinator::unified::topic_hash
+    pub metadata_hash: i64,
     /// The topic name behind each topic id in [`Self::initialized`] and
     /// [`Self::initializing`].
     ///
@@ -121,7 +123,7 @@ impl ShareGroupState {
             dirty: false,
             initialized: HashSet::new(),
             initializing: HashMap::new(),
-            subscribed_metadata: None,
+            metadata_hash: 0,
             topic_names: HashMap::new(),
             assignment_timestamp: None,
         }

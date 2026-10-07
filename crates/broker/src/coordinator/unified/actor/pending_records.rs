@@ -166,6 +166,7 @@ impl PendingRecords {
         coordinator.update_cached_seed(group_id, |seed| {
             if let Some(value) = self.group_metadata {
                 seed.group_epoch = value.epoch;
+                seed.metadata_hash = value.metadata_hash;
             }
             if self.partition_metadata == PartitionMetadataWrite::Tombstone {
                 seed.has_subscription_metadata_record = false;
@@ -237,7 +238,10 @@ mod tests {
     #[test]
     fn pending_records_offset_deltas_are_sequential() {
         let p = PendingRecords {
-            group_metadata: Some(GroupMetadataValue { epoch: 1 }),
+            group_metadata: Some(GroupMetadataValue {
+                epoch: 1,
+                metadata_hash: 0,
+            }),
             member_metadata: vec![(
                 "m1".into(),
                 Some(MemberMetadataValue {
@@ -284,7 +288,10 @@ mod tests {
         };
 
         PendingRecords {
-            group_metadata: Some(GroupMetadataValue { epoch: 1 }),
+            group_metadata: Some(GroupMetadataValue {
+                epoch: 1,
+                metadata_hash: 0,
+            }),
             resolved_regexes: vec![("r".into(), None)],
             member_metadata: vec![("m".into(), None)],
             target_metadata: Some(TargetAssignmentMetadataValue {
@@ -436,6 +443,7 @@ mod tests {
         let expected = crate::coordinator::unified::GroupSeed {
             has_subscription_metadata_record: false,
             group_epoch: 7,
+            metadata_hash: 0,
             target_epoch: 6,
             members: maplit::hashmap! {"m1".to_string() => p::MemberMetadataValue {
                 instance_id: None,

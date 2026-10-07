@@ -8,22 +8,16 @@
 //! the controller created, therefore reach the assignment on the next
 //! heartbeat.
 //!
-//! The byte layout is the one of Kafka's `Utils.computeTopicHash` and
-//! `Utils.computeGroupHash`, which feed hash4j's streaming XXH3 with seed 0.
-//! hash4j writes each integer as little-endian bytes and each `String` as its
-//! UTF-16 code units in little-endian order followed by its length as an
-//! `int`.
+//! The hash itself is Kafka's `Utils.computeGroupHash` over
+//! `Utils.computeTopicHash`, which [`topic_hash`] implements for all three
+//! group types.
 
 use std::collections::BTreeSet;
 
 use krabka_metadata::MetadataImage;
-use twox_hash::XxHash3_64;
 
 use super::configured::input_topics;
-use crate::coordinator::unified::streams::persistence::StreamsGroupTopologyValue;
-
-/// `Utils.TOPIC_HASH_MAGIC_BYTE`: the version of the topic hash layout.
-const TOPIC_HASH_MAGIC_BYTE: u8 = 0x00;
+use crate::coordinator::unified::{streams::persistence::StreamsGroupTopologyValue, topic_hash};
 
 /// The names of the topics that `StreamsTopology.requiredTopics` returns: the
 /// source topics, the repartition source topics and the changelog topics of
@@ -48,69 +42,7 @@ pub fn required_topics(topology: &StreamsGroupTopologyValue) -> BTreeSet<&str> {
 /// hash of every required topic that exists in `image`.
 #[must_use]
 pub fn metadata_hash(topology: &StreamsGroupTopologyValue, image: &MetadataImage) -> i64 {
-    // `required_topics` is sorted by name, which is the order that
-    // `computeGroupHash` sorts the entries into.
-    let topic_hashes: Vec<i64> = required_topics(topology)
-        .into_iter()
-        .filter_map(|topic| topic_hash(topic, image))
-        .collect();
-    if topic_hashes.is_empty() {
-        return 0;
-    }
-    let mut stream = Vec::with_capacity(topic_hashes.len() * 8);
-    for hash in topic_hashes {
-        stream.extend_from_slice(&hash.to_le_bytes());
-    }
-    xxh3(&stream)
-}
-
-/// Kafka's `Utils.computeTopicHash`, or `None` for a topic that `image` does
-/// not hold.
-fn topic_hash(topic: &str, image: &MetadataImage) -> Option<i64> {
-    let record = image.topic(topic)?;
-    let partition_count = image.topic_partition_count(topic);
-    let mut stream = vec![TOPIC_HASH_MAGIC_BYTE];
-    let (most, least) = record.topic_id.as_u64_pair();
-    stream.extend_from_slice(&most.to_le_bytes());
-    stream.extend_from_slice(&least.to_le_bytes());
-    put_string(&mut stream, &record.name);
-    stream.extend_from_slice(&partition_count.to_le_bytes());
-    for partition in 0..partition_count {
-        stream.extend_from_slice(&partition.to_le_bytes());
-        let mut racks: Vec<&str> = image
-            .partition(topic, partition)
-            .into_iter()
-            .flat_map(|record| record.replicas.iter())
-            .filter_map(|replica| image.broker(*replica))
-            .filter_map(|broker| broker.rack.as_deref())
-            .collect();
-        // Java sorts the racks by UTF-16 code units. Rust sorts `str` by
-        // bytes. The two orders agree for every rack in the Basic Multilingual
-        // Plane, and Kafka's rack ids are ASCII in practice.
-        racks.sort_unstable();
-        for rack in racks {
-            stream.extend_from_slice(&utf16_len(rack).to_le_bytes());
-            put_string(&mut stream, rack);
-        }
-    }
-    Some(xxh3(&stream))
-}
-
-/// hash4j's `putString`: the UTF-16 code units, then their count as an `int`.
-fn put_string(stream: &mut Vec<u8>, value: &str) {
-    for unit in value.encode_utf16() {
-        stream.extend_from_slice(&unit.to_le_bytes());
-    }
-    stream.extend_from_slice(&utf16_len(value).to_le_bytes());
-}
-
-/// Java's `String.length()`: the number of UTF-16 code units.
-fn utf16_len(value: &str) -> i32 {
-    i32::try_from(value.encode_utf16().count()).unwrap_or(i32::MAX)
-}
-
-fn xxh3(stream: &[u8]) -> i64 {
-    i64::from_le_bytes(XxHash3_64::oneshot(stream).to_le_bytes())
+    topic_hash::image_metadata_hash(required_topics(topology), image)
 }
 
 #[cfg(test)]

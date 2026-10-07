@@ -17,6 +17,8 @@ use super::{persistence_next_gen, share, streams};
 #[derive(Debug, Default, Clone, PartialEq)]
 pub struct GroupSeed {
     pub group_epoch: i32,
+    /// The `MetadataHash` of the last group metadata record.
+    pub metadata_hash: i64,
     pub target_epoch: i32,
     pub members: std::collections::HashMap<String, persistence_next_gen::MemberMetadataValue>,
     pub target_per_member:
@@ -41,6 +43,8 @@ pub struct GroupSeed {
 #[derive(Debug, Default, Clone, PartialEq)]
 pub struct ShareGroupSeed {
     pub group_epoch: i32,
+    /// The `MetadataHash` of the last group metadata record.
+    pub metadata_hash: i64,
     pub target_epoch: i32,
     pub members:
         std::collections::HashMap<String, share::persistence::ShareGroupMemberMetadataValue>,

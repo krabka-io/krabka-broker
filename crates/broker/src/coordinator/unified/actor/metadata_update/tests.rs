@@ -195,11 +195,11 @@ async fn the_heartbeat_after_a_metadata_update_refreshes_the_assignment() {
     check!(answers == expected);
 }
 
-/// Kafka refreshes a loaded group's metadata at its first heartbeat, and a
-/// record without a `MetadataHash`, as krabka's records all are, reads as 0.
-/// So that heartbeat bumps the epoch and recomputes the target, and a topic
-/// that grew while no coordinator held the group, or after the load, reaches
-/// the member.
+/// Kafka refreshes a loaded group's metadata at its first heartbeat and
+/// compares the hash with the `MetadataHash` that the group's last
+/// `ConsumerGroupMetadataValue` stored. An unchanged topic keeps the epoch
+/// and the target, and a topic that grew while no coordinator held the
+/// group, or after the load, bumps the epoch and reaches the member.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_loaded_group_refreshes_its_metadata_at_the_first_heartbeat() {
     // (name, the metadata when the group loads, a change after the load, the
@@ -209,7 +209,7 @@ async fn a_loaded_group_refreshes_its_metadata_at_the_first_heartbeat() {
             "the topic is as it was",
             snapshot_of(&[("orders", 1, 2)]),
             None,
-            answer(2, None),
+            answer(1, None),
         ),
         (
             "the topic grew while no coordinator held the group",
@@ -290,4 +290,32 @@ async fn a_hosted_classic_member_gets_a_created_topic_when_it_joins_again() {
                 ..Default::default()
             }
     );
+}
+
+/// The `MetadataHash` that a consumer group writes is Kafka's: hash4j 0.22.0
+/// gives `computeGroupHash` of topic `orders`, id `0101..01-0101..01`, two
+/// partitions and no racks, as the golden value below, and a group that
+/// subscribes to no existing topic writes 0.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_written_metadata_hash_is_kafkas() {
+    // (case, the metadata, the hash of the group's epoch record)
+    let rows = [
+        (
+            "orders exists",
+            snapshot_of(&[("orders", 1, 2)]),
+            2_418_189_869_542_540_743,
+        ),
+        ("orders does not exist", snapshot_of(&[]), 0),
+    ];
+    let mut written = Vec::new();
+    let mut expected = Vec::new();
+    for (case, metadata, hash) in rows {
+        let coordinator = make_coord_with_metadata(SwitchableMetadata::new(metadata));
+        let handle = coordinator.get_or_create_consumer("g");
+        heartbeat(&handle, join()).await;
+        let seed = coordinator.cached_seed("g").expect("the group's records");
+        written.push((case, seed.group_epoch, seed.metadata_hash));
+        expected.push((case, 1, hash));
+    }
+    check!(written == expected);
 }

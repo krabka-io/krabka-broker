@@ -47,7 +47,7 @@ pub struct GroupState {
     /// Kafka's `ModernGroup.metadataHash`: the hash of the subscribed topics'
     /// metadata that the current target assignment was computed from. See
     /// `reconciler::metadata_hash`.
-    metadata_hash: u64,
+    metadata_hash: i64,
     /// Kafka's `ModernGroup.metadataRefreshDeadline` set to
     /// `DeadlineAndEpoch.EMPTY`: a subscribed topic changed, so the next
     /// heartbeat computes the metadata hash again.
@@ -243,14 +243,14 @@ impl GroupState {
 
     /// The metadata hash that the group recorded last.
     #[must_use]
-    pub fn metadata_hash(&self) -> u64 {
+    pub fn metadata_hash(&self) -> i64 {
         self.metadata_hash
     }
 
     /// Records `hash` as the metadata of the current target and ends a
     /// requested refresh. Kafka's `updateSubscriptionMetadata` also sets the
     /// hash and the next refresh deadline together.
-    pub fn record_metadata_hash(&mut self, hash: u64) {
+    pub fn record_metadata_hash(&mut self, hash: i64) {
         self.metadata_hash = hash;
         self.metadata_refresh_requested = false;
     }
