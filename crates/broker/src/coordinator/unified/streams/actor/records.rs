@@ -125,7 +125,69 @@ fn current_assignment_value(m: &StreamsMemberState) -> StreamsGroupCurrentMember
         active_pending_revocation: m.active_pending_revocation.clone(),
         standby_pending_revocation: m.standby_pending_revocation.clone(),
         warmup_pending_revocation: m.warmup_pending_revocation.clone(),
+        active_epochs: active_epochs(m, &m.active),
+        active_pending_revocation_epochs: active_epochs(m, &m.active_pending_revocation),
     }
+}
+
+/// The `AssignmentEpochs` of each entry of `tasks`, as Kafka's
+/// `toTaskIdsWithEpochs` writes one for every active entry.
+fn active_epochs(
+    m: &StreamsMemberState,
+    tasks: &std::collections::BTreeMap<String, Vec<i32>>,
+) -> std::collections::BTreeMap<String, Vec<i32>> {
+    tasks
+        .iter()
+        .map(|(subtopology_id, partitions)| {
+            (
+                subtopology_id.clone(),
+                m.active_task_epochs(subtopology_id, partitions),
+            )
+        })
+        .collect()
+}
+
+/// Kafka's `TasksTupleWithEpochs.parseActiveTasksWithEpochs`: the epoch of
+/// each active task of a current assignment record. An entry whose
+/// `AssignmentEpochs` is null, or does not match its partitions in length,
+/// gives every partition the member epoch; Kafka logs the mismatch.
+fn replayed_active_epochs(
+    group_id: &str,
+    member_epoch: i32,
+    tasks: &std::collections::BTreeMap<String, Vec<i32>>,
+    epochs: &std::collections::BTreeMap<String, Vec<i32>>,
+) -> impl Iterator<Item = ((String, i32), i32)> {
+    let mut out = Vec::new();
+    for (subtopology_id, partitions) in tasks {
+        match epochs.get(subtopology_id) {
+            Some(epochs) if epochs.len() == partitions.len() => {
+                out.extend(
+                    partitions
+                        .iter()
+                        .zip(epochs)
+                        .map(|(partition, epoch)| ((subtopology_id.clone(), *partition), *epoch)),
+                );
+            }
+            mismatched => {
+                if let Some(epochs) = mismatched {
+                    tracing::error!(
+                        group_id,
+                        "Size of assignment epochs {} is not equal to partitions {} for \
+                         subtopology {subtopology_id}. Using default epoch {member_epoch} for \
+                         all partitions.",
+                        epochs.len(),
+                        partitions.len(),
+                    );
+                }
+                out.extend(
+                    partitions
+                        .iter()
+                        .map(|partition| ((subtopology_id.clone(), *partition), member_epoch)),
+                );
+            }
+        }
+    }
+    out.into_iter()
 }
 
 fn target_member_value(
@@ -231,6 +293,19 @@ pub(super) fn apply_seed(actor: &mut ActorState, seed: StreamsGroupSeed) {
     }
     crate::coordinator::unified::seeds::hydrate_member_epochs!(state, seed; m, cur {
             m.assignment_state = cur.state.into();
+            m.active_epochs = replayed_active_epochs(
+                &state.group_id,
+                cur.member_epoch,
+                &cur.active,
+                &cur.active_epochs,
+            )
+            .chain(replayed_active_epochs(
+                &state.group_id,
+                cur.member_epoch,
+                &cur.active_pending_revocation,
+                &cur.active_pending_revocation_epochs,
+            ))
+            .collect();
             m.active = cur.active;
             m.standby = cur.standby;
             m.warmup = cur.warmup;
@@ -268,7 +343,9 @@ mod tests {
     use assert2::check;
 
     use super::*;
-    use crate::coordinator::unified::streams::persistence::StreamsGroupTopologyValue;
+    use crate::coordinator::unified::streams::persistence::{
+        StreamsGroupTopologyValue, StreamsMemberWireState,
+    };
 
     #[test]
     fn seed_hydrates_state() {
@@ -294,10 +371,13 @@ mod tests {
         let mut current = std::collections::HashMap::new();
         current.insert(
             "m1".to_string(),
-            crate::coordinator::unified::test_support::stable_streams_assignment(
-                (4, 3),
-                maplit::btreemap! {"0".to_string() => vec![0, 1]},
-            ),
+            StreamsGroupCurrentMemberAssignmentValue {
+                active_epochs: maplit::btreemap! {"0".to_string() => vec![3, 4]},
+                ..crate::coordinator::unified::test_support::stable_streams_assignment(
+                    (4, 3),
+                    maplit::btreemap! {"0".to_string() => vec![0, 1]},
+                )
+            },
         );
         let mut target = std::collections::HashMap::new();
         target.insert(
@@ -344,8 +424,83 @@ mod tests {
         check!(m.process_id == "p1");
         check!(m.active == maplit::btreemap! {"0".to_string() => vec![0, 1]});
         check!(
+            m.active_epochs
+                == maplit::btreemap! {("0".to_string(), 0) => 3, ("0".to_string(), 1) => 4}
+        );
+        check!(
             actor.state.target.active["m1"] == maplit::btreemap! {"0".to_string() => vec![0, 1]}
         );
         check!(actor.state.phase == StreamsGroupStatePhase::Stable);
+    }
+
+    /// Kafka's `parseActiveTasksWithEpochs` on replay: the epochs of an entry
+    /// that lists one per partition, else the member epoch for each partition
+    /// of the entry, for the active tasks and the active tasks pending
+    /// revocation alike.
+    #[test]
+    fn a_seed_restores_the_active_task_epochs() {
+        let task = |partition| ("0".to_string(), partition);
+        // (case, AssignmentEpochs of the active entry, expected epochs)
+        let rows = [
+            (
+                "one epoch per partition",
+                Some(vec![3, 4]),
+                maplit::btreemap! {task(0) => 3, task(1) => 4, task(2) => 6},
+            ),
+            (
+                "no epochs: a record from before KIP-1251",
+                None,
+                maplit::btreemap! {task(0) => 7, task(1) => 7, task(2) => 6},
+            ),
+            (
+                "a length that does not match",
+                Some(vec![3]),
+                maplit::btreemap! {task(0) => 7, task(1) => 7, task(2) => 6},
+            ),
+        ];
+        for (case, epochs, expected) in rows {
+            let mut actor = ActorState::new("g".into());
+            let seed = StreamsGroupSeed {
+                members: [(
+                    "m1".to_string(),
+                    StreamsGroupMemberMetadataValue {
+                        instance_id: None,
+                        rack_id: None,
+                        client_id: "c1".into(),
+                        client_host: "/127.0.0.1".into(),
+                        process_id: "p1".into(),
+                        user_endpoint: None,
+                        client_tags: vec![],
+                        rebalance_timeout_ms: 60_000,
+                        topology_epoch: 0,
+                    },
+                )]
+                .into(),
+                current_per_member: [(
+                    "m1".to_string(),
+                    StreamsGroupCurrentMemberAssignmentValue {
+                        member_epoch: 7,
+                        previous_member_epoch: 6,
+                        state: StreamsMemberWireState::UnrevokedTasks,
+                        active: maplit::btreemap! {"0".to_string() => vec![0, 1]},
+                        active_pending_revocation: maplit::btreemap! {"0".to_string() => vec![2]},
+                        active_epochs: epochs
+                            .map(|epochs| maplit::btreemap! {"0".to_string() => epochs})
+                            .unwrap_or_default(),
+                        active_pending_revocation_epochs: maplit::btreemap! {
+                            "0".to_string() => vec![6],
+                        },
+                        ..StreamsGroupCurrentMemberAssignmentValue::default()
+                    },
+                )]
+                .into(),
+                ..StreamsGroupSeed::default()
+            };
+            apply_seed(&mut actor, seed);
+            check!(
+                actor.state.members["m1"].active_epochs == expected,
+                "{case}"
+            );
+        }
     }
 }

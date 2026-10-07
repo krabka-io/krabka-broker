@@ -2519,6 +2519,20 @@ async fn a_bump_records_the_validated_topology_epoch() {
         )
         .await;
         let seed = coord.cached_streams_seed("g").unwrap();
+        // The member got its active tasks at its epoch, and its current
+        // assignment record lists that epoch for each of them.
+        let current = &seed.current_per_member["m1"];
+        let at_member_epoch: BTreeMap<String, Vec<i32>> = current
+            .active
+            .iter()
+            .map(|(subtopology, partitions)| {
+                (
+                    subtopology.clone(),
+                    vec![current.member_epoch; partitions.len()],
+                )
+            })
+            .collect();
+        check!(current.active_epochs == at_member_epoch, "{case}");
         check!(
             (seed.validated_topology_epoch, seed.last_assignment_configs)
                 == (

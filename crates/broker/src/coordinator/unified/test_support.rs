@@ -32,6 +32,8 @@ pub(crate) fn stable_streams_assignment(
         active_pending_revocation: BTreeMap::new(),
         standby_pending_revocation: BTreeMap::new(),
         warmup_pending_revocation: BTreeMap::new(),
+        active_epochs: BTreeMap::new(),
+        active_pending_revocation_epochs: BTreeMap::new(),
     }
 }
 

@@ -99,6 +99,11 @@ pub struct StreamsMemberState {
     pub standby_pending_revocation: BTreeMap<String, Vec<i32>>,
     /// Warmup tasks the member must revoke before it advances.
     pub warmup_pending_revocation: BTreeMap<String, Vec<i32>>,
+    /// The epoch at which each active task, assigned or pending revocation,
+    /// was assigned to the member: Kafka's
+    /// `TasksTupleWithEpochs.activeTasksWithEpochs` (KIP-1251), which the
+    /// current assignment record writes as `AssignmentEpochs`.
+    pub active_epochs: BTreeMap<(String, i32), i32>,
     /// The active, standby and warmup tasks that the last heartbeat response
     /// sent to the member. A response sends the task lists again only when
     /// the assignment differs from them.
@@ -116,6 +121,24 @@ pub struct StreamsMemberState {
 }
 
 impl StreamsMemberState {
+    /// The assignment epochs of the partitions of `partitions` of
+    /// `subtopology_id`, in their order, as Kafka's
+    /// `StreamsCoordinatorRecordHelpers.toTaskIdsWithEpochs` lists them. A
+    /// partition without a recorded epoch gets the member epoch, as Kafka's
+    /// reader gives a task of a record that lists none.
+    #[must_use]
+    pub fn active_task_epochs(&self, subtopology_id: &str, partitions: &[i32]) -> Vec<i32> {
+        partitions
+            .iter()
+            .map(|partition| {
+                self.active_epochs
+                    .get(&(subtopology_id.to_owned(), *partition))
+                    .copied()
+                    .unwrap_or(self.member_epoch)
+            })
+            .collect()
+    }
+
     /// Constructs a newly joining member at epoch 0 with no assignment.
     ///
     /// When the client supplies no `process_id`, this method synthesizes a
@@ -146,6 +169,7 @@ impl StreamsMemberState {
             active_pending_revocation: BTreeMap::new(),
             standby_pending_revocation: BTreeMap::new(),
             warmup_pending_revocation: BTreeMap::new(),
+            active_epochs: BTreeMap::new(),
             sent_tasks: [BTreeMap::new(), BTreeMap::new(), BTreeMap::new()],
             task_offsets: BTreeMap::new(),
             task_end_offsets: BTreeMap::new(),
