@@ -45,7 +45,7 @@ pub struct ShareGroupTargetAssignmentMemberValue {
 }
 
 array_value_codec!(
-    ShareGroupTargetAssignmentMemberValue,
+    ShareGroupTargetAssignmentMemberValue("ShareGroupTargetAssignmentMemberValue"),
     topic_partitions,
     encode_topic_partitions,
     decode_topic_partitions
@@ -59,7 +59,7 @@ pub struct ShareGroupCurrentMemberAssignmentValue {
 }
 
 value_codec! {
-    ShareGroupCurrentMemberAssignmentValue,
+    ShareGroupCurrentMemberAssignmentValue("ShareGroupCurrentMemberAssignmentValue"),
     encode(&self) -> buf {
         buf.put_i32(self.member_epoch);
         buf.put_i32(self.previous_member_epoch);

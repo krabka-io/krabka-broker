@@ -11,9 +11,8 @@ use super::{
         StreamsGroupCurrentMemberAssignmentValue, StreamsGroupTargetAssignmentMemberValue,
     },
     epochs::{StreamsGroupMetadataValue, StreamsGroupTargetAssignmentMetadataValue},
-    keys::{self, encode_partition_metadata_key, encode_topology_key},
+    keys::{self, encode_topology_key},
     member::StreamsGroupMemberMetadataValue,
-    partition_metadata::StreamsGroupPartitionMetadataValue,
     topology::StreamsGroupTopologyValue,
 };
 
@@ -24,7 +23,6 @@ pub struct PendingStreamsRecords {
     /// value).
     pub member_metadata: Vec<(String, Option<StreamsGroupMemberMetadataValue>)>,
     pub topology: Option<StreamsGroupTopologyValue>,
-    pub partition_metadata: Option<StreamsGroupPartitionMetadataValue>,
     pub target_metadata: Option<StreamsGroupTargetAssignmentMetadataValue>,
     pub target_per_member: Vec<(String, Option<StreamsGroupTargetAssignmentMemberValue>)>,
     pub current_per_member: Vec<(String, Option<StreamsGroupCurrentMemberAssignmentValue>)>,
@@ -36,7 +34,6 @@ impl PendingStreamsRecords {
         self.group_metadata.is_none()
             && self.member_metadata.is_empty()
             && self.topology.is_none()
-            && self.partition_metadata.is_none()
             && self.target_metadata.is_none()
             && self.target_per_member.is_empty()
             && self.current_per_member.is_empty()
@@ -57,9 +54,6 @@ impl PendingStreamsRecords {
             before_target {
                 if let Some(v) = self.topology {
                     batch.push(encode_topology_key(group_id)?, Some(v.encode()));
-                }
-                if let Some(v) = self.partition_metadata {
-                    batch.push(encode_partition_metadata_key(group_id)?, Some(v.encode()));
                 }
             }
             after_members {}

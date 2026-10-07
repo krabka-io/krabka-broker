@@ -11,7 +11,6 @@ pub(crate) enum ReplayRecordKind {
     GroupMetadata,
     MemberMetadata,
     Topology,
-    PartitionMetadata,
     TargetAssignmentMetadata,
     TargetAssignmentMember,
     CurrentMemberAssignment,
@@ -64,7 +63,6 @@ pub(crate) fn replay_mutation(
         }
         ReplayRecordKind::MemberMetadata
         | ReplayRecordKind::Topology
-        | ReplayRecordKind::PartitionMetadata
         | ReplayRecordKind::TargetAssignmentMetadata
         | ReplayRecordKind::StatePartitionMetadata
         | ReplayRecordKind::RegularExpression => {

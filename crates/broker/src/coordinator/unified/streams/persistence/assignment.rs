@@ -96,7 +96,7 @@ pub struct StreamsGroupTargetAssignmentMemberValue {
 }
 
 value_codec! {
-    StreamsGroupTargetAssignmentMemberValue,
+    StreamsGroupTargetAssignmentMemberValue("StreamsGroupTargetAssignmentMemberValue"),
     encode(&self) -> buf {
         encode_task_map(buf, &self.active);
         encode_task_map(buf, &self.standby);
@@ -132,7 +132,7 @@ pub struct StreamsGroupCurrentMemberAssignmentValue {
 }
 
 value_codec! {
-    StreamsGroupCurrentMemberAssignmentValue,
+    StreamsGroupCurrentMemberAssignmentValue("StreamsGroupCurrentMemberAssignmentValue"),
     encode(&self) -> buf {
         buf.put_i32(self.member_epoch);
         buf.put_i32(self.previous_member_epoch);

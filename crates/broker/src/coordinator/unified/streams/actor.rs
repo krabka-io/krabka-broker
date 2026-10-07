@@ -58,9 +58,7 @@ use self::{
 use super::{
     config::StreamsGroupConfig,
     description::{SolicitationBackoff, StoredDescription, TopologyDescription},
-    persistence::{
-        DescriptionEpochs, StreamsGroupPartitionMetadataValue, StreamsGroupTopologyValue,
-    },
+    persistence::{DescriptionEpochs, StreamsGroupTopologyValue},
     state::{self, StreamsGroupState},
 };
 use crate::{
@@ -314,9 +312,6 @@ struct ActorState {
     /// carries only the epoch. It is `None` until the first member supplies a
     /// topology.
     topology: Option<StreamsGroupTopologyValue>,
-    /// Partition metadata from the most recent reconcile. The actor persists
-    /// it as the group's `StreamsGroupPartitionMetadataValue`.
-    partition_metadata: Option<StreamsGroupPartitionMetadataValue>,
     /// Kafka's `StreamsGroup.metadataHash`: the hash of the required topics in
     /// the image that the most recent reconcile configured the topology
     /// against. A heartbeat that sees another hash reconciles again.
@@ -361,7 +356,6 @@ impl ActorState {
         Self {
             state: StreamsGroupState::new(group_id),
             topology: None,
-            partition_metadata: None,
             metadata_hash: 0,
             creatable_topics: Vec::new(),
             target_changed: false,

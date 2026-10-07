@@ -15,8 +15,8 @@ use krabka_protocol::records::RecordBatch;
 
 use super::persistence::{
     encode_current_member_assignment_key, encode_group_metadata_key, encode_member_metadata_key,
-    encode_partition_metadata_key, encode_target_assignment_member_key,
-    encode_target_assignment_metadata_key, encode_topology_key,
+    encode_target_assignment_member_key, encode_target_assignment_metadata_key,
+    encode_topology_key,
 };
 use crate::{
     coordinator::unified::{OffsetRecordBatchBuilder, actor::PendingRecords},
@@ -66,14 +66,16 @@ pub(crate) fn classic_group_metadata_tombstone_batch(
 }
 
 /// Build the batch that tombstones every streams record for `group_id`, for the
-/// streams→classic downgrade and the type-aware streams delete. This function
-/// tombstones the group-level keys unconditionally: k17 `GroupMetadata`, k23
-/// `Topology`, k18 `PartitionMetadata`, and k20 `TargetAssignmentMetadata`. A
-/// tombstone for a never-written key is a harmless replay no-op. The k17
-/// tombstone is load-bearing, because a surviving k17 would resurrect the group
-/// as streams. Each id in `member_ids` also tombstones its k19/k21/k22. A
-/// drained group has no members, because members tombstone their own per-member
-/// records on leave, so `member_ids` is typically empty.
+/// streams→classic downgrade and the type-aware streams delete, in the order
+/// of Kafka's `StreamsGroup.createGroupTombstoneRecords`: each member's k22
+/// current assignment, each member's k21 target assignment, the k20
+/// `TargetAssignmentMetadata`, each member's k19 metadata, the k17
+/// `GroupMetadata`, and the k23 `Topology`. The group-level keys are
+/// tombstoned unconditionally; a tombstone for a never-written key is a
+/// harmless replay no-op. The k17 tombstone is load-bearing, because a
+/// surviving k17 would resurrect the group as streams. A drained group has no
+/// members, because members tombstone their own per-member records on leave,
+/// so `member_ids` is typically empty.
 ///
 /// This function builds the batch directly from the key encoders rather than
 /// through `PendingStreamsRecords`. That type's group-level fields are
@@ -89,17 +91,19 @@ pub(crate) fn streams_records_tombstone_batch(
     member_ids: &[String],
     now_ms: i64,
 ) -> Result<RecordBatch, BrokerError> {
-    let mut keys = vec![
-        encode_group_metadata_key(group_id)?,
-        encode_topology_key(group_id)?,
-        encode_partition_metadata_key(group_id)?,
-        encode_target_assignment_metadata_key(group_id)?,
-    ];
+    let mut keys = Vec::with_capacity(3 + 3 * member_ids.len());
     for mid in member_ids {
-        keys.push(encode_member_metadata_key(group_id, mid)?);
-        keys.push(encode_target_assignment_member_key(group_id, mid)?);
         keys.push(encode_current_member_assignment_key(group_id, mid)?);
     }
+    for mid in member_ids {
+        keys.push(encode_target_assignment_member_key(group_id, mid)?);
+    }
+    keys.push(encode_target_assignment_metadata_key(group_id)?);
+    for mid in member_ids {
+        keys.push(encode_member_metadata_key(group_id, mid)?);
+    }
+    keys.push(encode_group_metadata_key(group_id)?);
+    keys.push(encode_topology_key(group_id)?);
 
     let mut batch = OffsetRecordBatchBuilder::default();
     for key in keys {
@@ -126,37 +130,47 @@ mod tests {
         );
     }
 
+    /// The streams tombstones follow Kafka 4.3.1's
+    /// `StreamsGroup.createGroupTombstoneRecords`: k22 and k21 for each
+    /// member, k20, k19 for each member, then k17 and k23. Kafka defines no
+    /// type 18, so none is written.
     #[test]
-    fn streams_tombstone_batch_group_level_only() {
-        let batch = streams_records_tombstone_batch("g", &[], 123).unwrap();
-        // k17 GroupMetadata, k23 Topology, k18 PartitionMetadata, k20
-        // TargetAssignmentMetadata.
-        assert2::assert!((batch.records.len()) == (4), "four group-level tombstones");
-        assert2::assert!((batch.max_timestamp) == (123));
-        assert2::assert!((batch.last_offset_delta) == (3));
-        for r in &batch.records {
-            assert2::assert!(r.key.is_some(), "every record carries a key");
-            assert2::assert!(
-                r.value.is_none(),
-                "every record is a tombstone (null value)"
-            );
-        }
-        // The first record is the load-bearing k17 GroupMetadata tombstone.
-        let group_metadata_key = batch.records[0].key.as_ref().unwrap();
-        assert2::assert!(
-            (&group_metadata_key[..2]) == (&17i16.to_be_bytes()),
-            "k17 GroupMetadata key version"
-        );
-    }
+    fn streams_tombstone_batch_follows_kafka() {
+        let g = "g";
+        let rows = [
+            (
+                "no members",
+                vec![],
+                vec![
+                    encode_target_assignment_metadata_key(g).unwrap(),
+                    encode_group_metadata_key(g).unwrap(),
+                    encode_topology_key(g).unwrap(),
+                ],
+            ),
+            (
+                "one member",
+                vec!["m1".to_string()],
+                vec![
+                    encode_current_member_assignment_key(g, "m1").unwrap(),
+                    encode_target_assignment_member_key(g, "m1").unwrap(),
+                    encode_target_assignment_metadata_key(g).unwrap(),
+                    encode_member_metadata_key(g, "m1").unwrap(),
+                    encode_group_metadata_key(g).unwrap(),
+                    encode_topology_key(g).unwrap(),
+                ],
+            ),
+        ];
+        for (name, members, keys) in rows {
+            let batch = streams_records_tombstone_batch(g, &members, 123).unwrap();
 
-    #[test]
-    fn streams_tombstone_batch_includes_per_member_records() {
-        let batch = streams_records_tombstone_batch("g", &["m1".to_string()], 1).unwrap();
-        // 4 group-level + k19/k21/k22 for m1 = 7.
-        assert2::assert!(
-            (batch.records.len()) == (7),
-            "group-level + 3 per-member tombstones"
-        );
-        assert2::assert!(batch.records.iter().all(|r| r.value.is_none()));
+            let records: Vec<_> = batch
+                .records
+                .into_iter()
+                .map(|record| (record.key, record.value))
+                .collect();
+            let expected: Vec<_> = keys.into_iter().map(|key| (Some(key), None)).collect();
+            assert2::check!(records == expected, "{name}");
+            assert2::check!(batch.max_timestamp == 123, "{name}");
+        }
     }
 }

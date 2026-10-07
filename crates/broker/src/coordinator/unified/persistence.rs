@@ -159,7 +159,8 @@ pub enum Key {
     NextGen(crate::coordinator::unified::persistence_next_gen::NextGenKey),
     /// KIP-932 share-group record types, versions 10–15.
     Share(crate::coordinator::unified::share::persistence::ShareGroupKey),
-    /// KIP-1071 streams-group record types, versions 17–23.
+    /// KIP-1071 streams-group record types, versions 17 and 19–23. Kafka 4.3.1
+    /// defines no type 18.
     Streams(crate::coordinator::unified::streams::persistence::StreamsGroupKey),
 }
 
@@ -235,7 +236,7 @@ pub fn parse_record_key(mut buf: &[u8]) -> Result<RecordKey, BrokerError> {
         10..=15 => Key::Share(
             crate::coordinator::unified::share::persistence::parse_share_key(version, buf)?,
         ),
-        17..=23 => Key::Streams(
+        17 | 19..=23 => Key::Streams(
             crate::coordinator::unified::streams::persistence::parse_streams_key(version, buf)?,
         ),
         unknown => return Ok(RecordKey::UnknownType(unknown)),

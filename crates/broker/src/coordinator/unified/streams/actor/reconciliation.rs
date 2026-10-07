@@ -126,7 +126,6 @@ fn update_group_epoch(actor: &mut ActorState, metadata_source: Option<&Arc<dyn M
         actor.configured = true;
         actor.metadata_hash = topology::metadata_hash(&topology, &image);
         actor.creatable_topics.clear();
-        actor.partition_metadata = Some(topology::partition_metadata(&topology, &image));
         match topology::configure_topics(&topology, &image) {
             Ok(configured) => {
                 // The heartbeat hands the internal topics that the image does

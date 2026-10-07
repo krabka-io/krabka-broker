@@ -42,6 +42,8 @@ mod coordinator_replay_model;
 
 #[cfg(test)]
 pub(crate) mod test_support;
+#[cfg(test)]
+mod value_version_tests;
 
 pub use self::{
     group_coordinator::{GroupCoordinator, GroupType},

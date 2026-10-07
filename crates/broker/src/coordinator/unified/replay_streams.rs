@@ -79,17 +79,6 @@ impl GroupCoordinator {
             }
         );
     }
-    pub fn replay_streams_partition_metadata(
-        &self,
-        group_id: &str,
-        v: streams::persistence::StreamsGroupPartitionMetadataValue,
-    ) {
-        super::seeds::update_replayed_seeds!(self, streams_seeds, streams_seeds_cache, group_id; (v.clone(), v);
-            |seed| replay_write_is_admissible(ReplayRecordKind::PartitionMetadata, true, false) => |value| {
-                seed.partition_metadata = Some(value);
-            }
-        );
-    }
     pub fn replay_streams_target_assignment_metadata(&self, group_id: &str, assignment_epoch: i32) {
         if assignment_epoch < 0 {
             return;
@@ -151,7 +140,6 @@ impl GroupCoordinator {
             super::seeds::scrub_seed_assignments!(seed, key, K, assignment_epoch;
                 K::GroupMetadata { .. } => unreachable!("handled above"),
             K::Topology { .. } => seed.topology = None,
-            K::PartitionMetadata { .. } => seed.partition_metadata = None,
             );
         };
 
@@ -169,7 +157,7 @@ mod tests {
     use assert2::{assert, check};
 
     use super::{StreamsGroupSeed, streams};
-    use crate::coordinator::unified::test_support::{make_coord, real_uuid, streams_member};
+    use crate::coordinator::unified::test_support::{make_coord, streams_member};
 
     #[test]
     fn streams_replay_populates_seed_and_cache() {
@@ -190,13 +178,6 @@ mod tests {
                 }],
                 repartition_source_topics: vec![],
                 copartition_groups: vec![],
-            }],
-        };
-        let partition_metadata = streams::persistence::StreamsGroupPartitionMetadataValue {
-            topics: vec![streams::persistence::StreamsTopicMeta {
-                topic_name: "input".into(),
-                topic_id: real_uuid(5),
-                num_partitions: 2,
             }],
         };
         let mut active = std::collections::BTreeMap::new();
@@ -226,7 +207,6 @@ mod tests {
         );
         coord.replay_streams_member_metadata("st", "streams-member", member.clone());
         coord.replay_streams_topology("st", topology.clone());
-        coord.replay_streams_partition_metadata("st", partition_metadata.clone());
         coord.replay_streams_target_assignment_metadata("st", 32);
         coord.replay_streams_target_assignment_member("st", "streams-member", target.clone());
         coord.replay_streams_current_member_assignment("st", "streams-member", current.clone());
@@ -240,7 +220,6 @@ mod tests {
             },
             assignment_epoch: 32,
             topology: Some(topology),
-            partition_metadata: Some(partition_metadata),
             members: maplit::hashmap! {"streams-member".to_string() => member},
             target_per_member: maplit::hashmap! {"streams-member".to_string() => target},
             current_per_member: maplit::hashmap! {"streams-member".to_string() => current},

@@ -167,6 +167,12 @@ fn replay_skips_unknown_record_types_and_fails_on_bad_records() {
             Some(both_commits()),
         ),
         (
+            "type 18, which Kafka 4.3.1 no longer defines",
+            record(Some(typed_key(18)), Some(offset_value(12))),
+            Framing::Plain,
+            Some(both_commits()),
+        ),
+        (
             "unknown type 24 with an undecodable value",
             record(Some(typed_key(24)), Some(Bytes::from_static(b"\xff"))),
             Framing::Plain,

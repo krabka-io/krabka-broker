@@ -56,7 +56,7 @@ pub struct StreamsGroupMemberMetadataValue {
 }
 
 value_codec! {
-    StreamsGroupMemberMetadataValue,
+    StreamsGroupMemberMetadataValue("StreamsGroupMemberMetadataValue"),
     encode(&self) -> buf {
         put_compact_nullable_string(buf, self.instance_id.as_deref());
         put_member_client(buf, self.rack_id.as_deref(), &self.client_id, &self.client_host);

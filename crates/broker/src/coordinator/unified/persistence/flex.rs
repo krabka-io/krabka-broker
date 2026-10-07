@@ -54,22 +54,28 @@ pub(crate) fn encode_value(write: impl FnOnce(&mut BytesMut)) -> Bytes {
 }
 
 /// Reads the common version and tagged-field framing around a record's fields.
+/// `record` is the error that names the record when its version is not 0, as
+/// [`get_value_version`] refuses it.
 ///
 /// # Errors
-/// Returns the field reader's error, or an error when the version or trailer is truncated.
+/// Returns the field reader's error, or an error when the version is not 0 or
+/// the version or trailer is truncated.
 pub(crate) fn decode_value<T>(
     mut buf: &[u8],
+    record: &'static str,
     read: impl FnOnce(&mut &[u8]) -> Result<T, BrokerError>,
 ) -> Result<T, BrokerError> {
-    super::get_i16(&mut buf)?;
+    get_value_version(&mut buf, 0, record)?;
     let value = read(&mut buf)?;
     skip_tagged_fields(&mut buf)?;
     Ok(value)
 }
 
 /// Defines field codecs within the shared version-0 flexible record framing.
+/// The string literal is Kafka's record name, which the value-version error
+/// names.
 macro_rules! value_codec {
-    ($name:ident, encode($($receiver:tt)*) -> $writer:ident $write:block decode($reader:ident) $read:block) => {
+    ($name:ident($record:literal), encode($($receiver:tt)*) -> $writer:ident $write:block decode($reader:ident) $read:block) => {
         impl $name {
             #[must_use]
             pub fn encode($($receiver)*) -> bytes::Bytes {
@@ -77,9 +83,14 @@ macro_rules! value_codec {
             }
 
             /// # Errors
-            /// Returns an error when a field or the tagged-field trailer is truncated or invalid.
+            /// Returns an error when the value version is not 0, or when a
+            /// field or the tagged-field trailer is truncated or invalid.
             pub fn decode(buf: &[u8]) -> Result<Self, $crate::error::BrokerError> {
-                $crate::coordinator::unified::persistence::flex::decode_value(buf, |$reader| $read)
+                $crate::coordinator::unified::persistence::flex::decode_value(
+                    buf,
+                    concat!("unknown ", $record, " version"),
+                    |$reader| $read,
+                )
             }
         }
     };
@@ -90,7 +101,7 @@ pub(crate) use value_codec;
 // The consumer, share and streams assignment epochs have the same Kafka
 // value layout. Keep their domain types distinct while sharing the codec.
 macro_rules! epoch_value {
-    ($(#[$meta:meta])* $name:ident { $field:ident }) => {
+    ($(#[$meta:meta])* $name:ident($record:literal) { $field:ident }) => {
         $(#[$meta])*
         #[derive(Debug, Clone, Copy, PartialEq, Eq)]
         pub struct $name {
@@ -98,7 +109,7 @@ macro_rules! epoch_value {
         }
 
         $crate::coordinator::unified::persistence::flex::value_codec! {
-            $name,
+            $name($record),
             encode(self) -> buf {
                 bytes::BufMut::put_i32(buf, self.$field);
             }
@@ -113,11 +124,12 @@ macro_rules! epoch_value {
 
 pub(crate) use epoch_value;
 
-/// Implements a version-0 flexible value with one array-shaped field.
+/// Implements a version-0 flexible value with one array-shaped field. The
+/// string literal is Kafka's record name, which the value-version error names.
 macro_rules! array_value_codec {
-    ($name:ident, $field:ident, $encode:path, $decode:path) => {
+    ($name:ident($record:literal), $field:ident, $encode:path, $decode:path) => {
         $crate::coordinator::unified::persistence::flex::value_codec! {
-            $name,
+            $name($record),
             encode(&self) -> buf {
                 $encode(buf, &self.$field);
             }

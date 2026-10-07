@@ -76,7 +76,7 @@ pub struct ShareGroupStatePartitionMetadataValue {
 }
 
 value_codec! {
-    ShareGroupStatePartitionMetadataValue,
+    ShareGroupStatePartitionMetadataValue("ShareGroupStatePartitionMetadataValue"),
     encode(&self) -> buf {
         for topics in [&self.initializing, &self.initialized] {
             put_compact_array(buf, topics.iter(), |buf, topic| {

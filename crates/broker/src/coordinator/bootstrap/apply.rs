@@ -89,9 +89,6 @@ pub(super) fn check_value(key: &Key, value: &[u8]) -> Result<(), BrokerError> {
             StreamsGroupKey::Topology { .. } => {
                 st::StreamsGroupTopologyValue::decode(value).map(|_| ())
             }
-            StreamsGroupKey::PartitionMetadata { .. } => {
-                st::StreamsGroupPartitionMetadataValue::decode(value).map(|_| ())
-            }
             StreamsGroupKey::TargetAssignmentMetadata { .. } => {
                 st::StreamsGroupTargetAssignmentMetadataValue::decode(value).map(|_| ())
             }
@@ -256,13 +253,6 @@ pub(super) fn apply_streams_record(
         sp::StreamsGroupKey::Topology { group_id } => {
             let value = sp::StreamsGroupTopologyValue::decode(value_bytes)?;
             coordinator.replay_streams_topology(&group_id, value);
-            if coordinator.cached_streams_seed(&group_id).is_some() {
-                coordinator.mark_streams(&group_id);
-            }
-        }
-        sp::StreamsGroupKey::PartitionMetadata { group_id } => {
-            let value = sp::StreamsGroupPartitionMetadataValue::decode(value_bytes)?;
-            coordinator.replay_streams_partition_metadata(&group_id, value);
             if coordinator.cached_streams_seed(&group_id).is_some() {
                 coordinator.mark_streams(&group_id);
             }

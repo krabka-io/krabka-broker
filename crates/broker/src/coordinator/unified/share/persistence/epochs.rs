@@ -39,7 +39,7 @@ pub struct ShareGroupMetadataValue {
 }
 
 value_codec! {
-    ShareGroupMetadataValue,
+    ShareGroupMetadataValue("ShareGroupMetadataValue"),
     encode(self) -> buf {
         buf.put_i32(self.epoch);
         buf.put_i64(METADATA_HASH);
@@ -51,7 +51,11 @@ value_codec! {
     }
 }
 
-epoch_value!(ShareGroupTargetAssignmentMetadataValue { assignment_epoch });
+epoch_value!(
+    ShareGroupTargetAssignmentMetadataValue("ShareGroupTargetAssignmentMetadataValue") {
+        assignment_epoch
+    }
+);
 
 #[cfg(test)]
 mod tests {

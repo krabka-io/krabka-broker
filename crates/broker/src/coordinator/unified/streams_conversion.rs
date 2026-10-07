@@ -175,8 +175,8 @@ impl GroupCoordinator {
         }
 
         // Drained streams group → convert. Tombstone the group-level streams keys
-        // (k15/k17/k18/k19), flip the lock to Classic, drop the streams actor. A
-        // drained group's per-member records (k16/k20/k21) were already tombstoned
+        // (k20/k17/k23), flip the lock to Classic, drop the streams actor. A
+        // drained group's per-member records (k19/k21/k22) were already tombstoned
         // when those members left/expired, so no member ids are needed here. The
         // offset-home `groups` entry stays.
         let batch = streams_records_tombstone_batch(group_id, &[], now_ms)?;

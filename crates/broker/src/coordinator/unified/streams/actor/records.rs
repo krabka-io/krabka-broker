@@ -60,9 +60,6 @@ pub(super) fn snapshot_pending_after_change(
     if let Some(topology) = &actor.topology {
         pending.topology = Some(topology.clone());
     }
-    if let Some(pm) = &actor.partition_metadata {
-        pending.partition_metadata = Some(pm.clone());
-    }
     if state.target.epoch > INITIAL_EPOCH {
         pending.target_metadata = Some(StreamsGroupTargetAssignmentMetadataValue {
             assignment_epoch: state.target.epoch,
@@ -175,7 +172,6 @@ pub(super) fn snapshot_seed(actor: &ActorState) -> StreamsGroupSeed {
         description_epochs: actor.description_epochs,
         assignment_epoch: state.target.epoch,
         topology: actor.topology.clone(),
-        partition_metadata: actor.partition_metadata.clone(),
         members,
         target_per_member,
         current_per_member,
@@ -198,7 +194,6 @@ pub(super) fn apply_seed(actor: &mut ActorState, seed: StreamsGroupSeed) {
         state.topology_epoch = topology.epoch;
     }
     actor.topology = seed.topology;
-    actor.partition_metadata = seed.partition_metadata;
 
     for (mid, meta) in seed.members {
         let mut m = StreamsMemberState::joining(mid.clone(), meta.client_id, meta.client_host);
@@ -304,7 +299,6 @@ mod tests {
                 epoch: 2,
                 subtopologies: vec![],
             }),
-            partition_metadata: None,
             members,
             target_per_member: target,
             current_per_member: current,

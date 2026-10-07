@@ -24,8 +24,10 @@
 
 use crate::coordinator::unified::persistence::flex::epoch_value;
 
-epoch_value!(GroupMetadataValue { epoch });
-epoch_value!(TargetAssignmentMetadataValue { assignment_epoch });
+epoch_value!(GroupMetadataValue("ConsumerGroupMetadataValue") { epoch });
+epoch_value!(TargetAssignmentMetadataValue("ConsumerGroupTargetAssignmentMetadataValue") {
+    assignment_epoch
+});
 
 #[cfg(test)]
 mod tests {

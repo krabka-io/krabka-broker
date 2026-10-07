@@ -74,7 +74,6 @@ pub struct StreamsGroupSeed {
     pub description_epochs: streams::persistence::DescriptionEpochs,
     pub assignment_epoch: i32,
     pub topology: Option<streams::persistence::StreamsGroupTopologyValue>,
-    pub partition_metadata: Option<streams::persistence::StreamsGroupPartitionMetadataValue>,
     pub members:
         std::collections::HashMap<String, streams::persistence::StreamsGroupMemberMetadataValue>,
     pub target_per_member: std::collections::HashMap<

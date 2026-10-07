@@ -16,12 +16,11 @@
 //! as that other type, and its tools die in the middle of the topic rather than
 //! skip it.
 //!
-//! `apiKey` 18 is the one number here with no Kafka schema at 4.3.1: Kafka
-//! removed its streams partition-metadata record when KIP-1101 replaced it with
-//! a metadata hash. The broker still keeps that snapshot, so
-//! [`KEY_STREAMS_PARTITION_METADATA`] holds 18, the number the record used to
-//! have. Kafka's serde does not know it, which makes its tools skip the record
-//! rather than mis-decode it.
+//! Kafka 4.3.1 assigns no record type 18: KIP-1101 replaced the streams
+//! partition-metadata record with the `MetadataHash` of
+//! `StreamsGroupMetadataValue`. The broker neither writes nor reads it, so a
+//! record of type 18 replays as an unknown type and is skipped, as Kafka's
+//! loader skips it.
 //!
 //! Every `coordinator-key` schema declares `"flexibleVersions": "none"`, so a
 //! key string keeps the legacy `i16` length prefix and a key carries no
@@ -30,8 +29,6 @@
 use crate::coordinator::unified::persistence::{group_record_keys, string_key_encoders};
 
 pub const KEY_STREAMS_GROUP_METADATA: i16 = 17;
-/// The one key with no Kafka counterpart at 4.3.1. See the module docs.
-pub const KEY_STREAMS_PARTITION_METADATA: i16 = 18;
 pub const KEY_STREAMS_MEMBER_METADATA: i16 = 19;
 pub const KEY_STREAMS_TARGET_ASSIGNMENT_METADATA: i16 = 20;
 pub const KEY_STREAMS_TARGET_ASSIGNMENT_MEMBER: i16 = 21;
@@ -43,7 +40,6 @@ group_record_keys! {
         GroupMetadata => KEY_STREAMS_GROUP_METADATA,
         MemberMetadata(member_id) => KEY_STREAMS_MEMBER_METADATA,
         Topology => KEY_STREAMS_TOPOLOGY,
-        PartitionMetadata => KEY_STREAMS_PARTITION_METADATA,
         TargetAssignmentMetadata => KEY_STREAMS_TARGET_ASSIGNMENT_METADATA,
         TargetAssignmentMember(member_id) => KEY_STREAMS_TARGET_ASSIGNMENT_MEMBER,
         CurrentMemberAssignment(member_id) => KEY_STREAMS_CURRENT_MEMBER_ASSIGNMENT,
@@ -90,14 +86,6 @@ string_key_encoders! {
     /// 32767 bytes.
     pub fn encode_topology_key(group_id) = KEY_STREAMS_TOPOLOGY;
 
-    /// Encodes the partition-metadata key.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`crate::error::BrokerError::Protocol`] when a string of the key is longer than
-    /// 32767 bytes.
-    pub fn encode_partition_metadata_key(group_id) = KEY_STREAMS_PARTITION_METADATA;
-
     /// Encodes the target-assignment-metadata key.
     ///
     /// # Errors
@@ -132,14 +120,14 @@ mod tests {
     #[test]
     fn unknown_key_version_rejected() {
         assert!(parse_streams_key(99, &[]).is_err());
+        assert!(parse_streams_key(18, b"\x00\x02g1").is_err());
     }
 
     #[test]
     fn key_versions_match_kafka_api_keys() {
-        // apiKey of each schema at Apache Kafka tag 4.3.1, except the
-        // partition metadata, which 4.3.1 no longer defines.
+        // apiKey of each schema at Apache Kafka tag 4.3.1, which defines no
+        // streams record type 18.
         assert!(KEY_STREAMS_GROUP_METADATA == 17);
-        assert!(KEY_STREAMS_PARTITION_METADATA == 18);
         assert!(KEY_STREAMS_MEMBER_METADATA == 19);
         assert!(KEY_STREAMS_TARGET_ASSIGNMENT_METADATA == 20);
         assert!(KEY_STREAMS_TARGET_ASSIGNMENT_MEMBER == 21);

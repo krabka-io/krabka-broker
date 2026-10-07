@@ -13,8 +13,8 @@
 //! `(subtopology, partition)` pair, grouped by the active, standby, or warmup
 //! role.
 //!
-//! Key versions 17 and 19 to 23 belong to streams, and 18 to the one record
-//! Kafka no longer defines; see `keys` for the full mapping. The earlier
+//! Key versions 17 and 19 to 23 belong to streams; Kafka 4.3.1 defines no
+//! type 18. See `keys` for the full mapping. The earlier
 //! numbers are Kafka's: 0 and 1 for offset-commit, 2 for the classic group, 3
 //! to 8 for the consumer next-gen family, and 10 to 15 for share.
 //!
@@ -28,7 +28,6 @@ mod codec;
 mod epochs;
 mod keys;
 mod member;
-mod partition_metadata;
 mod pending;
 mod topology;
 
@@ -42,15 +41,13 @@ pub use self::{
     },
     keys::{
         KEY_STREAMS_CURRENT_MEMBER_ASSIGNMENT, KEY_STREAMS_GROUP_METADATA,
-        KEY_STREAMS_MEMBER_METADATA, KEY_STREAMS_PARTITION_METADATA,
-        KEY_STREAMS_TARGET_ASSIGNMENT_MEMBER, KEY_STREAMS_TARGET_ASSIGNMENT_METADATA,
-        KEY_STREAMS_TOPOLOGY, StreamsGroupKey, encode_current_member_assignment_key,
-        encode_group_metadata_key, encode_member_metadata_key, encode_partition_metadata_key,
-        encode_streams_key, encode_target_assignment_member_key,
+        KEY_STREAMS_MEMBER_METADATA, KEY_STREAMS_TARGET_ASSIGNMENT_MEMBER,
+        KEY_STREAMS_TARGET_ASSIGNMENT_METADATA, KEY_STREAMS_TOPOLOGY, StreamsGroupKey,
+        encode_current_member_assignment_key, encode_group_metadata_key,
+        encode_member_metadata_key, encode_streams_key, encode_target_assignment_member_key,
         encode_target_assignment_metadata_key, encode_topology_key, parse_streams_key,
     },
     member::{StreamsEndpoint, StreamsGroupMemberMetadataValue},
-    partition_metadata::{StreamsGroupPartitionMetadataValue, StreamsTopicMeta},
     pending::PendingStreamsRecords,
     topology::{
         StoredCopartitionGroup, StoredSubtopology, StoredTopicInfo, StreamsGroupTopologyValue,

@@ -106,7 +106,6 @@ fn streams_group_seed(member_id: &str) -> crate::coordinator::unified::StreamsGr
             crate::coordinator::unified::streams::persistence::DescriptionEpochs::default(),
         assignment_epoch: 6,
         topology: None,
-        partition_metadata: None,
         members,
         target_per_member,
         current_per_member,

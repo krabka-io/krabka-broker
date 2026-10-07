@@ -27,8 +27,8 @@ use bytes::{BufMut, Bytes, BytesMut};
 
 use crate::{
     coordinator::unified::persistence::{
-        flex::{epoch_value, put_tagged_fields, read_tagged},
-        get_i16, get_i32, get_i64,
+        flex::{epoch_value, get_value_version, put_tagged_fields, read_tagged},
+        get_i32, get_i64,
     },
     error::BrokerError,
 };
@@ -109,7 +109,7 @@ impl StreamsGroupMetadataValue {
     /// Returns an error when `buf` ends before a field, or when a tagged
     /// description epoch is not four bytes long.
     pub fn decode(mut buf: &[u8]) -> Result<Self, BrokerError> {
-        let _v = get_i16(&mut buf)?;
+        get_value_version(&mut buf, 0, "unknown StreamsGroupMetadataValue version")?;
         let epoch = get_i32(&mut buf)?;
         let metadata_hash = get_i64(&mut buf)?;
         let mut description = DescriptionEpochs::default();
@@ -132,7 +132,9 @@ impl StreamsGroupMetadataValue {
 
 epoch_value!(
     /// Key v20 value: the target-assignment epoch.
-    StreamsGroupTargetAssignmentMetadataValue { assignment_epoch }
+    StreamsGroupTargetAssignmentMetadataValue("StreamsGroupTargetAssignmentMetadataValue") {
+        assignment_epoch
+    }
 );
 
 #[cfg(test)]

@@ -24,13 +24,12 @@ const MAX_STATES: usize = 2_000_000;
 // considering a field -- into a failure instead of a silently smaller search
 // that still passes the upper bound. The *generated* count is deliberately not
 // pinned: it depends on dedupe timing across the BFS worker threads.
-const PINNED_UNIQUE_STATES: usize = 46_672;
+const PINNED_UNIQUE_STATES: usize = 23_344;
 const WITNESS_REJECTED_BINDING: u8 = 1 << 0;
 const WITNESS_IGNORED_ORPHAN: u8 = 1 << 1;
 const WITNESS_STALE_EPOCH: u8 = 1 << 2;
 const METADATA_TOPOLOGY: u8 = 1 << 0;
-const METADATA_PARTITIONS: u8 = 1 << 1;
-const METADATA_SHARE_STATE: u8 = 1 << 2;
+const METADATA_SHARE_STATE: u8 = 1 << 1;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 enum Action {
@@ -40,7 +39,6 @@ enum Action {
     WriteTarget(u8),
     WriteCurrent(u8, i32),
     WriteTopology,
-    WritePartitionMetadata,
     WriteStatePartitionMetadata,
     TombstoneGroup,
     TombstoneMember(u8),
@@ -134,7 +132,6 @@ impl Model for ReplayModel {
         }
         actions.extend([
             Action::WriteTopology,
-            Action::WritePartitionMetadata,
             Action::WriteStatePartitionMetadata,
             Action::TombstoneGroup,
             Action::TombstoneTargetEpoch,
@@ -204,14 +201,6 @@ impl Model for ReplayModel {
             Action::WriteTopology => {
                 if mutation(&state, ReplayRecordKind::Topology, 0) == ReplayMutation::Apply {
                     state.metadata |= METADATA_TOPOLOGY;
-                } else {
-                    state.witnesses |= WITNESS_IGNORED_ORPHAN;
-                }
-            }
-            Action::WritePartitionMetadata => {
-                if mutation(&state, ReplayRecordKind::PartitionMetadata, 0) == ReplayMutation::Apply
-                {
-                    state.metadata |= METADATA_PARTITIONS;
                 } else {
                     state.witnesses |= WITNESS_IGNORED_ORPHAN;
                 }
