@@ -80,8 +80,12 @@ pub struct StreamsGroupSeed {
     pub group_epoch: i32,
     /// The `MetadataHash` of the last group metadata record.
     pub metadata_hash: i64,
-    /// The KIP-1331 description epochs of the last group metadata record.
-    pub description_epochs: streams::persistence::DescriptionEpochs,
+    /// The `ValidatedTopologyEpoch` of the last group metadata record, or 0,
+    /// the value of a new group, before one.
+    pub validated_topology_epoch: i32,
+    /// The `LastAssignmentConfigs` of the last group metadata record, by key;
+    /// empty for a null list.
+    pub last_assignment_configs: std::collections::BTreeMap<String, String>,
     pub assignment_epoch: i32,
     /// The `AssignmentTimestamp` of the last target assignment metadata
     /// record, 0 when unknown.

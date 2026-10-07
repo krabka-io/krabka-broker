@@ -113,10 +113,11 @@ async fn streams_group_records_replay_into_seed() {
             sp::StreamsGroupMetadataValue {
                 epoch: 7,
                 metadata_hash: 0,
-                description: sp::DescriptionEpochs {
-                    stored: 2,
-                    failed: -1,
-                },
+                validated_topology_epoch: 2,
+                last_assignment_configs: Some(vec![sp::LastAssignmentConfig {
+                    key: "num.standby.replicas".into(),
+                    value: "0".into(),
+                }]),
             }
             .encode(),
         ),
@@ -161,12 +162,10 @@ async fn streams_group_records_replay_into_seed() {
     assert!(coord.group_type("stg") == Some(crate::coordinator::unified::GroupType::Streams));
     let seed = coord.cached_streams_seed("stg").expect("seed cached");
     check!(seed.group_epoch == 7);
+    check!(seed.validated_topology_epoch == 2);
     check!(
-        seed.description_epochs
-            == sp::DescriptionEpochs {
-                stored: 2,
-                failed: -1,
-            }
+        seed.last_assignment_configs
+            == maplit::btreemap! {"num.standby.replicas".to_string() => "0".to_string()}
     );
     check!(seed.members.contains_key("m1"));
     check!(seed.current_per_member["m1"].member_epoch == 7);

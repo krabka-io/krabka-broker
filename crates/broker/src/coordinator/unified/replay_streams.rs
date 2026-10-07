@@ -10,6 +10,7 @@ use super::{
     seeds::StreamsGroupSeed,
     streams,
 };
+use crate::error::BrokerError;
 
 /// The seed of a group that its first replayed record creates. Kafka replays
 /// the records into a new `StreamsGroup`, whose target assignment epoch is
@@ -22,11 +23,32 @@ fn new_seed() -> StreamsGroupSeed {
 }
 
 impl GroupCoordinator {
+    /// Applies a `StreamsGroupMetadataValue`, as Kafka's
+    /// `GroupMetadataManager.replay` of the record does: the group epoch, the
+    /// metadata hash, the validated topology epoch, and the last assignment
+    /// configuration, empty for a null list.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BrokerError::Startup`] when the configuration list names a
+    /// key twice: Kafka's `Collectors.toMap` throws `IllegalStateException`
+    /// for it, which fails the load.
     pub fn replay_streams_group_metadata(
         &self,
         group_id: &str,
         value: streams::persistence::StreamsGroupMetadataValue,
-    ) {
+    ) -> Result<(), BrokerError> {
+        let mut last_assignment_configs = std::collections::BTreeMap::new();
+        for config in value.last_assignment_configs.into_iter().flatten() {
+            if last_assignment_configs.contains_key(&config.key) {
+                return Err(BrokerError::Startup(format!(
+                    "Duplicate key {} (attempted merging values {} and {}) in the \
+                     LastAssignmentConfigs of streams group {group_id}",
+                    config.key, last_assignment_configs[&config.key], config.value
+                )));
+            }
+            last_assignment_configs.insert(config.key, config.value);
+        }
         let epoch = value.epoch;
         if !replay_write_is_admissible(
             ReplayRecordKind::GroupMetadata,
@@ -35,7 +57,7 @@ impl GroupCoordinator {
             false,
         ) || epoch < 0
         {
-            return;
+            return Ok(());
         }
         {
             let mut seed = self
@@ -45,7 +67,8 @@ impl GroupCoordinator {
             if replay_epoch_is_admissible(seed.group_epoch, epoch) {
                 seed.group_epoch = epoch;
                 seed.metadata_hash = value.metadata_hash;
-                seed.description_epochs = value.description;
+                seed.validated_topology_epoch = value.validated_topology_epoch;
+                seed.last_assignment_configs = last_assignment_configs.clone();
             }
         }
         {
@@ -56,9 +79,11 @@ impl GroupCoordinator {
             if replay_epoch_is_admissible(cached.group_epoch, epoch) {
                 cached.group_epoch = epoch;
                 cached.metadata_hash = value.metadata_hash;
-                cached.description_epochs = value.description;
+                cached.validated_topology_epoch = value.validated_topology_epoch;
+                cached.last_assignment_configs = last_assignment_configs;
             }
         }
+        Ok(())
     }
     pub fn replay_streams_member_metadata(
         &self,
@@ -200,17 +225,22 @@ mod tests {
             ..Default::default()
         };
 
-        coord.replay_streams_group_metadata(
-            "st",
-            streams::persistence::StreamsGroupMetadataValue {
-                epoch: 30,
-                metadata_hash: 44,
-                description: streams::persistence::DescriptionEpochs {
-                    stored: 3,
-                    failed: -1,
+        coord
+            .replay_streams_group_metadata(
+                "st",
+                streams::persistence::StreamsGroupMetadataValue {
+                    epoch: 30,
+                    metadata_hash: 44,
+                    validated_topology_epoch: 2,
+                    last_assignment_configs: Some(vec![
+                        streams::persistence::LastAssignmentConfig {
+                            key: "num.standby.replicas".into(),
+                            value: "1".into(),
+                        },
+                    ]),
                 },
-            },
-        );
+            )
+            .unwrap();
         coord.replay_streams_member_metadata("st", "streams-member", member.clone());
         coord.replay_streams_topology("st", topology.clone());
         coord.replay_streams_target_assignment_metadata(
@@ -226,9 +256,9 @@ mod tests {
         let expected = StreamsGroupSeed {
             group_epoch: 30,
             metadata_hash: 44,
-            description_epochs: streams::persistence::DescriptionEpochs {
-                stored: 3,
-                failed: -1,
+            validated_topology_epoch: 2,
+            last_assignment_configs: maplit::btreemap! {
+                "num.standby.replicas".to_string() => "1".to_string(),
             },
             assignment_epoch: 32,
             assignment_timestamp_ms: 1_791_331_200_000,
@@ -248,18 +278,22 @@ mod tests {
     #[test]
     fn a_group_without_target_metadata_replays_at_the_initial_assignment_epoch() {
         let coord = make_coord();
-        coord.replay_streams_group_metadata(
-            "st",
-            streams::persistence::StreamsGroupMetadataValue {
-                epoch: 2,
-                metadata_hash: 7,
-                description: streams::persistence::DescriptionEpochs::default(),
-            },
-        );
+        coord
+            .replay_streams_group_metadata(
+                "st",
+                streams::persistence::StreamsGroupMetadataValue {
+                    epoch: 2,
+                    metadata_hash: 7,
+                    validated_topology_epoch: -1,
+                    last_assignment_configs: None,
+                },
+            )
+            .unwrap();
 
         let expected = StreamsGroupSeed {
             group_epoch: 2,
             metadata_hash: 7,
+            validated_topology_epoch: -1,
             assignment_epoch: 1,
             ..StreamsGroupSeed::default()
         };
@@ -271,14 +305,17 @@ mod tests {
     fn streams_group_tombstone_blocks_orphan_topology_and_member() {
         let coord = make_coord();
         coord.mark_streams("st");
-        coord.replay_streams_group_metadata(
-            "st",
-            streams::persistence::StreamsGroupMetadataValue {
-                epoch: 2,
-                metadata_hash: 0,
-                description: streams::persistence::DescriptionEpochs::default(),
-            },
-        );
+        coord
+            .replay_streams_group_metadata(
+                "st",
+                streams::persistence::StreamsGroupMetadataValue {
+                    epoch: 2,
+                    metadata_hash: 0,
+                    validated_topology_epoch: -1,
+                    last_assignment_configs: None,
+                },
+            )
+            .unwrap();
         coord.replay_streams_member_metadata("st", "m", streams_member("m"));
 
         coord.replay_streams_tombstone(&streams::persistence::StreamsGroupKey::GroupMetadata {

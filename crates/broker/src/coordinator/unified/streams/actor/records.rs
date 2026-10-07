@@ -14,9 +14,10 @@ use crate::coordinator::unified::{
     offsets_log::OffsetsLog,
     streams::{
         persistence::{
-            PendingStreamsRecords, StreamsEndpoint, StreamsGroupCurrentMemberAssignmentValue,
-            StreamsGroupMemberMetadataValue, StreamsGroupMetadataValue,
-            StreamsGroupTargetAssignmentMemberValue, StreamsGroupTargetAssignmentMetadataValue,
+            LastAssignmentConfig, PendingStreamsRecords, StreamsEndpoint,
+            StreamsGroupCurrentMemberAssignmentValue, StreamsGroupMemberMetadataValue,
+            StreamsGroupMetadataValue, StreamsGroupTargetAssignmentMemberValue,
+            StreamsGroupTargetAssignmentMetadataValue,
         },
         state::{
             INITIAL_EPOCH, StoredTopologyHandle, StreamsGroupState, StreamsGroupStatePhase,
@@ -50,11 +51,7 @@ pub(super) fn snapshot_pending_after_change(
     };
     let state = &actor.state;
     let mut pending = PendingStreamsRecords {
-        group_metadata: Some(StreamsGroupMetadataValue {
-            epoch: state.group_epoch,
-            metadata_hash: actor.metadata_hash,
-            description: actor.description_epochs,
-        }),
+        group_metadata: Some(group_metadata_value(actor)),
         ..Default::default()
     };
     if let Some(topology) = &actor.topology {
@@ -74,6 +71,27 @@ pub(super) fn snapshot_pending_after_change(
         }
     );
     pending
+}
+
+/// Kafka's `newStreamsGroupMetadataRecord`: the group epoch, the metadata
+/// hash, the validated topology epoch, and the assignment configuration as a
+/// list in key order, which Kafka never writes as null.
+pub(super) fn group_metadata_value(actor: &ActorState) -> StreamsGroupMetadataValue {
+    StreamsGroupMetadataValue {
+        epoch: actor.state.group_epoch,
+        metadata_hash: actor.metadata_hash,
+        validated_topology_epoch: actor.validated_topology_epoch,
+        last_assignment_configs: Some(
+            actor
+                .last_assignment_configs
+                .iter()
+                .map(|(key, value)| LastAssignmentConfig {
+                    key: key.clone(),
+                    value: value.clone(),
+                })
+                .collect(),
+        ),
+    }
 }
 
 fn member_metadata_value(m: &StreamsMemberState) -> StreamsGroupMemberMetadataValue {
@@ -170,7 +188,8 @@ pub(super) fn snapshot_seed(actor: &ActorState) -> StreamsGroupSeed {
     StreamsGroupSeed {
         group_epoch: state.group_epoch,
         metadata_hash: actor.metadata_hash,
-        description_epochs: actor.description_epochs,
+        validated_topology_epoch: actor.validated_topology_epoch,
+        last_assignment_configs: actor.last_assignment_configs.clone(),
         assignment_epoch: state.target.epoch,
         assignment_timestamp_ms: actor.assignment_timestamp_ms,
         topology: actor.topology.clone(),
@@ -186,7 +205,8 @@ pub(super) fn apply_seed(actor: &mut ActorState, seed: StreamsGroupSeed) {
     let state = &mut actor.state;
     state.group_epoch = seed.group_epoch;
     actor.metadata_hash = seed.metadata_hash;
-    actor.description_epochs = seed.description_epochs;
+    actor.validated_topology_epoch = seed.validated_topology_epoch;
+    actor.last_assignment_configs = seed.last_assignment_configs;
     state.target.epoch = seed.assignment_epoch;
     state.assignment_epoch = seed.assignment_epoch;
     actor.assignment_timestamp_ms = seed.assignment_timestamp_ms;
@@ -248,9 +268,7 @@ mod tests {
     use assert2::check;
 
     use super::*;
-    use crate::coordinator::unified::streams::persistence::{
-        DescriptionEpochs, StreamsGroupTopologyValue,
-    };
+    use crate::coordinator::unified::streams::persistence::StreamsGroupTopologyValue;
 
     #[test]
     fn seed_hydrates_state() {
@@ -293,9 +311,9 @@ mod tests {
         let seed = StreamsGroupSeed {
             group_epoch: 4,
             metadata_hash: 11,
-            description_epochs: DescriptionEpochs {
-                stored: 2,
-                failed: -1,
+            validated_topology_epoch: 2,
+            last_assignment_configs: maplit::btreemap! {
+                "num.standby.replicas".to_string() => "1".to_string(),
             },
             assignment_epoch: 4,
             assignment_timestamp_ms: 0,
@@ -311,11 +329,11 @@ mod tests {
 
         check!(actor.state.group_epoch == 4);
         check!(actor.metadata_hash == 11);
+        check!(actor.validated_topology_epoch == 2);
         check!(
-            actor.description_epochs
-                == DescriptionEpochs {
-                    stored: 2,
-                    failed: -1,
+            actor.last_assignment_configs
+                == maplit::btreemap! {
+                    "num.standby.replicas".to_string() => "1".to_string(),
                 }
         );
         check!(actor.state.target.epoch == 4);

@@ -23,7 +23,6 @@ use crate::coordinator::unified::{
             test_support::{coordinator_with_log, describe, heartbeat_result_at, undelayed},
         },
         description::{Node, NodeKind, Subtopology, TopologyDescriptionPlugin},
-        persistence::DescriptionEpochs,
         topology::to_stored_topology,
     },
 };
@@ -157,8 +156,9 @@ async fn one_member_of_a_group_is_asked_for_the_description() {
 }
 
 /// A push stores the description and records its epoch: a describe serves
-/// it, the group metadata record carries the epoch, and no heartbeat asks
-/// again. Any member of the group may push, not only the one asked.
+/// it and no heartbeat asks again. Kafka 4.3.1 has no record for the epoch,
+/// so the push writes none. Any member of the group may push, not only the
+/// one asked.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_push_is_stored_and_ends_the_asking() {
     let coordinator = coordinator(TopologyDescriptionPlugin::InMemory);
@@ -167,6 +167,7 @@ async fn a_push_is_stored_and_ends_the_asking() {
     assert!(first.topology_description_required);
     let second = heartbeat(&handle, join("b"), 1).await;
     assert!(describe(&handle).await.topology_description.is_none());
+    let written = coordinator.cached_streams_seed("app");
 
     let answer = push(&handle, description_push("b", 0, 1)).await;
 
@@ -185,16 +186,7 @@ async fn a_push_is_stored_and_ends_the_asking() {
         global_stores: vec![],
     };
     assert!(describe(&handle).await.topology_description == Some(expected));
-    let seed = coordinator
-        .cached_streams_seed("app")
-        .expect("a cached seed");
-    assert!(
-        seed.description_epochs
-            == DescriptionEpochs {
-                stored: 0,
-                failed: -1
-            }
-    );
+    assert!(coordinator.cached_streams_seed("app") == written);
     for (member_id, member_epoch) in [("a", first.member_epoch), ("b", second.member_epoch)] {
         let response = heartbeat(&handle, steady(member_id, member_epoch), 1).await;
         assert!(!response.topology_description_required, "{member_id}");
@@ -238,19 +230,14 @@ async fn a_push_the_group_does_not_accept_stores_nothing() {
         let coordinator = coordinator(TopologyDescriptionPlugin::InMemory);
         let handle = coordinator.get_or_create_streams("app");
         heartbeat(&handle, join("a"), 1).await;
+        let written = coordinator.cached_streams_seed("app");
 
         assert!(push(&handle, refused).await == want, "{row}");
         assert!(
             describe(&handle).await.topology_description.is_none(),
             "{row}"
         );
-        let seed = coordinator
-            .cached_streams_seed("app")
-            .expect("a cached seed");
-        assert!(
-            seed.description_epochs == DescriptionEpochs::default(),
-            "{row}"
-        );
+        assert!(coordinator.cached_streams_seed("app") == written, "{row}");
     }
 
     let coordinator = coordinator(TopologyDescriptionPlugin::InMemory);
@@ -264,21 +251,15 @@ async fn a_push_the_group_does_not_accept_stores_nothing() {
     );
 }
 
-/// A group loaded from the log keeps the epoch its record stored, so its
-/// members are not asked again. The in-memory plugin did not survive the
-/// load, so a describe finds no description, as Kafka's reference plugin
-/// loses its map with the broker.
+/// A group loaded from the log knows nothing of a description: Kafka 4.3.1's
+/// records carry no KIP-1331 epoch, and the in-memory plugin did not survive
+/// the load. So the first member is asked for the description again, and a
+/// describe finds none until it pushes.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_loaded_group_is_not_asked_for_a_stored_epoch() {
-    let epochs = |stored, failed| DescriptionEpochs { stored, failed };
-    // (row, the loaded epochs, the topology epoch, whether the member is asked)
-    let rows = [
-        ("stored", epochs(0, -1), 0, false),
-        ("failed for good", epochs(-1, 0), 0, false),
-        ("uncertain", epochs(-2, -1), 0, true),
-        ("stored at an older epoch", epochs(0, -1), 1, true),
-    ];
-    for (row, description_epochs, topology_epoch, asked) in rows {
+async fn a_loaded_group_asks_for_the_description_again() {
+    // (row, the loaded topology epoch)
+    let rows = [("topology epoch 0", 0), ("topology epoch 1", 1)];
+    for (row, topology_epoch) in rows {
         let mut request = join("a");
         let topology = request
             .topology
@@ -292,7 +273,6 @@ async fn a_loaded_group_is_not_asked_for_a_stored_epoch() {
             .tx
             .send(StreamsGroupActorMessage::Seed(StreamsGroupSeed {
                 group_epoch: 2,
-                description_epochs,
                 topology: Some(loaded),
                 ..StreamsGroupSeed::default()
             }))
@@ -301,7 +281,7 @@ async fn a_loaded_group_is_not_asked_for_a_stored_epoch() {
 
         let response = heartbeat(&handle, request, 1).await;
 
-        assert!(response.topology_description_required == asked, "{row}");
+        assert!(response.topology_description_required, "{row}");
         assert!(
             describe(&handle).await.topology_description.is_none(),
             "{row}"

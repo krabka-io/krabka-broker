@@ -30,6 +30,43 @@ pub use self::{
     model::{GlobalStore, Node, NodeKind, Subtopology, TopologyDescription},
 };
 
+/// KIP-1331's record of what the topology description plugin holds for a
+/// group: Kafka trunk's `StreamsGroup.storedDescriptionTopologyEpoch` and
+/// `failedDescriptionTopologyEpoch`.
+///
+/// Kafka trunk persists both as tags 2 and 3 of `StreamsGroupMetadataValue`.
+/// Kafka 4.3.1 has neither the tags nor KIP-1331, and the broker writes
+/// `__consumer_offsets` as 4.3.1 does, so the group keeps them in memory
+/// only, next to the in-memory plugin's description. A group that its actor
+/// loads again holds no description and no epoch, and asks a member again.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, krabka_macros::FieldDefaults)]
+pub struct DescriptionEpochs {
+    /// The topology epoch whose description the plugin holds,
+    /// [`Self::NONE`] when it holds none, or [`Self::UNCERTAIN`] when a plugin
+    /// operation may not have completed.
+    #[default(Self::NONE)]
+    pub stored: i32,
+    /// The topology epoch whose description the plugin rejected for good, or
+    /// [`Self::NONE`].
+    #[default(Self::NONE)]
+    pub failed: i32,
+}
+
+impl DescriptionEpochs {
+    /// Kafka's `STORED_TOPOLOGY_EPOCH_NONE`.
+    pub const NONE: i32 = -1;
+    /// Kafka's `STORED_TOPOLOGY_EPOCH_UNCERTAIN`: the plugin may or may not
+    /// hold a description.
+    pub const UNCERTAIN: i32 = -2;
+
+    /// Whether the plugin holds the description of `topology_epoch`: Kafka's
+    /// `isReliablyStoredTopologyEpoch` and an equal epoch.
+    #[must_use]
+    pub fn holds(self, topology_epoch: i32) -> bool {
+        self.stored >= 0 && self.stored == topology_epoch
+    }
+}
+
 /// Kafka's `GroupCoordinatorConfig.STREAMS_GROUP_TOPOLOGY_DESCRIPTION_PLUGIN_CLASS_CONFIG`.
 pub const PLUGIN_CLASS_CONFIG: &str = "group.streams.topology.description.plugin.class";
 

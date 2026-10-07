@@ -16,7 +16,9 @@ use krabka_protocol::owned::{
 
 use super::{
     ActorState, chrono_now_ms,
-    reconciliation::{assignment_delay, configure_after_load, reconcile},
+    reconciliation::{
+        assignment_delay, configure_after_load, reconcile, validation_or_configs_changed,
+    },
     records::{flush_pending, snapshot_pending_after_change},
     request::{build_member, task_ids_to_map, task_offsets_to_map, update_client_tags},
     response::{ResponseDelta, build_assignment_resp, endpoint_to_partitions, error_resp},
@@ -231,7 +233,7 @@ pub(super) async fn handle_heartbeat(
 
     // ─── Steady state ────────────────────────────────────────────
     let mut changed = update_member_steady_state(actor, req, client_id, client_host, now);
-    refresh_topic_metadata(actor, metadata_source);
+    refresh_topic_metadata(actor, config, metadata_source);
 
     if actor.state.dirty || actor.assignment_pending() {
         let epochs = (actor.state.group_epoch, actor.state.target.epoch);
@@ -480,26 +482,31 @@ fn subtopologies_by_id(
 }
 
 /// Marks the group for a reconcile when a topic that the topology needs
-/// changed since the last reconcile.
+/// changed since the last reconcile, when the topology it validated changed,
+/// or when its assignment configuration changed.
 ///
 /// Kafka's `onMetadataUpdate` requests a metadata refresh for every streams
 /// group that uses a created, changed or deleted topic, and the next heartbeat
 /// computes the metadata hash again. A new hash configures the topology again
-/// and bumps the group epoch.
+/// and bumps the group epoch. The heartbeat then bumps the epoch when the
+/// validated topology epoch or the assignment configuration differs from the
+/// one that the group's last `StreamsGroupMetadataValue` recorded.
 fn refresh_topic_metadata(
     actor: &mut ActorState,
+    config: &StreamsGroupConfig,
     metadata_source: Option<&Arc<dyn MetadataSource>>,
 ) {
-    let Some(source) = metadata_source else {
-        return;
-    };
-    if !actor.state.dirty {
-        configure_after_load(actor, source);
+    if let Some(source) = metadata_source {
+        if !actor.state.dirty {
+            configure_after_load(actor, source);
+        }
+        if let Some(topology) = actor.topology.as_ref()
+            && topology::metadata_hash(topology, &source.current_image()) != actor.metadata_hash
+        {
+            actor.state.dirty = true;
+        }
     }
-    let Some(topology) = actor.topology.as_ref() else {
-        return;
-    };
-    if topology::metadata_hash(topology, &source.current_image()) != actor.metadata_hash {
+    if !actor.state.dirty && validation_or_configs_changed(actor, config) {
         actor.state.dirty = true;
     }
 }

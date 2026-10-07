@@ -65,7 +65,6 @@ mod tests {
     use assert2::{assert, check};
 
     use super::*;
-    use crate::coordinator::unified::streams::persistence::DescriptionEpochs;
 
     #[test]
     fn pending_records_into_batch_emits_one_record_per_key() {
@@ -73,7 +72,8 @@ mod tests {
             group_metadata: Some(StreamsGroupMetadataValue {
                 epoch: 1,
                 metadata_hash: 0,
-                description: DescriptionEpochs::default(),
+                validated_topology_epoch: -1,
+                last_assignment_configs: None,
             }),
             topology: Some(StreamsGroupTopologyValue::default()),
             ..Default::default()
@@ -97,7 +97,8 @@ mod tests {
             group_metadata: Some(StreamsGroupMetadataValue {
                 epoch: 1,
                 metadata_hash: 0,
-                description: DescriptionEpochs::default(),
+                validated_topology_epoch: -1,
+                last_assignment_configs: None,
             }),
             member_metadata: vec![("m".into(), None)],
             topology: Some(StreamsGroupTopologyValue::default()),

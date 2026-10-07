@@ -57,8 +57,8 @@ use self::{
 };
 use super::{
     config::StreamsGroupConfig,
-    description::{SolicitationBackoff, StoredDescription, TopologyDescription},
-    persistence::{DescriptionEpochs, StreamsGroupTopologyValue},
+    description::{DescriptionEpochs, SolicitationBackoff, StoredDescription, TopologyDescription},
+    persistence::StreamsGroupTopologyValue,
     state::{self, StreamsGroupState},
 };
 use crate::{
@@ -316,6 +316,16 @@ struct ActorState {
     /// the image that the most recent reconcile configured the topology
     /// against. A heartbeat that sees another hash reconciles again.
     metadata_hash: i64,
+    /// Kafka's `StreamsGroup.validatedTopologyEpoch`: the epoch of the
+    /// topology that the group last found configured and ready in the
+    /// metadata image when it bumped its epoch, or -1 when it was not ready.
+    /// A new group holds 0, as Kafka's `TimelineInteger` starts. A heartbeat
+    /// that validates another epoch bumps the group epoch.
+    validated_topology_epoch: i32,
+    /// Kafka's `StreamsGroup.lastAssignmentConfigs`: the assignment
+    /// configuration of the last group epoch bump. A heartbeat that sees
+    /// another configuration bumps the group epoch.
+    last_assignment_configs: BTreeMap<String, String>,
     /// The internal topics that the topology needs and the metadata image
     /// does not hold. Every heartbeat answer carries them, as Kafka's
     /// `StreamsGroupHeartbeatResult.creatableTopics` does, and `KafkaApis`
@@ -345,8 +355,8 @@ struct ActorState {
     /// assignment metadata record, and Kafka's assignment interval runs from
     /// it.
     assignment_timestamp_ms: i64,
-    /// KIP-1331: what the topology description plugin holds for the group,
-    /// as the group metadata record persists it.
+    /// KIP-1331: what the topology description plugin holds for the group.
+    /// It is not persisted: see [`DescriptionEpochs`].
     description_epochs: DescriptionEpochs,
     /// The description that the in-memory plugin holds for the group. It is
     /// not persisted: the plugin loses it with the broker.
@@ -361,6 +371,8 @@ impl ActorState {
             state: StreamsGroupState::new(group_id),
             topology: None,
             metadata_hash: 0,
+            validated_topology_epoch: 0,
+            last_assignment_configs: BTreeMap::new(),
             creatable_topics: Vec::new(),
             target_changed: false,
             configured: false,
@@ -550,22 +562,13 @@ async fn actor_loop(
                 };
                 let next =
                     resolve_group_config_from_image(&default_config, &image, &actor.state.group_id);
+                // Kafka reads a group's configuration when it needs it. A
+                // changed assignment configuration bumps the group epoch at
+                // the next heartbeat, which compares it with the
+                // `LastAssignmentConfigs` of the last bump.
                 if next != config {
                     config = next;
                     tick = session_tick(&config);
-                    actor.state.dirty = true;
-                    if reconcile_and_flush(
-                        &mut actor,
-                        &config,
-                        metadata_source,
-                        &*offsets_log,
-                        &coordinator,
-                    )
-                    .await
-                    .is_err()
-                    {
-                        break;
-                    }
                 }
             }
         }
@@ -721,20 +724,7 @@ async fn handle_message(
             let _ = reply.send(view);
         }
         StreamsGroupActorMessage::PushDescription { push, reply } => {
-            match description::handle_push(actor, offsets_log, coordinator, *push).await {
-                Ok(answer) => {
-                    let _ = reply.send(answer);
-                }
-                Err(e) => {
-                    tracing::warn!(
-                        group_id = %actor.state.group_id,
-                        error = %e,
-                        "streams-group actor exiting after log-write failure",
-                    );
-                    let _ = reply.send((write_failure_code(&e), None));
-                    return Step::Stop;
-                }
-            }
+            let _ = reply.send(description::handle_push(actor, &push));
         }
         StreamsGroupActorMessage::ValidateCommit {
             member_id,

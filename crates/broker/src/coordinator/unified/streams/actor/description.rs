@@ -7,11 +7,11 @@
 //! plugin and the back-off. The actor keeps all three for its group, so each
 //! step below runs in the one turn of the actor that handles the message.
 //!
-//! Kafka writes the group metadata record twice per push: the `UNCERTAIN`
-//! epoch before it calls the plugin, so that a broker that dies between the
-//! two writes asks again, and the pushed epoch after. The in-memory plugin
-//! stores in the same turn and loses everything with the broker, so the actor
-//! writes only the second record, which leaves the log as Kafka's.
+//! Kafka trunk writes the group metadata record twice per push, with the
+//! epochs in KIP-1331's tags 2 and 3. Kafka 4.3.1, whose records the broker
+//! writes, has neither KIP-1331 nor those tags, so a push writes nothing: the
+//! actor keeps the epochs in memory beside the in-memory plugin's
+//! description, and both go when the actor does.
 
 use std::time::Instant;
 
@@ -21,18 +21,13 @@ use krabka_protocol::owned::{
     streams_group_heartbeat_response::StreamsGroupHeartbeatResponse,
 };
 
-use super::{ActorState, chrono_now_ms, records::flush_pending};
+use super::ActorState;
 use crate::{
     codes,
-    coordinator::unified::{
-        GroupCoordinator,
-        offsets_log::OffsetsLog,
-        streams::{
-            config::StreamsGroupConfig,
-            description::{Jitter, StoredDescription, TopologyDescription},
-            persistence::{PendingStreamsRecords, StreamsGroupMetadataValue},
-            topology::status,
-        },
+    coordinator::unified::streams::{
+        config::StreamsGroupConfig,
+        description::{Jitter, StoredDescription, TopologyDescription},
+        topology::status,
     },
 };
 
@@ -111,69 +106,49 @@ pub(super) fn maybe_request_description(
 
 /// Kafka's `StreamsGroupTopologyDescriptionManager.pushTopology` with the
 /// in-memory plugin: checks the push against the group, stores the
-/// description, and records its epoch.
-///
-/// # Errors
-///
-/// Returns the error of the log write that records the epoch. The actor then
-/// stops, as it does when a heartbeat cannot write.
-pub(super) async fn handle_push(
-    actor: &mut ActorState,
-    offsets_log: &dyn OffsetsLog,
-    coordinator: &GroupCoordinator,
-    push: DescriptionPush,
-) -> Result<PushAnswer, crate::error::BrokerError> {
+/// description, and records its epoch in memory.
+pub(super) fn handle_push(actor: &mut ActorState, push: &DescriptionPush) -> PushAnswer {
     let group_id = actor.state.group_id.clone();
     // `GroupMetadataManager.validateStreamsGroupTopologyDescriptionUpdate`.
     if actor.holds_nothing() {
-        return Ok((
+        return (
             codes::GROUP_ID_NOT_FOUND,
             Some(format!("Group {group_id} not found.")),
-        ));
+        );
     }
     if !actor.state.members.contains_key(&push.member_id) {
-        return Ok((
+        return (
             codes::UNKNOWN_MEMBER_ID,
             Some(format!(
                 "Member {} is not a member of group {group_id}.",
                 push.member_id
             )),
-        ));
+        );
     }
     let topology_epoch = current_topology_epoch(actor);
     if push.topology_epoch != topology_epoch {
-        return Ok((
+        return (
             codes::INVALID_REQUEST,
             Some(format!(
                 "Topology epoch {} does not match the group's current topology epoch \
                  {topology_epoch}.",
                 push.topology_epoch
             )),
-        ));
+        );
     }
     let description = match TopologyDescription::from_push(&push.description) {
         Ok(description) => description,
-        Err(message) => return Ok((codes::INVALID_REQUEST, Some(message))),
+        Err(message) => return (codes::INVALID_REQUEST, Some(message)),
     };
     // `InMemoryTopologyDescriptionPlugin.setTopology` replaces what the group
-    // held, and `setStoredDescriptionTopologyEpoch` records the epoch over the
-    // `UNCERTAIN` mark that Kafka writes first.
+    // held, and `setStoredDescriptionTopologyEpoch` records the epoch.
     actor.description = Some(StoredDescription {
         topology_epoch,
         description,
     });
     actor.description_epochs.stored = topology_epoch;
-    let pending = PendingStreamsRecords {
-        group_metadata: Some(StreamsGroupMetadataValue {
-            epoch: actor.state.group_epoch,
-            metadata_hash: actor.metadata_hash,
-            description: actor.description_epochs,
-        }),
-        ..Default::default()
-    };
-    flush_pending(actor, pending, offsets_log, coordinator, chrono_now_ms()).await?;
     actor.description_backoff.clear(topology_epoch);
-    Ok((codes::NONE, None))
+    (codes::NONE, None)
 }
 
 /// What `StreamsGroupTopologyDescriptionManager.attachTopologyDescriptions`

@@ -2383,3 +2383,149 @@ async fn the_replayed_assignment_timestamp_holds_the_interval() {
         check!(fresh || written == stored, "{case}");
     }
 }
+
+/// Kafka's `streamsGroupHeartbeat` bumps the epoch of a group whose members
+/// and topology did not change when the topology epoch that it validates, or
+/// its assignment configuration, differs from what the group's last
+/// `StreamsGroupMetadataValue` recorded, and the bump records the new
+/// values. With no metadata source no topology is ready, so the group
+/// validates -1, and the default configuration is `num.standby.replicas=0`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_changed_validation_or_assignment_config_bumps_the_epoch() {
+    use crate::coordinator::unified::{
+        StreamsGroupSeed,
+        streams::persistence::{
+            StreamsGroupCurrentMemberAssignmentValue, StreamsGroupMemberMetadataValue,
+            StreamsMemberWireState,
+        },
+    };
+
+    let configs = |standby: &str| {
+        maplit::btreemap! {"num.standby.replicas".to_string() => standby.to_string()}
+    };
+    // The record that the bump writes: the epoch after the loaded 2, the
+    // validated topology epoch, and the configuration.
+    let bump = Some((3, -1, configs("0")));
+    // (case, the stored validated topology epoch, the stored configuration,
+    // what a steady heartbeat writes)
+    let rows = [
+        ("as recorded", -1, configs("0"), None),
+        ("another configuration", -1, configs("1"), bump.clone()),
+        (
+            "a null configuration list",
+            -1,
+            BTreeMap::new(),
+            bump.clone(),
+        ),
+        (
+            "a topology validated before the load",
+            0,
+            configs("0"),
+            bump,
+        ),
+    ];
+    for (case, validated, last_configs, expected) in rows {
+        let (coord, _log) = make_coordinator();
+        let handle = coord.get_or_create_streams("g");
+        handle
+            .tx
+            .send(StreamsGroupActorMessage::Seed(StreamsGroupSeed {
+                group_epoch: 2,
+                validated_topology_epoch: validated,
+                last_assignment_configs: last_configs,
+                assignment_epoch: 2,
+                members: [(
+                    "m1".to_owned(),
+                    StreamsGroupMemberMetadataValue {
+                        instance_id: None,
+                        rack_id: None,
+                        client_id: "client".into(),
+                        client_host: "/127.0.0.1".into(),
+                        process_id: "p1".into(),
+                        user_endpoint: None,
+                        client_tags: vec![],
+                        rebalance_timeout_ms: 60_000,
+                        topology_epoch: 0,
+                    },
+                )]
+                .into(),
+                current_per_member: [(
+                    "m1".to_owned(),
+                    StreamsGroupCurrentMemberAssignmentValue {
+                        member_epoch: 2,
+                        previous_member_epoch: 1,
+                        state: StreamsMemberWireState::Stable,
+                        ..StreamsGroupCurrentMemberAssignmentValue::default()
+                    },
+                )]
+                .into(),
+                ..StreamsGroupSeed::default()
+            }))
+            .await
+            .unwrap();
+        heartbeat(
+            &handle,
+            StreamsGroupHeartbeatRequest {
+                group_id: "g".into(),
+                member_id: "m1".into(),
+                member_epoch: 2,
+                ..Default::default()
+            },
+        )
+        .await;
+        let written = coord.cached_streams_seed("g").map(|seed| {
+            (
+                seed.group_epoch,
+                seed.validated_topology_epoch,
+                seed.last_assignment_configs,
+            )
+        });
+        check!(written == expected, "{case}");
+    }
+}
+
+/// The bump of a group whose topology the metadata holds in a valid
+/// configuration records the topology epoch as `ValidatedTopologyEpoch`,
+/// and every bump records `LastAssignmentConfigs`, as Kafka's
+/// `newStreamsGroupMetadataRecord` writes them.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_bump_records_the_validated_topology_epoch() {
+    use crate::test_support::FakeMetadataSource;
+
+    // (case, the topics in the image, the recorded validated topology epoch)
+    let rows = [
+        ("the source topic exists", vec![("in", 1, 2)], 1),
+        ("the source topic is missing", vec![], -1),
+    ];
+    for (case, topics, validated) in rows {
+        let source = Arc::new(
+            FakeMetadataSource::builder()
+                .image(image_of(None, &topics))
+                .build(),
+        );
+        let (coord, _log) = make_coordinator();
+        coord.set_metadata_source(source);
+        let handle = coord.get_or_create_streams("g");
+        heartbeat(
+            &handle,
+            StreamsGroupHeartbeatRequest {
+                group_id: "g".into(),
+                member_id: "m1".into(),
+                member_epoch: 0,
+                rebalance_timeout_ms: 1_000,
+                topology: Some(one_subtopology(false)),
+                ..Default::default()
+            },
+        )
+        .await;
+        let seed = coord.cached_streams_seed("g").unwrap();
+        check!(
+            (seed.validated_topology_epoch, seed.last_assignment_configs)
+                == (
+                    validated,
+                    maplit::btreemap! {"num.standby.replicas".to_string() => "0".to_string()}
+                ),
+            "{case}"
+        );
+    }
+}

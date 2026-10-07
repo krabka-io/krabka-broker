@@ -23,7 +23,7 @@ use crate::{
         streams::{
             assignor::{self, AssignorInput, AssignorMember},
             config::StreamsGroupConfig,
-            persistence::StreamsGroupTopologyValue,
+            persistence::{NO_VALIDATED_TOPOLOGY_EPOCH, StreamsGroupTopologyValue},
             state::{StreamsGroupStatePhase, StreamsTargetAssignment},
             topology,
         },
@@ -62,7 +62,7 @@ pub(super) fn reconcile(
 ) {
     let target_epoch = actor.state.target.epoch;
     if actor.state.dirty {
-        update_group_epoch(actor, metadata_source);
+        update_group_epoch(actor, config, metadata_source);
     }
     if actor.assignment_pending() && assignment_delay(actor, config, Instant::now()).is_none() {
         update_target_assignment(actor, config);
@@ -123,9 +123,50 @@ pub(super) fn configure_after_load(actor: &mut ActorState, source: &Arc<dyn Meta
     actor.configured_topology = Some(configured);
 }
 
+/// Kafka's `streamsGroupAssignmentConfigs`: the assignment configuration that
+/// Kafka 4.3.1 records in `LastAssignmentConfigs` and compares on every
+/// heartbeat, `num.standby.replicas` alone.
+#[must_use]
+pub(super) fn assignment_configs(config: &StreamsGroupConfig) -> BTreeMap<String, String> {
+    BTreeMap::from([(
+        "num.standby.replicas".to_owned(),
+        config.num_standby_replicas.to_string(),
+    )])
+}
+
+/// The `validatedTopologyEpoch` that Kafka's `streamsGroupHeartbeat` derives
+/// from the configured topology: the topology epoch when the configured
+/// topology is ready, and -1 otherwise.
+#[must_use]
+pub(super) fn validated_topology_epoch(actor: &ActorState) -> i32 {
+    actor
+        .ready_topology()
+        .and(actor.topology.as_ref())
+        .map_or(NO_VALIDATED_TOPOLOGY_EPOCH, |topology| topology.epoch)
+}
+
+/// Kafka's checks in `streamsGroupHeartbeat` that bump the group epoch of a
+/// group whose members and topology did not change: a topology epoch that
+/// the group validated, or stopped validating, since its last bump, and an
+/// assignment configuration other than the last one.
+#[must_use]
+pub(super) fn validation_or_configs_changed(
+    actor: &ActorState,
+    config: &StreamsGroupConfig,
+) -> bool {
+    validated_topology_epoch(actor) != actor.validated_topology_epoch
+        || assignment_configs(config) != actor.last_assignment_configs
+}
+
 /// Configures the topology against the current image and bumps the group
-/// epoch, which leaves the target assignment behind it.
-fn update_group_epoch(actor: &mut ActorState, metadata_source: Option<&Arc<dyn MetadataSource>>) {
+/// epoch, which leaves the target assignment behind it. The bump records the
+/// validated topology epoch and the assignment configuration, which Kafka's
+/// `newStreamsGroupMetadataRecord` writes beside the epoch.
+fn update_group_epoch(
+    actor: &mut ActorState,
+    config: &StreamsGroupConfig,
+    metadata_source: Option<&Arc<dyn MetadataSource>>,
+) {
     if let (Some(source), Some(topology)) = (metadata_source, actor.topology.clone()) {
         let image = source.current_image();
         actor.configured = true;
@@ -156,6 +197,8 @@ fn update_group_epoch(actor: &mut ActorState, metadata_source: Option<&Arc<dyn M
     if !actor.state.bump_epoch() {
         return;
     }
+    actor.validated_topology_epoch = validated_topology_epoch(actor);
+    actor.last_assignment_configs = assignment_configs(config);
     actor.state.dirty = false;
     actor.state.phase = if actor.state.members.is_empty() {
         StreamsGroupStatePhase::Empty
