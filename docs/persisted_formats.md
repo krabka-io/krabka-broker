@@ -123,6 +123,11 @@ The broker also reads the topic config key `krabka.elr`, which a 0.x broker wrot
 | `__diskless_wal_index` | krabka. Keys are fixed-width binary; values are wincode. | Each key starts with an `i16` key version that names its type: 0 for a range key, 1 for a delete-floor key. Each value starts with an `i16` version: 2 for `WalFlushRecord`, 0 for `WalDeleteFloorRecord`. | An unknown key version or value version is refused, and the live index marks its projection invalid. | None |
 | `__krabka_audit` | OCSF 1.3.0 JSON, with hash-chain headers and signed checkpoints in the signing domain `krabka-audit-ckpt-v1` | The OCSF schema version and the signing domain | Defined by `krabka-audit verify` | None |
 
+The group coordinator writes a `__consumer_offsets` group record only where Kafka 4.3.1's `GroupMetadataManager` writes it. So a reader of the topic must accept two shapes that a write on every transition did not make:
+
+- **A group can exist without a group metadata record.** A new consumer or share group starts at Kafka's group epoch 1, and the first `ConsumerGroupMetadataValue` (type 3) or `ShareGroupMetadataValue` (type 11) comes only with the first epoch bump. A member that joins without a change to the subscribed topic names writes its member record and its current assignment (types 5 and 8 for a consumer group) and no type 3. Replay creates the group from the first child record, as Kafka's `getOrMaybeCreatePersistedConsumerGroup` does, at epoch 1.
+- **A target assignment can be empty.** `ConsumerGroupTargetAssignmentMemberValue` (type 7), `ShareGroupTargetAssignmentMemberValue` (type 13) and `StreamsGroupTargetAssignmentMemberValue` (type 21) can hold an empty assignment. That is a member with no target, which is not the same as a tombstone: the tombstone removes the member's target, and the empty value keeps it.
+
 ### Other local state
 
 | Artifact | Location | Encoding | Version marker | Unknown-version behavior | Gating |
@@ -165,6 +170,12 @@ The items below are true of the code at 1.0.0.
 ### Fixture coverage
 
 Every krabka-owned format in the tables above has a golden-bytes test that encodes a value, compares it with fixed bytes and decodes the bytes back. The Kafka-owned formats rely on the Kafka differential suites instead. The replay-fence key `__krabka_diskless_replay_fence` in `__diskless_wal_index` is a fixed literal with an empty value and has no version.
+
+### Unknown tagged fields in group records
+
+Kafka 4.3.1 builds each group record that it writes from its in-memory group, not from the record it replayed. So it drops the unknown tagged fields at the top level of a replayed record when it writes that record again, and krabka drops them too. KIP-1331's streams tags 2 and 3, which Kafka 4.3.1 does not know, follow the same rule: krabka writes them only while `group.streams.topology.description.plugin.class` is set.
+
+Kafka keeps two nested structs of a replayed record as the generated objects, with their unknown tagged fields: `ConsumerGroupMemberMetadataValue.ClassicMemberMetadata`, with each of its `ClassicProtocol` entries, and `StreamsGroupMemberMetadataValue.Endpoint`. A member record that Kafka writes from a copy of the member, such as the record of a static member's replacement, carries those fields again. And because the generated `equals` compares them, a classic rejoin or a streams heartbeat that sends the same values as the replayed record still writes the member record again, and for the streams heartbeat also bumps the group epoch. krabka decodes these structs into its own types and drops their unknown tagged fields, so it writes the member record without them, and it writes no record and bumps no epoch for such a heartbeat. Kafka 4.3.1 defines no tagged field in these structs, so only a record from a later Kafka version can carry one.
 
 ## Integration
 

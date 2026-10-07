@@ -249,6 +249,48 @@ The records the coordinators write to `__consumer_offsets` now match Kafka
   already at the hard limit, or when the hard limit is unlimited, because
   Linux refuses an unlimited soft limit on open files. It logs a warning when
   the change fails.
+- **Breaking, group coordinator.** The consumer, share and streams group
+  coordinators write `__consumer_offsets` records where Kafka 4.3.1's
+  `GroupMetadataManager` writes them, in the same batches:
+  - New consumer and share groups start at group epoch and assignment epoch 1,
+    as Kafka's `ModernGroup` and `TargetAssignmentMetadata.INITIAL` do, so the
+    first epoch bump of a new group writes epoch 2. Streams groups already
+    started at 1.
+  - A group record is written only when a transition changes what it holds:
+    the member record when the member changed, the group metadata record when
+    the group epoch moves, the targets that changed with the target metadata,
+    and the member's current assignment when it changed. Before, each
+    transition wrote the group epoch, and the records of every member it
+    touched, again.
+  - A leave or a fence bumps the group epoch and computes no target. Each
+    session or rebalance timer fences its member in a batch of its own.
+    Before, a leave installed a new target, and one batch fenced all expired
+    members.
+  - The resolutions of a regular expression are written in a batch of their
+    own, after the heartbeat's batch. A member that joins with a regular
+    expression gets its topics at its next heartbeat, as in Kafka, not in the
+    response to its join.
+  - The downgrade of a consumer group to a classic group happens inside the
+    fence batch, not after it.
+  - The upgrade of a classic group, and the replacement of a static member, go
+    in the heartbeat's batch. The records of the replacement come before the
+    heartbeat's own records.
+  - `ConsumerGroupMemberMetadataValue` (type 5) lists its topics in sorted
+    order and writes `""` when the member has no regular expression, as
+    `newConsumerGroupMemberSubscriptionRecord` does. The share member record
+    lists its topics in sorted order too.
+  - A classic group that converts to a consumer group keeps its generation as
+    its group epoch, and the last assignment of each member becomes its target
+    and its current assignment, as `ConsumerGroup.fromClassicGroup` does.
+  - A member with no target gets a target-assignment record with an empty
+    value, not a tombstone.
+  - The `ShareGroupStatePartitionMetadata` (type 15) record of the partitions
+    that a heartbeat initializes is the last record of the heartbeat's batch.
+    Before, it was a batch of its own.
+  - Each share partition that a heartbeat initializes starts at offset -1, as
+    Kafka's `buildInitializeShareGroupStateRequest` asks. So a new partition
+    of a topic that a share group already consumes starts where
+    `share.auto.offset.reset` says. Before, it started at offset 0.
 
 ### Fixed
 
