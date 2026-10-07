@@ -45,10 +45,14 @@ use crate::{
 /// and skips the same record, so the replicas agree. Stopping on it instead
 /// would stop every controller on a race a client can cause.
 ///
-/// The krabka-private record errors of later `krabka-metadata` revisions
+/// `TranslateError::InvalidReference` is one of those image lookups (an
+/// unknown partition, a directory list measured against the image's replicas)
+/// and is skipped too. `TranslateError::InvalidValue` is decided by the bytes
+/// alone (an unknown `fenced` or `leader_recovery_state` value, an integer out
+/// of range) and is undecodable, as are the krabka-private record errors
 /// (`UnknownPrivateTag`, `UnknownPrivateRecordVersion`, `PrivateTagMismatch`,
-/// `TrailingPrivateRecordBytes`) are undecodable: only the image-resolution
-/// errors below are skips.
+/// `TrailingPrivateRecordBytes`): only the image-resolution errors below are
+/// skips.
 ///
 /// # Errors
 /// [`MetadataReplayError::UndecodableRecord`] as above.
@@ -67,7 +71,7 @@ pub fn decode_committed_value(
             error @ (TranslateError::UnknownTopicId(_)
             | TranslateError::UnknownTopicName(_)
             | TranslateError::UnknownAclId(_)
-            | TranslateError::Invalid { .. }),
+            | TranslateError::InvalidReference { .. }),
         ) => {
             tracing::warn!(
                 offset,
