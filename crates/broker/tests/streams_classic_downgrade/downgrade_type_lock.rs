@@ -73,6 +73,9 @@ async fn streams_group_with_live_member_rejects_classic_join() {
     let refused = JoinGroupResponse {
         error_code: ERR_INCONSISTENT_GROUP_PROTOCOL,
         member_id: String::new(),
+        // Kafka's `JoinGroupResponse` sends an empty protocol name as null
+        // from version 7 on.
+        protocol_name: None,
         ..Default::default()
     };
     for (row, request) in rows {
