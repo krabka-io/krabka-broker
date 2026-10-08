@@ -9,9 +9,9 @@
 use super::{
     FileConfigError, RuntimeFileConfig,
     validate::{
-        kafka_int_bytes, nonnegative_time, positive_i32, positive_i64, positive_ratio,
-        positive_time, positive_u32, positive_usize, whole_bytes_u32, whole_bytes_u64,
-        whole_bytes_usize,
+        kafka_int_bytes, kafka_long_bytes, nonnegative_time, positive_i32, positive_i64,
+        positive_ratio, positive_time, positive_u32, positive_usize, whole_bytes_u32,
+        whole_bytes_u64, whole_bytes_usize,
     },
 };
 
@@ -53,6 +53,7 @@ impl RuntimeFileConfig {
             positive_usize: share_session_cache_max_when_unlimited;
             whole_bytes_usize: log_read_buffer_cap => log_config.read_buffer_cap,
                 log_timestamp_scan_window => log_config.timestamp_scan_window;
+            kafka_long_bytes: log_read_ahead_max => log_config.read_ahead_max;
         }
         // A topic reports these two at `STATIC_BROKER_CONFIG` when the
         // operator named them, so the loader records the provenance.
@@ -155,6 +156,38 @@ mod tests {
         .expect("apply runtime config");
 
         assert!(cfg.log_config.max_message_size.bytes_u64() == 2048);
+    }
+
+    /// Zero is a value here, not a disabled key: it limits the read-ahead
+    /// hint to the fetch's own range. A fractional byte count is refused.
+    #[test]
+    fn log_read_ahead_max_round_trips_into_the_log_config() {
+        for (value, expected) in [
+            ("8MiB", Some(8 * 1024 * 1024)),
+            ("0B", Some(0)),
+            ("1.5B", None),
+        ] {
+            let applied = toml::from_str::<FileConfig>(&format!(
+                "[runtime]\nlog_read_ahead_max = \"{value}\"\n"
+            ))
+            .ok()
+            .and_then(|file| {
+                let mut cfg = crate::config::BrokerConfig::default();
+                file.apply_to(&mut cfg)
+                    .ok()
+                    .map(|()| cfg.log_config.read_ahead_max.bytes_u64())
+            });
+            assert!(applied == expected, "log_read_ahead_max={value}");
+        }
+    }
+
+    #[test]
+    fn omitted_log_read_ahead_max_keeps_the_log_default() {
+        let cfg =
+            crate::file_config::test_support::configured("[runtime]\n", "parse runtime config")
+                .expect("apply runtime config");
+
+        assert!(cfg.log_config.read_ahead_max == krabka_log::DEFAULT_READ_AHEAD_MAX);
     }
 
     /// The TOML surface takes exactly the values Kafka's `INT` with

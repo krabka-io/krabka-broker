@@ -315,7 +315,10 @@ impl Log {
         limit_offset: Offset,
         max_size: ByteSize,
     ) -> Result<RawRead, LogError> {
-        let read_buffer_cap = self.config.read().unwrap().read_buffer_cap;
+        let (read_buffer_cap, read_ahead_max) = {
+            let config = self.config.read().unwrap();
+            (config.read_buffer_cap, config.read_ahead_max)
+        };
         self.check_locally_readable(fetch_offset)?;
         if fetch_offset >= limit_offset {
             return Ok(RawRead::empty(fetch_offset));
@@ -326,11 +329,12 @@ impl Log {
             limit_offset,
             max_size,
             |segment, next, budget| {
-                let read = segment.read_raw_with_buffer_cap(
+                let read = segment.read_raw_with_policy(
                     next,
                     limit_offset,
                     budget,
                     read_buffer_cap,
+                    read_ahead_max,
                 )?;
                 if read.is_empty() {
                     return Ok(None);
@@ -386,12 +390,15 @@ impl Log {
     )]
     /// # Errors
     /// Returns an error when log I/O fails, a record or index is corrupt, or the requested offset violates the segment state.
+    /// # Panics
+    /// Panics if the log's config lock is poisoned.
     pub fn read_raw_desc(
         &self,
         fetch_offset: Offset,
         limit_offset: Offset,
         max_size: ByteSize,
     ) -> Result<RawReadDesc, LogError> {
+        let read_ahead_max = self.config.read().unwrap().read_ahead_max;
         self.check_locally_readable(fetch_offset)?;
         if fetch_offset >= limit_offset {
             return Ok(RawReadDesc::empty(fetch_offset));
@@ -402,7 +409,8 @@ impl Log {
             limit_offset,
             max_size,
             |segment, next, budget| {
-                let read = segment.read_raw_desc(next, limit_offset, budget)?;
+                let read =
+                    segment.read_raw_desc_with_policy(next, limit_offset, budget, read_ahead_max)?;
                 Ok(read.region.map(|region| RawChunk {
                     len: region.len,
                     data: region,

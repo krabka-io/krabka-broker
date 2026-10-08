@@ -479,3 +479,35 @@ fn a_small_budget_preserves_unindexed_descriptor_records_before_a_seam() {
     check!(actual == expected);
 }
 }
+
+crate::sendfile_cfg! {
+/// The configured `read_ahead_max` reaches the readahead hint of both
+/// verbatim reads: each asks for its window and at most that much more, not
+/// the default 4 MiB past it.
+#[test]
+fn configured_read_ahead_max_reaches_both_verbatim_reads() {
+    let budget = ByteSize::from_bytes(1_000);
+    let mut actual = Vec::new();
+    let mut expected = Vec::new();
+    for (read_ahead_max, hinted) in [(0, 1_000), (100, 1_100)] {
+        let (_dir, mut log) = crate::log::test_support::configured_test_log(LogConfig {
+            read_ahead_max: ByteSize::from_bytes(read_ahead_max),
+            ..LogConfig::default()
+        });
+        crate::log::test_support::append_samples(&mut log, 40, 1);
+        check!(log.active.as_ref().unwrap().size().bytes_u64() > 2 * budget.bytes_u64());
+        let advice = std::sync::Arc::new(crate::test_support::RecordedAdvice::default());
+        log.test_set_io(advice.clone());
+        let end = log.log_end_offset();
+
+        log.read_raw(Offset(0), end, budget).unwrap();
+        actual.push((read_ahead_max, "read_raw", advice.take()));
+        log.read_raw_desc(Offset(0), end, budget).unwrap();
+        actual.push((read_ahead_max, "read_raw_desc", advice.take()));
+        for path in ["read_raw", "read_raw_desc"] {
+            expected.push((read_ahead_max, path, vec![(0, hinted)]));
+        }
+    }
+    check!(actual == expected);
+}
+}

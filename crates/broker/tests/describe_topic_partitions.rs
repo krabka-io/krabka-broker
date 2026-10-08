@@ -178,7 +178,7 @@ async fn unknown_topic_in_named_request_returns_error_row() {
 /// regress.
 #[tokio::test]
 async fn elr_lists_are_empty_not_null_for_jvm_3_8_admin_compatibility() {
-    let (p, resp) = described_topic("t", 1).await;
+    let (p, resp) = Box::pin(described_topic("t", 1)).await;
 
     assert!(resp.topics.len() == 1);
     assert!(resp.topics[0].partitions.len() == 1);
@@ -318,7 +318,7 @@ async fn a_feature_downgrade_empties_the_reported_elr() {
 
 #[tokio::test]
 async fn topic_authorized_operations_populated_for_super_user() {
-    let (p, resp) = described_topic("t", 1).await;
+    let (p, resp) = Box::pin(described_topic("t", 1)).await;
 
     assert!(resp.topics.len() == 1);
     let row = &resp.topics[0];

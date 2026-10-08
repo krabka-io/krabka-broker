@@ -10,6 +10,8 @@ use std::{
     io::{IoSlice, Seek, SeekFrom},
 };
 
+use krabka_units::prelude::{ByteSize, ByteSizeExt};
+
 use super::Segment;
 use crate::{error::LogError, io::LogIo};
 
@@ -89,30 +91,30 @@ fn read_at(file: &File, offset: u64, buf: &mut [u8]) -> std::io::Result<usize> {
     rustix::io::pread(file, buf, offset).map_err(Into::into)
 }
 
-/// How far past its own window a read asks the kernel to read ahead.
-///
-/// A consumer that is behind fetches the window after this one next, so the
-/// hint covers that window as well, up to this cap. The cap bounds the page
-/// cache one read can claim when a fetch asks for a very large budget.
-pub(super) const READ_AHEAD_MAX: u64 = 4 * 1024 * 1024;
-
 /// The byte range of `.log` a read from `start_pos` with a `window`-byte
 /// budget asks the kernel to read ahead, as `(offset, len)`.
 ///
-/// The range is the window itself, then up to [`READ_AHEAD_MAX`] more of
-/// what the next sequential read takes, clamped at `log_size`. `None` when
-/// that leaves nothing.
-pub(super) fn read_ahead_span(start_pos: u64, window: u64, log_size: u64) -> Option<(u64, u64)> {
+/// A consumer that is behind fetches the window after this one next, so the
+/// range is the window itself, then up to `read_ahead_max` more of what the
+/// next sequential read takes, clamped at `log_size`. The cap bounds the page
+/// cache one read can claim when a fetch asks for a very large budget, and `0`
+/// leaves only the window. `None` when that leaves nothing.
+pub(super) fn read_ahead_span(
+    start_pos: u64,
+    window: u64,
+    log_size: u64,
+    read_ahead_max: u64,
+) -> Option<(u64, u64)> {
     let end = start_pos
         .saturating_add(window)
-        .saturating_add(window.min(READ_AHEAD_MAX))
+        .saturating_add(window.min(read_ahead_max))
         .min(log_size);
     (end > start_pos).then(|| (start_pos, end - start_pos))
 }
 
 impl Segment {
     /// Ask the kernel for the window a read from `start_pos` is about to
-    /// take, and for the window after it.
+    /// take, and for up to `read_ahead_max` of the window after it.
     ///
     /// The verbatim read finds its batch boundaries with one small `pread`
     /// per batch header, each up to a window ahead of the last, and only then
@@ -124,8 +126,10 @@ impl Segment {
     /// consumer that is behind a page-cache hit. Kafka's fetch needs no hint:
     /// it reads no batch header past the one it starts at, and sends a slice
     /// that may end in a partial batch.
-    pub(super) fn advise_read(&self, start_pos: u64, window: u64) {
-        if let Some((offset, len)) = read_ahead_span(start_pos, window, self.log_size) {
+    pub(super) fn advise_read(&self, start_pos: u64, window: u64, read_ahead_max: ByteSize) {
+        if let Some((offset, len)) =
+            read_ahead_span(start_pos, window, self.log_size, read_ahead_max.bytes_u64())
+        {
             self.io.advise_will_need(&self.log_file, offset, len);
         }
     }
@@ -297,17 +301,19 @@ mod tests {
     }
 
     /// The readahead span is the read's window and up to one more window
-    /// after it, never past the end of the file.
+    /// after it, capped at the configured maximum, never past the end of the
+    /// file.
     #[test]
     fn the_read_ahead_span_covers_the_window_and_the_next_one() {
-        let max = READ_AHEAD_MAX;
+        let max = 4 * 1024 * 1024;
         let cases = [
-            // (name, start_pos, window, log_size, expected)
+            // (name, start_pos, window, log_size, read_ahead_max, expected)
             (
                 "window and the next",
                 100,
                 1_000,
                 10_000,
+                max,
                 Some((100, 2_000)),
             ),
             (
@@ -315,6 +321,7 @@ mod tests {
                 100,
                 1_000,
                 1_500,
+                max,
                 Some((100, 1_400)),
             ),
             (
@@ -322,6 +329,7 @@ mod tests {
                 100,
                 1_000,
                 600,
+                max,
                 Some((100, 500)),
             ),
             (
@@ -329,22 +337,35 @@ mod tests {
                 0,
                 3 * max,
                 10 * max,
+                max,
                 Some((0, 4 * max)),
             ),
-            ("nothing left", 600, 1_000, 600, None),
-            ("past the end", 700, 1_000, 600, None),
-            ("an empty window", 100, 0, 1_000, None),
+            ("a small cap", 100, 1_000, 10_000, 300, Some((100, 1_300))),
+            (
+                "a zero cap hints only the window",
+                100,
+                1_000,
+                10_000,
+                0,
+                Some((100, 1_000)),
+            ),
+            ("nothing left", 600, 1_000, 600, max, None),
+            ("past the end", 700, 1_000, 600, max, None),
+            ("an empty window", 100, 0, 1_000, max, None),
             (
                 "no overflow",
                 u64::MAX - 1,
                 10,
                 u64::MAX,
+                max,
                 Some((u64::MAX - 1, 1)),
             ),
         ];
         let actual: Vec<_> = cases
             .iter()
-            .map(|&(name, start, window, size, _)| (name, read_ahead_span(start, window, size)))
+            .map(|&(name, start, window, size, cap, _)| {
+                (name, read_ahead_span(start, window, size, cap))
+            })
             .collect();
         let expected: Vec<_> = cases
             .iter()

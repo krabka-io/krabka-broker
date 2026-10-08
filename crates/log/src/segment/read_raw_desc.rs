@@ -18,7 +18,7 @@ use super::{
     io::read_full_at,
     read_raw::{RawBatch, select_raw_range},
 };
-use crate::error::LogError;
+use crate::{config::DEFAULT_READ_AHEAD_MAX, error::LogError};
 
 impl Segment {
     /// Descriptor variant of [`Segment::read_raw`] for the zero-copy
@@ -50,6 +50,19 @@ impl Segment {
         limit_offset: Offset,
         max_size: ByteSize,
     ) -> Result<RawSegmentDesc, LogError> {
+        self.read_raw_desc_with_policy(fetch_offset, limit_offset, max_size, DEFAULT_READ_AHEAD_MAX)
+    }
+
+    /// [`Segment::read_raw_desc`] under the log's configured read policy: the
+    /// readahead hint reaches at most `read_ahead_max` past the read's own
+    /// window.
+    pub(crate) fn read_raw_desc_with_policy(
+        &self,
+        fetch_offset: Offset,
+        limit_offset: Offset,
+        max_size: ByteSize,
+        read_ahead_max: ByteSize,
+    ) -> Result<RawSegmentDesc, LogError> {
         let Some(start_pos) =
             self.raw_start_position(fetch_offset, limit_offset, "read_raw_desc")?
         else {
@@ -60,7 +73,7 @@ impl Segment {
         let max_bytes = max_size.bytes_usize();
         let window =
             (max_bytes.max(HEADER_LEN) as u64).min(self.log_size.saturating_sub(start_pos));
-        self.advise_read(start_pos, window);
+        self.advise_read(start_pos, window, read_ahead_max);
         let window = usize::try_from(window)
             .map_err(|_| LogError::Corrupt("read_raw_desc window too large".into()))?;
         let mut header = [0; HEADER_LEN];

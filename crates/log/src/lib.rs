@@ -118,8 +118,8 @@ pub mod topic_name;
 mod txn_index;
 
 pub use config::{
-    CleanupPolicy, DEFAULT_MAX_MESSAGE_SIZE, DeliveryPolicy, LogConfig, RemoteTierFlags,
-    ScheduleOrder,
+    CleanupPolicy, DEFAULT_MAX_MESSAGE_SIZE, DEFAULT_READ_AHEAD_MAX, DeliveryPolicy, LogConfig,
+    RemoteTierFlags, ScheduleOrder,
 };
 pub use delivery::{DeliveryAdvance, batch_is_deliverable};
 pub use error::LogError;

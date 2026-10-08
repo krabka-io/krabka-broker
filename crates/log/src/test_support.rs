@@ -93,3 +93,21 @@ pub(crate) fn numbered_record(offset_delta: i32, timestamp_delta: i64) -> Record
         ..Default::default()
     }
 }
+
+/// A [`crate::io::LogIo`] that records every readahead hint a read gives,
+/// as `(offset, len)`, and does real I/O for everything else.
+#[derive(Debug, Default)]
+pub(crate) struct RecordedAdvice(std::sync::Mutex<Vec<(u64, u64)>>);
+
+impl RecordedAdvice {
+    /// The hints given since the last call, oldest first.
+    pub(crate) fn take(&self) -> Vec<(u64, u64)> {
+        std::mem::take(&mut *self.0.lock().unwrap())
+    }
+}
+
+impl crate::io::LogIo for RecordedAdvice {
+    fn advise_will_need(&self, _file: &std::fs::File, offset: u64, len: u64) {
+        self.0.lock().unwrap().push((offset, len));
+    }
+}

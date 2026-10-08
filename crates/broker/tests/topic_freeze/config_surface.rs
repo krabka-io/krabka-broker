@@ -92,7 +92,7 @@ async fn incremental_alter_configs(
 /// broken.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn neither_alter_path_can_set_or_clear_a_freeze() {
-    let (p, frozen, control) = crate::wire::controlled_fixture("orders").await;
+    let (p, frozen, control) = Box::pin(crate::wire::controlled_fixture("orders")).await;
     freeze_scope(&p.client, PATTERN_TYPE_LITERAL, "orders", "cutover").await;
 
     let refusal = (

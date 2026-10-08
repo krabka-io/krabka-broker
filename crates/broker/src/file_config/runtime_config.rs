@@ -96,6 +96,13 @@ pub struct RuntimeFileConfig {
     pub share_session_cache_max_when_unlimited: Option<usize>,
     /// Cap on the initial allocation a decoded or raw segment read makes.
     pub log_read_buffer_cap: Option<ByteSize>,
+    /// Cap on how far past a fetch read's own byte range the broker asks the
+    /// kernel to read ahead, so a consumer that is behind finds its next fetch
+    /// in the page cache. The hint reaches up to one more range of the same
+    /// size, and no further than this. The default is 4 MiB, and 0 limits the
+    /// hint to the fetch's own range. The hint has no effect on a host other
+    /// than Linux.
+    pub log_read_ahead_max: Option<ByteSize>,
     /// Size of the window a timestamp search reads the log in.
     pub log_timestamp_scan_window: Option<ByteSize>,
     /// Roll the active segment once it grows past this. Kafka's

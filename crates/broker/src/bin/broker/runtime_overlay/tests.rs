@@ -149,6 +149,7 @@ fn runtime_policy_cli_reads_krabka_environment() {
             ("KRABKA_RECORD_DECOMPRESSION_OUTPUT_FLOOR", Some("8MiB")),
             ("KRABKA_RECORD_DECOMPRESSION_OUTPUT_CEILING", Some("512MiB")),
             ("KRABKA_LOG_READ_BUFFER_CAP", Some("2MiB")),
+            ("KRABKA_LOG_READ_AHEAD_MAX", Some("8MiB")),
             ("KRABKA_LOG_TIMESTAMP_SCAN_WINDOW", Some("32KiB")),
             ("KRABKA_TRANSACTION_RECOVERY_READ_MAX", Some("3MiB")),
             ("KRABKA_DISKLESS_WAL_LOCAL_REPLICA_COUNT", Some("5")),
@@ -188,6 +189,7 @@ fn runtime_policy_cli_reads_krabka_environment() {
                     == krabka_units::mebibytes(8)
             );
             assert!(config.log_config.read_buffer_cap == krabka_units::mebibytes(2));
+            assert!(config.log_config.read_ahead_max == krabka_units::mebibytes(8));
             assert!(config.log_config.timestamp_scan_window == krabka_units::kibibytes(32));
             assert!(config.transaction_recovery_read_max == krabka_units::mebibytes(3));
             assert!(config.diskless_wal_local_replica_count == 5);

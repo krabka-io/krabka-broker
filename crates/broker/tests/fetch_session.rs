@@ -61,7 +61,7 @@ fn fetch_topic(name: &str, topic_id: WireUuid, partitions: Vec<FetchPartition>) 
 /// batch appears on the next incremental as the only partition.
 #[tokio::test]
 async fn new_session_then_incremental_filters_unchanged_partitions() {
-    let (p, _tid, r1) = topic_session(3, 100).await;
+    let (p, _tid, r1) = Box::pin(topic_session(3, 100)).await;
     check!(r1.error_code == 0, "no top-level error");
     check!(r1.session_id > 0, "broker allocated a session id");
     assert!(r1.responses.len() == 1, "new session emits full response");
@@ -117,7 +117,7 @@ async fn new_session_then_incremental_filters_unchanged_partitions() {
 /// they never reappear on later fetches, even after a produce.
 #[tokio::test]
 async fn forgotten_topics_drop_partitions_from_subscription() {
-    let (p, tid, r1) = topic_session(3, 100).await;
+    let (p, tid, r1) = Box::pin(topic_session(3, 100)).await;
     let sid = r1.session_id;
     assert!(sid > 0);
 
@@ -191,7 +191,7 @@ async fn unknown_session_id_returns_not_found() {
 /// A stale epoch on a valid session gives `INVALID_FETCH_SESSION_EPOCH`.
 #[tokio::test]
 async fn stale_session_epoch_returns_invalid_epoch() {
-    let (p, _tid, r1) = topic_session(1, 0).await;
+    let (p, _tid, r1) = Box::pin(topic_session(1, 0)).await;
     let sid = r1.session_id;
     assert!(sid > 0);
 
@@ -215,7 +215,7 @@ async fn stale_session_epoch_returns_invalid_epoch() {
 /// entry. A later request with the same id is `NOT_FOUND`.
 #[tokio::test]
 async fn close_session_drops_cache_entry() {
-    let (p, tid, r1) = topic_session(1, 0).await;
+    let (p, tid, r1) = Box::pin(topic_session(1, 0)).await;
     let sid = r1.session_id;
     assert!(sid > 0);
 

@@ -27,11 +27,13 @@ the release tag; [Releasing](docs/releasing.md#cratesio) gives the procedure.
 
 - A consumer far behind the log end of a partition reads at disk speed. Each
   verbatim fetch read now gives the kernel one `POSIX_FADV_WILLNEED` hint for
-  its window and the window after it, up to 4 MiB more, before it walks the
-  batch headers. Before, the walk took one small `pread` per batch header,
-  each up to a window ahead of the data the kernel had read. On a cold segment
-  each was a disk read of its own, made one after another under the log mutex,
-  and the scattered pages kept the kernel's sequential readahead small. On one
+  its window and the window after it, before it walks the batch headers. The
+  new `[runtime]` key `log_read_ahead_max` caps how far past the window the
+  hint reaches. Its default is 4 MiB, and 0 hints only the window. Before,
+  the walk took one small `pread` per batch header, each up to a window ahead
+  of the data the kernel had read. On a cold segment each was a disk read of
+  its own, made one after another under the log mutex, and the scattered pages
+  kept the kernel's sequential readahead small. On one
   1 KiB-record partition with a backlog larger than the page cache, and a disk
   capped at 1,000 read IOPS, a drain took 50,600 disk reads of 81 KiB and ran
   at 75K records/s, below the 100K records/s publish rate of the
