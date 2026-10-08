@@ -10,13 +10,8 @@
 
 use assert2::check;
 use bytes::Bytes;
-use krabka_protocol::records::{Record, RecordBatch};
-use tempfile::tempdir;
 
-use super::{
-    replay::replay_records,
-    test_support::{bare_coordinator, classic_group_record},
-};
+use super::test_support::{classic_group_record, replay_log};
 use crate::coordinator::{
     persistence::{GroupMetadataValue as ClassicGroupMetadataValue, OffsetCommitValue},
     unified::{
@@ -97,21 +92,8 @@ fn classic_tombstone() -> LogRecord {
 }
 
 fn replay(records: Vec<LogRecord>) -> Held {
-    let coordinator = bare_coordinator();
-    let dir = tempdir().unwrap();
-    let mut log = krabka_log::Log::open(dir.path(), krabka_log::LogConfig::default()).unwrap();
-    for (key, value) in records {
-        log.append(&mut RecordBatch {
-            records: vec![Record {
-                key: Some(key),
-                value,
-                ..Record::default()
-            }],
-            ..RecordBatch::default()
-        })
-        .unwrap();
-    }
-    let replayed = match replay_records(&log, &coordinator) {
+    let (coordinator, replayed) = replay_log(records);
+    let replayed = match replayed {
         Ok(replayed) => replayed,
         Err(crate::error::BrokerError::Startup(message)) => return Held::Failed(message),
         Err(other) => return Held::Failed(other.to_string()),

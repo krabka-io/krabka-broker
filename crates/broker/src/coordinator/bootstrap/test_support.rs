@@ -223,3 +223,35 @@ pub(super) fn commit_record_for_group(
 ) -> krabka_protocol::records::Record {
     crate::coordinator::test_support::offset_record(group, "t", partition, offset)
 }
+
+/// Write each `(key, value)` record (a `None` value is a tombstone) to a fresh
+/// log as a batch of its own, then replay that log into a [`bare_coordinator`].
+///
+/// Returns the coordinator the replay seeded and what [`replay_records`]
+/// returned.
+///
+/// [`replay_records`]: super::replay::replay_records
+pub(super) fn replay_log(
+    records: impl IntoIterator<Item = (bytes::Bytes, Option<bytes::Bytes>)>,
+) -> (
+    Arc<GroupCoordinator>,
+    Result<super::replay::Replayed, crate::error::BrokerError>,
+) {
+    use krabka_protocol::records::{Record, RecordBatch};
+    let coordinator = bare_coordinator();
+    let dir = tempfile::tempdir().unwrap();
+    let mut log = krabka_log::Log::open(dir.path(), krabka_log::LogConfig::default()).unwrap();
+    for (key, value) in records {
+        log.append(&mut RecordBatch {
+            records: vec![Record {
+                key: Some(key),
+                value,
+                ..Record::default()
+            }],
+            ..RecordBatch::default()
+        })
+        .unwrap();
+    }
+    let replayed = super::replay::replay_records(&log, &coordinator);
+    (coordinator, replayed)
+}

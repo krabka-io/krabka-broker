@@ -8,10 +8,8 @@
 
 use assert2::check;
 use bytes::Bytes;
-use krabka_protocol::records::{Record, RecordBatch};
-use tempfile::tempdir;
 
-use super::{replay::replay_records, test_support::bare_coordinator};
+use super::test_support::replay_log;
 use crate::coordinator::unified::{
     GroupSeed,
     persistence_next_gen::{
@@ -59,21 +57,8 @@ fn value() -> Bytes {
 
 /// Replays one batch per record and returns what it left for group `g`.
 fn replay(records: Vec<LogRecord>) -> Outcome {
-    let coordinator = bare_coordinator();
-    let dir = tempdir().unwrap();
-    let mut log = krabka_log::Log::open(dir.path(), krabka_log::LogConfig::default()).unwrap();
-    for (key, value) in records {
-        log.append(&mut RecordBatch {
-            records: vec![Record {
-                key: Some(key),
-                value,
-                ..Record::default()
-            }],
-            ..RecordBatch::default()
-        })
-        .unwrap();
-    }
-    if replay_records(&log, &coordinator).is_err() {
+    let (coordinator, replayed) = replay_log(records);
+    if replayed.is_err() {
         return Outcome::Failed;
     }
     coordinator.seeds.get("g").map_or(Outcome::NoGroup, |seed| {
