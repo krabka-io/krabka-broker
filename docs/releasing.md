@@ -136,6 +136,31 @@ commit tag stops the release before signing, attestations or release tags change
 There is no rebuild fallback. The provenance records the CI run and immutable
 image reference in `internalParameters.imageSource`.
 
+The ARM64 half is the one thing release builds. It pushes
+`--platforms=//:linux_arm64` of `//packaging:image` by digest, with no tag of
+its own, and `docker buildx imagetools create` joins that manifest and the
+tested AMD64 manifest, each by digest, into the `vX.Y.Z` index. The job checks
+both children of the index before it moves a tag and again before it signs.
+It never rebuilds the AMD64 half. Through v1.0.0 it did, through
+`image_index`'s platform split, and required the rebuilt child to equal the
+tested digest. That transition moves every action into another output
+directory, so the rebuild compiled the broker from scratch rather than from
+the cache delivery used, and the check held only while such a rebuild was
+byte-for-byte identical to the build CI tested. For v1.0.0 it was not.
+
+If a release run fails in the workflow rather than in the commit, do not move
+the tag and do not cut a patch only to re-run it. Fix the workflow on `main`,
+then release the existing tag from there:
+
+```sh
+gh workflow run release.yml --ref main -f tag=v1.0.0
+```
+
+The dispatched run checks out the tag and holds it to the same `verify` checks
+as a push. Its signing identity is the workflow on the branch it ran from,
+`.../release.yml@refs/heads/main`, not `@refs/tags/vX.Y.Z`. Verify such a
+release with that identity.
+
 The artifact is retained for 90 days. If it is unavailable, rerun main CI for
 the release commit and require that complete run to succeed before rerunning the
 release workflow. A locally rebuilt image or a manually replaced commit tag

@@ -19,7 +19,8 @@ because there is no shell to fetch one with.
 
 Release tags and `latest` at `ghcr.io/krabka-io/krabka-broker` are image indexes
 for `linux/amd64` and `linux/arm64`. The per-commit delivery tag remains an
-AMD64 manifest used to verify the release's AMD64 child. On an ARM64 host, a
+AMD64 manifest, and the release index names that same manifest, by digest, as
+its AMD64 child. On an ARM64 host, a
 native image can also be built and loaded locally:
 
 ```
