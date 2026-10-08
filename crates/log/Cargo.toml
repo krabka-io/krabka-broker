@@ -5,12 +5,15 @@ edition.workspace = true
 license.workspace = true
 authors.workspace = true
 description = "Byte-compatible reader/writer for Apache Kafka's on-disk log format"
-repository = "https://github.com/robot-head/crabka"
-homepage = "https://github.com/robot-head/crabka"
+repository = "https://github.com/krabka-io/krabka-broker"
+homepage = "https://github.com/krabka-io/krabka-broker"
 documentation = "https://docs.rs/krabka-log"
 readme = "README.md"
 keywords = ["kafka", "log", "storage", "records", "krabka"]
 categories = ["database-implementations", "encoding"]
+# The library and the design document its README links to. Tests, benches and
+# fixtures stay out of the package.
+include = ["src/**/*.rs", "docs/design.md", "README.md", "CHANGELOG.md"]
 
 [lints]
 workspace = true

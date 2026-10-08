@@ -479,9 +479,11 @@ points at robot-head/crabka for the history before the extraction.
 
 ## Publishing
 
-`krabka-log` and the other published names in this tree are released to crates.io
-from [`robot-head/crabka`](https://github.com/robot-head/crabka). This repository
-publishes no crate; consumers pin it by git revision.
+A `vX.Y.Z` tag on `main` publishes `krabka-log` and `krabka-verified` to
+crates.io, with `krabka-macros`, which `krabka-log` needs. Every other crate,
+the broker included, sets `publish = false`; consumers of those pin this
+repository by git revision. [Releasing](docs/releasing.md#cratesio) gives the
+procedure.
 
 ## Roadmap
 
