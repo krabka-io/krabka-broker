@@ -48,7 +48,7 @@ use crate::{
 
 /// Kafka's `appendGroupMetadataErrorToResponseError`: the `JoinGroup` error
 /// for a group metadata write that failed.
-fn append_error_code(error: &crate::error::BrokerError) -> i16 {
+pub(crate) fn append_error_code(error: &crate::error::BrokerError) -> i16 {
     match codes::from_broker_error(error) {
         codes::UNKNOWN_TOPIC_OR_PARTITION
         | codes::NOT_ENOUGH_REPLICAS

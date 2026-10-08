@@ -12,14 +12,16 @@ use krabka_protocol::owned::{
 };
 
 use crate::{
-    CONVERGE_TRIES, ERR_GROUP_ID_NOT_FOUND, ERR_NON_EMPTY_GROUP, ERR_NONE,
+    CONVERGE_TRIES, ERR_INCONSISTENT_GROUP_PROTOCOL, ERR_NON_EMPTY_GROUP, ERR_NONE,
     downgrade_classic_join::{classic_join_sync, join_request},
     downgrade_harness::{boot, connect, create_topic, finalize_streams_version},
     downgrade_streams_join::{streams_join_and_converge, topology},
 };
 
 /// A streams group with a LIVE member rejects a classic `JoinGroup` with
-/// `GROUP_ID_NOT_FOUND` (69) and stays Streams-typed.
+/// `INCONSISTENT_GROUP_PROTOCOL` (23) and the unknown member id, as Kafka's
+/// `classicGroupJoin` does for a group that is not empty, and stays
+/// Streams-typed.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn streams_group_with_live_member_rejects_classic_join() {
     let (broker, bootstrap, _dir) = boot().await;
@@ -55,10 +57,8 @@ async fn streams_group_with_live_member_rejects_classic_join() {
     .expect("JoinGroup timeout")
     .expect("JoinGroup");
     assert!(
-        r.error_code == ERR_GROUP_ID_NOT_FOUND,
-        "classic join for streams group with live member must return \
-         GROUP_ID_NOT_FOUND (69), got {}",
-        r.error_code
+        (r.error_code, r.member_id.as_str()) == (ERR_INCONSISTENT_GROUP_PROTOCOL, ""),
+        "classic join for streams group with live member: {r:?}"
     );
     assert!(
         broker.group_type_for_test("g2")

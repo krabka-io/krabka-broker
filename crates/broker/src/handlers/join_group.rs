@@ -14,8 +14,9 @@ use krabka_protocol::owned::{
 use crate::{
     codes,
     coordinator::unified::{
-        actor::{GroupActorMessage, GroupKindTag},
+        actor::{GroupActorMessage, GroupKindTag, join_append_error_code},
         config::NextGenConfig,
+        streams::migration::DowngradeOutcome,
     },
     task_util::ask,
     time_util::now_ms,
@@ -71,28 +72,46 @@ context_handler! {
         // same id can detect it as a classic group and either convert or reject it
         // (KIP-1071 cold upgrade). First-mark-wins: a prior `mark_next_gen` (or any
         // other type lock) from a consumer-protocol group is not overridden.
-        // KIP-1071 cold downgrade: a classic JoinGroup for a drained streams group
-        // converts it in place to a classic group; a streams group with live members
-        // is rejected (online streams migration is unsupported). Non-streams group
+        // KIP-1071 cold downgrade: Kafka's `classicGroupJoin` refuses a join to a
+        // streams group with members, and sends one to an empty streams group to
+        // `classicGroupJoinToClassicGroup`, which deletes it. Non-streams group
         // ids pass through unchanged.
         match broker
             .group_coordinator
-            .try_convert_streams_to_classic(&req.group_id, now_ms())
+            .try_convert_streams_to_classic(&req.group_id, &req.member_id, now_ms())
             .await
         {
-            Ok(
-                crate::coordinator::unified::streams::migration::DowngradeOutcome::RejectLiveMembers,
-            ) => {
+            Ok(DowngradeOutcome::RejectLiveMembers) => {
                 return Ok(respond(
                     version,
                     JoinGroupResponse {
-                        error_code: codes::GROUP_ID_NOT_FOUND,
+                        error_code: codes::INCONSISTENT_GROUP_PROTOCOL,
                         ..Default::default()
                     },
                 ));
             }
-            Ok(_) => {} // NotStreams | Converted → serve the classic JoinGroup below
-            Err(e) => return Err(e),
+            Ok(DowngradeOutcome::Removed) => {
+                return Ok(respond(
+                    version,
+                    JoinGroupResponse {
+                        error_code: codes::UNKNOWN_MEMBER_ID,
+                        member_id: req.member_id,
+                        ..Default::default()
+                    },
+                ));
+            }
+            Ok(DowngradeOutcome::NotStreams | DowngradeOutcome::Converted) => {}
+            // The append future's failure: Kafka reverts the deletion and answers
+            // `appendGroupMetadataErrorToResponseError` of the write error.
+            Err(error) => {
+                return Ok(respond(
+                    version,
+                    JoinGroupResponse {
+                        error_code: join_append_error_code(&error),
+                        ..Default::default()
+                    },
+                ));
+            }
         }
 
         // Kafka's `classicGroupJoinToClassicGroup`: a member id names a member
