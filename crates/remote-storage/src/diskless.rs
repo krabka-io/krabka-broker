@@ -59,14 +59,15 @@ impl WalIndexKey {
     /// Part of the 1.x on-disk contract: a 1.x broker reads every range key
     /// that any earlier 1.x broker wrote.
     pub const KEY_VERSION: i16 = 0;
-    const LEN: usize = 30;
+    const LEN: usize = PARTITION_KEY_PREFIX_LEN + 8;
 
     #[must_use]
     pub fn to_bytes(self) -> Bytes {
-        let mut out = Vec::with_capacity(Self::LEN);
-        out.extend_from_slice(&Self::KEY_VERSION.to_be_bytes());
-        out.extend_from_slice(self.topic_id.as_bytes());
-        out.extend_from_slice(&self.partition.to_be_bytes());
+        let mut out = encode_partition_key_prefix::<{ Self::LEN }>(
+            Self::KEY_VERSION,
+            self.topic_id,
+            self.partition,
+        );
         out.extend_from_slice(&self.first_offset.to_be_bytes());
         out.into()
     }
@@ -75,14 +76,12 @@ impl WalIndexKey {
     /// version, or the wrong length.
     #[must_use]
     pub fn from_bytes(bytes: &[u8]) -> Option<Self> {
-        let bytes: &[u8; Self::LEN] = bytes.try_into().ok()?;
-        if wal_index_key_version(bytes) != Some(Self::KEY_VERSION) {
-            return None;
-        }
+        let (topic_id, partition, rest) =
+            decode_partition_key_prefix::<{ Self::LEN }>(bytes, Self::KEY_VERSION)?;
         Some(Self {
-            topic_id: Uuid::from_bytes(bytes[2..18].try_into().ok()?),
-            partition: i32::from_be_bytes(bytes[18..22].try_into().ok()?),
-            first_offset: i64::from_be_bytes(bytes[22..].try_into().ok()?),
+            topic_id,
+            partition,
+            first_offset: i64::from_be_bytes(rest.try_into().ok()?),
         })
     }
 }
@@ -92,6 +91,43 @@ impl WalIndexKey {
 #[must_use]
 pub fn wal_index_key_version(key: &[u8]) -> Option<i16> {
     Some(i16::from_be_bytes(key.get(..2)?.try_into().ok()?))
+}
+
+/// Length of the big-endian `i16` key version, topic id and big-endian `i32`
+/// partition that every partition-scoped `__diskless_wal_index` key starts
+/// with.
+const PARTITION_KEY_PREFIX_LEN: usize = 22;
+
+/// Start a `KEY_LEN`-byte partition-scoped key with its version, topic id and
+/// partition.
+///
+/// The caller appends the rest of the key, if any.
+fn encode_partition_key_prefix<const KEY_LEN: usize>(
+    version: i16,
+    topic_id: Uuid,
+    partition: i32,
+) -> Vec<u8> {
+    let mut out = Vec::with_capacity(KEY_LEN);
+    out.extend_from_slice(&version.to_be_bytes());
+    out.extend_from_slice(topic_id.as_bytes());
+    out.extend_from_slice(&partition.to_be_bytes());
+    out
+}
+
+/// Split a `KEY_LEN`-byte partition-scoped key into its topic id, partition and
+/// the bytes after them, or `None` when `bytes` are the wrong length or carry a
+/// key version other than `version`.
+fn decode_partition_key_prefix<const KEY_LEN: usize>(
+    bytes: &[u8],
+    version: i16,
+) -> Option<(Uuid, i32, &[u8])> {
+    let bytes: &[u8; KEY_LEN] = bytes.try_into().ok()?;
+    if wal_index_key_version(bytes) != Some(version) {
+        return None;
+    }
+    let topic_id = Uuid::from_bytes(bytes.get(2..18)?.try_into().ok()?);
+    let partition = i32::from_be_bytes(bytes.get(18..PARTITION_KEY_PREFIX_LEN)?.try_into().ok()?);
+    Some((topic_id, partition, bytes.get(PARTITION_KEY_PREFIX_LEN..)?))
 }
 
 impl From<&WalIndexEntry> for WalIndexKey {
@@ -118,28 +154,27 @@ impl WalDeleteFloorKey {
     /// Part of the 1.x on-disk contract: a 1.x broker reads every delete-floor
     /// key that any earlier 1.x broker wrote.
     pub const KEY_VERSION: i16 = 1;
-    const LEN: usize = 22;
+    const LEN: usize = PARTITION_KEY_PREFIX_LEN;
 
     #[must_use]
     pub fn to_bytes(self) -> Bytes {
-        let mut out = Vec::with_capacity(Self::LEN);
-        out.extend_from_slice(&Self::KEY_VERSION.to_be_bytes());
-        out.extend_from_slice(self.topic_id.as_bytes());
-        out.extend_from_slice(&self.partition.to_be_bytes());
-        out.into()
+        encode_partition_key_prefix::<{ Self::LEN }>(
+            Self::KEY_VERSION,
+            self.topic_id,
+            self.partition,
+        )
+        .into()
     }
 
     /// Decode a delete-floor key, or `None` when `bytes` are not one: another
     /// key version, or the wrong length.
     #[must_use]
     pub fn from_bytes(bytes: &[u8]) -> Option<Self> {
-        let bytes: &[u8; Self::LEN] = bytes.try_into().ok()?;
-        if wal_index_key_version(bytes) != Some(Self::KEY_VERSION) {
-            return None;
-        }
+        let (topic_id, partition, _) =
+            decode_partition_key_prefix::<{ Self::LEN }>(bytes, Self::KEY_VERSION)?;
         Some(Self {
-            topic_id: Uuid::from_bytes(bytes[2..18].try_into().ok()?),
-            partition: i32::from_be_bytes(bytes[18..].try_into().ok()?),
+            topic_id,
+            partition,
         })
     }
 }
