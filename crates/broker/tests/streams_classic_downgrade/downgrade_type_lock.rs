@@ -1,12 +1,15 @@
 //! The type lock that guards the downgrade: a streams group with a live member
-//! rejects a classic `JoinGroup`, and the classic admin path sees the converted
-//! group as `streams` and refuses to delete it while a member is live.
+//! refuses a classic `JoinGroup`, static or dynamic, and the classic admin path
+//! sees the converted group as `streams` and refuses to delete it while a
+//! member is live.
 
 use std::time::Duration;
 
-use assert2::assert;
+use assert2::{assert, check};
 use krabka_protocol::owned::{
     delete_groups_request::DeleteGroupsRequest,
+    join_group_request::JoinGroupRequest,
+    join_group_response::JoinGroupResponse,
     leave_group_request::{LeaveGroupRequest, MemberIdentity},
     list_groups_request::ListGroupsRequest,
 };
@@ -18,10 +21,13 @@ use crate::{
     downgrade_streams_join::{streams_join_and_converge, topology},
 };
 
-/// A streams group with a LIVE member rejects a classic `JoinGroup` with
-/// `INCONSISTENT_GROUP_PROTOCOL` (23) and the unknown member id, as Kafka's
-/// `classicGroupJoin` does for a group that is not empty, and stays
-/// Streams-typed.
+/// A streams group with a LIVE member refuses every classic `JoinGroup`, static
+/// or dynamic, and stays Streams-typed with its member.
+///
+/// Kafka 4.3.1's `classicGroupJoin` accepts a streams group only when it is
+/// empty, and answers any other with `INCONSISTENT_GROUP_PROTOCOL` (23) and
+/// the unknown member id, before the `MEMBER_ID_REQUIRED` exchange and before
+/// it looks at the instance id (`testClassicGroupJoinWithNonEmptyStreamsGroup`).
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn streams_group_with_live_member_rejects_classic_join() {
     let (broker, bootstrap, _dir) = boot().await;
@@ -42,29 +48,51 @@ async fn streams_group_with_live_member_rejects_classic_join() {
         )
         .await;
     broker.wait_until_streams_group_member_count("g2", 1).await;
-    assert!(
-        broker.group_type_for_test("g2")
-            == Some(krabka_broker::coordinator::unified::GroupType::Streams)
-    );
 
-    // Round-1 classic JoinGroup (empty member_id) must be rejected BEFORE the
-    // MEMBER_ID_REQUIRED dance: the downgrade pre-step runs first.
-    let r = tokio::time::timeout(
-        Duration::from_secs(5),
-        classic_client.send(join_request("g2", "")),
-    )
-    .await
-    .expect("JoinGroup timeout")
-    .expect("JoinGroup");
-    assert!(
-        (r.error_code, r.member_id.as_str()) == (ERR_INCONSISTENT_GROUP_PROTOCOL, ""),
-        "classic join for streams group with live member: {r:?}"
-    );
+    // (row, the JoinGroup)
+    let rows = [
+        ("a dynamic member's first join", join_request("g2", "")),
+        (
+            "a dynamic member's join with a member id",
+            join_request("g2", "m-1"),
+        ),
+        (
+            "a static member's join",
+            JoinGroupRequest {
+                group_instance_id: Some("instance-1".into()),
+                ..join_request("g2", "")
+            },
+        ),
+        (
+            "a static member's join with a member id",
+            JoinGroupRequest {
+                group_instance_id: Some("instance-1".into()),
+                ..join_request("g2", "m-1")
+            },
+        ),
+    ];
+    let refused = JoinGroupResponse {
+        error_code: ERR_INCONSISTENT_GROUP_PROTOCOL,
+        member_id: String::new(),
+        // Kafka's `JoinGroupResponse` sends an empty protocol name as null
+        // from version 7 on.
+        protocol_name: None,
+        ..Default::default()
+    };
+    for (row, request) in rows {
+        let response = tokio::time::timeout(Duration::from_secs(5), classic_client.send(request))
+            .await
+            .expect("JoinGroup timeout")
+            .expect("JoinGroup");
+        check!(response == refused, "{row}");
+    }
+
     assert!(
         broker.group_type_for_test("g2")
             == Some(krabka_broker::coordinator::unified::GroupType::Streams),
         "group_type must remain Streams after rejected downgrade"
     );
+    broker.wait_until_streams_group_member_count("g2", 1).await;
 }
 
 /// After a classic-to-streams conversion, `ListGroups` reports
