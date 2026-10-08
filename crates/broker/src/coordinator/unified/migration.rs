@@ -20,7 +20,7 @@ pub(crate) use self::{
     downgrade::{convert_consumer_to_classic, downgrade_pending_records},
     hosted_classic::{
         ClassicMemberRegistration, build_hosted_classic_join_result, serve_classic_heartbeat,
-        serve_classic_sync, upsert_classic_member,
+        serve_classic_sync, supports_classic_protocols, upsert_classic_member,
     },
     upgrade::{
         convert_classic_to_consumer, decode_consumer_subscription, upgrade_pending_records,

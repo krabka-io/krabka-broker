@@ -415,8 +415,9 @@ impl GroupState {
     /// Moves the static member `previous` to the id `member_id` at epoch 0, as
     /// Kafka's `getOrMaybeSubscribeStaticConsumerGroupMember` copies a
     /// released static member for the member that rejoins with its instance
-    /// id. The member keeps its subscription, target and assignment, and the
-    /// group does not rebalance for the change.
+    /// id. The member keeps its subscription, classic metadata, target and
+    /// assignment, as Kafka's `ConsumerGroupMember.Builder(member, memberId)`
+    /// copies them, and the group does not rebalance for the change.
     pub fn replace_static_member(&mut self, previous: &str, member_id: &str) {
         let Some(mut member) = self.members.remove(previous) else {
             return;
@@ -431,7 +432,6 @@ impl GroupState {
         member.member_id = member_id.to_string();
         member.member_epoch = 0;
         member.previous_member_epoch = 0;
-        member.classic = None;
         if let Some(instance_id) = &member.instance_id {
             self.instance_to_member
                 .insert(instance_id.clone(), member_id.to_string());
@@ -578,11 +578,8 @@ mod tests {
             m.partitions_pending_revocation = [(T, vec![2])].into();
             m.assignment_epochs = [(T, [(0, 3), (1, 5), (2, 2)].into())].into();
             m.classic = classic.then(|| super::super::ClassicMemberFacade {
-                generation_id: 5,
                 supported_protocols: vec![],
                 session_timeout: Duration::from_secs(45),
-                last_synced_assignment: bytes::Bytes::new(),
-                awaiting_sync: false,
             });
             g.members.insert(id.into(), m);
         }
@@ -987,11 +984,8 @@ mod tests {
             m.assignment_state = MemberAssignmentState::UnrevokedPartitions;
             if row.classic {
                 m.classic = Some(super::super::ClassicMemberFacade {
-                    generation_id: 1,
                     supported_protocols: vec![],
                     session_timeout: Duration::from_secs(45),
-                    last_synced_assignment: bytes::Bytes::new(),
-                    awaiting_sync: false,
                 });
             }
             g.add_or_update_member(m);
@@ -1040,11 +1034,8 @@ mod tests {
         let mut classic = member("classic");
         classic.assignment_state = MemberAssignmentState::UnrevokedPartitions;
         classic.classic = Some(super::super::ClassicMemberFacade {
-            generation_id: 1,
             supported_protocols: vec![],
             session_timeout: Duration::from_secs(45),
-            last_synced_assignment: bytes::Bytes::new(),
-            awaiting_sync: true,
         });
         g.add_or_update_member(classic);
         assert!(g.fence_rebalance_timeouts(start).is_empty());

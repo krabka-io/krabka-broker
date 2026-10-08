@@ -10,7 +10,7 @@ use krabka_verified::{
     group_migration_record_plan,
 };
 
-use super::assignment::member_target_assignment;
+use super::assignment::{consumer_assignment_blob, embedded_protocol_version};
 use crate::coordinator::unified::{
     actor::{GroupTombstone, PendingRecords, classic_group_metadata_record},
     classic_state::{ClassicGroup as ClassicState, Member as ClassicMember, select_protocol},
@@ -54,13 +54,7 @@ pub(crate) fn convert_consumer_to_classic(
             .classic
             .as_ref()
             .expect("downgrade precondition: all members are hosted classic members");
-        // Seed from the server-computed TARGET, not `assigned_partitions`: a
-        // hosted classic member's `assigned_partitions` only fills in as a
-        // NATIVE consumer acks epochs over heartbeats, which a hosted classic
-        // member never does. Its real partitions live in `target.per_member`,
-        // so reading the target keeps them across the downgrade.
-        let seed = member_target_assignment(state, mid, image);
-        let mut cm = ClassicMember::new(
+        let cm = ClassicMember::new(
             mid.clone(),
             m.client_id.clone(),
             m.client_host.clone(),
@@ -69,10 +63,30 @@ pub(crate) fn convert_consumer_to_classic(
             facade.supported_protocols.clone(),
         )
         .with_instance_id(m.instance_id.clone());
-        cm.assignment = Some(seed);
         classic.add_member(cm);
     }
-    if let Some(name) = select_protocol(&classic.members) {
+    // Kafka's `ClassicGroup.fromConsumerGroup` seeds each member with its
+    // TARGET assignment, serialized at the version of the member's metadata
+    // for the selected protocol.
+    let selected = select_protocol(&classic.members);
+    for (mid, member) in &mut classic.members {
+        let metadata = selected
+            .as_deref()
+            .and_then(|name| member.protocols.iter().find(|(n, _)| n == name))
+            .or_else(|| member.protocols.first())
+            .map(|(_, metadata)| metadata.as_ref());
+        let version = metadata
+            .and_then(embedded_protocol_version)
+            .unwrap_or_default();
+        let target = state
+            .target
+            .per_member
+            .get(mid)
+            .cloned()
+            .unwrap_or_default();
+        member.assignment = Some(consumer_assignment_blob(&target, image, version));
+    }
+    if let Some(name) = selected {
         classic.complete_rebalance(&name);
         // Drive to Stable so a downgraded member's first Heartbeat/SyncGroup
         // reads its seed assignment instead of REBALANCE_IN_PROGRESS.
@@ -193,12 +207,14 @@ mod tests {
             partitions_pending_revocation: std::collections::HashMap::new(),
             assignment_epochs: std::collections::HashMap::new(),
             last_seen: Instant::now(),
+            // Subscription metadata whose embedded-protocol version is 1, the
+            // version the member's seed assignment is serialized at.
             classic: Some(ClassicMemberFacade {
-                generation_id: 7,
-                supported_protocols: vec![("range".into(), bytes::Bytes::from_static(b"meta"))],
+                supported_protocols: vec![(
+                    "range".into(),
+                    bytes::Bytes::from_static(b"\x00\x01meta"),
+                )],
                 session_timeout: Duration::from_secs(30),
-                last_synced_assignment: bytes::Bytes::new(),
-                awaiting_sync: false,
             }),
         };
         state.add_or_update_member(m);
@@ -219,8 +235,8 @@ mod tests {
         let asn = member.assignment.clone().expect("seed assignment");
         let mut cur = &asn[..];
         let version = cur.get_i16();
-        assert!(version == 0);
-        let decoded = ConsumerProtocolAssignment::decode(&mut cur, 0).unwrap();
+        assert!(version == 1);
+        let decoded = ConsumerProtocolAssignment::decode(&mut cur, 1).unwrap();
         check!(decoded.assigned_partitions[0].topic == "orders");
         check!(decoded.assigned_partitions[0].partitions == vec![0, 1]);
         // Group must land in Stable so the first Heartbeat/SyncGroup after

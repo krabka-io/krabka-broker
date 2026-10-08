@@ -133,6 +133,9 @@ pub(super) fn update_member_state(
     if let Some(m) = state.members.get_mut(&req.member_id) {
         m.last_seen = now;
         client.update_metadata(&mut m.client_id, &mut m.client_host);
+        // Kafka's `setClassicMemberMetadata(null)`: a member that heartbeats
+        // speaks the consumer protocol.
+        m.classic = None;
         // Kafka's `maybeUpdateRackId` and `maybeUpdateServerAssignorName`: an
         // absent value keeps the stored one. Neither changes the group epoch.
         super::super::member_helpers::update_present(&mut m.rack_id, req.rack_id.as_ref());

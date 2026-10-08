@@ -371,6 +371,36 @@ impl GroupState {
         rebuilt
     }
 
+    /// Kafka's `ConsumerGroup.waitingOnUnreleasedPartition`: `true` when the
+    /// member is in `UnreleasedPartitions` and a partition of its target that
+    /// it does not hold yet is still held by another member.
+    #[must_use]
+    pub fn waiting_on_unreleased_partition(&self, member_id: &str) -> bool {
+        let Some(member) = self.members.get(member_id) else {
+            return false;
+        };
+        if member.assignment_state != MemberAssignmentState::UnreleasedPartitions {
+            return false;
+        }
+        let Some(target) = self.target.per_member.get(member_id) else {
+            return false;
+        };
+        let wanted: Partitions = target
+            .iter()
+            .map(|(topic_id, partitions)| {
+                let assigned = member.assigned_partitions.get(topic_id);
+                let missing: Vec<i32> = partitions
+                    .iter()
+                    .copied()
+                    .filter(|partition| assigned.is_none_or(|held| !held.contains(partition)))
+                    .collect();
+                (*topic_id, missing)
+            })
+            .filter(|(_, missing)| !missing.is_empty())
+            .collect();
+        !self.held_by_others(member_id, &wanted).is_empty()
+    }
+
     /// The partitions of `wanted` that a member other than `member_id` holds,
     /// assigned or pending revocation.
     fn held_by_others(&self, member_id: &str, wanted: &Partitions) -> HashSet<(Uuid, i32)> {

@@ -9,32 +9,51 @@ use std::collections::HashMap;
 use bytes::{BufMut, Bytes, BytesMut};
 use krabka_protocol::{
     Encode,
-    owned::consumer_protocol_assignment::{ConsumerProtocolAssignment, TopicPartition},
+    owned::consumer_protocol_assignment::{
+        ConsumerProtocolAssignment, MAX_VERSION as ASSIGNMENT_MAX_VERSION, TopicPartition,
+    },
     primitives::uuid::Uuid,
 };
 
-use crate::coordinator::unified::{
-    consumer_state::GroupState as ConsumerState, reconciler::ReconcileInput,
-};
+use crate::coordinator::unified::reconciler::ReconcileInput;
 
 /// Translates a member's server-side target, which maps topic ID to
-/// partitions, into a classic `ConsumerProtocolAssignment` wire blob, which
-/// maps topic name to partitions. The blob carries the leading `i16` version
-/// prefix that a classic client expects in the `SyncGroup` assignment field.
+/// partitions, into a classic `ConsumerProtocolAssignment` wire blob of
+/// version 0, which maps topic name to partitions.
 ///
-/// This function drops a topic ID that the metadata image does not hold,
-/// because the topic was deleted. The output order is deterministic, by topic
-/// name.
+/// See [`consumer_assignment_blob`] for the translation.
 pub(crate) fn target_to_consumer_assignment(
     target: &HashMap<Uuid, Vec<i32>>,
     image: &ReconcileInput,
 ) -> Bytes {
+    consumer_assignment_blob(target, image, 0)
+}
+
+/// Kafka's `ConsumerProtocol.serializeAssignment(toConsumerProtocolAssignment(
+/// partitions, image), version)`: the partitions, by topic ID, as a classic
+/// `ConsumerProtocolAssignment` wire blob, which maps topic name to
+/// partitions, with no user data.
+///
+/// The blob starts with the `i16` version prefix that a classic client reads
+/// first. A version above the highest the schema knows is written as the
+/// highest, as Kafka's `checkAssignmentVersion` does. The caller rejects a
+/// negative version, which Kafka refuses with a `SchemaException`.
+///
+/// A topic ID that the metadata image does not hold, because the topic was
+/// deleted, is dropped. Topics are ordered by name and partitions ascending,
+/// so the bytes do not depend on map order.
+pub(crate) fn consumer_assignment_blob(
+    partitions: &HashMap<Uuid, Vec<i32>>,
+    image: &ReconcileInput,
+    version: i16,
+) -> Bytes {
+    let version = version.clamp(0, ASSIGNMENT_MAX_VERSION);
     let id_to_name: HashMap<Uuid, &str> = image
         .topic_id_by_name
         .iter()
         .map(|(name, id)| (*id, name.as_str()))
         .collect();
-    let mut assigned: Vec<TopicPartition> = target
+    let mut assigned: Vec<TopicPartition> = partitions
         .iter()
         .filter_map(|(tid, parts)| {
             id_to_name.get(tid).map(|name| {
@@ -54,32 +73,19 @@ pub(crate) fn target_to_consumer_assignment(
         ..Default::default()
     };
     let mut out = BytesMut::new();
-    out.put_i16(0); // "consumer" embedded-protocol version-negotiation prefix
+    out.put_i16(version);
     assignment
-        .encode(&mut out, 0)
+        .encode(&mut out, version)
         .expect("ConsumerProtocolAssignment encode is infallible into BytesMut");
     out.freeze()
 }
 
-/// Translates a member's server-side TARGET into a
-/// `ConsumerProtocolAssignment` blob. The target is the source of truth for
-/// what the member should own, and it mirrors the native heartbeat response.
-///
-/// In the next-gen model a member's `assigned_partitions` fills in only as the
-/// client acknowledges the target. A hosted classic member has no such
-/// acknowledgement loop, so the target is what it must sync.
-pub(super) fn member_target_assignment(
-    state: &ConsumerState,
-    member_id: &str,
-    image: &ReconcileInput,
-) -> Bytes {
-    let target = state
-        .target
-        .per_member
-        .get(member_id)
-        .cloned()
-        .unwrap_or_default();
-    target_to_consumer_assignment(&target, image)
+/// Kafka's `ConsumerProtocol.deserializeVersion`: the `i16` version prefix of
+/// a consumer embedded-protocol blob, or `None` when the blob is too short to
+/// hold one.
+pub(crate) fn embedded_protocol_version(blob: &[u8]) -> Option<i16> {
+    let prefix: [u8; 2] = blob.get(..2)?.try_into().ok()?;
+    Some(i16::from_be_bytes(prefix))
 }
 
 #[cfg(test)]

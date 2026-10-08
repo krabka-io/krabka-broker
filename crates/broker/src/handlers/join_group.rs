@@ -14,8 +14,9 @@ use krabka_protocol::owned::{
 use crate::{
     codes,
     coordinator::unified::{
-        actor::{GroupActorMessage, GroupKindTag},
+        actor::{GroupActorMessage, GroupKindTag, join_append_error_code},
         config::NextGenConfig,
+        streams::migration::DowngradeOutcome,
     },
     task_util::ask,
     time_util::now_ms,
@@ -71,31 +72,46 @@ context_handler! {
         // same id can detect it as a classic group and either convert or reject it
         // (KIP-1071 cold upgrade). First-mark-wins: a prior `mark_next_gen` (or any
         // other type lock) from a consumer-protocol group is not overridden.
-        // KIP-1071 cold downgrade: a classic JoinGroup for a drained streams group
-        // converts it in place to a classic group. Kafka's `classicGroupJoin`
-        // refuses a JoinGroup, static or dynamic, for a streams group with
-        // members with `INCONSISTENT_GROUP_PROTOCOL` and the unknown member id
-        // (online streams migration is unsupported). Non-streams group ids pass
-        // through unchanged.
+        // KIP-1071 cold downgrade: Kafka's `classicGroupJoin` refuses a join to a
+        // streams group with members, and sends one to an empty streams group to
+        // `classicGroupJoinToClassicGroup`, which deletes it. Non-streams group
+        // ids pass through unchanged.
         match broker
             .group_coordinator
-            .try_convert_streams_to_classic(&req.group_id, now_ms())
+            .try_convert_streams_to_classic(&req.group_id, &req.member_id, now_ms())
             .await
         {
-            Ok(
-                crate::coordinator::unified::streams::migration::DowngradeOutcome::RejectLiveMembers,
-            ) => {
+            Ok(DowngradeOutcome::RejectLiveMembers) => {
                 return Ok(respond(
                     version,
                     JoinGroupResponse {
                         error_code: codes::INCONSISTENT_GROUP_PROTOCOL,
-                        member_id: String::new(),
                         ..Default::default()
                     },
                 ));
             }
-            Ok(_) => {} // NotStreams | Converted → serve the classic JoinGroup below
-            Err(e) => return Err(e),
+            Ok(DowngradeOutcome::Removed) => {
+                return Ok(respond(
+                    version,
+                    JoinGroupResponse {
+                        error_code: codes::UNKNOWN_MEMBER_ID,
+                        member_id: req.member_id,
+                        ..Default::default()
+                    },
+                ));
+            }
+            Ok(DowngradeOutcome::NotStreams | DowngradeOutcome::Converted) => {}
+            // The append future's failure: Kafka reverts the deletion and answers
+            // `appendGroupMetadataErrorToResponseError` of the write error.
+            Err(error) => {
+                return Ok(respond(
+                    version,
+                    JoinGroupResponse {
+                        error_code: join_append_error_code(&error),
+                        ..Default::default()
+                    },
+                ));
+            }
         }
 
         // Kafka's `classicGroupJoinToClassicGroup`: a member id names a member
@@ -117,12 +133,29 @@ context_handler! {
             .group_coordinator
             .get_or_create_group(&req.group_id, GroupKindTag::Classic);
 
+        // A classic join to a consumer group runs Kafka's
+        // `maybeUpdateRegularExpressions` with the request context of the join:
+        // the actor resolves the group's patterns against this image with this
+        // principal's `Describe` decisions. The offset is read before the image,
+        // as the `ConsumerGroupHeartbeat` handler reads it.
+        let metadata_offset = broker.controller.current_metadata_offset();
+        let regex_resolver = std::sync::Arc::new(
+            crate::coordinator::unified::regex_resolver::ImageTopicRegexResolver::new(
+                broker.controller.current_image(),
+                metadata_offset,
+                broker.config.authorizer.clone(),
+                ctx.principal.clone(),
+                *ctx.peer,
+            ),
+        );
+
         // A closed mailbox and a dropped reply both answer REBALANCE_IN_PROGRESS.
         let Ok(result) = ask(&handle.tx, |reply| GroupActorMessage::ClassicJoin {
             req,
             version,
             client_id: ctx.client_id.unwrap_or_default().to_owned(),
             client_host: ctx.client_host(),
+            regex_resolver,
             reply,
         })
         .await

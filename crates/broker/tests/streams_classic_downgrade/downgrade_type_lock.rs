@@ -1,6 +1,7 @@
 //! The type lock that guards the downgrade: a streams group with a live member
-//! refuses a classic `JoinGroup`, static or dynamic, and the classic admin path sees the converted
-//! group as `streams` and refuses to delete it while a member is live.
+//! refuses a classic `JoinGroup`, static or dynamic, and the classic admin path
+//! sees the converted group as `streams` and refuses to delete it while a
+//! member is live.
 
 use std::time::Duration;
 

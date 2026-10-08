@@ -219,7 +219,7 @@ async fn commit_rows(
     // Kafka's `commitOffset` runs the per-partition validator only on the
     // partitions whose metadata fits, so split them out first.
     let (valid, rows) = split_oversized_metadata(req, broker.config.offset_metadata_max_bytes);
-    let handle = validate(broker, req, &committed_partitions(&valid, &image), version).await?;
+    let handle = validate(broker, &valid, &image, version).await?;
 
     if valid
         .topics
@@ -331,16 +331,27 @@ fn expire_timestamp_ms(retention_time_ms: i64, now_ms: i64) -> Option<i64> {
 /// after spawn. A streams group (KIP-1071) validates in its streams actor, and
 /// its offsets live in a group actor of the same id, as `TxnOffsetCommit`
 /// keeps them.
+///
+/// `req` holds the partitions that Kafka's `commitOffset` runs the
+/// per-partition validator on: a consumer group checks them by topic id, and
+/// a streams group by topic name.
 async fn validate(
     broker: &Broker,
     req: &OffsetCommitRequest,
-    partitions: &[(WireUuid, i32)],
+    image: &krabka_metadata::MetadataImage,
     version: i16,
 ) -> Result<Arc<GroupActorHandle>, i16> {
     let coordinator = &broker.group_coordinator;
     let generation = req.generation_id_or_member_epoch;
     let code = if let Some(streams) = coordinator.find_streams(&req.group_id) {
-        validate_streams_group_offset_commit(&streams, &req.member_id, generation, version).await
+        validate_streams_group_offset_commit(
+            &streams,
+            &req.member_id,
+            generation,
+            version,
+            named_partitions(req),
+        )
+        .await
     } else if let Some(handle) = coordinator.find(&req.group_id) {
         let code = validate_commit(
             &handle,
@@ -351,7 +362,7 @@ async fn validate(
                 fence: CommitFence::Offset {
                     api_version: version,
                 },
-                partitions: partitions.to_vec(),
+                partitions: committed_partitions(req, image),
             },
         )
         .await;
@@ -388,6 +399,20 @@ fn committed_partitions(
                 .partitions
                 .iter()
                 .map(move |partition| (topic_id, partition.partition_index))
+        })
+        .collect()
+}
+
+/// The `(topic name, partition)` of every partition `req` commits, which a
+/// streams group checks against its topology's source topics.
+fn named_partitions(req: &OffsetCommitRequest) -> Vec<(String, i32)> {
+    req.topics
+        .iter()
+        .flat_map(|topic| {
+            topic
+                .partitions
+                .iter()
+                .map(|partition| (topic.name.clone(), partition.partition_index))
         })
         .collect()
 }

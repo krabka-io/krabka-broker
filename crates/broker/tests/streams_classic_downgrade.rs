@@ -3,8 +3,8 @@
 //!
 //! A drained streams group converts to classic on a classic `JoinGroup`, and
 //! keeps its offsets. A streams group with a live member rejects that
-//! `JoinGroup`. The admin handlers List, Describe, and Delete respect the type
-//! lock.
+//! `JoinGroup` with `INCONSISTENT_GROUP_PROTOCOL`. The admin handlers List,
+//! Describe, and Delete respect the type lock.
 
 // Cargo compiles this file as its own test binary, so the crate root's module
 // directory is `tests/`. `#[path]` re-bases each declaration onto the sibling

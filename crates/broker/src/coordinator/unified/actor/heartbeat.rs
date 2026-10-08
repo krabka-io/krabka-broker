@@ -108,9 +108,20 @@ pub(super) async fn handle_actor_heartbeat(
             GroupKind::Consumer(fresh),
         ));
     } else if let Some(classic) = group.as_classic() {
-        // `convertToConsumerGroup`.
+        // `convertToConsumerGroup`, which refuses a member that
+        // `ConsumerGroup.fromClassicGroup` cannot carry over.
         let new_state =
-            migration::convert_classic_to_consumer(classic, &services.metadata.snapshot());
+            match migration::convert_classic_to_consumer(classic, &services.metadata.snapshot()) {
+                Ok(new_state) => new_state,
+                Err(message) => {
+                    let _ = reply.send(ConsumerGroupHeartbeatResponse {
+                        error_code: codes::GROUP_ID_NOT_FOUND,
+                        error_message: Some(message),
+                        ..Default::default()
+                    });
+                    return true;
+                }
+            };
         prefix = Some(migration::upgrade_pending_records(&new_state));
         classic_before = Some(std::mem::replace(
             group.kind_mut(),
@@ -402,7 +413,7 @@ fn is_full_request(req: &ConsumerGroupHeartbeatRequest) -> bool {
 /// `member_id` at epoch 0 and returns its records, the released member's
 /// tombstones, then the new member's subscription, target and current
 /// assignment.
-fn replace_static_member(
+pub(super) fn replace_static_member(
     state: &mut GroupState,
     previous: &str,
     member_id: &str,

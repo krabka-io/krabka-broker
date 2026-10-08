@@ -254,6 +254,23 @@ pub(super) fn make_coordinator_with_topic_policy(
     partitions: i32,
     policy: crate::coordinator::unified::config::ConsumerGroupMigrationPolicy,
 ) -> (Arc<GroupCoordinator>, Arc<InMemoryOffsetsLog>) {
+    make_coordinator_with_topic_config(
+        topic,
+        partitions,
+        NextGenConfig {
+            migration_policy: policy,
+            ..NextGenConfig::assigning_at_once()
+        },
+    )
+}
+
+/// As [`make_coordinator_with_topic`], but with an explicit consumer-group
+/// config.
+pub(super) fn make_coordinator_with_topic_config(
+    topic: &str,
+    partitions: i32,
+    config: NextGenConfig,
+) -> (Arc<GroupCoordinator>, Arc<InMemoryOffsetsLog>) {
     let topic_id = Uuid([7; 16]);
     let input = ReconcileInput {
         topic_id_by_name: [(topic.to_string(), topic_id)].into(),
@@ -262,14 +279,7 @@ pub(super) fn make_coordinator_with_topic_policy(
     };
     let metadata: Arc<dyn MetadataProvider> = Arc::new(StaticMetadata { input });
     let log = Arc::new(InMemoryOffsetsLog::default());
-    let coord = coordinator_with_log(
-        NextGenConfig {
-            migration_policy: policy,
-            ..NextGenConfig::assigning_at_once()
-        },
-        metadata,
-        log.clone(),
-    );
+    let coord = coordinator_with_log(config, metadata, log.clone());
     (coord, log)
 }
 

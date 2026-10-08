@@ -40,9 +40,16 @@ pub(crate) enum ConvertOutcome {
 pub(crate) enum DowngradeOutcome {
     /// Not a streams group. Serve the classic `JoinGroup` normally.
     NotStreams,
-    /// Was a drained streams group. The coordinator converted it in place to classic.
+    /// Was a drained streams group, and the join names no member. The
+    /// coordinator wrote [`streams_to_classic_batch`] and converted the group
+    /// in place to an empty classic group, which serves the join.
     Converted,
-    /// Streams group has live members. Online streams migration is not supported.
+    /// Was a drained streams group, and the join names a member. The
+    /// coordinator dropped the streams group without a record, and the join
+    /// answers `UNKNOWN_MEMBER_ID`.
+    Removed,
+    /// Streams group has live members. The join answers
+    /// `INCONSISTENT_GROUP_PROTOCOL`.
     RejectLiveMembers,
 }
 
@@ -91,6 +98,61 @@ pub(crate) fn streams_records_tombstone_batch(
     member_ids: &[String],
     now_ms: i64,
 ) -> Result<RecordBatch, BrokerError> {
+    let mut batch = OffsetRecordBatchBuilder::default();
+    for key in streams_tombstone_keys(group_id, member_ids)? {
+        batch.push(key, None);
+    }
+    Ok(batch.finish(now_ms))
+}
+
+/// Build the one batch of Kafka 4.3.1's `classicGroupJoinToClassicGroup` for
+/// a join with no member id to the drained streams group `group_id`.
+///
+/// `maybeDeleteEmptyStreamsGroup` puts the tombstones of
+/// `StreamsGroup.createGroupTombstoneRecords` first. A drained group has no
+/// members, so they are the k20 `TargetAssignmentMetadata`, the k17
+/// `GroupMetadata` and the k23 `Topology`. The join of a new classic group
+/// returns no records of its own, because its first rebalance waits for the
+/// initial delay, so Kafka adds `newEmptyGroupMetadataRecord` to the same list:
+/// a k2 `GroupMetadata` with the empty protocol type, generation 0, no
+/// protocol, no leader, no members, and the time of the group's last state
+/// change, which the join has just made `now_ms`. The coordinator writes the
+/// list atomically.
+///
+/// # Errors
+///
+/// Returns [`BrokerError::Protocol`] when `group_id` is longer than 32767
+/// bytes.
+pub(crate) fn streams_to_classic_batch(
+    group_id: &str,
+    now_ms: i64,
+) -> Result<RecordBatch, BrokerError> {
+    use crate::coordinator::unified::persistence::GroupMetadataValue;
+
+    let mut batch = OffsetRecordBatchBuilder::default();
+    for key in streams_tombstone_keys(group_id, &[])? {
+        batch.push(key, None);
+    }
+    let empty = GroupMetadataValue {
+        protocol_type: String::new(),
+        generation: 0,
+        protocol_name: None,
+        leader: None,
+        current_state_timestamp_ms: now_ms,
+        members: Vec::new(),
+    };
+    batch.push(
+        GroupMetadataValue::encode_key(group_id)?,
+        Some(empty.encode_value()?),
+    );
+    Ok(batch.finish(now_ms))
+}
+
+/// The keys of `StreamsGroup.createGroupTombstoneRecords`, in its order.
+fn streams_tombstone_keys(
+    group_id: &str,
+    member_ids: &[String],
+) -> Result<Vec<bytes::Bytes>, BrokerError> {
     let mut keys = Vec::with_capacity(3 + 3 * member_ids.len());
     for mid in member_ids {
         keys.push(encode_current_member_assignment_key(group_id, mid)?);
@@ -104,12 +166,7 @@ pub(crate) fn streams_records_tombstone_batch(
     }
     keys.push(encode_group_metadata_key(group_id)?);
     keys.push(encode_topology_key(group_id)?);
-
-    let mut batch = OffsetRecordBatchBuilder::default();
-    for key in keys {
-        batch.push(key, None);
-    }
-    Ok(batch.finish(now_ms))
+    Ok(keys)
 }
 
 #[cfg(test)]
@@ -172,5 +229,43 @@ mod tests {
             assert2::check!(records == expected, "{name}");
             assert2::check!(batch.max_timestamp == 123, "{name}");
         }
+    }
+
+    /// Kafka 4.3.1's `classicGroupJoinToClassicGroup` for a drained streams
+    /// group: the streams tombstones, then `newEmptyGroupMetadataRecord`, in
+    /// one batch.
+    #[test]
+    fn streams_to_classic_batch_follows_kafka() {
+        use crate::coordinator::unified::persistence::GroupMetadataValue;
+
+        let batch = streams_to_classic_batch("g", 123).unwrap();
+
+        let records: Vec<_> = batch
+            .records
+            .into_iter()
+            .map(|record| (record.key, record.value))
+            .collect();
+        let empty = GroupMetadataValue {
+            protocol_type: String::new(),
+            generation: 0,
+            protocol_name: None,
+            leader: None,
+            current_state_timestamp_ms: 123,
+            members: vec![],
+        };
+        let expected = vec![
+            (
+                Some(encode_target_assignment_metadata_key("g").unwrap()),
+                None,
+            ),
+            (Some(encode_group_metadata_key("g").unwrap()), None),
+            (Some(encode_topology_key("g").unwrap()), None),
+            (
+                Some(GroupMetadataValue::encode_key("g").unwrap()),
+                Some(empty.encode_value().unwrap()),
+            ),
+        ];
+        assert2::check!(records == expected);
+        assert2::check!(batch.max_timestamp == 123);
     }
 }
