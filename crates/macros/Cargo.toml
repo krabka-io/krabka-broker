@@ -1,12 +1,18 @@
 [package]
 name = "krabka-macros"
-publish = false
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 authors.workspace = true
 description = "Derive macros that let one declaration in the broker stand for code it would otherwise repeat"
-
+repository = "https://github.com/krabka-io/krabka-broker"
+homepage = "https://github.com/krabka-io/krabka-broker"
+documentation = "https://docs.rs/krabka-macros"
+readme = "README.md"
+keywords = ["krabka", "derive", "metrics", "proc-macro"]
+categories = ["development-tools::procedural-macro-helpers"]
+# `krabka-log` derives with these macros, so they publish with it.
+include = ["src/**/*.rs", "README.md", "CHANGELOG.md"]
 [lints]
 workspace = true
 
