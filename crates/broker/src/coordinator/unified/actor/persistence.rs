@@ -17,6 +17,7 @@ use super::{
 use crate::coordinator::unified::{
     classic_state::ClassicGroup,
     consumer_state::{GroupState, MemberState},
+    member_records::MemberValues,
     offsets_log::OffsetsLog,
     persistence_next_gen::{
         ClassicMemberMetadata, CurrentMemberAssignmentValue, CurrentTopicPartitions,
@@ -146,10 +147,21 @@ pub(super) fn target_assignment_value(
 ///   changed, and the target metadata (`TargetAssignmentBuilder`).
 pub(super) struct Recorder {
     group_epoch: i32,
-    members: Vec<(
-        String,
-        Option<(MemberMetadataValue, CurrentMemberAssignmentValue)>,
-    )>,
+    members: MemberValues<MemberMetadataValue, CurrentMemberAssignmentValue>,
+}
+
+/// The values of `member_id` that [`Recorder`] compares, if the group holds
+/// the member.
+fn member_values(
+    state: &GroupState,
+    member_id: &str,
+) -> Option<(MemberMetadataValue, CurrentMemberAssignmentValue)> {
+    state.members.get(member_id).map(|member| {
+        (
+            member_metadata_value(member),
+            current_assignment_value(member),
+        )
+    })
 }
 
 impl Recorder {
@@ -157,21 +169,9 @@ impl Recorder {
     pub(super) fn start<S: AsRef<str>>(state: &GroupState, member_ids: &[S]) -> Self {
         Self {
             group_epoch: state.group_epoch,
-            members: member_ids
-                .iter()
-                .map(|member_id| {
-                    let member_id = member_id.as_ref();
-                    (
-                        member_id.to_owned(),
-                        state.members.get(member_id).map(|member| {
-                            (
-                                member_metadata_value(member),
-                                current_assignment_value(member),
-                            )
-                        }),
-                    )
-                })
-                .collect(),
+            members: MemberValues::take(member_ids.iter().map(AsRef::as_ref), |member_id| {
+                member_values(state, member_id)
+            }),
         }
     }
 
@@ -186,28 +186,8 @@ impl Recorder {
         partition_metadata: bool,
     ) -> PendingRecords {
         let mut pending = PendingRecords::default();
-        for (member_id, before) in self.members {
-            match (before, state.members.get(&member_id)) {
-                (Some(_), None) => {
-                    pending.member_metadata.push((member_id.clone(), None));
-                    pending.target_per_member.push((member_id.clone(), None));
-                    pending.current_per_member.push((member_id, None));
-                }
-                (before, Some(member)) => {
-                    let metadata = member_metadata_value(member);
-                    let current = current_assignment_value(member);
-                    if before.as_ref().map(|(metadata, _)| metadata) != Some(&metadata) {
-                        pending
-                            .member_metadata
-                            .push((member_id.clone(), Some(metadata)));
-                    }
-                    if before.as_ref().map(|(_, current)| current) != Some(&current) {
-                        pending.current_per_member.push((member_id, Some(current)));
-                    }
-                }
-                (None, None) => {}
-            }
-        }
+        self.members
+            .record_changes(&mut pending, |member_id| member_values(state, member_id));
         if state.group_epoch != self.group_epoch {
             pending.group_metadata = Some(GroupMetadataValue {
                 epoch: state.group_epoch,

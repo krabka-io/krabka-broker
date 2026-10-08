@@ -12,6 +12,7 @@ use super::seed::snapshot_seed;
 use crate::{
     coordinator::unified::{
         OffsetRecordBatchBuilder,
+        member_records::{MemberRecordFamilies, MemberRecordLists, MemberValues},
         share::{
             persistence::{
                 DeletingTopic, ShareGroupCurrentMemberAssignmentValue, ShareGroupKey,
@@ -38,6 +39,20 @@ pub(crate) struct PendingShareRecords {
     /// KIP-932 `ShareGroupStatePartitionMetadata` (key v15). `Some` writes the
     /// updated Initialized/deleting record after a lifecycle Initialize/Delete.
     pub state_partition_metadata: Option<ShareGroupStatePartitionMetadataValue>,
+}
+
+impl MemberRecordFamilies for PendingShareRecords {
+    type Metadata = ShareGroupMemberMetadataValue;
+    type Target = ShareGroupTargetAssignmentMemberValue;
+    type Current = ShareGroupCurrentMemberAssignmentValue;
+
+    fn member_record_families(&mut self) -> MemberRecordLists<'_, Self> {
+        (
+            &mut self.member_metadata,
+            &mut self.target_per_member,
+            &mut self.current_per_member,
+        )
+    }
 }
 
 impl PendingShareRecords {
@@ -196,33 +211,33 @@ fn sorted_partitions(partitions: &HashMap<Uuid, Vec<i32>>) -> Vec<(Uuid, Vec<i32
 /// metadata (`TargetAssignmentBuilder`).
 pub(super) struct ShareRecorder {
     group_epoch: i32,
-    members: Vec<(
-        String,
-        Option<(
-            ShareGroupMemberMetadataValue,
-            ShareGroupCurrentMemberAssignmentValue,
-        )>,
-    )>,
+    members: MemberValues<ShareGroupMemberMetadataValue, ShareGroupCurrentMemberAssignmentValue>,
+}
+
+/// The values of `member_id` that [`ShareRecorder`] compares, if the group
+/// holds the member.
+fn member_values(
+    state: &ShareGroupState,
+    member_id: &str,
+) -> Option<(
+    ShareGroupMemberMetadataValue,
+    ShareGroupCurrentMemberAssignmentValue,
+)> {
+    state.members.get(member_id).map(|member| {
+        (
+            member_metadata_value(member),
+            current_assignment_value(member),
+        )
+    })
 }
 
 impl ShareRecorder {
     pub(super) fn start(state: &ShareGroupState, member_ids: &[&str]) -> Self {
         Self {
             group_epoch: state.group_epoch,
-            members: member_ids
-                .iter()
-                .map(|member_id| {
-                    (
-                        (*member_id).to_owned(),
-                        state.members.get(*member_id).map(|member| {
-                            (
-                                member_metadata_value(member),
-                                current_assignment_value(member),
-                            )
-                        }),
-                    )
-                })
-                .collect(),
+            members: MemberValues::take(member_ids.iter().copied(), |member_id| {
+                member_values(state, member_id)
+            }),
         }
     }
 
@@ -234,28 +249,8 @@ impl ShareRecorder {
         target: Option<&[String]>,
     ) -> PendingShareRecords {
         let mut pending = PendingShareRecords::default();
-        for (member_id, before) in self.members {
-            match (before, state.members.get(&member_id)) {
-                (Some(_), None) => {
-                    pending.member_metadata.push((member_id.clone(), None));
-                    pending.target_per_member.push((member_id.clone(), None));
-                    pending.current_per_member.push((member_id, None));
-                }
-                (before, Some(member)) => {
-                    let metadata = member_metadata_value(member);
-                    let current = current_assignment_value(member);
-                    if before.as_ref().map(|(metadata, _)| metadata) != Some(&metadata) {
-                        pending
-                            .member_metadata
-                            .push((member_id.clone(), Some(metadata)));
-                    }
-                    if before.as_ref().map(|(_, current)| current) != Some(&current) {
-                        pending.current_per_member.push((member_id, Some(current)));
-                    }
-                }
-                (None, None) => {}
-            }
-        }
+        self.members
+            .record_changes(&mut pending, |member_id| member_values(state, member_id));
         if state.group_epoch != self.group_epoch {
             pending.group_metadata = Some(ShareGroupMetadataValue {
                 epoch: state.group_epoch,

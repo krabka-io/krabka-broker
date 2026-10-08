@@ -650,18 +650,6 @@ macro_rules! assert_member_record_count {
 }
 pub(crate) use assert_member_record_count;
 
-/// Queue all three member-record tombstones in the caller's member order.
-macro_rules! tombstone_members {
-    ($pending:expr, $members:expr) => {
-        for member in $members {
-            $pending.member_metadata.push((member.clone(), None));
-            $pending.target_per_member.push((member.clone(), None));
-            $pending.current_per_member.push((member.clone(), None));
-        }
-    };
-}
-pub(crate) use tombstone_members;
-
 #[cfg(test)]
 mod tests {
     use assert2::assert;

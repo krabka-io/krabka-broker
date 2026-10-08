@@ -21,7 +21,13 @@ use super::{
     member::StreamsGroupMemberMetadataValue,
     topology::StreamsGroupTopologyValue,
 };
-use crate::{coordinator::unified::OffsetRecordBatchBuilder, error::BrokerError};
+use crate::{
+    coordinator::unified::{
+        OffsetRecordBatchBuilder,
+        member_records::{MemberRecordFamilies, MemberRecordLists},
+    },
+    error::BrokerError,
+};
 
 #[derive(Debug, Default)]
 pub struct PendingStreamsRecords {
@@ -33,6 +39,20 @@ pub struct PendingStreamsRecords {
     pub target_metadata: Option<StreamsGroupTargetAssignmentMetadataValue>,
     pub target_per_member: Vec<(String, Option<StreamsGroupTargetAssignmentMemberValue>)>,
     pub current_per_member: Vec<(String, Option<StreamsGroupCurrentMemberAssignmentValue>)>,
+}
+
+impl MemberRecordFamilies for PendingStreamsRecords {
+    type Metadata = StreamsGroupMemberMetadataValue;
+    type Target = StreamsGroupTargetAssignmentMemberValue;
+    type Current = StreamsGroupCurrentMemberAssignmentValue;
+
+    fn member_record_families(&mut self) -> MemberRecordLists<'_, Self> {
+        (
+            &mut self.member_metadata,
+            &mut self.target_per_member,
+            &mut self.current_per_member,
+        )
+    }
 }
 
 impl PendingStreamsRecords {

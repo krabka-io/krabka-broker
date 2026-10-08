@@ -27,6 +27,7 @@ mod admin_ops;
 mod group_coordinator;
 mod image_metadata;
 mod member_helpers;
+mod member_records;
 mod offset_batch;
 mod registry;
 mod replay_next_gen;

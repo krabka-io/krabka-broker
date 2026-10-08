@@ -11,6 +11,7 @@
 use super::ActorState;
 use crate::coordinator::unified::{
     GroupCoordinator, StreamsGroupSeed,
+    member_records::MemberValues,
     offsets_log::OffsetsLog,
     streams::{
         persistence::{
@@ -42,13 +43,25 @@ use crate::coordinator::unified::{
 pub(super) struct StreamsRecorder {
     group_epoch: i32,
     had_topology: bool,
-    members: Vec<(
-        String,
-        Option<(
-            StreamsGroupMemberMetadataValue,
-            StreamsGroupCurrentMemberAssignmentValue,
-        )>,
-    )>,
+    members:
+        MemberValues<StreamsGroupMemberMetadataValue, StreamsGroupCurrentMemberAssignmentValue>,
+}
+
+/// The values of `member_id` that [`StreamsRecorder`] compares, if the group
+/// holds the member.
+fn member_values(
+    state: &StreamsGroupState,
+    member_id: &str,
+) -> Option<(
+    StreamsGroupMemberMetadataValue,
+    StreamsGroupCurrentMemberAssignmentValue,
+)> {
+    state.members.get(member_id).map(|member| {
+        (
+            member_metadata_value(member),
+            current_assignment_value(member),
+        )
+    })
 }
 
 impl StreamsRecorder {
@@ -56,20 +69,9 @@ impl StreamsRecorder {
         Self {
             group_epoch: actor.state.group_epoch,
             had_topology: actor.topology.is_some(),
-            members: member_ids
-                .iter()
-                .map(|member_id| {
-                    (
-                        (*member_id).to_owned(),
-                        actor.state.members.get(*member_id).map(|member| {
-                            (
-                                member_metadata_value(member),
-                                current_assignment_value(member),
-                            )
-                        }),
-                    )
-                })
-                .collect(),
+            members: MemberValues::take(member_ids.iter().copied(), |member_id| {
+                member_values(&actor.state, member_id)
+            }),
         }
     }
 
@@ -77,29 +79,9 @@ impl StreamsRecorder {
     /// from the target assignment that the transition computed, if it did.
     pub(super) fn finish(self, actor: &mut ActorState) -> PendingStreamsRecords {
         let mut pending = PendingStreamsRecords::default();
-        for (member_id, before) in self.members {
-            match (before, actor.state.members.get(&member_id)) {
-                (Some(_), None) => {
-                    crate::coordinator::unified::persistence::tombstone_members!(
-                        pending,
-                        std::iter::once(&member_id)
-                    );
-                }
-                (before, Some(member)) => {
-                    let metadata = member_metadata_value(member);
-                    let current = current_assignment_value(member);
-                    if before.as_ref().map(|(metadata, _)| metadata) != Some(&metadata) {
-                        pending
-                            .member_metadata
-                            .push((member_id.clone(), Some(metadata)));
-                    }
-                    if before.as_ref().map(|(_, current)| current) != Some(&current) {
-                        pending.current_per_member.push((member_id, Some(current)));
-                    }
-                }
-                (None, None) => {}
-            }
-        }
+        self.members.record_changes(&mut pending, |member_id| {
+            member_values(&actor.state, member_id)
+        });
         if !self.had_topology {
             pending.topology.clone_from(&actor.topology);
         }

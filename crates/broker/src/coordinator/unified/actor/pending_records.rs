@@ -9,6 +9,7 @@ use krabka_protocol::records::RecordBatch;
 use crate::{
     coordinator::unified::{
         GroupCoordinator, OffsetRecordBatchBuilder,
+        member_records::{MemberRecordFamilies, MemberRecordLists},
         persistence_next_gen::{
             CurrentMemberAssignmentValue, GroupMetadataValue, MemberMetadataValue, NextGenKey,
             RegularExpressionValue, TargetAssignmentMemberValue, TargetAssignmentMetadataValue,
@@ -132,6 +133,20 @@ pub(crate) struct PendingRecords {
     /// The records that follow these in the same batch, such as a
     /// heartbeat's own records after the records of Kafka's `replaceMember`.
     pub then: Option<Box<PendingRecords>>,
+}
+
+impl MemberRecordFamilies for PendingRecords {
+    type Metadata = MemberMetadataValue;
+    type Target = TargetAssignmentMemberValue;
+    type Current = CurrentMemberAssignmentValue;
+
+    fn member_record_families(&mut self) -> MemberRecordLists<'_, Self> {
+        (
+            &mut self.member_metadata,
+            &mut self.target_per_member,
+            &mut self.current_per_member,
+        )
+    }
 }
 
 impl PendingRecords {
