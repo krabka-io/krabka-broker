@@ -20,7 +20,10 @@
 //! two endpoints the broker reads, which is how the OPA authorizer's suite
 //! already fakes its decision service. The registry's own conformance to
 //! Confluent is asserted in that repository, against a real
-//! `cp-schema-registry` container.
+//! `cp-schema-registry` container. The end-to-end case, a broker cluster
+//! validating against the real registry through failover, lives there too, in
+//! `tests/live_registry.rs`: the registry dev-depends on this broker, so a
+//! dependency in this direction would pin each repository to the other.
 
 mod support;
 
@@ -34,8 +37,6 @@ mod accepted;
 mod full_mode;
 #[path = "schema_validation/harness.rs"]
 mod harness;
-#[path = "schema_validation/live_registry.rs"]
-mod live_registry;
 #[path = "schema_validation/registry_availability.rs"]
 mod registry_availability;
 #[path = "schema_validation/rejected.rs"]

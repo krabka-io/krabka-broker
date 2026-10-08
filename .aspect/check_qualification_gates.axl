@@ -107,9 +107,12 @@ java_source=$(source_repo krabka-streams-java)
 # as skipped. Bazel's wrapper XML only describes the suite process.
 check m19-java-coordination junit_passed io.krabka.streams.test.CoordinationCompatibilityIT 'fencesTheOldLeaderAndAppendsARecoveredMemberToTheTail()' "$evidence/java-junit/TEST-junit-jupiter.xml"
 check m19-java-streams junit_passed io.krabka.streams.test.BrokerCompatibilityIT 'runsStreamsProtocolEosStandbyIqv2AndRestore()' "$evidence/java-junit/TEST-junit-jupiter.xml"
+# The RF=3 live-registry suite lives with the registry, which dev-depends on
+# the broker; the broker does not depend on the registry service crate.
+registry_source=$(source_repo krabka-schema-registry)
+(cd "$registry_source" && bazel test //crates/schema-registry:live_registry_test --test_output=all --nocache_test_results) 2>&1 | tee "$evidence/m19-schema.log"
+check m19-schema grep -F 'test rf_three_validation_survives_registry_and_broker_failover ... ok' "$evidence/m19-schema.log"
 broker_source=$(source_repo krabka-broker)
-(cd "$broker_source" && bazel test //crates/broker:schema_validation_test --test_output=all --nocache_test_results) 2>&1 | tee "$evidence/m19-schema.log"
-check m19-schema grep -F 'test live_registry::rf_three_validation_survives_registry_and_broker_failover ... ok' "$evidence/m19-schema.log"
 # Match the historical negative-pin probe: unsupported protocol records must
 # produce a compiler diagnostic, not an apparent successful compatibility run.
 # The client pin moves with it: the old protocol only resolves against the

@@ -57,7 +57,7 @@ Kind. Their timeouts bound the run rather than turning a timeout into a pass.
 
 | Gate | Executed boundary |
 | :--- | :--- |
-| Installation | The pinned public Compose and Helm recipes with candidate images and downloaded, checksum-verified charts; produce/readback and uninstall. The existing Go and Java integration suites run against the installed broker, and the pinned broker's RF=3 schema suite plus incompatible-protocol build probe rerun the original compatibility supporting checks. |
+| Installation | The pinned public Compose and Helm recipes with candidate images and downloaded, checksum-verified charts; produce/readback and uninstall. The existing Go and Java integration suites run against the installed broker, and the pinned schema registry's RF=3 live-registry suite plus the broker's incompatible-protocol build probe rerun the original compatibility supporting checks. |
 | Operator lifecycle | The pinned operator `packaging/kind-lifecycle.sh`, using published chart contents and the candidate broker, operator and rebalancer images; upgrade, disruption, scale-down, certificate rotation and acknowledged-record reconciliation. |
 | Authenticated CLI | The pinned CLI's real `candidate_broker` test, against a disposable three-broker SASL cluster. Its one executable lookup is adapted in the isolated checkout to invoke the downloaded CLI binary instead of a rebuilt binary; the patch is retained. |
 | Observability recovery | The pinned demo Compose recipe with explicit candidate broker, o11y and demo-app image overrides on linux/amd64, followed by its `qualify-failover.sh`; signal queries, WAL recovery, offset reconciliation and alert firing/resolution. |
