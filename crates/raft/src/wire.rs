@@ -401,34 +401,55 @@ mod tests {
 
     use super::*;
 
-    /// The v0 bodies of the krabka-private RPCs, byte for byte. A change to
-    /// one of them is a change to the 1.x rolling-upgrade contract.
-    #[test]
-    fn v0_bodies_match_their_golden_bytes() {
-        let directory = uuid::Uuid::from_u128(0x0102_0304_0506_0708_090a_0b0c_0d0e_0f10);
-        let mut submit_request = Vec::new();
+    /// The v0 `SubmitChange` request body that [`submit_request`] encodes to.
+    const SUBMIT_REQUEST_V0: &[u8] = &[0, 0, 0, 3, 1, 2, 3];
+
+    /// The v0 `SubmitChange` response body that [`submit_response`] encodes to.
+    const SUBMIT_RESPONSE_V0: &[u8] = &[0, 4, 0, 0, 0, 0, 0, 0, 0, 3, 0, 0, 0, 2, b'o', b'k'];
+
+    /// The v0 `MetadataFetch` request body that [`fetch_request`] encodes to.
+    const FETCH_REQUEST_V0: &[u8] = &[
+        0, 0, 0, 0, 0, 0, 0, 42, 0, 0x10, 0, 0, 0, 0, 0, 7, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12,
+        13, 14, 15, 16,
+    ];
+
+    /// The v0 `MetadataFetch` response body that [`fetch_response`] encodes to.
+    const FETCH_RESPONSE_V0: &[u8] = &[
+        0, 0, // error_code
+        0, 0, 0, 0, 0, 0, 0, 3, // leader_hint
+        0, 0, 0, 4, // leader_epoch
+        0, 0, 0, 0, 0, 0, 0, 1, // log_start_offset
+        0, 0, 0, 0, 0, 0, 0, 99, // high_watermark
+        0, 0, 0, 0, 0, 0, 2, 0, // quorum_high_watermark
+        0, 0, 0, 0, 0, 0, 0, 64, // snapshot end offset
+        0, 0, 0, 2, // snapshot epoch
+        0, 0, 0, 1, 0xaa, // records
+    ];
+
+    fn submit_request() -> KrabkaSubmitChangeRequest {
         KrabkaSubmitChangeRequest {
             records: Bytes::from_static(b"\x01\x02\x03"),
         }
-        .encode_v0(&mut submit_request)
-        .unwrap();
-        let mut submit_response = Vec::new();
+    }
+
+    fn submit_response() -> KrabkaSubmitChangeResponse {
         KrabkaSubmitChangeResponse {
             error_code: SUBMIT_CHANGE_UNCOMMITTED_TAIL,
             leader_hint: 3,
             result: Bytes::from_static(b"ok"),
         }
-        .encode_v0(&mut submit_response)
-        .unwrap();
-        let mut fetch_request = Vec::new();
+    }
+
+    fn fetch_request() -> KrabkaMetadataFetchRequest {
         KrabkaMetadataFetchRequest {
             fetch_offset: 42,
             max_bytes: 1_048_576,
             replica_id: 7,
-            replica_directory_id: directory,
+            replica_directory_id: uuid::Uuid::from_u128(0x0102_0304_0506_0708_090a_0b0c_0d0e_0f10),
         }
-        .encode_v0(&mut fetch_request);
-        let mut fetch_response = Vec::new();
+    }
+
+    fn fetch_response() -> KrabkaMetadataFetchResponse {
         KrabkaMetadataFetchResponse {
             error_code: 0,
             leader_hint: 3,
@@ -439,42 +460,47 @@ mod tests {
             snapshot_id: Some((64, 2)),
             records: Bytes::from_static(b"\xaa"),
         }
-        .encode_v0(&mut fetch_response)
-        .unwrap();
+    }
+
+    /// The v0 bodies of the krabka-private RPCs, byte for byte. A change to
+    /// one of them is a change to the 1.x rolling-upgrade contract.
+    #[test]
+    fn v0_bodies_match_their_golden_bytes() {
+        let mut submit_request_bytes = Vec::new();
+        submit_request()
+            .encode_v0(&mut submit_request_bytes)
+            .unwrap();
+        let mut submit_response_bytes = Vec::new();
+        submit_response()
+            .encode_v0(&mut submit_response_bytes)
+            .unwrap();
+        let mut fetch_request_bytes = Vec::new();
+        fetch_request().encode_v0(&mut fetch_request_bytes);
+        let mut fetch_response_bytes = Vec::new();
+        fetch_response()
+            .encode_v0(&mut fetch_response_bytes)
+            .unwrap();
 
         let cases: [(&str, Vec<u8>, &[u8]); 4] = [
             (
                 "SubmitChange request",
-                submit_request,
-                &[0, 0, 0, 3, 1, 2, 3],
+                submit_request_bytes,
+                SUBMIT_REQUEST_V0,
             ),
             (
                 "SubmitChange response",
-                submit_response,
-                &[0, 4, 0, 0, 0, 0, 0, 0, 0, 3, 0, 0, 0, 2, b'o', b'k'],
+                submit_response_bytes,
+                SUBMIT_RESPONSE_V0,
             ),
             (
                 "MetadataFetch request",
-                fetch_request,
-                &[
-                    0, 0, 0, 0, 0, 0, 0, 42, 0, 0x10, 0, 0, 0, 0, 0, 7, 1, 2, 3, 4, 5, 6, 7, 8, 9,
-                    10, 11, 12, 13, 14, 15, 16,
-                ],
+                fetch_request_bytes,
+                FETCH_REQUEST_V0,
             ),
             (
                 "MetadataFetch response",
-                fetch_response,
-                &[
-                    0, 0, // error_code
-                    0, 0, 0, 0, 0, 0, 0, 3, // leader_hint
-                    0, 0, 0, 4, // leader_epoch
-                    0, 0, 0, 0, 0, 0, 0, 1, // log_start_offset
-                    0, 0, 0, 0, 0, 0, 0, 99, // high_watermark
-                    0, 0, 0, 0, 0, 0, 2, 0, // quorum_high_watermark
-                    0, 0, 0, 0, 0, 0, 0, 64, // snapshot end offset
-                    0, 0, 0, 2, // snapshot epoch
-                    0, 0, 0, 1, 0xaa, // records
-                ],
+                fetch_response_bytes,
+                FETCH_RESPONSE_V0,
             ),
         ];
         for (case, encoded, golden) in cases {
@@ -485,53 +511,21 @@ mod tests {
     /// The golden v0 bodies decode back to the values they were made from.
     #[test]
     fn golden_v0_bodies_decode_back() {
-        let mut cur: &[u8] = &[0, 0, 0, 3, 1, 2, 3];
         check!(
-            KrabkaSubmitChangeRequest::decode_v0(&mut cur).unwrap()
-                == KrabkaSubmitChangeRequest {
-                    records: Bytes::from_static(b"\x01\x02\x03"),
-                }
+            KrabkaSubmitChangeRequest::decode_v0(&mut &*SUBMIT_REQUEST_V0).unwrap()
+                == submit_request()
         );
-        let mut cur: &[u8] = &[0, 4, 0, 0, 0, 0, 0, 0, 0, 3, 0, 0, 0, 2, b'o', b'k'];
         check!(
-            KrabkaSubmitChangeResponse::decode_v0(&mut cur).unwrap()
-                == KrabkaSubmitChangeResponse {
-                    error_code: SUBMIT_CHANGE_UNCOMMITTED_TAIL,
-                    leader_hint: 3,
-                    result: Bytes::from_static(b"ok"),
-                }
+            KrabkaSubmitChangeResponse::decode_v0(&mut &*SUBMIT_RESPONSE_V0).unwrap()
+                == submit_response()
         );
-        let mut cur: &[u8] = &[
-            0, 0, 0, 0, 0, 0, 0, 42, 0, 0x10, 0, 0, 0, 0, 0, 7, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11,
-            12, 13, 14, 15, 16,
-        ];
         check!(
-            KrabkaMetadataFetchRequest::decode_v0(&mut cur).unwrap()
-                == KrabkaMetadataFetchRequest {
-                    fetch_offset: 42,
-                    max_bytes: 1_048_576,
-                    replica_id: 7,
-                    replica_directory_id: uuid::Uuid::from_u128(
-                        0x0102_0304_0506_0708_090a_0b0c_0d0e_0f10
-                    ),
-                }
+            KrabkaMetadataFetchRequest::decode_v0(&mut &*FETCH_REQUEST_V0).unwrap()
+                == fetch_request()
         );
-        let mut cur: &[u8] = &[
-            0, 0, 0, 0, 0, 0, 0, 0, 0, 3, 0, 0, 0, 4, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0,
-            99, 0, 0, 0, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 64, 0, 0, 0, 2, 0, 0, 0, 1, 0xaa,
-        ];
         check!(
-            KrabkaMetadataFetchResponse::decode_v0(&mut cur).unwrap()
-                == KrabkaMetadataFetchResponse {
-                    error_code: 0,
-                    leader_hint: 3,
-                    leader_epoch: 4,
-                    log_start_offset: 1,
-                    high_watermark: 99,
-                    quorum_high_watermark: 512,
-                    snapshot_id: Some((64, 2)),
-                    records: Bytes::from_static(b"\xaa"),
-                }
+            KrabkaMetadataFetchResponse::decode_v0(&mut &*FETCH_RESPONSE_V0).unwrap()
+                == fetch_response()
         );
     }
 
