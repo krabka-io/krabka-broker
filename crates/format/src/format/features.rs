@@ -106,8 +106,8 @@ pub(super) fn parse_feature_spec(s: &str) -> Result<(String, i16), String> {
 pub const LATEST_PRODUCTION_METADATA_VERSION: i16 = krabka_raft::LATEST_PRODUCTION_METADATA_VERSION;
 
 /// Kafka's message for a `--feature` name its formatter does not support. The
-/// list is `Feature.PRODUCTION_FEATURES` by name, sorted, and so holds every
-/// registered feature but `metadata.version`.
+/// list is every registered feature but `metadata.version`, by name, sorted:
+/// Kafka's `Feature.PRODUCTION_FEATURES` and krabka's `krabka.version`.
 fn unsupported_feature(name: &str) -> String {
     let mut supported: Vec<&str> = krabka_metadata::feature_registry()
         .iter()
@@ -374,10 +374,9 @@ mod tests {
         assert2::assert!(ov.get("transaction.version") == Some(&2));
     }
 
-    /// Kafka's `Feature.PRODUCTION_FEATURES` names, sorted: what a formatter
-    /// that meets an unknown `--feature` name lists. It has no
-    /// `metadata.version`.
-    /// krabka adds its own `krabka.version`, which this build supports.
+    /// Kafka's `Feature.PRODUCTION_FEATURES` names and krabka's own
+    /// `krabka.version`, sorted: what a formatter that meets an unknown
+    /// `--feature` name lists. It has no `metadata.version`.
     const SUPPORTED_FEATURES: &str = "eligible.leader.replicas.version, group.version, \
                                       krabka.version, kraft.version, share.version, \
                                       streams.version, transaction.version";
@@ -443,8 +442,9 @@ mod tests {
     }
 
     /// Kafka 4.3.1's `kafka-storage format` messages, word for word: the
-    /// unknown-feature list is its production features in name order, and a
-    /// level a feature does not define is `Feature.fromFeatureLevel`'s refusal.
+    /// unknown-feature list is its production features and `krabka.version`
+    /// in name order, and a level a feature does not define is
+    /// `Feature.fromFeatureLevel`'s refusal.
     #[test]
     fn feature_refusals_use_kafkas_messages() {
         for (feature, expected) in [

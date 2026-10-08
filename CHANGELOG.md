@@ -196,6 +196,12 @@ The records the coordinators write to `__consumer_offsets` now match Kafka
   `krabka-format` before you start 1.0.0 on it. [Persisted
   formats](docs/persisted_formats.md) lists every format and the gaps that
   remain.
+- The workspace builds on krabka-protocol 0.6.0 and krabka-client-rs 0.6.0.
+  `krabka-security` now takes Kerberos from the crates.io `krabka-sspi` in
+  place of the `robot-head/sspi-rs` fork. The metadata layer adds the
+  `krabka.version` feature, which `ApiVersions` and broker registration
+  advertise, and refuses a krabka-private metadata record written before
+  0.6.0, so a metadata log from an earlier build must be formatted again.
 - **Breaking, on-disk format.** `krabka-format` writes Kafka's
   `meta.properties` into each directory it formats, in place of
   `meta.properties.json`: the Java properties file of `kafka-storage format`,

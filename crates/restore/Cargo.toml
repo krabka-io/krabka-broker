@@ -29,13 +29,13 @@ maplit = { workspace = true }
 # uses, with the recovered topic and partition records seeded into the
 # bootstrap stream.
 krabka-format = { version = "1.0.0", path = "../format" }
-krabka-ids = { version = "0.5.0" }
+krabka-ids = { version = "0.6.0" }
 krabka-log = { version = "1.0.0", path = "../log" }
-krabka-metadata = { version = "0.5.0" }
+krabka-metadata = { version = "0.6.0" }
 # The archive handle is built straight onto the object-store layer. The broker
 # owns the same mapping, but a recovery tool must not carry the broker.
 krabka-object-store = { version = "1.0.0", path = "../object-store", features = ["clap"] }
-krabka-protocol = { version = "0.5.0", default-features = false }
+krabka-protocol = { version = "0.6.0", default-features = false }
 krabka-raft = { version = "1.0.0", path = "../raft" }
 # The KIP-405 archive key codec and segment metadata model.
 krabka-remote-storage = { version = "1.0.0", path = "../remote-storage" }
@@ -82,8 +82,8 @@ krabka-audit = { workspace = true }
 krabka-backup = { version = "1.0.0", path = "../backup-cli" }
 krabka-broker = { version = "1.0.0", path = "../broker", features = ["test-helpers"] }
 # `dr_roundtrip` reads a group's committed offsets back with `OffsetFetch`.
-krabka-client-admin = { version = "0.5.0" }
-krabka-client-core = { version = "0.5.0" }
+krabka-client-admin = { version = "0.6.0" }
+krabka-client-core = { version = "0.6.0" }
 krabka-security = { workspace = true }
 # `diskless_capture_broker` sets the diskless flush cadence on a broker config.
 krabka-units = { workspace = true }
