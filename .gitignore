@@ -44,3 +44,4 @@ __pycache__/
 # forgets its tempdir, writes these. They were committed by accident twice.
 /crates/broker/meta.properties
 /crates/broker/krabka-data/
+/.cpd/

@@ -145,6 +145,20 @@ and the compose-internal example hostnames excluded. A link that is correct but
 permanently unreachable to a checker goes in [`.lycheeignore`](.lycheeignore)
 with a line saying why; anything else it reports is a link to fix.
 
+## Duplicate Code
+
+Run `aspect check-cpd --base origin/main` before submitting Rust refactors.
+The required CPD job uses native PMD 7.28.0 at **40 tokens**, comparing every
+Rust source with the PR target revision (or the previous main revision).
+Existing repeats are allowed; new repeated token sequences and additional
+copies fail. Formatting, comments, and file moves do not increase the allowance.
+Removing repeats reduces the allowance for subsequent changes.
+
+The task requires Git, JDK 17 or newer, curl, unzip, and tar. It verifies pinned
+downloads and writes reports to `.cpd/`; CI retains these as the `cpd` artifact.
+See the [checker documentation](tools/cpd/README.md) for the lexer fix and
+comparison details.
+
 ## Submit a Change
 
 Before you open a pull request:
