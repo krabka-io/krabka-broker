@@ -13,7 +13,8 @@ use krabka_protocol::primitives::uuid::Uuid;
 
 use super::{group::GroupState, member::MemberState};
 use crate::coordinator::unified::{
-    actor::MetadataProvider, persistence_next_gen::MemberAssignmentState,
+    actor::MetadataProvider, member_helpers::new_target_assignment,
+    persistence_next_gen::MemberAssignmentState,
 };
 
 /// The partitions each topic holds, by topic id.
@@ -62,26 +63,9 @@ impl GroupState {
     /// It returns the members whose target differs from the one they held, a
     /// member that held none included, sorted: the members for which Kafka's
     /// builder writes a target assignment record.
-    pub fn install_target(&mut self, mut per_member: HashMap<String, Partitions>) -> Vec<String> {
-        let mut changed = Vec::new();
-        let mut target = HashMap::with_capacity(self.members.len());
-        for member_id in self.members.keys() {
-            let mut assignment = per_member.remove(member_id).unwrap_or_default();
-            assignment.retain(|_, partitions| !partitions.is_empty());
-            for partitions in assignment.values_mut() {
-                partitions.sort_unstable();
-            }
-            if !self
-                .target
-                .per_member
-                .get(member_id)
-                .is_some_and(|held| same_assignment(held, &assignment))
-            {
-                changed.push(member_id.clone());
-            }
-            target.insert(member_id.clone(), assignment);
-        }
-        changed.sort_unstable();
+    pub fn install_target(&mut self, per_member: HashMap<String, Partitions>) -> Vec<String> {
+        let (target, changed) =
+            new_target_assignment(self.members.keys(), per_member, &self.target.per_member);
         self.target.epoch = self.group_epoch;
         self.target.per_member = target;
         changed

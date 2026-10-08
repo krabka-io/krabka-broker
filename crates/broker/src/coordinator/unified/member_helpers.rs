@@ -5,7 +5,12 @@
 //! pure functions over request fields, so they sit apart from the coordinator
 //! that calls them.
 
-use std::time::{Duration, Instant};
+use std::{
+    collections::HashMap,
+    time::{Duration, Instant},
+};
+
+use krabka_protocol::primitives::uuid::Uuid;
 
 /// Evicts expired members through the group's own removal transition.
 macro_rules! evict_expired {
@@ -181,6 +186,44 @@ pub(crate) fn can_compute_next_target_assignment(
     // Java adds two `long`s, so an overflow wraps around.
     let interval_ms = i64::try_from(interval.as_millis()).unwrap_or(i64::MAX);
     now_ms >= assignment_timestamp_ms.wrapping_add(interval_ms)
+}
+
+/// One member's assignment: the partitions of each topic, by topic id.
+type Assignment = HashMap<Uuid, Vec<i32>>;
+
+/// Kafka's `TargetAssignmentBuilder.newMemberAssignment` over a whole group:
+/// the target each of `member_ids` gets from the assignor's `per_member`
+/// output, and the members whose target differs from the one in `held`.
+///
+/// A member the assignor gave nothing gets an empty target. Each target drops
+/// its empty topics and sorts its partitions. A member whose target is not
+/// [`same_assignment`] as the one it held, a member that held none included,
+/// is in the returned list, sorted: the members for which Kafka's builder
+/// writes a target assignment record.
+///
+/// [`same_assignment`]: crate::coordinator::unified::consumer_state::same_assignment
+pub(crate) fn new_target_assignment<'a>(
+    member_ids: impl ExactSizeIterator<Item = &'a String>,
+    mut per_member: HashMap<String, Assignment>,
+    held: &HashMap<String, Assignment>,
+) -> (HashMap<String, Assignment>, Vec<String>) {
+    let mut changed = Vec::new();
+    let mut target = HashMap::with_capacity(member_ids.len());
+    for member_id in member_ids {
+        let mut assignment = per_member.remove(member_id).unwrap_or_default();
+        assignment.retain(|_, partitions| !partitions.is_empty());
+        for partitions in assignment.values_mut() {
+            partitions.sort_unstable();
+        }
+        if !held.get(member_id).is_some_and(|held| {
+            crate::coordinator::unified::consumer_state::same_assignment(held, &assignment)
+        }) {
+            changed.push(member_id.clone());
+        }
+        target.insert(member_id.clone(), assignment);
+    }
+    changed.sort_unstable();
+    (target, changed)
 }
 
 #[cfg(test)]
