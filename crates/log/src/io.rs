@@ -5,7 +5,9 @@
 //! indexes, the `.stampindex`, the producer snapshots, the leader-epoch
 //! checkpoint, the compaction swap and the segment deletions retention
 //! performs -- goes through the path-and-target methods below, so a test can
-//! fail exactly one class of file and watch what recovery makes of it.
+//! fail exactly one class of file and watch what recovery makes of it. The
+//! readahead hint of the fetch path goes through it too, so a test can see
+//! which ranges a read asks the kernel for.
 
 use std::{
     fmt::Debug,
@@ -135,6 +137,31 @@ pub trait LogIo: Debug + Send + Sync {
         let _ = target;
         std::fs::remove_file(path)
     }
+
+    /// Tell the kernel that a fetch reads `len` bytes of a `.log` file from
+    /// `offset` next.
+    ///
+    /// This is the one read-side method, and it is a hint, not a read: it
+    /// starts `posix_fadvise(POSIX_FADV_WILLNEED)` readahead of the range and
+    /// returns without waiting for it. A failure changes nothing a reader can
+    /// observe, so it is dropped. The targets without `posix_fadvise` do
+    /// nothing.
+    fn advise_will_need(&self, file: &File, offset: u64, len: u64) {
+        advise_will_need(file, offset, len);
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn advise_will_need(file: &File, offset: u64, len: u64) {
+    if let Some(len) = std::num::NonZeroU64::new(len) {
+        // A refused hint leaves the read exactly as it was without one.
+        let _ = rustix::fs::fadvise(file, offset, Some(len), rustix::fs::Advice::WillNeed);
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn advise_will_need(file: &File, offset: u64, len: u64) {
+    let _ = (file, offset, len);
 }
 
 /// Write the whole of `buf` to `file` through `io`, looping over short writes.

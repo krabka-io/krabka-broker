@@ -60,6 +60,7 @@ impl Segment {
         let max_bytes = max_size.bytes_usize();
         let window =
             (max_bytes.max(HEADER_LEN) as u64).min(self.log_size.saturating_sub(start_pos));
+        self.advise_read(start_pos, window);
         let window = usize::try_from(window)
             .map_err(|_| LogError::Corrupt("read_raw_desc window too large".into()))?;
         let mut header = [0; HEADER_LEN];
@@ -167,5 +168,29 @@ mod tests {
         assert2::assert!(region.len == raw.bytes.len());
         assert2::assert!(region_bytes(&region) == raw.bytes.to_vec());
         drop(dir);
+    }
+
+    /// The descriptor read asks the kernel for the region it describes, and
+    /// the window after it, in one hint given before its header walk. The
+    /// walk then reads headers the hint already brought in, rather than
+    /// taking one disk read per batch on a cold segment.
+    #[test]
+    fn read_raw_desc_advises_its_region_and_the_next_window_in_one_hint() {
+        use crate::segment::test_support::recording_advice;
+
+        let (_dir, mut seg) = test_segment();
+        for off in 0..20i64 {
+            seg.append(&test_batch_at(off), DENSE_INDEX).unwrap();
+        }
+        let advice = recording_advice(&mut seg);
+        let batch_len = u64::try_from(test_batch_at(0).encoded_len()).unwrap();
+        let budget = 3 * batch_len;
+
+        let desc = seg
+            .read_raw_desc(Offset(4), Offset(20), bytes(u32::try_from(budget).unwrap()))
+            .unwrap();
+        let region = desc.region.expect("a read inside the segment");
+        assert2::check!(region.len == usize::try_from(budget).unwrap());
+        assert2::check!(advice.take() == vec![(region.offset, 2 * budget)]);
     }
 }

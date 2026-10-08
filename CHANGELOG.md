@@ -23,6 +23,24 @@ the release tag; [Releasing](docs/releasing.md#cratesio) gives the procedure.
 
 ## [Unreleased]
 
+### Fixed
+
+- A consumer far behind the log end of a partition reads at disk speed. Each
+  verbatim fetch read now gives the kernel one `POSIX_FADV_WILLNEED` hint for
+  its window and the window after it, up to 4 MiB more, before it walks the
+  batch headers. Before, the walk took one small `pread` per batch header,
+  each up to a window ahead of the data the kernel had read. On a cold segment
+  each was a disk read of its own, made one after another under the log mutex,
+  and the scattered pages kept the kernel's sequential readahead small. On one
+  1 KiB-record partition with a backlog larger than the page cache, and a disk
+  capped at 1,000 read IOPS, a drain took 50,600 disk reads of 81 KiB and ran
+  at 75K records/s, below the 100K records/s publish rate of the
+  OpenMessaging Benchmark's `backlog-1-topic-1-partition-1kb` workload. It now
+  takes 12,700 reads of 326 KiB and drains 3.4 times as fast. Kafka 4.3.1
+  ran at 119K records/s on the same disk. Kafka needs no hint, because its
+  fetch sends a slice that may end in a partial batch and reads no batch
+  header past the one it starts at. The response bytes do not change.
+
 ## [1.0.0] - 2026-10-07
 
 1.0.0 is the first release with a compatibility promise. Every 1.x broker

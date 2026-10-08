@@ -146,6 +146,7 @@ impl Segment {
         // crosses back to `usize` once, here.
         let max_bytes = max_size.bytes_usize();
         let first_read = max_bytes.max(HEADER_LEN);
+        self.advise_read(start_pos, first_read as u64);
         let mut buf: Vec<u8> = Vec::with_capacity(first_read.min(read_buffer_cap.bytes_usize()));
         self.read_log_range(start_pos, &mut buf, first_read)?;
 

@@ -46,6 +46,10 @@ zerocopy = { workspace = true }
 [target.'cfg(target_os = "wasi")'.dependencies]
 rustix = { workspace = true }
 
+# The `posix_fadvise(POSIX_FADV_WILLNEED)` readahead hint of the fetch path.
+[target.'cfg(target_os = "linux")'.dependencies]
+rustix = { workspace = true }
+
 [dev-dependencies]
 # The lookup and compaction tests of `max.decompressed.message.bytes` write
 # compressed batches, and the library itself carries no codec.

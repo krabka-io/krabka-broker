@@ -89,7 +89,47 @@ fn read_at(file: &File, offset: u64, buf: &mut [u8]) -> std::io::Result<usize> {
     rustix::io::pread(file, buf, offset).map_err(Into::into)
 }
 
+/// How far past its own window a read asks the kernel to read ahead.
+///
+/// A consumer that is behind fetches the window after this one next, so the
+/// hint covers that window as well, up to this cap. The cap bounds the page
+/// cache one read can claim when a fetch asks for a very large budget.
+pub(super) const READ_AHEAD_MAX: u64 = 4 * 1024 * 1024;
+
+/// The byte range of `.log` a read from `start_pos` with a `window`-byte
+/// budget asks the kernel to read ahead, as `(offset, len)`.
+///
+/// The range is the window itself, then up to [`READ_AHEAD_MAX`] more of
+/// what the next sequential read takes, clamped at `log_size`. `None` when
+/// that leaves nothing.
+pub(super) fn read_ahead_span(start_pos: u64, window: u64, log_size: u64) -> Option<(u64, u64)> {
+    let end = start_pos
+        .saturating_add(window)
+        .saturating_add(window.min(READ_AHEAD_MAX))
+        .min(log_size);
+    (end > start_pos).then(|| (start_pos, end - start_pos))
+}
+
 impl Segment {
+    /// Ask the kernel for the window a read from `start_pos` is about to
+    /// take, and for the window after it.
+    ///
+    /// The verbatim read finds its batch boundaries with one small `pread`
+    /// per batch header, each up to a window ahead of the last, and only then
+    /// sends the run. On a cold segment each of those `pread`s is a disk read
+    /// of its own, made one after another, and the scattered pages they leave
+    /// behind keep the kernel's sequential readahead from growing. One
+    /// `WILLNEED` over the whole window turns them into a few large reads in
+    /// flight at once, and the part past the window makes the next fetch of a
+    /// consumer that is behind a page-cache hit. Kafka's fetch needs no hint:
+    /// it reads no batch header past the one it starts at, and sends a slice
+    /// that may end in a partial batch.
+    pub(super) fn advise_read(&self, start_pos: u64, window: u64) {
+        if let Some((offset, len)) = read_ahead_span(start_pos, window, self.log_size) {
+            self.io.advise_will_need(&self.log_file, offset, len);
+        }
+    }
+
     pub(super) fn read_log_range(
         &self,
         start_pos: u64,
@@ -254,5 +294,102 @@ mod tests {
             let mut slices = [IoSlice::new(&slice)];
             assert2::check!(write_all_vectored(&io, &file, &mut slices).is_ok() == succeeds);
         }
+    }
+
+    /// The readahead span is the read's window and up to one more window
+    /// after it, never past the end of the file.
+    #[test]
+    fn the_read_ahead_span_covers_the_window_and_the_next_one() {
+        let max = READ_AHEAD_MAX;
+        let cases = [
+            // (name, start_pos, window, log_size, expected)
+            (
+                "window and the next",
+                100,
+                1_000,
+                10_000,
+                Some((100, 2_000)),
+            ),
+            (
+                "the next window clamped",
+                100,
+                1_000,
+                1_500,
+                Some((100, 1_400)),
+            ),
+            (
+                "the window itself clamped",
+                100,
+                1_000,
+                600,
+                Some((100, 500)),
+            ),
+            (
+                "the lookahead capped",
+                0,
+                3 * max,
+                10 * max,
+                Some((0, 4 * max)),
+            ),
+            ("nothing left", 600, 1_000, 600, None),
+            ("past the end", 700, 1_000, 600, None),
+            ("an empty window", 100, 0, 1_000, None),
+            (
+                "no overflow",
+                u64::MAX - 1,
+                10,
+                u64::MAX,
+                Some((u64::MAX - 1, 1)),
+            ),
+        ];
+        let actual: Vec<_> = cases
+            .iter()
+            .map(|&(name, start, window, size, _)| (name, read_ahead_span(start, window, size)))
+            .collect();
+        let expected: Vec<_> = cases
+            .iter()
+            .map(|&(name, .., expected)| (name, expected))
+            .collect();
+        assert2::assert!(actual == expected);
+    }
+
+    /// A verbatim read asks the kernel for its whole window and the window
+    /// after it, from the batch it starts at, in one hint.
+    #[test]
+    fn a_verbatim_read_advises_its_window_and_the_next_in_one_hint() {
+        use krabka_ids::Offset;
+        use krabka_units::prelude::bytes;
+
+        use crate::segment::test_support::{
+            DENSE_INDEX, recording_advice, test_batch_at, test_segment,
+        };
+
+        let (_dir, mut seg) = test_segment();
+        let mut positions = Vec::new();
+        for off in 0..20i64 {
+            positions.push(seg.log_size);
+            seg.append(&test_batch_at(off), DENSE_INDEX).unwrap();
+        }
+        let advice = recording_advice(&mut seg);
+        let budget = 100u64;
+
+        let mid = seg
+            .read_raw(Offset(2), Offset(20), bytes(u32::try_from(budget).unwrap()))
+            .unwrap();
+        check!(mid.start_offset == Offset(2));
+        check!(advice.take() == vec![(positions[2], 2 * budget)]);
+
+        // Near the end the hint stops at the end of the file.
+        seg.read_raw(
+            Offset(19),
+            Offset(20),
+            bytes(u32::try_from(budget).unwrap()),
+        )
+        .unwrap();
+        check!(advice.take() == vec![(positions[19], seg.log_size - positions[19])]);
+
+        // A read that finds nothing to serve asks for nothing.
+        seg.read_raw(Offset(20), Offset(30), bytes(100)).unwrap();
+        check!(advice.take() == Vec::<(u64, u64)>::new());
     }
 }
