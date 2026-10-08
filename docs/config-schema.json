@@ -2007,6 +2007,15 @@
             "null"
           ]
         },
+        "log_read_ahead_max": {
+          "default": null,
+          "description": "Cap on how far past a fetch read's own byte range the broker asks the\nkernel to read ahead, so a consumer that is behind finds its next fetch\nin the page cache. The hint reaches up to one more range of the same\nsize, and no further than this. The default is 4 MiB, and 0 limits the\nhint to the fetch's own range. The hint has no effect on a host other\nthan Linux.",
+          "format": "byte-size",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "log_read_buffer_cap": {
           "default": null,
           "description": "Cap on the initial allocation a decoded or raw segment read makes.",

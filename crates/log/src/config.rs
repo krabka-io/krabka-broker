@@ -43,6 +43,10 @@ const DEFAULT_DELIVERY_CLOCK_UNCERTAINTY: Time = millis(250);
 /// Default upper bound on a single read's initial allocation.
 pub const DEFAULT_READ_BUFFER_CAP: ByteSize = mebibytes(4);
 
+/// Default cap on how far past its own window a verbatim read asks the
+/// kernel to read ahead.
+pub const DEFAULT_READ_AHEAD_MAX: ByteSize = mebibytes(4);
+
 /// Default byte window for timestamp scans between sparse index entries.
 pub const DEFAULT_TIMESTAMP_SCAN_WINDOW: ByteSize = kibibytes(64);
 
@@ -175,6 +179,14 @@ pub struct LogConfig {
     /// Cap the initial allocation used by decoded and raw segment reads.
     #[default(DEFAULT_READ_BUFFER_CAP)]
     pub read_buffer_cap: ByteSize,
+
+    /// How far past a verbatim read's own window the read asks the kernel to
+    /// read ahead, as a `POSIX_FADV_WILLNEED` hint, so a consumer that is
+    /// behind finds its next fetch in the page cache. The hint covers the
+    /// window and then up to one more window, capped at this. `0` hints only
+    /// the window itself. The hint is a no-op off Linux.
+    #[default(DEFAULT_READ_AHEAD_MAX)]
+    pub read_ahead_max: ByteSize,
 
     /// Read timestamp searches in windows of this size.
     #[default(DEFAULT_TIMESTAMP_SCAN_WINDOW)]
@@ -353,6 +365,7 @@ mod tests {
             LogConfig::default()
                 == LogConfig {
                     read_buffer_cap: mebibytes(4),
+                    read_ahead_max: mebibytes(4),
                     timestamp_scan_window: kibibytes(64),
                     segment_size: bytes(1 << 30),
                     segment_roll_interval: days(7),

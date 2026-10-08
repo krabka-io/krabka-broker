@@ -15,7 +15,10 @@ use tracing::instrument;
 use zerocopy::FromBytes;
 
 use super::{RawSegmentRead, Segment};
-use crate::{config::DEFAULT_READ_BUFFER_CAP, error::LogError};
+use crate::{
+    config::{DEFAULT_READ_AHEAD_MAX, DEFAULT_READ_BUFFER_CAP},
+    error::LogError,
+};
 
 /// Header fields used to choose a verbatim range without decoding records.
 pub(super) struct RawBatch {
@@ -108,11 +111,12 @@ impl Segment {
         limit_offset: Offset,
         max_size: ByteSize,
     ) -> Result<RawSegmentRead, LogError> {
-        self.read_raw_with_buffer_cap(
+        self.read_raw_with_policy(
             fetch_offset,
             limit_offset,
             max_size,
             DEFAULT_READ_BUFFER_CAP,
+            DEFAULT_READ_AHEAD_MAX,
         )
     }
 
@@ -130,12 +134,16 @@ impl Segment {
         self.read_start_position(target_rel).map(Some)
     }
 
-    pub(crate) fn read_raw_with_buffer_cap(
+    /// [`Segment::read_raw`] under the log's configured read policy: the
+    /// initial allocation is capped at `read_buffer_cap`, and the readahead
+    /// hint reaches at most `read_ahead_max` past the read's own window.
+    pub(crate) fn read_raw_with_policy(
         &self,
         fetch_offset: Offset,
         limit_offset: Offset,
         max_size: ByteSize,
         read_buffer_cap: ByteSize,
+        read_ahead_max: ByteSize,
     ) -> Result<RawSegmentRead, LogError> {
         let Some(start_pos) = self.raw_start_position(fetch_offset, limit_offset, "read_raw")?
         else {
@@ -146,7 +154,7 @@ impl Segment {
         // crosses back to `usize` once, here.
         let max_bytes = max_size.bytes_usize();
         let first_read = max_bytes.max(HEADER_LEN);
-        self.advise_read(start_pos, first_read as u64);
+        self.advise_read(start_pos, first_read as u64, read_ahead_max);
         let mut buf: Vec<u8> = Vec::with_capacity(first_read.min(read_buffer_cap.bytes_usize()));
         self.read_log_range(start_pos, &mut buf, first_read)?;
 
@@ -231,7 +239,13 @@ mod tests {
         seg.append(&sample_batch(4, 2, 300), sparse).unwrap(); // 4..=5
 
         let read = seg
-            .read_raw_with_buffer_cap(Offset(4), Offset(99), NO_LIMIT, mebibytes(1))
+            .read_raw_with_policy(
+                Offset(4),
+                Offset(99),
+                NO_LIMIT,
+                mebibytes(1),
+                DEFAULT_READ_AHEAD_MAX,
+            )
             .unwrap();
         check!(
             read.start_offset == Offset(4),
