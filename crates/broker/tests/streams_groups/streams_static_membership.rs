@@ -101,7 +101,11 @@ async fn every_static_member_request_is_refused_and_changes_nothing() {
     check!(describe(&client, "static-app").await == before);
     let absent = describe(&client, "static-absent").await;
     check!(
-        absent.groups.iter().map(|g| g.error_code).collect::<Vec<_>>()
+        absent
+            .groups
+            .iter()
+            .map(|g| g.error_code)
+            .collect::<Vec<_>>()
             == vec![GROUP_ID_NOT_FOUND]
     );
 }

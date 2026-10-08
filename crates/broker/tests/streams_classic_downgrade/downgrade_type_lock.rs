@@ -51,7 +51,10 @@ async fn streams_group_with_live_member_rejects_classic_join() {
     // (row, the JoinGroup)
     let rows = [
         ("a dynamic member's first join", join_request("g2", "")),
-        ("a dynamic member's join with a member id", join_request("g2", "m-1")),
+        (
+            "a dynamic member's join with a member id",
+            join_request("g2", "m-1"),
+        ),
         (
             "a static member's join",
             JoinGroupRequest {
