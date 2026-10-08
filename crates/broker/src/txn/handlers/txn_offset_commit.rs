@@ -296,6 +296,7 @@ pub(crate) async fn handle(
                 &streams,
                 &req.member_id,
                 req.generation_id_or_member_epoch,
+                reserved.clone(),
             )
             .await
         } else {

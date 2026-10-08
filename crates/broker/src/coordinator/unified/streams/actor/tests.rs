@@ -1876,7 +1876,7 @@ fn validate_offset_commit_follows_kafka_streams_group() {
             Err(codes::STALE_MEMBER_EPOCH),
         ),
         (
-            "older epoch",
+            "older epoch on a group without a topology",
             &group,
             "m1",
             4,
@@ -1884,11 +1884,124 @@ fn validate_offset_commit_follows_kafka_streams_group() {
             Err(codes::STALE_MEMBER_EPOCH),
         ),
     ];
+    let partitions = [("in".to_string(), 0)];
     for (row, state, member_id, member_epoch, fence, expected) in rows {
         check!(
-            validate_offset_commit(state, member_id, member_epoch, fence) == expected,
+            validate_offset_commit(state, None, member_id, member_epoch, fence, &partitions)
+                == expected,
             "{row}"
         );
+    }
+}
+
+/// KIP-1251: Kafka 4.3.1's `StreamsGroup.createAssignmentEpochValidator`.
+/// Member `m1` is at epoch 5. It holds active tasks 0 and 1 of subtopology
+/// `0`, assigned at epochs 3 and 5, task 2 pending revocation from epoch 4,
+/// and task 3 with no recorded epoch. Subtopology `0` reads `in` and the
+/// repartition topic `rep`; subtopology `1` reads `other`, where `m1` holds
+/// nothing. Each row commits at epoch 4.
+#[test]
+fn older_epoch_commit_checks_each_tasks_assignment_epoch() {
+    use crate::coordinator::unified::streams::persistence::{StoredSubtopology, StoredTopicInfo};
+
+    type Row = (
+        &'static str,
+        &'static [(&'static str, i32)],
+        Result<(), i16>,
+    );
+
+    let subtopology = |id: &str, source: &str, repartition: &[&str]| StoredSubtopology {
+        subtopology_id: id.into(),
+        source_topics: vec![source.into()],
+        source_topic_regex: vec![],
+        repartition_sink_topics: vec![],
+        state_changelog_topics: vec![],
+        repartition_source_topics: repartition
+            .iter()
+            .map(|name| StoredTopicInfo {
+                name: (*name).into(),
+                partitions: 4,
+                replication_factor: -1,
+                topic_configs: vec![],
+            })
+            .collect(),
+        copartition_groups: vec![],
+    };
+    let topology = StreamsGroupTopologyValue {
+        epoch: 1,
+        subtopologies: vec![
+            subtopology("0", "in", &["rep"]),
+            subtopology("1", "other", &[]),
+        ],
+    };
+    let mut group = crate::coordinator::unified::streams::state::StreamsGroupState::new("g");
+    let mut member = crate::coordinator::unified::streams::state::StreamsMemberState::joining(
+        "m1",
+        "client",
+        "/127.0.0.1",
+    );
+    member.member_epoch = 5;
+    member.active = maplit::btreemap! {"0".to_string() => vec![0, 1, 3]};
+    member.active_pending_revocation = maplit::btreemap! {"0".to_string() => vec![2]};
+    member.active_epochs = maplit::btreemap! {
+        ("0".to_string(), 0) => 3,
+        ("0".to_string(), 1) => 5,
+        ("0".to_string(), 2) => 4,
+    };
+    group.members.insert("m1".into(), member);
+
+    // (row, committed (topic, partition)s, expected)
+    let rows: [Row; 10] = [
+        ("no partitions", &[], Ok(())),
+        ("assigned before the epoch", &[("in", 0)], Ok(())),
+        (
+            "assigned after the epoch",
+            &[("in", 1)],
+            Err(codes::STALE_MEMBER_EPOCH),
+        ),
+        ("pending revocation at the epoch", &[("in", 2)], Ok(())),
+        (
+            "no recorded epoch reads the member epoch",
+            &[("in", 3)],
+            Err(codes::STALE_MEMBER_EPOCH),
+        ),
+        ("a repartition source topic", &[("rep", 0)], Ok(())),
+        (
+            "one refused partition refuses the commit",
+            &[("in", 0), ("in", 1)],
+            Err(codes::STALE_MEMBER_EPOCH),
+        ),
+        (
+            "a task the member does not hold",
+            &[("in", 4)],
+            Err(codes::STALE_MEMBER_EPOCH),
+        ),
+        (
+            "another subtopology's task",
+            &[("other", 0)],
+            Err(codes::STALE_MEMBER_EPOCH),
+        ),
+        (
+            "a topic outside the topology",
+            &[("unknown", 0)],
+            Err(codes::STALE_MEMBER_EPOCH),
+        ),
+    ];
+    for (row, committed, expected) in rows {
+        let partitions: Vec<(String, i32)> = committed
+            .iter()
+            .map(|(topic, partition)| ((*topic).to_string(), *partition))
+            .collect();
+        for fence in [
+            CommitFence::Offset { api_version: 9 },
+            CommitFence::Transactional,
+        ] {
+            check!(
+                validate_offset_commit(&group, Some(&topology), "m1", 4, fence, &partitions)
+                    == expected,
+                "{row} {fence:?}"
+            );
+        }
     }
 }
 
