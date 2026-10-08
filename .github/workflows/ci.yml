@@ -28,7 +28,7 @@ concurrency:
 
 jobs:
   cpd:
-    name: CPD · no new repeats at 40 tokens
+    name: CPD · no new repeats at 100 tokens
     if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
     timeout-minutes: 30

@@ -148,7 +148,7 @@ with a line saying why; anything else it reports is a link to fix.
 ## Duplicate Code
 
 Run `aspect check-cpd --base origin/main` before submitting Rust refactors.
-The required CPD job uses native PMD 7.28.0 at **40 tokens**, comparing every
+The required CPD job uses native PMD 7.28.0 at **100 tokens**, comparing every
 Rust source with the PR target revision (or the previous main revision).
 Existing repeats are allowed; new repeated token sequences and additional
 copies fail. Formatting, comments, and file moves do not increase the allowance.

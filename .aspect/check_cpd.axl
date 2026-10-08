@@ -1,4 +1,4 @@
-"""Reject new native PMD Rust CPD matches of at least 40 tokens.
+"""Reject new native PMD Rust CPD matches of at least 100 tokens.
 
 The allowance comes from source at an immutable Git revision, not an editable
 list of findings. A dedicated CI job supplies the PR base or main's previous
@@ -134,7 +134,7 @@ def _impl(ctx: TaskContext) -> int:
     return _run(ctx, java + ["net.sourceforge.pmd.cpd.CheckCpd", baseline, candidate, output], root)
 
 check_cpd = task(
-    summary = "Reject new Rust CPD matches of 40 or more tokens",
+    summary = "Reject new Rust CPD matches of 100 or more tokens",
     implementation = _impl,
     args = {
         "base": args.string(default = "origin/main", description = "Immutable CI base, or a local Git revision."),

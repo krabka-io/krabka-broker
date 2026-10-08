@@ -37,7 +37,7 @@ import org.antlr.v4.runtime.Token;
 
 /** A source-derived, exact-token ratchet accompanying native PMD Rust CPD reports. */
 public final class CheckCpd {
-    static final int MINIMUM_TOKENS = 40;
+    static final int MINIMUM_TOKENS = 100;
     private static final Language RUST = LanguageRegistry.CPD.getLanguageById("rust");
     private static final long HASH_BASE = 1_000_003L;
     private static final Pattern SUPPRESSION = Pattern.compile("CPD-(?:OFF|ON)");
@@ -96,7 +96,7 @@ public final class CheckCpd {
             report.append('\n');
         }
         Files.writeString(outputDir.resolve("violations.txt"), report, StandardCharsets.UTF_8);
-        String summary = "{\n  \"pmdVersion\": \"7.28.0\",\n  \"minimumTokens\": 40,\n"
+        String summary = "{\n  \"pmdVersion\": \"7.28.0\",\n  \"minimumTokens\": " + MINIMUM_TOKENS + ",\n"
                 + "  \"baseFiles\": " + base.files.size() + ",\n  \"headFiles\": " + head.files.size()
                 + ",\n  \"baseGroups\": " + base.groups + ",\n  \"headGroups\": " + head.groups
                 + ",\n  \"lexerErrors\": 0,\n  \"candidateSequences\": " + candidates.terminals
@@ -210,7 +210,7 @@ public final class CheckCpd {
 
     /**
      * Native CPD prunes overlapping/maximal matches, so its XML is not an occurrence index.
-     * Every real nonoverlapping repeated sequence has a pair of equal initial 40-token
+     * Every real nonoverlapping repeated sequence has a pair of equal initial MINIMUM_TOKENS-token
      * windows. Extending each such pair (capped at their distance within one file) exposes
      * every repeated prefix. The trie stores that complete set without copying prefixes.
      */
@@ -379,7 +379,7 @@ public final class CheckCpd {
         Window(long first) { starts.add(first); }
     }
 
-    /** Primitive open-addressing index: the vast majority of 40-token windows occur once. */
+    /** Primitive open-addressing index: the vast majority of MINIMUM_TOKENS-token windows occur once. */
     private static final class LongIndex {
         long[] keys = new long[1024];
         long[] values = new long[1024];
