@@ -3,14 +3,17 @@
 //! membership state machine because it is best-effort work that runs after
 //! reconciliation rather than inside it.
 //!
-//! The hook deletes share state only for a topic that the metadata image no
-//! longer holds, as Kafka's `GroupMetadataManager.maybeCleanupShareGroupState`
-//! does for a deleted topic. Kafka deletes share state otherwise only for
-//! `DeleteShareGroupOffsets` and `DeleteGroups`
+//! The hook also takes a topic that the metadata image no longer holds out of
+//! the group's `ShareGroupStatePartitionMetadata`, as Kafka's
+//! `GroupMetadataManager.maybeCleanupShareGroupState` does for a deleted
+//! topic. It does not call the persister for it: the share coordinator removes
+//! the share state of a deleted topic on its own, as Kafka's
+//! `ShareCoordinatorService.onTopicsDeleted` does. Kafka deletes share state
+//! otherwise only for `DeleteShareGroupOffsets` and `DeleteGroups`
 //! (`sharePartitionsEligibleForOffsetDeletion`,
-//! `shareGroupBuildPartitionDeleteRequest`). A partition that no member is
-//! assigned keeps its share-partition start offset, so consumers that
-//! subscribe again continue from it.
+//! `shareGroupBuildPartitionDeleteRequest`). A partition of a topic that no
+//! member subscribes to any more keeps its share state and its share-partition
+//! start offset, so consumers that subscribe again continue from it.
 
 use std::collections::{HashMap, HashSet};
 
@@ -68,12 +71,7 @@ pub(super) fn prepare_initialize(
         .iter()
         .map(|(name, topic_id)| (*topic_id, name.clone()))
         .collect();
-    for tp in &to_init {
-        state.initializing.insert(*tp, now_ms);
-        if let Some(name) = topic_names.get(&tp.0) {
-            state.topic_names.insert(tp.0, name.clone());
-        }
-    }
+    state.add_initializing(&to_init, &topic_names, now_ms);
     state.forget_unused_topic_names();
     let calls = to_init
         .iter()
@@ -114,50 +112,101 @@ pub(super) fn start_initialize(
     );
 }
 
-/// The share state of a topic that the metadata image no longer holds goes,
-/// as Kafka's `maybeCleanupShareGroupState` takes a deleted topic out of the
-/// group's `ShareGroupStatePartitionMetadata`.
+/// Kafka's `GroupMetadataManager.maybeCleanupShareGroupState` for this
+/// group: every topic of its `ShareGroupStatePartitionMetadata` that the
+/// metadata image no longer holds leaves the initializing, initialized and
+/// deleting sets, and the group writes the new record when a set changed.
+///
+/// Kafka runs it for every group when a metadata delta deletes topics. The
+/// group runs it at each heartbeat and each session tick, against the topics
+/// its record names.
 pub(super) async fn cleanup_deleted_topics(
     state: &mut ShareGroupState,
     offsets_log: &dyn OffsetsLog,
     coordinator: &GroupCoordinator,
     now_ms: i64,
 ) {
-    let Some(persister) = coordinator.share_persister() else {
+    let topic_ids = state.state_topic_ids();
+    if topic_ids.is_empty() {
         return;
-    };
-    let input = coordinator.metadata.snapshot();
-    let topic_names: HashMap<Uuid, String> = input
-        .topic_id_by_name
-        .iter()
-        .map(|(name, topic_id)| (*topic_id, name.clone()))
-        .collect();
-    let to_delete = deleted_topic_partitions(&state.initialized, &topic_names);
-    let mut changed = false;
-    for (tid, partition) in to_delete {
-        let topic_uuid = uuid::Uuid::from_bytes(tid.0);
-        match persister
-            .delete(&state.group_id, topic_uuid, partition)
-            .await
-        {
-            Ok(()) => {
-                state.initialized.remove(&(tid, partition));
-                changed = true;
-            }
-            Err(e) => {
-                tracing::warn!(
-                    group_id = %state.group_id,
-                    topic_id = %topic_uuid,
-                    partition,
-                    error = %e,
-                    "share-state Delete of a deleted topic failed; will retry next heartbeat",
-                );
-            }
-        }
     }
-    if changed {
+    let deleted = deleted_topics(&topic_ids, &TopicImage::current(coordinator));
+    if state.cleanup_deleted_topics(&deleted) {
         write_state_partition_metadata(state, offsets_log, coordinator, now_ms).await;
     }
+}
+
+/// The metadata image that the group checks its share-state partition
+/// metadata against: the broker's current image, or the provider's snapshot
+/// for a coordinator that runs without a metadata source.
+pub(super) enum TopicImage {
+    Image(std::sync::Arc<krabka_metadata::MetadataImage>),
+    Snapshot(ReconcileInput),
+}
+
+impl TopicImage {
+    pub(super) fn current(coordinator: &GroupCoordinator) -> Self {
+        match coordinator.metadata_source() {
+            Some(source) => Self::Image(source.current_image()),
+            None => Self::Snapshot(coordinator.metadata.snapshot()),
+        }
+    }
+
+    /// Whether the image holds any topic. Before the broker loads an image it
+    /// holds none, and no topic reads as deleted.
+    pub(super) fn is_loaded(&self) -> bool {
+        match self {
+            Self::Image(image) => image.topics().next().is_some(),
+            Self::Snapshot(input) => !input.topic_id_by_name.is_empty(),
+        }
+    }
+
+    /// The name and partition count of the topic with `topic_id`.
+    pub(super) fn by_id(&self, topic_id: &Uuid) -> Option<(String, i32)> {
+        match self {
+            Self::Image(image) => image
+                .topic_by_id(&uuid::Uuid::from_bytes(topic_id.0))
+                .map(|topic| (topic.name.clone(), image.topic_partition_count(&topic.name))),
+            Self::Snapshot(input) => input
+                .topic_id_by_name
+                .iter()
+                .find(|(_, id)| *id == topic_id)
+                .map(|(name, id)| {
+                    (
+                        name.clone(),
+                        input.partitions_per_topic.get(id).copied().unwrap_or(0),
+                    )
+                }),
+        }
+    }
+
+    /// The topic id and partition count of the topic named `topic_name`.
+    pub(super) fn by_name(&self, topic_name: &str) -> Option<(uuid::Uuid, i32)> {
+        match self {
+            Self::Image(image) => image
+                .topic(topic_name)
+                .map(|topic| (topic.topic_id, image.topic_partition_count(topic_name))),
+            Self::Snapshot(input) => input.topic_id_by_name.get(topic_name).map(|id| {
+                (
+                    uuid::Uuid::from_bytes(id.0),
+                    input.partitions_per_topic.get(id).copied().unwrap_or(0),
+                )
+            }),
+        }
+    }
+}
+
+/// The topics of `topic_ids` that `image` does not hold. An image that is not
+/// loaded yet deletes nothing.
+fn deleted_topics(topic_ids: &HashSet<Uuid>, image: &TopicImage) -> HashSet<Uuid> {
+    if !image.is_loaded() {
+        return HashSet::new();
+    }
+    topic_ids
+        .iter()
+        .filter(|topic_id| image.by_id(topic_id).is_none())
+        .copied()
+        .collect()
 }
 
 /// One `Initialize` call of the persister: the share partition and the start
@@ -246,7 +295,7 @@ pub(super) async fn apply_initialized(
         if initialized {
             state.mark_initialized(partition);
         } else {
-            state.initializing.remove(&partition);
+            state.uninitialize(&[partition]);
         }
     }
     write_state_partition_metadata(state, offsets_log, coordinator, now_ms).await;
@@ -315,24 +364,6 @@ fn partitions_to_initialize(
         .collect();
     out.sort_unstable_by_key(|(topic_id, partition)| (topic_id.0, *partition));
     out
-}
-
-/// The initialized partitions whose topic the metadata snapshot no longer
-/// holds, sorted. An empty snapshot (no image yet) deletes nothing.
-fn deleted_topic_partitions(
-    initialized: &HashSet<(Uuid, i32)>,
-    topic_names: &HashMap<Uuid, String>,
-) -> Vec<(Uuid, i32)> {
-    if topic_names.is_empty() {
-        return Vec::new();
-    }
-    let mut deleted: Vec<(Uuid, i32)> = initialized
-        .iter()
-        .copied()
-        .filter(|(topic_id, _)| !topic_names.contains_key(topic_id))
-        .collect();
-    deleted.sort_unstable_by_key(|(topic_id, partition)| (topic_id.0, *partition));
-    deleted
 }
 
 #[cfg(test)]
@@ -567,21 +598,57 @@ mod tests {
         );
     }
 
+    /// Kafka's `maybeCleanupShareGroupState`: a topic the image no longer
+    /// holds leaves all three sets, the rest stay, and an image that is not
+    /// loaded yet deletes nothing.
     #[test]
-    fn only_partitions_of_a_topic_missing_from_the_image_are_deleted() {
+    fn a_topic_missing_from_the_image_leaves_every_set() {
         let kept = Uuid([5; 16]);
-        let deleted = Uuid([6; 16]);
-        let initialized = HashSet::from([(kept, 0), (deleted, 1), (deleted, 0)]);
-        let image = HashMap::from([(kept, "kept".to_owned())]);
-        // (topic names in the snapshot, expected deletes)
+        let gone = Uuid([6; 16]);
+        let image = || {
+            TopicImage::Snapshot(ReconcileInput {
+                topic_id_by_name: HashMap::from([("kept".to_owned(), kept)]),
+                partitions_per_topic: HashMap::from([(kept, 2)]),
+                ..ReconcileInput::default()
+            })
+        };
+        // (row, image, expected initialized, initializing, deleting, changed)
         let rows = [
-            (image, vec![(deleted, 0), (deleted, 1)]),
-            (HashMap::new(), vec![]),
+            (
+                "a deleted topic goes",
+                image(),
+                HashSet::from([(kept, 0)]),
+                vec![(kept, 1)],
+                vec![],
+                true,
+            ),
+            (
+                "an unloaded image deletes nothing",
+                TopicImage::Snapshot(ReconcileInput::default()),
+                HashSet::from([(kept, 0), (gone, 0)]),
+                vec![(kept, 1), (gone, 1)],
+                vec![gone],
+                false,
+            ),
         ];
-        for (index, (topic_names, expected)) in rows.into_iter().enumerate() {
+        for (row, image, initialized, initializing, deleting, changed) in rows {
+            let mut state = ShareGroupState::new("g");
+            state.initialized.extend([(kept, 0), (gone, 0)]);
+            state.initializing.extend([((kept, 1), 7), ((gone, 1), 7)]);
+            state.deleting.insert(gone, "gone".to_owned());
+            state.topic_names.insert(kept, "kept".to_owned());
+            state.topic_names.insert(gone, "gone".to_owned());
+
+            let deleted = deleted_topics(&state.state_topic_ids(), &image);
+
+            assert!(state.cleanup_deleted_topics(&deleted) == changed, "{row}");
+            assert!(state.initialized == initialized, "{row}");
+            let mut held: Vec<(Uuid, i32)> = state.initializing.keys().copied().collect();
+            held.sort_unstable_by_key(|(topic_id, partition)| (topic_id.0, *partition));
+            assert!(held == initializing, "{row}");
             assert!(
-                deleted_topic_partitions(&initialized, &topic_names) == expected,
-                "row {index}"
+                state.deleting.keys().copied().collect::<Vec<_>>() == deleting,
+                "{row}"
             );
         }
     }

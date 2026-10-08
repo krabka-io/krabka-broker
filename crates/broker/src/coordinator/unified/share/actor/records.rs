@@ -14,7 +14,7 @@ use crate::{
         OffsetRecordBatchBuilder,
         share::{
             persistence::{
-                ShareGroupCurrentMemberAssignmentValue, ShareGroupKey,
+                DeletingTopic, ShareGroupCurrentMemberAssignmentValue, ShareGroupKey,
                 ShareGroupMemberMetadataValue, ShareGroupMetadataValue,
                 ShareGroupStatePartitionMetadataValue, ShareGroupTargetAssignmentMemberValue,
                 ShareGroupTargetAssignmentMetadataValue, TopicPartitionsInfo, UNKNOWN_TOPIC_NAME,
@@ -315,8 +315,8 @@ pub(super) fn target_assignment_value(
 }
 
 /// Build the `ShareGroupStatePartitionMetadata` (key v15) value from the live
-/// initializing and initialized sets. There is one row per topic in each, and
-/// the partitions are sorted for a stable encoding.
+/// initializing, initialized and deleting sets. There is one row per topic in
+/// each, and the partitions are sorted for a stable encoding.
 ///
 /// Each row names its topic. The name comes from
 /// [`ShareGroupState::topic_names`], which the lifecycle hook fills from the
@@ -331,8 +331,22 @@ pub(super) fn state_partition_metadata_from(
     ShareGroupStatePartitionMetadataValue {
         initializing: topic_partitions_infos(state, state.initializing.keys()),
         initialized: topic_partitions_infos(state, state.initialized.iter()),
-        deleting: Vec::new(),
+        deleting: deleting_topics(state),
     }
+}
+
+/// The deleting set as `DeletingTopics` rows, sorted by topic id.
+fn deleting_topics(state: &ShareGroupState) -> Vec<DeletingTopic> {
+    let mut topics: Vec<DeletingTopic> = state
+        .deleting
+        .iter()
+        .map(|(topic_id, topic_name)| DeletingTopic {
+            topic_id: uuid::Uuid::from_bytes(topic_id.0),
+            topic_name: topic_name.clone(),
+        })
+        .collect();
+    topics.sort_by_key(|topic| topic.topic_id);
+    topics
 }
 
 /// Groups `partitions` into one named, sorted row per topic.
@@ -397,6 +411,8 @@ mod tests {
         state.initialized.insert((forgotten, 0));
         state.initializing.insert((named, 2), 5);
         state.topic_names.insert(named, "orders".to_owned());
+        state.deleting.insert(forgotten, "carts".to_owned());
+        state.deleting.insert(named, "orders".to_owned());
 
         // Rows sorted by topic id, partitions sorted, and the topic whose name
         // the group no longer knows gets Kafka's `<UNKNOWN>` placeholder.
@@ -420,7 +436,16 @@ mod tests {
                             partitions: vec![0],
                         },
                     ],
-                    deleting: Vec::new(),
+                    deleting: vec![
+                        DeletingTopic {
+                            topic_id: uuid::Uuid::from_bytes([1; 16]),
+                            topic_name: "orders".to_owned(),
+                        },
+                        DeletingTopic {
+                            topic_id: uuid::Uuid::from_bytes([2; 16]),
+                            topic_name: "carts".to_owned(),
+                        },
+                    ],
                 }
         );
     }

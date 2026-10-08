@@ -27,14 +27,13 @@ use crate::{
 /// offset.
 ///
 /// The group has *no members* when Alter runs, so the membership lifecycle has
-/// never seeded the share-state. A member join and leave would reap the state
-/// when the group empties. Alter thus initializes from absent at
-/// `state_epoch = 1` with `start_offset = 5`. A later first join then
-/// reconciles at `group_epoch = 1`. The equal-or-higher durable `state_epoch`
-/// *fences* the lifecycle re-init `initialize(1, 0)`, so the SPSO from Alter
-/// survives and the first `ShareFetch` acquires from offset 5. The test thus
-/// exercises the real acquire path against the reset and invalidated leader
-/// cache.
+/// never seeded the share-state. Alter thus initializes from absent at the
+/// group's current epoch, 1, with `start_offset = 5`, and records the
+/// partition as initialized, as Kafka's `alterShareGroupOffsets` does. A later
+/// first join finds the partition initialized and does not initialize it
+/// again, so the SPSO from Alter survives and the first `ShareFetch` acquires
+/// from offset 5. The test thus exercises the real acquire path against the
+/// reset and invalidated leader cache.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn alter_resets_empty_group() {
     let (_permit, broker, client, _dir, tid) =
@@ -45,8 +44,9 @@ async fn alter_resets_empty_group() {
     produce_n(&client, "t", tid, 0, 6).await;
 
     // Alter: reset SPSO to 5 on the empty (never-joined) group. This
-    // initializes-from-absent at state_epoch 1, and invalidates the (empty)
-    // leader cache. Retry while the persister leadership is still settling.
+    // initializes-from-absent at the group epoch 1, and invalidates the
+    // (empty) leader cache. Retry while the persister leadership is still
+    // settling.
     let mut altered = false;
     for _ in 0..40 {
         let resp = client
@@ -85,8 +85,9 @@ async fn alter_resets_empty_group() {
     );
 
     // Join and ShareFetch: must acquire starting at offset 5 (the reset SPSO).
-    // The first-join lifecycle re-init is fenced by the Alter's state_epoch, so
-    // the acquire reads the reset SPSO 5 via the invalidated leader cache.
+    // The first join does not initialize the already-initialized partition
+    // again, so the acquire reads the reset SPSO 5 via the invalidated leader
+    // cache.
     let (member, _epoch) = join(&client, "g1", "t").await;
     let row = fetch_until_acquired(&client, "g1", &member, tid, 0, 0).await;
     assert!(

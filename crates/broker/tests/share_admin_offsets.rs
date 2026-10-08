@@ -11,9 +11,9 @@
 //! These tests prove:
 //! - Describe reflects the durable SPSO after a consume and an Accept advance
 //!   it. Describe also reports lag = HWM − SPSO for a locally-led partition.
-//! - Alter on an *empty* group resets the SPSO. It bumps the state epoch,
-//!   re-initializes, AND invalidates the share-partition leader cache, so a
-//!   later `ShareFetch` acquires from the new offset.
+//! - Alter on an *empty* group resets the SPSO. It re-initializes the share
+//!   state at the group's current epoch AND invalidates the share-partition
+//!   leader cache, so a later `ShareFetch` acquires from the new offset.
 //! - Alter on a *non-empty* group with a live member is rejected with
 //!   `NON_EMPTY_GROUP`.
 //! - Delete removes the durable share-state for a topic. Describe then reads

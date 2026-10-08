@@ -5,8 +5,10 @@
 //! top-level `NON_EMPTY_GROUP` rejection.
 //!
 //! The request carries only `topic_name` for each topic, and no partition
-//! list. The handler therefore lists the group's initialized partitions for
-//! each topic from the cached `ShareGroupStatePartitionMetadata`.
+//! list. The group's actor lists the initialized partitions of each topic
+//! from its `ShareGroupStatePartitionMetadata`, records the topic as deleting,
+//! and takes it out once the persister deleted its state, as Kafka's
+//! `GroupCoordinatorService.deleteShareGroupOffsets` does.
 //!
 //! `network::dispatch` intercepts this request inline for the per-group
 //! `Delete` ACL gate, which needs the principal and the peer `SocketAddr`.
@@ -27,7 +29,7 @@ use crate::{
     codes,
     coordinator::unified::{
         GroupType,
-        share::actor::{DeleteTopic, DeleteTopicOutcome, ShareGroupActorMessage},
+        share::actor::{DeleteTopicOutcome, ShareGroupActorMessage},
     },
     error::BrokerError,
     handlers::ErrorResponse as _,
@@ -109,8 +111,6 @@ context_handler! {
             ));
         };
 
-        let metadata = coordinator.share_state_partition_metadata(&gid);
-
         let mut responses: Vec<DeleteShareGroupOffsetsResponseTopic> = denied_topics
             .into_iter()
             .map(|rt| DeleteShareGroupOffsetsResponseTopic {
@@ -121,35 +121,10 @@ context_handler! {
                 ..Default::default()
             })
             .collect();
-        // Kafka's `errorTopicResponseList`: the rows `sharePartitionsEligibleForOffsetDeletion`
-        // refuses, then the topics whose state delete failed. They follow the
-        // deleted topics.
-        let mut refused: Vec<DeleteShareGroupOffsetsResponseTopic> = Vec::new();
-        let mut failed: Vec<DeleteShareGroupOffsetsResponseTopic> = Vec::new();
-        let mut actor_requests = Vec::new();
-        for rt in allowed_topics {
-            let Some(topic_id) = image.topic(&rt.topic_name).map(|t| t.topic_id) else {
-                refused.push(DeleteShareGroupOffsetsResponseTopic {
-                    topic_name: rt.topic_name,
-                    topic_id: Uuid::default(),
-                    error_code: codes::UNKNOWN_TOPIC_OR_PARTITION,
-                    error_message: kafka_message(codes::UNKNOWN_TOPIC_OR_PARTITION).map(str::to_owned),
-                    ..Default::default()
-                });
-                continue;
-            };
-            actor_requests.push(DeleteTopic {
-                topic_id,
-                topic_name: rt.topic_name,
-            });
-        }
-        let names_and_ids: Vec<(String, uuid::Uuid)> = actor_requests
-            .iter()
-            .map(|r| (r.topic_name.clone(), r.topic_id))
-            .collect();
+        let topic_names: Vec<String> = allowed_topics.into_iter().map(|rt| rt.topic_name).collect();
 
         let asked = ask(&actor.tx, |reply| ShareGroupActorMessage::DeleteOffsets {
-            requests: actor_requests,
+            topic_names,
             reply,
         })
         .await;
@@ -166,54 +141,53 @@ context_handler! {
             Ok(outcomes) => outcomes,
             Err(error_code) => return Ok(top_level(error_code, None)),
         };
-        if outcomes.len() != names_and_ids.len() {
-            return Ok(top_level(codes::COORDINATOR_NOT_AVAILABLE, None));
-        }
-        for ((topic_name, topic_id), outcome) in names_and_ids.into_iter().zip(outcomes) {
-            match outcome {
-                DeleteTopicOutcome::Deleted => {
-                    let part_indices = metadata
-                        .as_ref()
-                        .and_then(|value| {
-                            value
-                                .initialized
-                                .iter()
-                                .find(|candidate| candidate.topic_id == topic_id)
-                                .map(|candidate| candidate.partitions.as_slice())
-                        })
-                        .unwrap_or_default();
-                    for partition in part_indices {
+        // The actor answers in Kafka's row order: the deleted topics, the topics
+        // `sharePartitionsEligibleForOffsetDeletion` refused, then the topics
+        // whose state delete failed.
+        for (topic_name, outcome) in outcomes {
+            responses.push(match outcome {
+                DeleteTopicOutcome::Deleted {
+                    topic_id,
+                    partitions,
+                } => {
+                    for partition in partitions {
                         broker
                             .share_partition_leaders
-                            .invalidate(&gid, topic_id, *partition);
+                            .invalidate(&gid, topic_id, partition);
                     }
-                    responses.push(DeleteShareGroupOffsetsResponseTopic {
+                    DeleteShareGroupOffsetsResponseTopic {
                         topic_name,
                         topic_id: Uuid(*topic_id.as_bytes()),
                         error_code: codes::NONE,
                         ..Default::default()
-                    });
+                    }
                 }
-                DeleteTopicOutcome::NoState => refused.push(DeleteShareGroupOffsetsResponseTopic {
+                DeleteTopicOutcome::UnknownTopic => DeleteShareGroupOffsetsResponseTopic {
+                    topic_name,
+                    topic_id: Uuid::default(),
+                    error_code: codes::UNKNOWN_TOPIC_OR_PARTITION,
+                    error_message: kafka_message(codes::UNKNOWN_TOPIC_OR_PARTITION).map(str::to_owned),
+                    ..Default::default()
+                },
+                DeleteTopicOutcome::NoState => DeleteShareGroupOffsetsResponseTopic {
                     topic_name,
                     topic_id: Uuid::default(),
                     error_code: codes::UNKNOWN_TOPIC_OR_PARTITION,
                     error_message: Some(NO_OFFSETS_MESSAGE.to_owned()),
                     ..Default::default()
-                }),
-                DeleteTopicOutcome::Failed(error_code) => {
-                    failed.push(DeleteShareGroupOffsetsResponseTopic {
-                        topic_name,
-                        topic_id: Uuid(*topic_id.as_bytes()),
-                        error_code,
-                        error_message: kafka_message(error_code).map(str::to_owned),
-                        ..Default::default()
-                    });
-                }
-            }
+                },
+                DeleteTopicOutcome::Failed {
+                    topic_id,
+                    error_code,
+                } => DeleteShareGroupOffsetsResponseTopic {
+                    topic_name,
+                    topic_id: Uuid(*topic_id.as_bytes()),
+                    error_code,
+                    error_message: kafka_message(error_code).map(str::to_owned),
+                    ..Default::default()
+                },
+            });
         }
-        responses.extend(refused);
-        responses.extend(failed);
 
         let resp = DeleteShareGroupOffsetsResponse {
             throttle_time_ms: 0,
@@ -422,9 +396,10 @@ mod tests {
 
     /// Kafka's `deleteShareGroupOffsets` and `initiateDeleteShareGroupOffsets`:
     /// an empty id is invalid, a missing group or one of another type is not
-    /// found (and no share group is created), and a topic the image lacks or
-    /// the group holds no state for answers `UNKNOWN_TOPIC_OR_PARTITION` with
-    /// Kafka's message.
+    /// found (and no share group is created), a group with no share-state
+    /// partition metadata answers no row at all, and in a group with some, a
+    /// topic the image lacks or the group holds no state for answers
+    /// `UNKNOWN_TOPIC_OR_PARTITION` with Kafka's message, in request order.
     #[tokio::test]
     async fn handle_refuses_what_kafka_refuses() {
         broker_fixture!(
@@ -437,6 +412,23 @@ mod tests {
         let _classic = coordinator.get_or_create_classic("classic");
         coordinator.mark_share("share-empty");
         let _share = coordinator.get_or_create_share("share-empty");
+        coordinator.mark_share("share-held");
+        coordinator
+            .get_or_create_share("share-held")
+            .tx
+            .send(ShareGroupActorMessage::Seed(ShareGroupSeed {
+                state_partition_metadata: ShareGroupStatePartitionMetadataValue {
+                    initialized: vec![TopicPartitionsInfo {
+                        topic_id: uuid::Uuid::from_bytes([5; 16]),
+                        topic_name: "elsewhere".into(),
+                        partitions: vec![0],
+                    }],
+                    ..Default::default()
+                },
+                ..Default::default()
+            }))
+            .await
+            .expect("seed share-held");
         let top_level = |error_code, message: &str| DeleteShareGroupOffsetsResponse {
             error_code,
             error_message: Some(message.into()),
@@ -471,13 +463,18 @@ mod tests {
             (
                 "share-empty",
                 vec!["t", "missing-topic"],
+                DeleteShareGroupOffsetsResponse::default(),
+            ),
+            (
+                "share-held",
+                vec!["t", "missing-topic"],
                 DeleteShareGroupOffsetsResponse {
                     responses: vec![
+                        row("t", "There is no offset information to delete."),
                         row(
                             "missing-topic",
                             "This server does not host this topic-partition.",
                         ),
-                        row("t", "There is no offset information to delete."),
                     ],
                     ..Default::default()
                 },
@@ -494,12 +491,14 @@ mod tests {
             .expect("handle delete");
             assert!(response == expected, "group {group_id:?}");
         }
-        assert!(coordinator.share_group_ids() == vec!["share-empty".to_owned()]);
+        let mut share_groups = coordinator.share_group_ids();
+        share_groups.sort_unstable();
+        assert!(share_groups == vec!["share-empty".to_owned(), "share-held".to_owned()]);
         broker_handle.shutdown().await;
     }
 
     #[tokio::test]
-    async fn delete_fences_only_requested_state_and_retry_is_exact() {
+    async fn delete_removes_only_requested_state_and_a_retry_finds_none() {
         broker_fixture!(
             (broker_handle, _dir, broker),
             share_allow_all,
@@ -563,10 +562,11 @@ mod tests {
             .await
             .expect("seed share actor");
 
-        // The first delete fences the state. The retry finds no initialized
-        // partition of the topic left, so Kafka's
-        // `sharePartitionsEligibleForOffsetDeletion` answers the no-offsets
-        // row and the fence stays.
+        // The first delete removes the state, and
+        // `completeDeleteShareGroupOffsets` takes the topic out of the
+        // deleting set. The retry finds the topic neither initialized nor
+        // deleting, so Kafka's `sharePartitionsEligibleForOffsetDeletion`
+        // answers the no-offsets row.
         let deleted_row = DeleteShareGroupOffsetsResponseTopic {
             topic_name: "delete-topic".into(),
             topic_id: Uuid(*deleted_id.as_bytes()),
@@ -595,15 +595,11 @@ mod tests {
                     }
             );
 
-            let (state_epoch, _, start_offset, _) = persister
+            let deleted_state = persister
                 .read_summary("g-delete", deleted_id, 0)
                 .await
-                .expect("read deleted state")
-                .expect("durable deletion fence");
-            assert!(state_epoch == 5);
-            assert!(
-                start_offset == crate::share_coordinator::coordinator::UNINITIALIZED_START_OFFSET
-            );
+                .expect("read deleted state");
+            assert!(deleted_state.is_none());
         }
         let (kept_state_epoch, _, kept_start_offset, _) = persister
             .read_summary("g-delete", kept_id, 0)
@@ -748,27 +744,15 @@ mod tests {
             assert!(response == expected, "case: {case}");
 
             // A denied topic's durable state must be untouched; an allowed
-            // topic's must be fenced (deleted).
+            // topic's must be deleted.
             for (name, topic_id) in [("allow-topic", allow_id), ("deny-topic", deny_id)] {
-                let (state_epoch, _, start_offset, _) = persister
+                let state = persister
                     .read_summary("g-authz", topic_id, 0)
                     .await
                     .expect("read state")
-                    .expect("state row");
-                if denied.contains(name) {
-                    assert!(state_epoch == 4, "case: {case}, topic: {name}");
-                    assert!(
-                        start_offset == krabka_log::Offset(10),
-                        "case: {case}, topic: {name}"
-                    );
-                } else {
-                    assert!(state_epoch == 5, "case: {case}, topic: {name}");
-                    assert!(
-                        start_offset
-                            == crate::share_coordinator::coordinator::UNINITIALIZED_START_OFFSET,
-                        "case: {case}, topic: {name}"
-                    );
-                }
+                    .map(|(state_epoch, _, start_offset, _)| (state_epoch, start_offset));
+                let expected = denied.contains(name).then_some((4, krabka_log::Offset(10)));
+                assert!(state == expected, "case: {case}, topic: {name}");
             }
 
             broker_handle.shutdown().await;

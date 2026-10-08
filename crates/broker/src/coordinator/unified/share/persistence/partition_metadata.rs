@@ -28,10 +28,12 @@
 //! The group writes a partition to `InitializingTopics` before it asks the
 //! persister to initialize it, and moves it to `InitializedTopics` once the
 //! persister answers, as Kafka's `GroupMetadataManager.addInitializingTopicsRecords`
-//! and `initializeShareGroupState` do. It drives the persister's delete to
-//! completion before it writes the record rather than staging the topic in
-//! `DeletingTopics`, so it writes that array empty, and a record from another
-//! writer that carries it still decodes.
+//! and `initializeShareGroupState` do. It writes a topic to `DeletingTopics`
+//! before it asks the persister to delete the topic's share state, and takes
+//! it out once the persister answers, as Kafka's
+//! `sharePartitionsEligibleForOffsetDeletion`,
+//! `shareGroupBuildPartitionDeleteRequest` and
+//! `completeDeleteShareGroupOffsets` do.
 
 use crate::{
     coordinator::unified::persistence::flex::{

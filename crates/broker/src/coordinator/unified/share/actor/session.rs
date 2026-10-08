@@ -8,6 +8,7 @@ use std::time::Instant;
 use super::{
     heartbeat::fence_member,
     records::{chrono_now_ms, flush_pending},
+    share_state::cleanup_deleted_topics,
 };
 use crate::coordinator::unified::{
     GroupCoordinator,
@@ -18,8 +19,11 @@ use crate::coordinator::unified::{
 
 /// Called on every heartbeat-interval tick. Each member whose session
 /// expired is fenced on its own, with a batch of its own, as each of Kafka's
-/// session timers runs `shareGroupFenceMember` for its member. Returns `Err`
-/// if a log write fails, and the actor must then exit.
+/// session timers runs `shareGroupFenceMember` for its member. Then the
+/// topics that the metadata image dropped leave the group's share-state
+/// partition metadata, so an empty group that no heartbeat reaches still
+/// follows Kafka's `maybeCleanupShareGroupState`. Returns `Err` if a fence
+/// write fails, and the actor must then exit.
 pub(super) async fn handle_session_tick(
     state: &mut ShareGroupState,
     config: &ShareGroupConfig,
@@ -45,6 +49,7 @@ pub(super) async fn handle_session_tick(
             return Err(e);
         }
     }
+    cleanup_deleted_topics(state, offsets_log, coordinator, chrono_now_ms()).await;
     Ok(())
 }
 
@@ -129,5 +134,62 @@ mod tests {
         }
         check!(written == expected);
         check!((state.members.len(), state.group_epoch, state.target.epoch) == (0, 4, 2));
+    }
+
+    /// Kafka's `maybeCleanupShareGroupState` reaches an empty group too: a
+    /// tick takes a topic the image no longer holds out of every set of the
+    /// group's share-state partition metadata and writes the record, and a
+    /// tick with nothing to clean writes nothing.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_tick_drops_the_share_state_of_a_deleted_topic() {
+        use crate::coordinator::unified::share::persistence::{
+            ShareGroupStatePartitionMetadataValue, TopicPartitionsInfo,
+        };
+
+        let (metadata, topic_id) = metadata_with_topic("t", 2);
+        let config = ShareGroupConfig::default();
+        let log = Arc::new(InMemoryOffsetsLog::default());
+        let coord = Arc::new(GroupCoordinator::new(
+            NextGenConfig::default(),
+            config.clone(),
+            metadata.clone(),
+            log.clone(),
+            crate::coordinator::unified::streams::config::StreamsGroupConfig::default(),
+        ));
+        let gone = krabka_protocol::primitives::uuid::Uuid([9; 16]);
+        let mut state = ShareGroupState::new("g");
+        state.initialized.extend([(topic_id, 0), (gone, 0)]);
+        state.initializing.insert((gone, 1), 1);
+        state.deleting.insert(gone, "gone".to_owned());
+        state.topic_names.insert(topic_id, "t".to_owned());
+        state.topic_names.insert(gone, "gone".to_owned());
+
+        for _ in 0..2 {
+            handle_session_tick(&mut state, &config, &*metadata, &*log, &coord)
+                .await
+                .expect("tick should succeed");
+        }
+
+        let expected = PendingShareRecords {
+            state_partition_metadata: Some(ShareGroupStatePartitionMetadataValue {
+                initialized: vec![TopicPartitionsInfo {
+                    topic_id: uuid::Uuid::from_bytes(topic_id.0),
+                    topic_name: "t".to_owned(),
+                    partitions: vec![0],
+                }],
+                ..ShareGroupStatePartitionMetadataValue::default()
+            }),
+            ..PendingShareRecords::default()
+        }
+        .into_batch("g", 0)
+        .unwrap()
+        .records;
+        let written: Vec<_> = log
+            .batches()
+            .await
+            .into_iter()
+            .map(|batch| batch.records)
+            .collect();
+        check!(written == vec![expected]);
     }
 }

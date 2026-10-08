@@ -46,6 +46,7 @@ pub(super) fn apply_seed(state: &mut ShareGroupState, seed: ShareGroupSeed) {
     // the lifecycle hook retries them once the retry interval passes.
     state.initialized.clear();
     state.initializing.clear();
+    state.deleting.clear();
     state.topic_names.clear();
     let replayed_at = super::records::chrono_now_ms();
     restore_named_partitions(
@@ -60,6 +61,11 @@ pub(super) fn apply_seed(state: &mut ShareGroupState, seed: ShareGroupSeed) {
         &seed.state_partition_metadata.initialized,
         ShareGroupState::mark_initialized,
     );
+    for topic in &seed.state_partition_metadata.deleting {
+        state
+            .deleting
+            .insert(Uuid(*topic.topic_id.as_bytes()), topic.topic_name.clone());
+    }
     state.forget_unused_topic_names();
 }
 
@@ -149,7 +155,7 @@ mod tests {
 
     #[test]
     fn seed_round_trip_keeps_the_topic_name_of_every_initialized_topic() {
-        // The name a topic was initialized under survives the trip through the
+        // The name a topic was initialized or is deleted under survives the trip through the
         // persisted record, so a restarted group keeps naming it even when the
         // metadata image no longer resolves the id.
         let id = Uuid([7; 16]);
@@ -158,6 +164,7 @@ mod tests {
         state.initialized.insert((id, 1));
         state.initializing.insert((id, 2), 0);
         state.topic_names.insert(id, "orders".to_owned());
+        state.deleting.insert(Uuid([8; 16]), "carts".to_owned());
 
         let seed = snapshot_seed(&state);
         let mut restored = ShareGroupState::new("g");
@@ -165,6 +172,7 @@ mod tests {
 
         check!(restored.topic_names == state.topic_names);
         check!(restored.initialized == state.initialized);
+        check!(restored.deleting == state.deleting);
         check!(restored.initializing.keys().collect::<Vec<_>>() == vec![&(id, 2)]);
         assert!(snapshot_seed(&restored).state_partition_metadata == seed.state_partition_metadata);
     }

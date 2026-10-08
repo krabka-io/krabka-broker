@@ -2,15 +2,18 @@
 //!
 //! Kafka's `GroupCoordinatorService.deleteGroups` runs the share group delete
 //! first. A group with members answers `NON_EMPTY_GROUP`. For an empty group,
-//! the persister deletes the share state of every initialized partition. A
-//! group whose state delete failed is kept and answers the error. Only then
-//! does the general delete write the group tombstones
-//! (`ShareGroup.createGroupTombstoneRecords`).
+//! the group records every initialized and initializing topic as deleting,
+//! and the persister deletes their share state
+//! (`shareGroupBuildPartitionDeleteRequest`). A group whose state delete
+//! failed is kept and answers the error. Only then does the general delete
+//! write the group tombstones (`ShareGroup.createGroupTombstoneRecords`),
+//! which tombstone the `ShareGroupStatePartitionMetadata` record too.
 
 use krabka_protocol::records::RecordBatch;
 
-use super::records::{
-    PendingShareRecords, chrono_now_ms, flush_pending, state_partition_metadata_from,
+use super::{
+    records::{PendingShareRecords, chrono_now_ms, flush_pending, state_partition_metadata_from},
+    share_state::TopicImage,
 };
 use crate::{
     codes,
@@ -66,19 +69,21 @@ pub(super) async fn delete_group(
     Ok(())
 }
 
-/// Deletes the share state of every initialized and initializing partition
-/// of the group, as Kafka's `shareGroupBuildPartitionDeleteRequest` combines
-/// both sets: an initializing partition may already hold state.
+/// Kafka's `GroupMetadataManager.shareGroupBuildPartitionDeleteRequest`
+/// followed by `GroupCoordinatorService.performShareGroupsDeletion`.
 ///
-/// When a delete fails, the partitions whose state is already gone leave the
-/// sets, and the method writes the new `ShareGroupStatePartitionMetadata`, so
-/// a retry deletes only the rest.
+/// Every initialized and initializing partition, and every partition of a
+/// topic that an earlier delete left deleting, moves to the deleting set, and
+/// the group writes that `ShareGroupStatePartitionMetadata` record before the
+/// persister deletes any state. When a delete fails, the group is kept with
+/// the record as written, so a retry deletes every one of those topics again.
+/// A group with no share-state partition metadata writes nothing here.
 async fn delete_share_state(
     state: &mut ShareGroupState,
     offsets_log: &dyn OffsetsLog,
     coordinator: &GroupCoordinator,
 ) -> Result<(), DeleteGroupError> {
-    if state.initialized.is_empty() && state.initializing.is_empty() {
+    if !state.has_state_partition_metadata() {
         return Ok(());
     }
     let Some(persister) = coordinator.share_persister() else {
@@ -87,29 +92,43 @@ async fn delete_share_state(
         ));
     };
 
-    let mut partitions: Vec<_> = state
-        .initialized
-        .iter()
-        .chain(state.initializing.keys())
-        .copied()
-        .collect::<std::collections::HashSet<_>>()
-        .into_iter()
-        .collect();
-    partitions.sort_unstable_by_key(|(topic_id, partition)| (topic_id.0, *partition));
-    let mut failed = false;
-    let mut removed = false;
-    for (topic_id, partition) in partitions {
+    let image = TopicImage::current(coordinator);
+    let before = (
+        state.initialized.clone(),
+        state.initializing.clone(),
+        state.deleting.clone(),
+        state.topic_names.clone(),
+    );
+    let candidates = state.move_all_to_deleting(|topic_id| image.by_id(topic_id));
+    let pending = PendingShareRecords {
+        state_partition_metadata: Some(state_partition_metadata_from(state)),
+        ..Default::default()
+    };
+    if let Err(error) =
+        flush_pending(state, pending, offsets_log, coordinator, chrono_now_ms()).await
+    {
+        tracing::warn!(
+            group_id = %state.group_id,
+            %error,
+            "persisting the deleting share partitions of a share group delete failed",
+        );
+        (
+            state.initialized,
+            state.initializing,
+            state.deleting,
+            state.topic_names,
+        ) = before;
+        return Err(DeleteGroupError::Internal);
+    }
+
+    let mut error_code = codes::NONE;
+    for (topic_id, partitions) in candidates {
         let topic_uuid = uuid::Uuid::from_bytes(topic_id.0);
-        match persister
-            .delete(&state.group_id, topic_uuid, partition)
-            .await
-        {
-            Ok(()) => {
-                state.initialized.remove(&(topic_id, partition));
-                state.initializing.remove(&(topic_id, partition));
-                removed = true;
-            }
-            Err(error) => {
+        for partition in partitions {
+            if let Err(error) = persister
+                .delete(&state.group_id, topic_uuid, partition)
+                .await
+            {
                 tracing::warn!(
                     group_id = %state.group_id,
                     topic_id = %topic_uuid,
@@ -117,34 +136,20 @@ async fn delete_share_state(
                     %error,
                     "share state delete failed; the share group is kept",
                 );
-                failed = true;
+                if error_code == codes::NONE {
+                    error_code = match error {
+                        BrokerError::SharePartitionState { code, .. } => code,
+                        _ => codes::COORDINATOR_NOT_AVAILABLE,
+                    };
+                }
             }
         }
     }
-    if !failed {
-        return Ok(());
+    if error_code == codes::NONE {
+        Ok(())
+    } else {
+        Err(DeleteGroupError::ShareState(error_code))
     }
-    if removed {
-        state.forget_unused_topic_names();
-        let pending = PendingShareRecords {
-            state_partition_metadata: Some(state_partition_metadata_from(state)),
-            ..Default::default()
-        };
-        if let Err(error) =
-            flush_pending(state, pending, offsets_log, coordinator, chrono_now_ms()).await
-        {
-            tracing::warn!(
-                group_id = %state.group_id,
-                %error,
-                "persisting ShareGroupStatePartitionMetadata after a failed state delete failed",
-            );
-        }
-    }
-    // The persister reports no per-partition code to this caller yet, so every
-    // failure answers the retriable coordinator error.
-    Err(DeleteGroupError::ShareState(
-        codes::COORDINATOR_NOT_AVAILABLE,
-    ))
 }
 
 /// The tombstones of an empty share group, in the order of Kafka's
@@ -186,7 +191,9 @@ mod tests {
         ShareGroupSeed,
         share::{
             actor::ShareGroupActorMessage,
-            persistence::{ShareGroupStatePartitionMetadataValue, TopicPartitionsInfo},
+            persistence::{
+                DeletingTopic, ShareGroupStatePartitionMetadataValue, TopicPartitionsInfo,
+            },
         },
         test_support::{fixed_source, make_coord_with_log, make_share_persister, share_member},
     };
@@ -239,6 +246,31 @@ mod tests {
         seed
     }
 
+    /// An empty group whose only topic an earlier delete left deleting.
+    fn deleting_seed() -> ShareGroupSeed {
+        let mut seed = seed(0, &[]);
+        seed.state_partition_metadata.deleting = vec![DeletingTopic {
+            topic_id: uuid::Uuid::from_bytes([9; 16]),
+            topic_name: "orders".to_owned(),
+        }];
+        seed
+    }
+
+    /// The `(key, value)` of a `ShareGroupStatePartitionMetadata` record of
+    /// `sg` holding `value`.
+    fn metadata_record(value: ShareGroupStatePartitionMetadataValue) -> Appended {
+        PendingShareRecords {
+            state_partition_metadata: Some(value),
+            ..Default::default()
+        }
+        .into_batch("sg", 0)
+        .unwrap()
+        .records
+        .into_iter()
+        .map(|record| (record.key, record.value))
+        .collect()
+    }
+
     /// `DeleteGroups` on a share group, per row: whether the group exists,
     /// its members and initialized or initializing partitions, and whether a share persister
     /// is wired. The persister runs over a metadata image with no brokers, so
@@ -251,9 +283,18 @@ mod tests {
             .into_iter()
             .map(|record| (record.key, record.value))
             .collect();
+        // Kafka's `shareGroupBuildPartitionDeleteRequest` records every
+        // initialized topic as deleting before the persister runs.
+        let orders_deleting = metadata_record(ShareGroupStatePartitionMetadataValue {
+            deleting: vec![DeletingTopic {
+                topic_id: uuid::Uuid::from_bytes([9; 16]),
+                topic_name: "orders".to_owned(),
+            }],
+            ..Default::default()
+        });
         // (share group seed, persister wired, expected result, group kept,
         //  expected appended records)
-        let rows: [Row; 6] = [
+        let rows: [Row; 7] = [
             (
                 None,
                 true,
@@ -276,7 +317,21 @@ mod tests {
                     codes::COORDINATOR_NOT_AVAILABLE,
                 )),
                 true,
-                Vec::new(),
+                orders_deleting,
+            ),
+            // A deleting topic that the metadata image no longer holds is
+            // dropped from the record, and with nothing left to delete the
+            // group goes.
+            (
+                Some(deleting_seed()),
+                true,
+                Ok(()),
+                false,
+                [
+                    metadata_record(ShareGroupStatePartitionMetadataValue::default()),
+                    tombstones.clone(),
+                ]
+                .concat(),
             ),
             (
                 Some(seed(0, &[0])),
