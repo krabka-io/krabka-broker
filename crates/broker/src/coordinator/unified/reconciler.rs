@@ -1,44 +1,151 @@
-//! Trigger-driven reconciler. It runs at the next heartbeat after a dirty
-//! signal: a subscription change, a member add or leave, a metadata change that
-//! [`refresh_metadata`] found, or an assignor selection change.
+//! The epoch and target assignment steps of Kafka's consumer group
+//! heartbeat: the subscription metadata update that bumps the group epoch,
+//! the epoch bump of a fence, and the target assignment that a group whose
+//! epoch is ahead of its target computes.
 
-use std::{
-    collections::{BTreeSet, HashMap, HashSet},
-    hash::{DefaultHasher, Hash, Hasher},
-};
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 use krabka_protocol::primitives::uuid::Uuid;
 
 use super::assignor::{
     Assignor, GroupSpec, MemberSubscription, SubscriptionShape, TopicMetadata, subscription_type,
 };
-use crate::coordinator::unified::consumer_state::{GroupState, MemberState};
+use crate::coordinator::unified::{
+    consumer_state::{GroupState, MemberState},
+    topic_hash,
+};
 
 #[derive(Debug, Clone, Default)]
 pub struct ReconcileInput {
     pub topic_id_by_name: HashMap<String, Uuid>,
     pub partitions_per_topic: HashMap<Uuid, i32>,
-    /// Per-`(topic_id, partition_index)` set of replica racks.
-    /// An empty or missing entry means there is no rack data for that
-    /// partition. The built-in assignors do not read it, as in Kafka.
+    /// Per-`(topic_id, partition_index)` rack of each replica whose broker
+    /// has one, repeats included: Kafka's
+    /// `CoordinatorMetadataImage.TopicMetadata.partitionRacks`. An empty or
+    /// missing entry means there is no rack data for that partition.
+    /// [`Self::topic_metadata`] gives the assignors the set of these racks,
+    /// which the built-in assignors do not read, as in Kafka.
     pub partition_racks: HashMap<(Uuid, i32), Vec<String>>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ReconcileOutcome {
-    NoChange,
-    Recomputed,
-    EpochExhausted,
+impl ReconcileInput {
+    /// Kafka's `Utils.computeTopicHash` for the topic named `name`, or `None`
+    /// when the snapshot does not hold it.
+    #[must_use]
+    pub fn topic_hash(&self, name: &str) -> Option<i64> {
+        let topic_id = self.topic_id_by_name.get(name)?;
+        let partitions = self
+            .partitions_per_topic
+            .get(topic_id)
+            .copied()
+            .unwrap_or(0)
+            .max(0);
+        let racks: Vec<Vec<&str>> = (0..partitions)
+            .map(|partition| {
+                self.partition_racks
+                    .get(&(*topic_id, partition))
+                    .map(|racks| racks.iter().map(String::as_str).collect())
+                    .unwrap_or_default()
+            })
+            .collect();
+        Some(topic_hash::topic_hash(topic_id.0, name, racks.into_iter()))
+    }
+
+    /// Kafka's `ModernGroup.computeMetadataHash`: the group hash over the
+    /// topic hash of every topic in `topics` that the snapshot holds.
+    #[must_use]
+    pub fn metadata_hash<'a>(&self, topics: impl IntoIterator<Item = &'a str>) -> i64 {
+        let topics: BTreeSet<&str> = topics.into_iter().collect();
+        topic_hash::group_hash(
+            topics
+                .into_iter()
+                .filter_map(|topic| self.topic_hash(topic).map(|hash| (topic, hash))),
+        )
+    }
+
+    /// The assignors' view of the snapshot: the partition counts, and for each
+    /// partition the set of racks it has a replica on, as Kafka's
+    /// `SubscribedTopicDescriber.racksForPartition` gives it.
+    #[must_use]
+    pub fn topic_metadata(&self) -> TopicMetadata {
+        TopicMetadata {
+            partitions_per_topic: self.partitions_per_topic.clone(),
+            partition_racks: self
+                .partition_racks
+                .iter()
+                .map(|(partition, racks)| {
+                    let racks: BTreeSet<&String> = racks.iter().collect();
+                    (*partition, racks.into_iter().cloned().collect())
+                })
+                .collect(),
+        }
+    }
 }
 
-pub fn reconcile_if_dirty(
+/// The group epoch cannot move past `i32::MAX`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EpochExhausted;
+
+/// Kafka's `GroupMetadataManager.updateSubscriptionMetadata`, which
+/// `consumerGroupHeartbeat` and `classicGroupJoinToConsumerGroup` run when the
+/// heartbeat changed the subscription (`bump`) or the group's metadata
+/// expired.
+///
+/// It computes the metadata hash of the subscribed topics, and bumps the group
+/// epoch when `bump` is set or the hash differs from the stored one. It then
+/// records the hash and ends a requested refresh, as Kafka's
+/// `setMetadataRefreshDeadline` does. It returns whether it bumped the epoch.
+///
+/// # Errors
+///
+/// Returns [`EpochExhausted`] when the epoch must move and cannot; the group
+/// is then unchanged.
+pub fn update_subscription_metadata(
+    group: &mut GroupState,
+    input: &ReconcileInput,
+    bump: bool,
+) -> Result<bool, EpochExhausted> {
+    let hash = metadata_hash(group, input);
+    let bump = bump || hash != group.metadata_hash();
+    if bump && !group.bump_epoch() {
+        return Err(EpochExhausted);
+    }
+    group.record_metadata_hash(hash);
+    Ok(bump)
+}
+
+/// The epoch bump of Kafka's `consumerGroupFenceMembers` and of
+/// `handleRegularExpressionsResult`: the group epoch moves by one and the
+/// group records the metadata hash of the topics that the remaining
+/// subscriptions name.
+///
+/// # Errors
+///
+/// Returns [`EpochExhausted`] when the epoch cannot move; the group is then
+/// unchanged.
+pub fn bump_with_metadata_hash(
+    group: &mut GroupState,
+    input: &ReconcileInput,
+) -> Result<(), EpochExhausted> {
+    let hash = metadata_hash(group, input);
+    if !group.bump_epoch() {
+        return Err(EpochExhausted);
+    }
+    group.set_metadata_hash(hash);
+    Ok(())
+}
+
+/// Kafka's `TargetAssignmentBuilder.build` for a consumer group whose epoch is
+/// ahead of its target (`maybeUpdateTargetAssignment`): runs `assignor` over
+/// every member and installs the result as the target at the group epoch.
+///
+/// It returns the members whose target changed, sorted: the members for which
+/// Kafka writes a `ConsumerGroupTargetAssignmentMember` record.
+pub fn compute_target(
     group: &mut GroupState,
     input: &ReconcileInput,
     assignor: &dyn Assignor,
-) -> ReconcileOutcome {
-    if !group.dirty {
-        return ReconcileOutcome::NoChange;
-    }
+) -> Vec<String> {
     let subscriptions: Vec<MemberSubscription> = group
         .members
         .values()
@@ -67,87 +174,31 @@ pub fn reconcile_if_dirty(
         members: subscriptions,
         subscription_type: subscription_type(&shapes),
     };
-    let topics = TopicMetadata {
-        partitions_per_topic: input.partitions_per_topic.clone(),
-        partition_racks: input.partition_racks.clone(),
-    };
-    let assignment = assignor.assign(&spec, &topics);
-    if !group.bump_epoch() {
-        return ReconcileOutcome::EpochExhausted;
-    }
-    group.install_target(assignment);
-    group.record_metadata_hash(metadata_hash(group, input));
-    group.dirty = false;
-    ReconcileOutcome::Recomputed
+    let assignment = assignor.assign(&spec, &input.topic_metadata());
+    group.install_target(assignment)
 }
 
-/// Kafka's `ModernGroup.computeMetadataHash`: one number over the metadata of
-/// every topic that the group subscribes to and `input` holds.
+/// Kafka's `ModernGroup.computeMetadataHash` for a consumer group: the
+/// `topic_hash` group hash over every topic that the group subscribes to and
+/// `input` holds.
 ///
 /// A member subscribes to its topic names and to the topics that its regex
-/// resolved to. Kafka's `Utils.computeTopicHash` hashes the id, the name, the
-/// partition count and the partition racks of a topic, and
-/// `Utils.computeGroupHash` combines the topic hashes in name order, or gives
-/// `0` when no subscribed topic exists. This hash reads the same fields from
-/// the reconcile snapshot, in the same order, and it is also `0` for no topic.
-/// The snapshot names each rack of a partition once, where Kafka lists the
-/// rack of each replica.
-///
-/// The hash stays in memory, so it does not need Kafka's bytes: the group
-/// only compares it with the hash that its current target was computed from.
+/// resolved to, which is what Kafka's `ConsumerGroup.subscribedTopicNames`
+/// counts.
 #[must_use]
-pub fn metadata_hash(group: &GroupState, input: &ReconcileInput) -> u64 {
+pub fn metadata_hash(group: &GroupState, input: &ReconcileInput) -> i64 {
     let mut topics: BTreeSet<&str> = BTreeSet::new();
     for member in group.members.values() {
         topics.extend(member.subscribed_topic_names.iter().map(String::as_str));
-        topics.extend(regex_topic_names(group, member, &input.topic_id_by_name));
+        topics.extend(group.regex_topics(member).map(String::as_str));
     }
-    let mut hasher = DefaultHasher::new();
-    let mut any_topic = false;
-    for name in topics {
-        let Some(topic_id) = input.topic_id_by_name.get(name) else {
-            continue;
-        };
-        any_topic = true;
-        let partitions = input
-            .partitions_per_topic
-            .get(topic_id)
-            .copied()
-            .unwrap_or(0);
-        (name, topic_id, partitions).hash(&mut hasher);
-        for partition in 0..partitions {
-            input
-                .partition_racks
-                .get(&(*topic_id, partition))
-                .hash(&mut hasher);
-        }
-    }
-    if any_topic { hasher.finish() } else { 0 }
-}
-
-/// Computes the metadata hash again for a group whose metadata expired, as
-/// Kafka's `consumerGroupHeartbeat` and `classicGroupJoinToConsumerGroup` do
-/// when `hasMetadataExpired` holds.
-///
-/// A new hash marks the group dirty. The reconcile that follows then bumps the
-/// group epoch, computes a new target and records the hash, as Kafka's
-/// `updateSubscriptionMetadata` does. An unchanged hash only ends the refresh:
-/// Kafka bumps the group epoch for a new hash only, so a change that leaves the
-/// assignor's input as it was, such as a new partition leader, does not
-/// rebalance the group.
-pub fn refresh_metadata(group: &mut GroupState, input: &ReconcileInput) {
-    let hash = metadata_hash(group, input);
-    if hash == group.metadata_hash() {
-        group.record_metadata_hash(hash);
-    } else {
-        group.dirty = true;
-    }
+    input.metadata_hash(topics)
 }
 
 /// Insert into `out` every topic-id that a member subscribes to, both by exact
 /// name and through the topics that its regex resolved to in the group. This
 /// is the single source of truth for what a member subscribes to, and both
-/// `reconcile_if_dirty` and `membership_topic_ids` use it.
+/// `compute_target` and `membership_topic_ids` use it.
 ///
 /// The group resolves a pattern against the metadata image, as Kafka's
 /// `TopicRegexResolver` does, and keeps the topics that the requesting
@@ -229,63 +280,64 @@ mod tests {
         )
     }
 
+    /// Kafka's `updateSubscriptionMetadata`: (case, bump asked, the topic's
+    /// partitions when the group recorded its hash, the partitions now) to
+    /// (epoch bumped, group epoch after). A new hash bumps the epoch even when
+    /// the heartbeat did not ask for it, and an unchanged hash with no bump
+    /// asked keeps it.
     #[test]
-    fn dirty_triggers_recompute() {
+    fn the_subscription_metadata_update_bumps_as_kafka_does() {
+        let rows = [
+            ("nothing changed", false, 2, 2, (false, 1)),
+            ("the subscription changed", true, 2, 2, (true, 2)),
+            ("the topic grew", false, 2, 4, (true, 2)),
+            ("both", true, 2, 4, (true, 2)),
+        ];
+        for (case, bump, recorded, now, expected) in rows {
+            let mut g = GroupState::new("g");
+            g.add_or_update_member(fresh_member("m1", "t"));
+            let (at_record, _) = input("t", recorded);
+            g.record_metadata_hash(metadata_hash(&g, &at_record));
+            let (current, _) = input("t", now);
+            let bumped = update_subscription_metadata(&mut g, &current, bump).unwrap();
+            check!((bumped, g.group_epoch) == expected, "{case}");
+            check!(g.metadata_hash() == metadata_hash(&g, &current), "{case}");
+            check!(!g.metadata_refresh_requested(), "{case}");
+        }
+    }
+
+    #[test]
+    fn an_exhausted_epoch_bumps_nothing() {
+        let mut group = GroupState::new("g");
+        group.group_epoch = i32::MAX;
+        let (input, _) = input("t", 1);
+        assert!(update_subscription_metadata(&mut group, &input, true) == Err(EpochExhausted));
+        assert!(bump_with_metadata_hash(&mut group, &input) == Err(EpochExhausted));
+        assert!(group.group_epoch == i32::MAX);
+    }
+
+    /// Kafka's `TargetAssignmentBuilder` writes a target record for each member
+    /// whose assignment changed, a member with no previous target included,
+    /// and installs the target at the group epoch.
+    #[test]
+    fn compute_target_reports_the_members_whose_target_changed() {
         let mut g = GroupState::new("g");
         g.add_or_update_member(fresh_member("m1", "t"));
         let (inp, t) = input("t", 4);
-        let outcome = reconcile_if_dirty(&mut g, &inp, &UniformAssignor);
-        check!(outcome == ReconcileOutcome::Recomputed);
+        g.bump_epoch();
+        let first = compute_target(&mut g, &inp, &UniformAssignor);
+        check!(first == vec!["m1".to_string()]);
+        check!(g.target.epoch == 2);
         check!(g.target.per_member["m1"][&t] == vec![0, 1, 2, 3]);
-        check!(!g.dirty);
-    }
 
-    #[test]
-    fn clean_is_no_op() {
-        let mut g = GroupState::new("g");
-        g.dirty = false;
-        let (inp, _) = input("t", 4);
-        assert!(reconcile_if_dirty(&mut g, &inp, &UniformAssignor) == ReconcileOutcome::NoChange);
-    }
-
-    #[test]
-    fn dirty_group_rejects_epoch_exhaustion_without_installing_a_target() {
-        let mut group = GroupState::new("g");
-        group.group_epoch = i32::MAX;
-        group.dirty = true;
-        let input = ReconcileInput::default();
-
-        let outcome = reconcile_if_dirty(&mut group, &input, &UniformAssignor);
-
-        assert!(outcome == ReconcileOutcome::EpochExhausted);
-        assert!(group.group_epoch == i32::MAX);
-        assert!(group.dirty);
-    }
-
-    #[test]
-    fn idempotent_under_repeated_calls() {
-        let mut g = GroupState::new("g");
-        g.add_or_update_member(fresh_member("m1", "t"));
-        let (inp, _) = input("t", 2);
-        reconcile_if_dirty(&mut g, &inp, &UniformAssignor);
-        let epoch1 = g.group_epoch;
-        let outcome = reconcile_if_dirty(&mut g, &inp, &UniformAssignor);
-        assert!(outcome == ReconcileOutcome::NoChange);
-        assert!(g.group_epoch == epoch1);
-    }
-
-    #[test]
-    fn metadata_change_via_dirty_flag_recomputes() {
-        let mut g = GroupState::new("g");
-        g.add_or_update_member(fresh_member("m1", "t"));
-        let (inp1, _) = input("t", 2);
-        reconcile_if_dirty(&mut g, &inp1, &UniformAssignor);
-        let epoch_before = g.group_epoch;
-        let (inp2, _) = input("t", 4);
-        g.dirty = true;
-        let outcome = reconcile_if_dirty(&mut g, &inp2, &UniformAssignor);
-        assert!(outcome == ReconcileOutcome::Recomputed);
-        assert!(g.group_epoch > epoch_before);
+        // A member that subscribes to nothing joins: it gets an empty target
+        // and m1 keeps its own, so only the new member has a record.
+        g.add_or_update_member(fresh_member("m2", "unknown"));
+        g.bump_epoch();
+        let second = compute_target(&mut g, &inp, &UniformAssignor);
+        check!(second == vec!["m2".to_string()]);
+        check!(g.target.per_member["m2"].is_empty());
+        check!(g.target.epoch == 3);
     }
 
     #[test]
@@ -399,7 +451,8 @@ mod tests {
             if let Some(topics) = resolved {
                 resolve(&mut g, regex, topics);
             }
-            reconcile_if_dirty(&mut g, &inp, &UniformAssignor);
+            g.bump_epoch();
+            compute_target(&mut g, &inp, &UniformAssignor);
             assert!(
                 assigned_names(&g, &inp, "m1") == expected,
                 "{regex} {names:?} {resolved:?}"
@@ -419,32 +472,13 @@ mod tests {
         g.add_or_update_member(member_with_regex("m3", &[], Some("b.*")));
         resolve(&mut g, "a.*", &["a1", "a2"]);
         resolve(&mut g, "b.*", &["b1"]);
-        reconcile_if_dirty(&mut g, &inp, &UniformAssignor);
+        g.bump_epoch();
+        compute_target(&mut g, &inp, &UniformAssignor);
         let assigned: Vec<Vec<String>> = ["m1", "m2", "m3"]
             .iter()
             .map(|member_id| assigned_names(&g, &inp, member_id))
             .collect();
         assert!(assigned == [vec!["a1", "a2"], vec!["a1", "a2"], vec!["b1"]]);
-    }
-
-    #[test]
-    fn regex_change_marks_group_dirty() {
-        let mut g = GroupState::new("g");
-        g.add_or_update_member(member_with_regex("m1", &[], Some("^a")));
-        resolve(&mut g, "^a", &["a1"]);
-        resolve(&mut g, "^b", &["b1"]);
-        let inp = input_with_topics(&[("a1", 1), ("b1", 1)]);
-        reconcile_if_dirty(&mut g, &inp, &UniformAssignor);
-        assert!(!g.dirty, "fresh recompute clears dirty");
-        let epoch_before = g.group_epoch;
-
-        // Change the regex pattern → must dirty the group so the next
-        // reconcile re-runs.
-        g.add_or_update_member(member_with_regex("m1", &[], Some("^b")));
-        assert!(g.dirty, "regex change must mark group dirty");
-        let outcome = reconcile_if_dirty(&mut g, &inp, &UniformAssignor);
-        assert!(outcome == ReconcileOutcome::Recomputed);
-        assert!(g.group_epoch > epoch_before);
     }
 
     /// Kafka's metadata hash covers the id, the name, the partition count and

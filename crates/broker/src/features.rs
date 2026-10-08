@@ -336,6 +336,35 @@ mod tests {
         );
     }
 
+    /// The whole supported-feature table a default node advertises: the
+    /// registry, with the krabka-owned `krabka.version` at [0, 1] after Kafka's
+    /// own features, which keep their ranges.
+    #[test]
+    fn supported_features_include_krabka_version() {
+        let feature = |name, min_version, max_version| SupportedFeature {
+            name,
+            min_version,
+            max_version,
+        };
+        assert!(
+            supported_features(krabka_raft::UnstableFeatureVersions::Disabled)
+                == vec![
+                    feature(
+                        METADATA_VERSION,
+                        METADATA_VERSION_MIN,
+                        LATEST_PRODUCTION_METADATA_VERSION
+                    ),
+                    feature("group.version", 0, 1),
+                    feature("transaction.version", 0, 2),
+                    feature(SHARE_VERSION, 0, 1),
+                    feature(STREAMS_VERSION, 0, 1),
+                    feature(ELR_VERSION, 0, 1),
+                    feature("kraft.version", 0, 1),
+                    feature("krabka.version", 0, 1),
+                ]
+        );
+    }
+
     #[test]
     fn streams_version_is_supported() {
         let expected = SupportedFeature {

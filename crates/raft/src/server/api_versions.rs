@@ -734,6 +734,17 @@ mod tests {
                     finalized("metadata.version", 25),
                 ],
             },
+            Row {
+                version: 4,
+                kraft_version: 1,
+                levels: &[("metadata.version", 30), ("krabka.version", 1)],
+                want_supported: &modern,
+                want_finalized: vec![
+                    finalized("krabka.version", 1),
+                    finalized("kraft.version", 1),
+                    finalized("metadata.version", 30),
+                ],
+            },
         ];
         for Row {
             version,

@@ -21,7 +21,7 @@ impl ReconModel {
         Self {
             pool: vec!["a", "b"],
             partitions: 2,
-            max_epoch: 8,
+            max_epoch: 9,
         }
     }
 
@@ -29,7 +29,7 @@ impl ReconModel {
         Self {
             pool: vec!["a", "b", "c"],
             partitions: 2,
-            max_epoch: 6,
+            max_epoch: 7,
         }
     }
 

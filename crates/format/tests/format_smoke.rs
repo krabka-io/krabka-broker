@@ -101,6 +101,38 @@ fn format_with_add_scram_writes_credential_record() {
     assert2::assert!(!offset_zero_checkpoint(&dir).exists());
 }
 
+/// `krabka.version` bootstraps at level 0, which writes no record, unless
+/// `--feature krabka.version=N` overrides it.
+#[test]
+fn format_seeds_krabka_version_only_when_overridden() {
+    let cases: [(&[&str], Option<i16>); 3] = [
+        (&[], None),
+        (&["--feature", "krabka.version=1"], Some(1)),
+        (&["--feature", "krabka.version=0"], None),
+    ];
+    let actual: Vec<_> = cases
+        .iter()
+        .map(|(flags, _)| {
+            let dir = tempfile::tempdir().unwrap();
+            let mut args = vec!["--node-id", "1"];
+            args.extend_from_slice(flags);
+            let out = run_format(&dir, &args);
+            assert2::assert!(out.status.success(), "{flags:?}: {out:?}");
+            let seeded = bootstrap_records(&dir)
+                .into_iter()
+                .find_map(|record| match record {
+                    MetadataRecord::V1FeatureLevel(f) if f.name == "krabka.version" => {
+                        Some(f.level)
+                    }
+                    _ => None,
+                });
+            (*flags, seeded)
+        })
+        .collect();
+    let expected: Vec<_> = cases.to_vec();
+    assert2::assert!(actual == expected);
+}
+
 #[test]
 fn format_low_iterations_fails() {
     let dir = tempfile::tempdir().unwrap();

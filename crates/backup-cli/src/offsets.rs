@@ -23,6 +23,8 @@ use krabka_protocol::owned::offset_commit_request::{
 };
 use serde::{Deserialize, Serialize};
 
+use crate::{error::BackupError, manifest::decode_versioned};
+
 /// `OffsetCommitRequest.generationIdOrMemberEpoch` for a caller that is not a
 /// group member. Kafka's admin path sends this, and the coordinator skips
 /// membership fencing for it.
@@ -53,14 +55,44 @@ pub struct GroupOffsets {
     pub offsets: Vec<CommittedOffset>,
 }
 
+/// Version of `group-offsets.json`, its required top-level `"version"` field.
+///
+/// Part of the 1.x on-disk contract: a 1.x `krabka-backup` reads every offsets
+/// file that any earlier 1.x build wrote.
+pub const GROUP_OFFSETS_VERSION: i16 = 0;
+
 /// The captured offsets of every group in one cluster.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GroupOffsetsFile {
+    /// Always [`GROUP_OFFSETS_VERSION`] when this build writes it.
+    pub version: i16,
     /// One entry per group that had at least one committed offset.
     pub groups: Vec<GroupOffsets>,
 }
 
+/// An empty file of the version this build writes.
+impl Default for GroupOffsetsFile {
+    fn default() -> Self {
+        Self {
+            version: GROUP_OFFSETS_VERSION,
+            groups: Vec::new(),
+        }
+    }
+}
+
 impl GroupOffsetsFile {
+    /// Decode an offsets file, refusing a missing or unknown `"version"`.
+    ///
+    /// # Errors
+    ///
+    /// [`BackupError::UnsupportedVersion`] for a file with no version or one
+    /// other than [`GROUP_OFFSETS_VERSION`], and [`BackupError::Json`] for
+    /// bytes that are not an offsets file. `context` names the object in
+    /// either error.
+    pub fn from_slice(bytes: &[u8], context: &str) -> Result<Self, BackupError> {
+        decode_versioned(bytes, context, GROUP_OFFSETS_VERSION)
+    }
+
     /// How many `(group, topic, partition)` offsets the file holds.
     #[must_use]
     pub fn offset_count(&self) -> usize {
@@ -179,9 +211,11 @@ mod tests {
     };
 
     use super::{
-        CommittedOffset, GroupOffsets, GroupOffsetsFile, SIMPLE_CONSUMER_GENERATION,
-        UNKNOWN_LEADER_EPOCH, commit_refusals, commit_request, group_offsets,
+        CommittedOffset, GROUP_OFFSETS_VERSION, GroupOffsets, GroupOffsetsFile,
+        SIMPLE_CONSUMER_GENERATION, UNKNOWN_LEADER_EPOCH, commit_refusals, commit_request,
+        group_offsets,
     };
+    use crate::error::BackupError;
 
     fn captured() -> GroupOffsets {
         GroupOffsets {
@@ -281,9 +315,58 @@ mod tests {
         check!(commit_refusals(&response) == vec!["orders-1: error code 25".to_owned()]);
     }
 
+    /// The exact bytes this build writes for one group of [`captured`]. A
+    /// change here is a change to the 1.x capture format.
+    const GOLDEN_OFFSETS: &str = concat!(
+        r#"{"version":0,"groups":[{"group":"orders-consumers","offsets":["#,
+        r#"{"topic":"orders","partition":0,"offset":12},"#,
+        r#"{"topic":"orders","partition":1,"offset":7},"#,
+        r#"{"topic":"payments","partition":0,"offset":3}]}]}"#,
+    );
+
+    #[test]
+    fn an_offsets_file_encodes_to_the_golden_bytes_and_decodes_back() {
+        let file = GroupOffsetsFile {
+            version: GROUP_OFFSETS_VERSION,
+            groups: vec![captured()],
+        };
+        check!(serde_json::to_string(&file).unwrap() == GOLDEN_OFFSETS);
+        check!(
+            GroupOffsetsFile::from_slice(GOLDEN_OFFSETS.as_bytes(), "group-offsets.json").unwrap()
+                == file
+        );
+        check!(GroupOffsetsFile::default().version == GROUP_OFFSETS_VERSION);
+    }
+
+    #[test]
+    fn an_offsets_file_with_a_missing_or_unknown_version_is_refused() {
+        for (name, json, found) in [
+            ("pre-1.0 offsets file", r#"{"groups":[]}"#, None),
+            ("future version", r#"{"version":1,"groups":[]}"#, Some("1")),
+            (
+                "version that is not a number",
+                r#"{"version":"0","groups":[]}"#,
+                Some("\"0\""),
+            ),
+        ] {
+            let error = GroupOffsetsFile::from_slice(json.as_bytes(), "group-offsets.json")
+                .expect_err(name);
+            assert2::assert!(
+                let BackupError::UnsupportedVersion {
+                    found: actual,
+                    expected: GROUP_OFFSETS_VERSION,
+                    ..
+                } = &error,
+                "case {name}: {error}"
+            );
+            check!(actual.as_deref() == found, "case {name}");
+        }
+    }
+
     #[test]
     fn the_offsets_file_counts_every_partition_of_every_group() {
         let file = GroupOffsetsFile {
+            version: GROUP_OFFSETS_VERSION,
             groups: vec![
                 captured(),
                 GroupOffsets {

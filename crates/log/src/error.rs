@@ -87,6 +87,63 @@ pub enum LogError {
     #[error("corrupt log: {0}")]
     Corrupt(String),
 
+    /// A persisted sidecar or checkpoint names a format version this build
+    /// does not read. A future 1.x broker wrote it, or it is not the artifact
+    /// its name says.
+    #[error("unrecognized version {found} of the {artifact} file {}", path.display())]
+    UnsupportedFormatVersion {
+        /// The artifact kind, such as `stampindex` or `leader-epoch-checkpoint`.
+        artifact: &'static str,
+        /// The file that carries the version.
+        path: std::path::PathBuf,
+        /// The version the file carries.
+        found: i64,
+    },
+
+    /// A persisted sidecar or checkpoint has no version marker. Only a broker
+    /// before 1.0 wrote that layout, and 1.x reads no 0.x data.
+    #[error(
+        "the {artifact} file {} has no version marker: it predates krabka 1.0, so the node \
+         must be reformatted",
+        path.display()
+    )]
+    MissingFormatVersion {
+        /// The artifact kind, such as `stampindex` or `leader-epoch-checkpoint`.
+        artifact: &'static str,
+        /// The file that lacks the marker.
+        path: std::path::PathBuf,
+    },
+
+    /// A control record's key or end-transaction-marker value is too short to
+    /// hold its fields. Kafka's `ControlRecordType.parseTypeId` throws
+    /// `InvalidRecordException` for a short key, and
+    /// `EndTransactionMarker.deserializeValue` cannot read a short value.
+    #[error(
+        "Invalid value size found for {record}. Must have at least {needed} bytes, but found \
+         only {found}"
+    )]
+    InvalidControlRecordSize {
+        /// `end control record key` or `end transaction marker value`.
+        record: &'static str,
+        /// The bytes the record must hold.
+        needed: usize,
+        /// The bytes it holds; a missing key or value counts as zero.
+        found: usize,
+    },
+
+    /// A control record names a negative key version or end-transaction-marker
+    /// value version. Kafka's `ControlRecordType.parseTypeId` and
+    /// `EndTransactionMarker.deserializeValue` throw `InvalidRecordException`
+    /// for one: the bytes are corrupt. A version above the current one is not
+    /// this error; Kafka parses it as the current version.
+    #[error("Invalid version found for {record}: {version}. May indicate data corruption")]
+    InvalidControlRecordVersion {
+        /// `control record` for the key, `end transaction marker` for the value.
+        record: &'static str,
+        /// The negative version the record carries.
+        version: i16,
+    },
+
     /// A caller supplied an invalid argument.
     #[error("invalid argument: {0}")]
     InvalidArgument(String),

@@ -467,11 +467,8 @@ mod tests {
             next.member_epoch = 7;
             if classic {
                 next.classic = Some(ClassicMemberFacade {
-                    generation_id: 7,
                     supported_protocols: vec![],
                     session_timeout: Duration::from_secs(45),
-                    last_synced_assignment: bytes::Bytes::new(),
-                    awaiting_sync: false,
                 });
             }
             state.add_or_update_member(next);

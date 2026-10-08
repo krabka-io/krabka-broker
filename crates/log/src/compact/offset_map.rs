@@ -55,7 +55,7 @@ pub fn build_offset_map(
             // indexing their key silently dropped all-but-newest markers and
             // broke read_committed (the control-batch data-loss bug).
             if batch.attributes.is_control_batch() {
-                txn_meta.on_control_batch_read(&batch);
+                txn_meta.on_control_batch_read(&batch)?;
                 continue;
             }
             if txn_meta.on_batch_read(&batch) {

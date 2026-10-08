@@ -1,10 +1,12 @@
 //! `AlterShareGroupOffsets` (`api_key` 91), from KIP-932.
 //!
 //! The handler resets the share-partition start offset (SPSO) for the
-//! requested partitions of an *empty* share group. It bumps the GROUP epoch
-//! once for the whole batch, writes a `ShareGroupMetadata` record, and
-//! initializes the persister state at the new group epoch. It rejects a
-//! non-empty group at the top level with `NON_EMPTY_GROUP`.
+//! requested partitions of an *empty* share group. As Kafka's
+//! `GroupMetadataManager.alterShareGroupOffsets` does, it leaves the group
+//! epoch alone: the group records the partitions as initializing, the
+//! persister initializes them at the group's current epoch, and the group
+//! records them as initialized. It rejects a non-empty group at the top level
+//! with `NON_EMPTY_GROUP`.
 //!
 //! Authorization, per Kafka's `KafkaApis.handleAlterShareGroupOffsetsRequest`:
 //!   - `Read` on `Group(group_id)` for the whole response.
@@ -140,8 +142,8 @@ context_handler! {
                 Vec::with_capacity(rt.partitions.len());
 
             for rp in rt.partitions {
-                let partition_record = image.partition(&topic_name, rp.partition_index);
-                let Some((topic_id, partition_record)) = topic_id.zip(partition_record) else {
+                let partition_exists = image.partition(&topic_name, rp.partition_index).is_some();
+                let Some(topic_id) = topic_id.filter(|_| partition_exists) else {
                     partitions.push(AlterShareGroupOffsetsResponsePartition {
                         partition_index: rp.partition_index,
                         error_code: codes::UNKNOWN_TOPIC_OR_PARTITION,
@@ -160,7 +162,6 @@ context_handler! {
                     topic_name: topic_name.clone(),
                     partition: rp.partition_index,
                     start_offset: rp.start_offset,
-                    observed_leader_epoch: partition_record.leader_epoch.0,
                 });
                 partitions.push(AlterShareGroupOffsetsResponsePartition {
                     partition_index: rp.partition_index,
@@ -624,9 +625,9 @@ mod tests {
 
     /// Issue #944: a share group that does not exist yet is created and
     /// persisted by `AlterShareGroupOffsets` — matching Kafka's
-    /// `getOrMaybeCreateShareGroup(groupId, true)` — and the group epoch is
-    /// bumped with a `ShareGroupMetadata` record written before the
-    /// partitions are initialized. The regression guard: once a partition is
+    /// `getOrMaybeCreateShareGroup(groupId, true)` — through its
+    /// `ShareGroupStatePartitionMetadata` record alone, at the initial group
+    /// epoch. The regression guard: once a partition is
     /// initialized this way, later member joins must not re-initialize it and
     /// change its start offset back.
     #[tokio::test]
@@ -664,7 +665,7 @@ mod tests {
             .group_coordinator
             .cached_share_seed("g-new")
             .expect("share group persisted");
-        assert!(seed.group_epoch == 1, "the first alter bumps epoch 0 -> 1");
+        assert!(seed.group_epoch == 1, "alter leaves the group epoch alone");
         assert!(
             seed.state_partition_metadata
                 .initialized
@@ -738,8 +739,13 @@ mod tests {
         broker_handle.shutdown().await;
     }
 
+    /// Kafka's `alterShareGroupOffsets` writes no `ShareGroupMetadata` record
+    /// and initializes every requested partition at the group's current
+    /// epoch, which the share coordinator accepts again on a repeat because
+    /// it fences only an older epoch. A partition the topic does not have
+    /// answers `UNKNOWN_TOPIC_OR_PARTITION` and is never initialized.
     #[tokio::test]
-    async fn reset_mutates_only_requested_valid_partitions_and_bumps_group_epoch() {
+    async fn reset_initializes_requested_valid_partitions_at_the_group_epoch() {
         broker_fixture!(
             (broker_handle, _dir, broker),
             share_allow_all,
@@ -760,12 +766,28 @@ mod tests {
             .expect("topic metadata")
             .topic_id;
 
-        // Every alter call bumps the group epoch by exactly one, per Kafka's
-        // `GroupMetadataManager.alterShareGroupOffsets`; there is no
-        // exact-retry short-circuit, unlike the old per-partition
-        // `state_epoch` scheme this replaces.
+        broker.group_coordinator.mark_share("g-reset");
+        let actor = broker.group_coordinator.get_or_create_share("g-reset");
+        let (seed_tx, seed_rx) = tokio::sync::oneshot::channel();
+        actor
+            .tx
+            .send(ShareGroupActorMessage::Seed(ShareGroupSeed {
+                group_epoch: 7,
+                ..Default::default()
+            }))
+            .await
+            .expect("send seed");
+        // `Seed` has no reply; round-trip a `Describe` to know it was applied
+        // before the alter request below is sent.
+        actor
+            .tx
+            .send(ShareGroupActorMessage::Describe { reply: seed_tx })
+            .await
+            .expect("send describe");
+        seed_rx.await.expect("describe reply");
+
         let reset_request = request("g-reset", "reset-topic", &[0, 9]);
-        for expected_group_epoch in [1, 2] {
+        for _ in 0..2 {
             let response = handle(
                 &broker,
                 reset_request.clone(),
@@ -785,74 +807,27 @@ mod tests {
                 .await
                 .expect("read state")
                 .expect("state present");
-            assert!(state_epoch == expected_group_epoch);
+            assert!(state_epoch == 7);
             assert!(start_offset == krabka_log::Offset(42));
             let seed = broker
                 .group_coordinator
                 .cached_share_seed("g-reset")
                 .expect("share group persisted");
-            assert!(seed.group_epoch == expected_group_epoch);
+            assert!(seed.group_epoch == 7);
+            assert!(
+                seed.state_partition_metadata
+                    == crate::coordinator::unified::share::persistence::ShareGroupStatePartitionMetadataValue {
+                        initialized: vec![
+                            crate::coordinator::unified::share::persistence::TopicPartitionsInfo {
+                                topic_id,
+                                topic_name: "reset-topic".to_owned(),
+                                partitions: vec![0],
+                            }
+                        ],
+                        ..Default::default()
+                    }
+            );
         }
-        let leader_epoch = broker
-            .controller
-            .current_image()
-            .partition("reset-topic", 0)
-            .expect("partition metadata")
-            .leader_epoch
-            .0;
-        let actor = broker.group_coordinator.get_or_create_share("g-reset");
-        let (tx, rx) = tokio::sync::oneshot::channel();
-        actor
-            .tx
-            .send(ShareGroupActorMessage::ResetOffsets {
-                requests: vec![crate::coordinator::unified::share::actor::ResetPartition {
-                    topic_id,
-                    topic_name: "reset-topic".into(),
-                    partition: 0,
-                    start_offset: 99,
-                    observed_leader_epoch: leader_epoch + 1,
-                }],
-                reply: tx,
-            })
-            .await
-            .expect("send stale reset");
-        assert!(rx.await.expect("stale reset reply") == Ok(vec![codes::FENCED_LEADER_EPOCH]));
-
-        // A group epoch already exhausted at `i32::MAX` fails the whole batch
-        // top-level, before any partition is touched.
-        broker.group_coordinator.mark_share("g-overflow");
-        let overflow_actor = broker.group_coordinator.get_or_create_share("g-overflow");
-        let (seed_tx, seed_rx) = tokio::sync::oneshot::channel();
-        overflow_actor
-            .tx
-            .send(ShareGroupActorMessage::Seed(ShareGroupSeed {
-                group_epoch: i32::MAX,
-                ..Default::default()
-            }))
-            .await
-            .expect("send seed");
-        // `Seed` has no reply; round-trip a `Describe` to know it was applied
-        // before the alter request below is sent.
-        overflow_actor
-            .tx
-            .send(ShareGroupActorMessage::Describe { reply: seed_tx })
-            .await
-            .expect("send describe");
-        seed_rx.await.expect("describe reply");
-
-        let overflow_response = handle(
-            &broker,
-            request("g-overflow", "reset-topic", &[0]),
-            alter_share_group_offsets_response::MAX_VERSION,
-            &ctx,
-        )
-        .await
-        .expect("handle overflow reset");
-        assert!(
-            overflow_response.error_code == codes::COORDINATOR_NOT_AVAILABLE,
-            "{overflow_response:?}"
-        );
-        assert!(overflow_response.responses.is_empty());
 
         let state = persister
             .read_summary("g-reset", topic_id, 9)

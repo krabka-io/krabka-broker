@@ -5,7 +5,7 @@ members = ["crates/*"]
 exclude = ["tools/mutants"]
 
 [workspace.package]
-version = "0.7.0"
+version = "1.0.0"
 edition = "2024"
 license = "Apache-2.0"
 authors = ["The Krabka Authors"]
@@ -16,8 +16,8 @@ unsafe_code = "forbid"
 [workspace.lints.clippy]
 pedantic = { level = "warn", priority = -1 }
 disallowed_macros = "deny"
-# These three opt-outs are intentional while the public API is still pre-1.0;
-# re-evaluate once API surfaces stabilise.
+# These three opt-outs are intentional; re-evaluate once API surfaces
+# stabilise.
 clone_on_copy = "warn"
 
 [profile.mutants]
@@ -116,7 +116,6 @@ pbkdf2 = { version = "=0.13.0", default-features = false, features = ["kdf", "hm
 prometheus-client = "0.25"
 proptest = "1"
 prost = "0.14"
-prost-reflect = "0.16"
 # Thread-safe clock abstraction (rs-clock). Production code reads time through
 # its three separate traits -- `WallClock` for business timestamps,
 # `MonotonicClock` for elapsed-time arithmetic, and `Timer` for delays -- so
@@ -180,7 +179,7 @@ wincode = "=0.6"
 zerocopy = { version = "0.8", features = ["derive"] }
 
 # First-party crates inherited by more than one member.
-krabka-audit = { path = "crates/audit", version = "0.7.0" }
+krabka-audit = { path = "crates/audit", version = "1.0.0" }
 krabka-security = "0.6.0"
 krabka-units = "0.6.0"
 
@@ -188,9 +187,6 @@ krabka-units = "0.6.0"
 # against crates.io above and in the member manifests; the patch below is
 # the single place a sibling revision is bumped.
 [patch.crates-io]
-# The schema-registry service used by M19's acceptance test consumes these
-# broker crates as published dependencies. They are not published, and this
-# workspace builds them, so the registry uses these very copies.
 krabka-admin-ui = { git = "https://github.com/krabka-io/krabka-cli", rev = "b39dc88d0da3792db02ad62469b45f4fe312ea75" }
 krabka-app-sdk = { git = "https://github.com/krabka-io/krabka-gateway", rev = "49870fd8e5f708274ff69a3e64a092844e2f8809" }
 krabka-audit = { path = "crates/audit" }
@@ -246,8 +242,7 @@ krabka-remote-storage = { path = "crates/remote-storage" }
 krabka-remote-storage-topic = { path = "crates/remote-storage-topic" }
 krabka-replicator = { git = "https://github.com/krabka-io/krabka-connect", rev = "ecd5fd77656bc24addb087e714477b9201053a28" }
 krabka-restore = { path = "crates/restore" }
-krabka-schema-registry = { git = "https://github.com/krabka-io/krabka-schema-registry", rev = "3b0e666b1b85ca4cce810be7480df663a8925d3b" }
-krabka-schema-serde = { git = "https://github.com/krabka-io/krabka-schema-registry", rev = "3b0e666b1b85ca4cce810be7480df663a8925d3b" }
+krabka-schema-serde = { git = "https://github.com/krabka-io/krabka-schema-registry", rev = "565e5ed9fb6d275bca20871bceb777e4913d7829" }
 krabka-sdk-conformance = { git = "https://github.com/krabka-io/krabka-gateway", rev = "49870fd8e5f708274ff69a3e64a092844e2f8809" }
 krabka-security = { git = "https://github.com/krabka-io/krabka-protocol", rev = "574e0e385f5d5187979049aa0578f1abf3fa123b" }
 krabka-telemetry = { path = "crates/telemetry" }

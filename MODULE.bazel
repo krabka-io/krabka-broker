@@ -7,7 +7,7 @@ so there is no second dependency set to keep in sync.
 
 module(
     name = "krabka_broker",
-    version = "0.7.0",
+    version = "1.0.0",
 )
 
 # `tools/creusot` constrains its container layers with `@platforms//os:linux`.
@@ -295,7 +295,6 @@ SIBLING_MEMBERS = {
     "krabka-client-producer": "crates/client-producer",
     "krabka-authz": "crates/authz",
     "krabka-logfmt": "crates/logfmt",
-    "krabka-schema-registry": "crates/schema-registry",
     "krabka-schema-serde": "crates/schema-serde",
     "krabka-telemetry": "crates/telemetry",
 }

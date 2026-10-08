@@ -46,6 +46,12 @@ impl MetadataSource for ObserverSource {
     fn quorum_committed_offset(&self) -> i64 {
         self.observer.quorum_committed_offset()
     }
+    fn watch_fatal(&self) -> watch::Receiver<Option<String>> {
+        self.observer.watch_fatal()
+    }
+    fn metadata_load_error_count(&self) -> u64 {
+        self.observer.metadata_load_error_count()
+    }
     fn quorum_state(&self) -> QuorumState {
         // A broker-only node is not a voter and has no openraft state of its
         // own, so only `current_leader` is meaningful here. DescribeQuorum

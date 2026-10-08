@@ -16,7 +16,12 @@
 //!   `[]TaskIds{SubtopologyId string, Partitions []int32}`.
 //! - Current: `MemberEpoch` (int32), `PreviousMemberEpoch` (int32), `State`
 //!   (int8), then six `[]TaskIds`: the three roles, and then the three
-//!   pending-revocation lists in the same role order.
+//!   pending-revocation lists in the same role order. Its `TaskIds` adds the
+//!   tagged `AssignmentEpochs` (tag 0, a nullable `[]int32`, default null), the
+//!   epoch at which each partition was assigned (KIP-1251). Kafka's
+//!   `newStreamsGroupCurrentAssignmentRecord` writes it for the active tasks
+//!   and the active tasks pending revocation, and leaves it null for standby
+//!   and warmup tasks.
 //!
 //! Every role has its own revocation list, as in Kafka's
 //! `CurrentAssignmentBuilder`.
@@ -26,7 +31,9 @@ use std::collections::BTreeMap;
 use bytes::BufMut;
 use krabka_protocol::ProtocolError;
 
-use super::codec::{decode_task_map, encode_task_map};
+use super::codec::{
+    decode_task_map, decode_task_map_with_epochs, encode_task_map, encode_task_map_with_epochs,
+};
 use crate::{
     coordinator::unified::{
         persistence::{
@@ -96,7 +103,7 @@ pub struct StreamsGroupTargetAssignmentMemberValue {
 }
 
 value_codec! {
-    StreamsGroupTargetAssignmentMemberValue,
+    StreamsGroupTargetAssignmentMemberValue("StreamsGroupTargetAssignmentMemberValue"),
     encode(&self) -> buf {
         encode_task_map(buf, &self.active);
         encode_task_map(buf, &self.standby);
@@ -129,18 +136,29 @@ pub struct StreamsGroupCurrentMemberAssignmentValue {
     pub active_pending_revocation: BTreeMap<String, Vec<i32>>,
     pub standby_pending_revocation: BTreeMap<String, Vec<i32>>,
     pub warmup_pending_revocation: BTreeMap<String, Vec<i32>>,
+    /// The `AssignmentEpochs` of the `ActiveTasks` entries that carry one, by
+    /// subtopology id, in the order of their partitions. Kafka 4.3.1 writes
+    /// one for every active task entry.
+    pub active_epochs: BTreeMap<String, Vec<i32>>,
+    /// The `AssignmentEpochs` of the `ActiveTasksPendingRevocation` entries
+    /// that carry one.
+    pub active_pending_revocation_epochs: BTreeMap<String, Vec<i32>>,
 }
 
 value_codec! {
-    StreamsGroupCurrentMemberAssignmentValue,
+    StreamsGroupCurrentMemberAssignmentValue("StreamsGroupCurrentMemberAssignmentValue"),
     encode(&self) -> buf {
         buf.put_i32(self.member_epoch);
         buf.put_i32(self.previous_member_epoch);
         buf.put_i8(self.state as i8);
-        encode_task_map(buf, &self.active);
+        encode_task_map_with_epochs(buf, &self.active, &self.active_epochs);
         encode_task_map(buf, &self.standby);
         encode_task_map(buf, &self.warmup);
-        encode_task_map(buf, &self.active_pending_revocation);
+        encode_task_map_with_epochs(
+            buf,
+            &self.active_pending_revocation,
+            &self.active_pending_revocation_epochs,
+        );
         encode_task_map(buf, &self.standby_pending_revocation);
         encode_task_map(buf, &self.warmup_pending_revocation);
     }
@@ -148,10 +166,11 @@ value_codec! {
         let member_epoch = get_i32(buf)?;
         let previous_member_epoch = get_i32(buf)?;
         let state = StreamsMemberWireState::from_i8(get_i8(buf)?)?;
-        let active = decode_task_map(buf)?;
+        let (active, active_epochs) = decode_task_map_with_epochs(buf)?;
         let standby = decode_task_map(buf)?;
         let warmup = decode_task_map(buf)?;
-        let active_pending_revocation = decode_task_map(buf)?;
+        let (active_pending_revocation, active_pending_revocation_epochs) =
+            decode_task_map_with_epochs(buf)?;
         let standby_pending_revocation = decode_task_map(buf)?;
         let warmup_pending_revocation = decode_task_map(buf)?;
         Ok(Self {
@@ -164,6 +183,8 @@ value_codec! {
             active_pending_revocation,
             standby_pending_revocation,
             warmup_pending_revocation,
+            active_epochs,
+            active_pending_revocation_epochs,
         })
     }
 }
@@ -275,8 +296,55 @@ mod tests {
             active_pending_revocation: pending,
             standby_pending_revocation: maplit::btreemap! {"1".to_string() => vec![0]},
             warmup_pending_revocation: maplit::btreemap! {"2".to_string() => vec![4]},
+            active_epochs: maplit::btreemap! {"0".to_string() => vec![3, 5]},
+            active_pending_revocation_epochs: maplit::btreemap! {"0".to_string() => vec![2]},
         };
         assert!(StreamsGroupCurrentMemberAssignmentValue::decode(&v.encode()).unwrap() == v);
+    }
+
+    /// The `TaskIds` of the current assignment carries `AssignmentEpochs` as
+    /// tagged field 0, a compact `[]int32`, as Kafka 4.3.1's
+    /// `toTaskIdsWithEpochs` writes it for every active entry, and without it
+    /// as `toTaskIds` writes the standby and warmup entries.
+    #[test]
+    fn current_member_assignment_epochs_match_kafka_schema() {
+        let v = StreamsGroupCurrentMemberAssignmentValue {
+            member_epoch: 5,
+            previous_member_epoch: 4,
+            state: StreamsMemberWireState::UnrevokedTasks,
+            active: maplit::btreemap! {"0".to_string() => vec![1, 2]},
+            standby: maplit::btreemap! {"1".to_string() => vec![0]},
+            active_pending_revocation: maplit::btreemap! {"0".to_string() => vec![3]},
+            active_epochs: maplit::btreemap! {"0".to_string() => vec![4, 5]},
+            active_pending_revocation_epochs: maplit::btreemap! {"0".to_string() => vec![3]},
+            ..Default::default()
+        };
+        let mut want: Vec<u8> = vec![0x00, 0x00];
+        want.extend_from_slice(&5i32.to_be_bytes());
+        want.extend_from_slice(&4i32.to_be_bytes());
+        want.push(0x02); // streams MemberState.UNREVOKED_TASKS
+        // ActiveTasks: one entry, "0", partitions [1, 2], one tagged field:
+        // tag 0, nine bytes, AssignmentEpochs [4, 5].
+        want.extend_from_slice(b"\x02\x020\x03");
+        want.extend_from_slice(&1i32.to_be_bytes());
+        want.extend_from_slice(&2i32.to_be_bytes());
+        want.extend_from_slice(b"\x01\x00\x09\x03");
+        want.extend_from_slice(&4i32.to_be_bytes());
+        want.extend_from_slice(&5i32.to_be_bytes());
+        // StandbyTasks: one entry, "1", partitions [0], no tagged field.
+        want.extend_from_slice(b"\x02\x021\x02");
+        want.extend_from_slice(&0i32.to_be_bytes());
+        want.push(0x00);
+        want.push(0x01); // empty WarmupTasks
+        // ActiveTasksPendingRevocation: "0", [3], AssignmentEpochs [3].
+        want.extend_from_slice(b"\x02\x020\x02");
+        want.extend_from_slice(&3i32.to_be_bytes());
+        want.extend_from_slice(b"\x01\x00\x05\x02");
+        want.extend_from_slice(&3i32.to_be_bytes());
+        want.extend_from_slice(&[0x01, 0x01]); // empty standby and warmup revocations
+        want.push(0x00); // message tagged fields
+        assert!(&v.encode()[..] == &want[..]);
+        assert!(StreamsGroupCurrentMemberAssignmentValue::decode(&want).unwrap() == v);
     }
 
     #[test]

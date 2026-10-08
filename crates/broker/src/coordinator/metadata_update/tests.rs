@@ -235,7 +235,7 @@ async fn a_metadata_update_refreshes_the_groups_this_broker_coordinates() {
             },
         )
         .await;
-        check!(joined.member_epoch == 1, "{group_id}");
+        check!(joined.member_epoch == 2, "{group_id}");
     }
 
     metadata.set(snapshot_of(&[("orders", 1, 2)]));
@@ -254,7 +254,7 @@ async fn a_metadata_update_refreshes_the_groups_this_broker_coordinates() {
             ConsumerGroupHeartbeatRequest {
                 group_id: group_id.into(),
                 member_id: "m1".into(),
-                member_epoch: 1,
+                member_epoch: 2,
                 rebalance_timeout_ms: -1,
                 ..Default::default()
             },
@@ -280,9 +280,9 @@ async fn a_metadata_update_refreshes_the_groups_this_broker_coordinates() {
     check!(
         answers
             == vec![
-                ("a", answer(2, Some(vec![0, 1]))),
-                ("b", answer(2, Some(vec![0, 1]))),
-                ("not-owned", answer(1, None)),
+                ("a", answer(3, Some(vec![0, 1]))),
+                ("b", answer(3, Some(vec![0, 1]))),
+                ("not-owned", answer(2, None)),
             ]
     );
 }

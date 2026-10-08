@@ -67,6 +67,14 @@ pub struct StreamsTargetAssignment {
     pub warmup: HashMap<String, BTreeMap<String, Vec<i32>>>,
 }
 
+/// Kafka's `TasksTuple`: a member's active, standby and warmup tasks, each by
+/// subtopology.
+pub type TasksTuple = (
+    BTreeMap<String, Vec<i32>>,
+    BTreeMap<String, Vec<i32>>,
+    BTreeMap<String, Vec<i32>>,
+);
+
 /// A minimal handle for the resolved topology that lives in `topology.rs`.
 ///
 /// The state machine tracks only the topology's *presence* and *epoch*. The
@@ -120,7 +128,7 @@ pub struct StreamsGroupState {
 /// epoch past the assignment epoch. A member that joins while the initial
 /// rebalance delay holds the assignment back so reconciles to epoch 1, and does
 /// not stay at the join epoch 0.
-pub const INITIAL_EPOCH: i32 = 1;
+pub const INITIAL_EPOCH: i32 = crate::coordinator::unified::INITIAL_GROUP_EPOCH;
 
 impl StreamsGroupState {
     pub fn new(group_id: impl Into<String>) -> Self {
@@ -168,6 +176,27 @@ impl StreamsGroupState {
         }
     }
 
+    /// Kafka's `streamsGroupFenceMember`: removes `member_id` and bumps the
+    /// group epoch, which the group records with its metadata hash, validated
+    /// topology epoch and assignment configuration as they are. The target
+    /// waits for the next heartbeat; the group is not marked dirty. Returns
+    /// `false`, with the group unchanged, when the member is unknown or the
+    /// epoch is exhausted.
+    pub fn fence_member(&mut self, member_id: &str) -> bool {
+        if !self.members.contains_key(member_id) {
+            return false;
+        }
+        let Some(group_epoch) = crate::metadata_epoch::next_i32(self.group_epoch) else {
+            return false;
+        };
+        self.members.remove(member_id);
+        self.rebalance_deadlines.remove(member_id);
+        self.clear_shutdown_request_when_empty();
+        self.group_epoch = group_epoch;
+        self.refresh_phase();
+        true
+    }
+
     /// Removes a member and returns it if it was present. The method marks
     /// the group dirty only on a real removal.
     pub fn remove_member(&mut self, member_id: &str) -> Option<StreamsMemberState> {
@@ -178,6 +207,20 @@ impl StreamsGroupState {
             self.clear_shutdown_request_when_empty();
         }
         m
+    }
+
+    /// The members whose session expired at `now`, without removing them:
+    /// each one is fenced on its own, as each of Kafka's session timers fences
+    /// its member.
+    #[must_use]
+    pub fn expired_members(&self, now: Instant, session_timeout: Duration) -> Vec<String> {
+        crate::coordinator::unified::expired_member_ids(
+            self.members
+                .iter()
+                .map(|(id, member)| (id.as_str(), member.last_seen)),
+            now,
+            session_timeout,
+        )
     }
 
     crate::coordinator::unified::member_helpers::evict_expired! {
@@ -210,10 +253,68 @@ impl StreamsGroupState {
     /// The members keep their current assignment. Each one reconciles toward
     /// the new target in its own heartbeat through [`Self::reconcile_member`],
     /// as Kafka's `maybeReconcile` does.
-    pub fn install_target(&mut self, target: StreamsTargetAssignment) {
+    ///
+    /// Every member gets a target, an empty one when the assignor gave it
+    /// nothing, as Kafka's `TargetAssignmentBuilder.newMemberAssignment` does.
+    /// It returns the members whose target differs from the one they held, a
+    /// member that held none included, sorted: the members for which Kafka's
+    /// builder writes a target assignment record.
+    pub fn install_target(&mut self, mut target: StreamsTargetAssignment) -> Vec<String> {
+        fn take(
+            role: &mut HashMap<String, BTreeMap<String, Vec<i32>>>,
+            member_id: &str,
+        ) -> BTreeMap<String, Vec<i32>> {
+            let mut tasks = role.remove(member_id).unwrap_or_default();
+            tasks.retain(|_, partitions| !partitions.is_empty());
+            for partitions in tasks.values_mut() {
+                partitions.sort_unstable();
+                partitions.dedup();
+            }
+            tasks
+        }
+        let mut changed = Vec::new();
+        let mut installed = StreamsTargetAssignment::default();
+        let mut member_ids: Vec<&String> = self.members.keys().collect();
+        member_ids.sort_unstable();
+        for member_id in member_ids {
+            let tuple = (
+                take(&mut target.active, member_id),
+                take(&mut target.standby, member_id),
+                take(&mut target.warmup, member_id),
+            );
+            if self.target_tuple(member_id).as_ref() != Some(&tuple) {
+                changed.push(member_id.clone());
+            }
+            let (active, standby, warmup) = tuple;
+            installed.active.insert(member_id.clone(), active);
+            if !standby.is_empty() {
+                installed.standby.insert(member_id.clone(), standby);
+            }
+            if !warmup.is_empty() {
+                installed.warmup.insert(member_id.clone(), warmup);
+            }
+        }
         self.assignment_epoch = self.group_epoch;
-        self.target = target;
+        self.target = installed;
         self.target.epoch = self.assignment_epoch;
+        changed
+    }
+
+    /// The target of `member_id` as Kafka's `TasksTuple`, or `None` when the
+    /// group holds no target for it.
+    #[must_use]
+    pub fn target_tuple(&self, member_id: &str) -> Option<TasksTuple> {
+        let active = self.target.active.get(member_id);
+        let standby = self.target.standby.get(member_id);
+        let warmup = self.target.warmup.get(member_id);
+        if active.is_none() && standby.is_none() && warmup.is_none() {
+            return None;
+        }
+        Some((
+            active.cloned().unwrap_or_default(),
+            standby.cloned().unwrap_or_default(),
+            warmup.cloned().unwrap_or_default(),
+        ))
     }
 
     /// Validates the `member_epoch` of a heartbeat from `member_id`, as Kafka's
@@ -341,6 +442,17 @@ impl StreamsGroupState {
     /// sorted. This is the fence of Kafka's
     /// `scheduleStreamsGroupRebalanceTimeout`.
     pub fn fence_rebalance_timeouts(&mut self, now: Instant) -> Vec<String> {
+        let fenced = self.rebalance_timeouts_due(now);
+        for member_id in &fenced {
+            self.remove_member(member_id);
+        }
+        fenced
+    }
+
+    /// The members whose rebalance timeout fired at `now`, sorted, without
+    /// removing them; the fired deadlines are dropped. See
+    /// [`Self::fence_rebalance_timeouts`].
+    pub fn rebalance_timeouts_due(&mut self, now: Instant) -> Vec<String> {
         let mut fenced: Vec<String> = self
             .rebalance_deadlines
             .iter()
@@ -356,9 +468,6 @@ impl StreamsGroupState {
         self.rebalance_deadlines
             .retain(|_, (deadline, _)| now < *deadline);
         fenced.sort_unstable();
-        for member_id in &fenced {
-            self.remove_member(member_id);
-        }
         fenced
     }
 

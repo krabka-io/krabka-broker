@@ -3,7 +3,7 @@
 //! control batches, and the KIP-595 `LeaderChange` marker.
 
 use krabka_ids::Offset;
-use krabka_metadata::VoterSet;
+use krabka_metadata::{MetadataImage, MetadataRecord, TranslateError, VoterSet, from_kraft_value};
 use krabka_protocol::{
     Decode, Encode,
     owned::no_op_record::NoOpRecord,
@@ -14,9 +14,75 @@ use krabka_protocol::{
 };
 
 use crate::{
-    error::RaftError,
+    error::{MetadataReplayError, RaftError},
     kraft::types::{Epoch, NodeId},
 };
+
+/// Decodes the committed metadata value at `offset` against `image`, as every
+/// controller replay path reads it: live apply, restart recovery, the
+/// downgrade-snapshot rebuild and the leader's walk of an earlier epoch's
+/// tail.
+///
+/// Bytes that are not a metadata record this build reads are a
+/// [`MetadataReplayError::UndecodableRecord`], and the caller stops the
+/// controller. Kafka's controller cannot replay such a record either:
+/// `MetadataRecordSerde` throws on it, and `QuorumController` and the
+/// controller-role `MetadataLoader` hand the throw to a fatal fault handler
+/// (`SharedServer.fatalQuorumControllerFaultHandler` and
+/// `SharedServer.metadataLoaderFaultHandler`, whose `fatal` is
+/// `processRoles.contains(ProcessRole.ControllerRole)`). The snapshot reader
+/// refuses the same bytes, so a snapshot and the log it replaces agree.
+///
+/// An empty KIP-835 `NoOpRecord` is `Ok(None)`: it changes nothing.
+///
+/// A record that decodes but names a topic, partition or ACL the image does
+/// not hold is `Ok(None)`: the caller skips it, as it skips a record that fails
+/// `MetadataImage::validate`. Kafka never commits such a record, because its
+/// active controller replays each record before it appends it. A krabka leader
+/// checks a write against its committed image, so a write can lose a race to an
+/// earlier one still in flight (a partition change behind the deletion of its
+/// topic). Every replica then decodes the same bytes against the same image
+/// and skips the same record, so the replicas agree. Stopping on it instead
+/// would stop every controller on a race a client can cause.
+///
+/// `TranslateError::InvalidReference` is one of those image lookups (an
+/// unknown partition, a directory list measured against the image's replicas)
+/// and is skipped too. `TranslateError::InvalidValue` is decided by the bytes
+/// alone (an unknown `fenced` or `leader_recovery_state` value, an integer out
+/// of range) and is undecodable, as are the krabka-private record errors
+/// (`UnknownPrivateTag`, `UnknownPrivateRecordVersion`, `PrivateTagMismatch`,
+/// `TrailingPrivateRecordBytes`): only the image-resolution errors below are
+/// skips.
+///
+/// # Errors
+/// [`MetadataReplayError::UndecodableRecord`] as above.
+pub fn decode_committed_value(
+    value: &[u8],
+    image: &MetadataImage,
+    offset: i64,
+) -> Result<Option<MetadataRecord>, MetadataReplayError> {
+    // A KIP-835 no-op changes nothing, and has no image record to become.
+    if is_kip835_noop(value) {
+        return Ok(None);
+    }
+    match from_kraft_value(value, image) {
+        Ok(record) => Ok(Some(record)),
+        Err(
+            error @ (TranslateError::UnknownTopicId(_)
+            | TranslateError::UnknownTopicName(_)
+            | TranslateError::UnknownAclId(_)
+            | TranslateError::InvalidReference { .. }),
+        ) => {
+            tracing::warn!(
+                offset,
+                %error,
+                "kraft: skipped a committed record that names state the image does not hold"
+            );
+            Ok(None)
+        }
+        Err(error) => Err(MetadataReplayError::UndecodableRecord { offset, error }),
+    }
+}
 
 /// The api key of Kafka's `NoOpRecord`.
 const NO_OP_RECORD_API_KEY: u32 = 20;
@@ -105,11 +171,40 @@ pub fn typed_control_batch(
     })
 }
 
-pub fn decode_control_record(record: &Record) -> Result<Option<ControlRecord>, RaftError> {
-    let (Some(key), Some(value)) = (&record.key, &record.value) else {
-        return Ok(None);
+/// Decode one record of a control batch.
+///
+/// # Errors
+/// [`RaftError::MalformedControlRecord`] for a missing or empty key or value,
+/// as Kafka's `RecordsIterator.decodeControlRecord` throws, and the decoder's
+/// error for a key or value that does not decode.
+pub fn decode_control_record(record: &Record) -> Result<ControlRecord, RaftError> {
+    let key = match &record.key {
+        None => {
+            return Err(RaftError::MalformedControlRecord(
+                "Missing key in the record when a key was expected",
+            ));
+        }
+        Some(key) if key.is_empty() => {
+            return Err(RaftError::MalformedControlRecord(
+                "Got an unexpected empty key in the record",
+            ));
+        }
+        Some(key) => key,
     };
-    Ok(Some(ControlRecord::decode(key, value)?))
+    let value = match &record.value {
+        None => {
+            return Err(RaftError::MalformedControlRecord(
+                "Missing value in the record when a value was expected",
+            ));
+        }
+        Some(value) if value.is_empty() => {
+            return Err(RaftError::MalformedControlRecord(
+                "Got an unexpected empty value in the record",
+            ));
+        }
+        Some(value) => value,
+    };
+    Ok(ControlRecord::decode(key, value)?)
 }
 
 /// Build the leader's `LeaderChange` control batch for `epoch`: a single

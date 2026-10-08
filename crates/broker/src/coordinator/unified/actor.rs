@@ -49,8 +49,9 @@ pub(crate) mod test_support;
 mod tests;
 
 pub(crate) use self::{
+    classic_join::append_error_code as join_append_error_code,
     commit_validation::validate_commit,
-    pending_records::PendingRecords,
+    pending_records::{GroupTombstone, PendingRecords, group_tombstone_keys},
     persistence::{classic_group_metadata_record, full_pending_records},
 };
 pub use self::{

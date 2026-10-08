@@ -1,5 +1,22 @@
-//! The byte codec for one spooled record and the length-prefixed frame that
-//! carries it.
+//! The byte codec for one spooled record, the length-prefixed frame that
+//! carries it, and the version header every file in the spool directory
+//! starts with.
+//!
+//! ## File header
+//!
+//! Each of `audit.spool`, `audit.losses`, `audit.replay-offset` and
+//! `audit.replay-poison` starts with [`FILE_MAGIC`] and then
+//! [`FORMAT_VERSION`] as a big-endian `i16`. The `i16` is the version marker
+//! the 1.x on-disk contract uses everywhere. The magic is there because a
+//! version alone cannot tell a 1.x file from a 0.x one here: a 0.x
+//! `audit.spool` starts with a `u32` frame length and a 0.x
+//! `audit.replay-poison` with a `u64` offset, so both almost always start with
+//! `00 00`, which is version 0. Without the magic, a 0.x spool would read as a
+//! 1.x spool whose first frame is torn, and `open` would cut every record off
+//! as a torn tail. A file that does not start with the magic is refused as
+//! predating 1.0, and one with an unknown version is refused by number.
+//!
+//! ## Frames
 //!
 //! A frame is `[u32 len][record]` and a record is `[u8 class_tag]
 //! [u32 value_len][value][u32 header_count]([u32 klen][k][u32 vlen][v])*`, all
@@ -8,7 +25,59 @@
 //! panicking so that the scan can treat a short or corrupt tail as
 //! end-of-data.
 
-use crate::{event::AuditEventClass, sink::AuditRecord};
+use crate::{
+    event::AuditEventClass,
+    sink::{AuditError, AuditRecord},
+};
+
+/// The four bytes every file in the audit spool directory starts with.
+///
+/// Part of the 1.x on-disk contract.
+pub(super) const FILE_MAGIC: [u8; 4] = *b"KAUD";
+
+/// The version of every file in the audit spool directory, written after
+/// [`FILE_MAGIC`] as a big-endian `i16`.
+///
+/// Part of the 1.x on-disk contract. A later 1.x build that changes the
+/// layout of any of these files bumps it and keeps reading this one.
+pub(super) const FORMAT_VERSION: i16 = 0;
+
+/// The length of [`file_header`].
+pub(crate) const HEADER_LEN: usize = FILE_MAGIC.len() + 2;
+
+/// The header a file in the audit spool directory starts with.
+pub(super) fn file_header() -> [u8; HEADER_LEN] {
+    let mut header = [0_u8; HEADER_LEN];
+    header[..FILE_MAGIC.len()].copy_from_slice(&FILE_MAGIC);
+    header[FILE_MAGIC.len()..].copy_from_slice(&FORMAT_VERSION.to_be_bytes());
+    header
+}
+
+/// `bytes` with its header checked and stripped.
+///
+/// # Errors
+///
+/// [`AuditError::UnsupportedSpoolFormat`] naming `file` when `bytes` does not
+/// start with [`FILE_MAGIC`] and a version (`found: None`, a 0.x file), or
+/// when the version is not [`FORMAT_VERSION`].
+pub(super) fn strip_file_header<'a>(file: &str, bytes: &'a [u8]) -> Result<&'a [u8], AuditError> {
+    let unsupported = |found| AuditError::UnsupportedSpoolFormat {
+        file: file.to_owned(),
+        found,
+    };
+    let (header, body) = bytes
+        .split_at_checked(HEADER_LEN)
+        .ok_or_else(|| unsupported(None))?;
+    let (magic, version) = header.split_at(FILE_MAGIC.len());
+    if magic != FILE_MAGIC {
+        return Err(unsupported(None));
+    }
+    let version = i16::from_be_bytes([version[0], version[1]]);
+    if version != FORMAT_VERSION {
+        return Err(unsupported(Some(version)));
+    }
+    Ok(body)
+}
 
 pub(super) fn encode_frame(record: &AuditRecord) -> Vec<u8> {
     let body = encode_record(record);

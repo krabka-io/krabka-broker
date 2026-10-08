@@ -4,17 +4,15 @@
 //! state-machine work with no log or persister access.
 
 use std::{
-    collections::{BTreeMap, HashMap, HashSet},
-    time::{Duration, Instant},
+    collections::{HashMap, HashSet},
+    time::Duration,
 };
 
 use krabka_protocol::primitives::uuid::Uuid;
 
 use crate::coordinator::unified::{
     actor::MetadataProvider,
-    assignor::{
-        GroupSpec, MemberSubscription, SubscriptionShape, TopicMetadata, subscription_type,
-    },
+    assignor::{GroupSpec, MemberSubscription, SubscriptionShape, subscription_type},
     reconciler::ReconcileInput,
     share::{
         assignor::ShareGroupAssignor,
@@ -22,36 +20,50 @@ use crate::coordinator::unified::{
     },
 };
 
-/// Bumps the group epoch and recomputes the target assignment when Kafka's
-/// `GroupMetadataManager.shareGroupHeartbeat` would.
+/// The group epoch cannot move past `i32::MAX`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct EpochExhausted;
+
+/// Steps 1 and 2 of Kafka's `GroupMetadataManager.shareGroupHeartbeat` after
+/// the member update: the epoch bump and the target assignment.
 ///
-/// The epoch bumps when membership or a subscription changed, when the
-/// subscribed topics changed in the metadata image (Kafka's metadata hash),
-/// or when initialized partitions of a subscribed topic are not assigned yet
-/// (`initializedAssignmentPending`). The target is recomputed whenever the
-/// group epoch is ahead of the target epoch, from the previous target and
-/// over the initialized partitions only (`withTopicAssignablePartitionsMap`),
-/// unless the group's `assignment_interval` since the last target has not
-/// elapsed (`canComputeNextTargetAssignment`). Returns `false` when the group
-/// epoch is exhausted.
+/// The epoch bumps when the heartbeat changed the member's subscription
+/// (`subscription_changed`), when the subscribed topics changed in the
+/// metadata image (Kafka's metadata hash), or, for a group whose target is
+/// current, when initialized partitions of a subscribed topic are not
+/// assigned yet (`initializedAssignmentPending`). The target is recomputed
+/// whenever the group epoch is ahead of the target epoch, from the previous
+/// target and over the initialized partitions only
+/// (`withTopicAssignablePartitionsMap`), unless the group's
+/// `assignment_interval` since the last target has not elapsed
+/// (`canComputeNextTargetAssignment`).
+///
+/// It returns the members whose target changed when it computed a target.
+///
+/// # Errors
+///
+/// Returns [`EpochExhausted`] when the epoch must move and cannot.
 pub(super) fn reconcile(
     state: &mut ShareGroupState,
     metadata: &dyn MetadataProvider,
     assignment_interval: Duration,
-) -> bool {
+    subscription_changed: bool,
+) -> Result<Option<Vec<String>>, EpochExhausted> {
     let input = metadata.snapshot();
-    let subscribed = subscribed_metadata(state, &input);
-    let metadata_changed = state.subscribed_metadata.as_ref() != Some(&subscribed);
+    let metadata_hash = metadata_hash(state, &input);
+    let metadata_changed = metadata_hash != state.metadata_hash;
     let pending = state.target.epoch >= state.group_epoch && initialized_assignment_pending(state);
-    if (state.dirty || metadata_changed || pending) && !state.bump_epoch() {
-        return false;
+    if (subscription_changed || metadata_changed || pending) && !state.bump_epoch() {
+        return Err(EpochExhausted);
     }
-    state.subscribed_metadata = Some(subscribed);
-    state.dirty = false;
+    state.metadata_hash = metadata_hash;
     if state.target.epoch >= state.group_epoch
-        || state.assignment_delayed(assignment_interval, Instant::now())
+        || state.assignment_delayed(
+            assignment_interval,
+            crate::coordinator::unified::wall_clock_ms(),
+        )
     {
-        return true;
+        return Ok(None);
     }
 
     let members: Vec<MemberSubscription> = state
@@ -84,39 +96,27 @@ pub(super) fn reconcile(
         subscription_type: subscription_type(&shapes),
         members,
     };
-    let topics = TopicMetadata {
-        partitions_per_topic: input.partitions_per_topic,
-        partition_racks: input.partition_racks,
-    };
+    let topics = input.topic_metadata();
     let mut assignable: HashMap<Uuid, HashSet<i32>> = HashMap::new();
     for (topic_id, partition) in &state.initialized {
         assignable.entry(*topic_id).or_default().insert(*partition);
     }
     let assignment = ShareGroupAssignor.assign(&group, &topics, Some(&assignable));
-    state.install_target(assignment);
-    true
+    Ok(Some(state.install_target(
+        assignment,
+        crate::coordinator::unified::wall_clock_ms(),
+    )))
 }
 
-/// The subscribed topics of the group as the image shows them: each
-/// subscribed name the image holds, with its topic id and partition count.
-fn subscribed_metadata(
-    state: &ShareGroupState,
-    input: &ReconcileInput,
-) -> BTreeMap<String, ([u8; 16], i32)> {
-    state
-        .members
-        .values()
-        .flat_map(|m| m.subscribed_topic_names.iter())
-        .filter_map(|name| {
-            let topic_id = input.topic_id_by_name.get(name)?;
-            let partitions = input
-                .partitions_per_topic
-                .get(topic_id)
-                .copied()
-                .unwrap_or(0);
-            Some((name.clone(), (topic_id.0, partitions)))
-        })
-        .collect()
+/// Kafka's `ModernGroup.computeMetadataHash` over the topics that the
+/// members of `state` subscribe to.
+pub(super) fn metadata_hash(state: &ShareGroupState, input: &ReconcileInput) -> i64 {
+    input.metadata_hash(
+        state
+            .members
+            .values()
+            .flat_map(|m| m.subscribed_topic_names.iter().map(String::as_str)),
+    )
 }
 
 /// Kafka's `GroupMetadataManager.initializedAssignmentPending`: whether a
@@ -174,7 +174,8 @@ mod tests {
     use assert2::{assert, check};
 
     use super::{
-        MetadataProvider, ReconcileInput, ShareGroupState, ShareMemberState, Uuid, reconcile,
+        EpochExhausted, MetadataProvider, ReconcileInput, ShareGroupState, ShareMemberState, Uuid,
+        reconcile,
     };
 
     #[derive(Debug)]
@@ -213,20 +214,28 @@ mod tests {
         // (step, partitions in the image, partition initialized before the
         // step, expected group epoch, expected target of m)
         let steps: [Step; 6] = [
-            ("join with nothing initialized", 1, None, 1, vec![]),
-            ("partition 0 initialized", 1, Some(0), 2, vec![0]),
-            ("retry", 1, None, 2, vec![0]),
-            ("topic grows", 2, None, 3, vec![0]),
-            ("partition 1 initialized", 2, Some(1), 4, vec![0, 1]),
-            ("retry after growth", 2, None, 4, vec![0, 1]),
+            ("join with nothing initialized", 1, None, 2, vec![]),
+            ("partition 0 initialized", 1, Some(0), 3, vec![0]),
+            ("retry", 1, None, 3, vec![0]),
+            ("topic grows", 2, None, 4, vec![0]),
+            ("partition 1 initialized", 2, Some(1), 5, vec![0, 1]),
+            ("retry after growth", 2, None, 5, vec![0, 1]),
         ];
-        for (step, partitions, initialized, epoch, target) in steps {
+        for (index, (step, partitions, initialized, epoch, target)) in steps.into_iter().enumerate()
+        {
             if let Some(partition) = initialized {
                 state.mark_initialized((topic, partition));
                 state.topic_names.insert(topic, "t".to_owned());
             }
+            // Only the join changes the member's subscription.
             check!(
-                reconcile(&mut state, &Metadata { topic, partitions }, Duration::ZERO),
+                reconcile(
+                    &mut state,
+                    &Metadata { topic, partitions },
+                    Duration::ZERO,
+                    index == 0,
+                )
+                .is_ok(),
                 "{step}"
             );
             check!(state.group_epoch == epoch, "{step}");
@@ -241,6 +250,84 @@ mod tests {
         }
     }
 
+    /// Kafka replays `ShareGroupMetadataValue.MetadataHash` into the group,
+    /// and the first heartbeat after the load bumps the epoch only when the
+    /// hash of the current image differs. The hash it writes is Kafka's:
+    /// the golden values are hash4j 0.22.0's for topic `t`, id
+    /// `0505..05-0505..05`, with one and with two partitions and no racks.
+    #[test]
+    fn a_replayed_hash_decides_the_first_epoch_bump() {
+        use super::super::seed::apply_seed;
+        use crate::coordinator::unified::{
+            ShareGroupSeed,
+            share::persistence::{
+                ShareGroupCurrentMemberAssignmentValue, ShareGroupMemberMetadataValue,
+            },
+        };
+
+        const ONE_PARTITION: i64 = -1_770_207_100_006_454_364;
+        const TWO_PARTITIONS: i64 = -6_073_397_787_647_429_838;
+        let topic = Uuid([5; 16]);
+        // (case, the stored hash, partitions in the image at the load,
+        // (group epoch, hash) after the first heartbeat)
+        let rows = [
+            (
+                "the stored hash matches",
+                ONE_PARTITION,
+                1,
+                (3, ONE_PARTITION),
+            ),
+            ("the topic grew", ONE_PARTITION, 2, (4, TWO_PARTITIONS)),
+            ("no hash was stored", 0, 1, (4, ONE_PARTITION)),
+        ];
+        for (case, stored, partitions, expected) in rows {
+            let mut state = ShareGroupState::new("g");
+            apply_seed(
+                &mut state,
+                ShareGroupSeed {
+                    group_epoch: 3,
+                    metadata_hash: stored,
+                    target_epoch: 3,
+                    assignment_timestamp_ms: 0,
+                    members: [(
+                        "m".to_owned(),
+                        ShareGroupMemberMetadataValue {
+                            rack_id: None,
+                            client_id: "client".into(),
+                            client_host: "host".into(),
+                            subscribed_topic_names: vec!["t".into()],
+                        },
+                    )]
+                    .into(),
+                    current_per_member: [(
+                        "m".to_owned(),
+                        ShareGroupCurrentMemberAssignmentValue {
+                            member_epoch: 3,
+                            previous_member_epoch: 2,
+                            assigned_partitions: vec![],
+                        },
+                    )]
+                    .into(),
+                    ..ShareGroupSeed::default()
+                },
+            );
+            check!(
+                reconcile(
+                    &mut state,
+                    &Metadata { topic, partitions },
+                    Duration::ZERO,
+                    false
+                )
+                .is_ok(),
+                "{case}"
+            );
+            check!(
+                (state.group_epoch, state.metadata_hash) == expected,
+                "{case}"
+            );
+        }
+    }
+
     #[test]
     fn metadata_change_fails_closed_at_epoch_limit() {
         let topic = Uuid([6; 16]);
@@ -252,14 +339,17 @@ mod tests {
             ShareMemberState::joining("m", "client", "host", HashSet::from(["t".to_owned()])),
         );
 
-        assert!(!reconcile(
-            &mut state,
-            &Metadata {
-                topic,
-                partitions: 1,
-            },
-            Duration::ZERO,
-        ));
+        assert!(
+            reconcile(
+                &mut state,
+                &Metadata {
+                    topic,
+                    partitions: 1,
+                },
+                Duration::ZERO,
+                false,
+            ) == Err(EpochExhausted)
+        );
         check!(state.group_epoch == i32::MAX);
         assert!(state.target.per_member.is_empty());
     }

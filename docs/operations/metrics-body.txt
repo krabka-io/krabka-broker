@@ -292,6 +292,9 @@ krabka_broker_log_cleaner_uncleanable_partitions 0
 # HELP krabka_broker_offline_log_dirs Log directories this broker has marked offline, whether by the startup writability probe or by a live write/fsync failure. Mirrors kafka.log:type=LogManager,name=OfflineLogDirectoryCount..
 # TYPE krabka_broker_offline_log_dirs gauge
 krabka_broker_offline_log_dirs 0
+# HELP krabka_broker_metadata_load_error_count Committed metadata records this broker-only node could not decode and skipped, since it started. Mirrors kafka.server:type=broker-metadata-metrics,name=metadata-load-error-count..
+# TYPE krabka_broker_metadata_load_error_count gauge
+krabka_broker_metadata_load_error_count 0
 # HELP krabka_broker_log_compactions Per-partition cumulative count of compaction passes this broker's cleaner completed successfully..
 # TYPE krabka_broker_log_compactions counter
 krabka_broker_log_compactions_total{topic="orders",partition="0"} 0

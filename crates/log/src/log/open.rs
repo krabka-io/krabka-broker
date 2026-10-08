@@ -19,7 +19,8 @@ use tracing::instrument;
 use super::{
     Log,
     control::{
-        ControlBatchKind, control_batch_kind, marker_coordinator_epoch, transaction_marker_flags,
+        ControlBatchKind, batch_control_marker_coordinator_epoch, control_batch_kind,
+        transaction_marker_flags,
     },
 };
 use crate::{
@@ -368,7 +369,7 @@ impl Log {
         }
         self.update_owned_producer_entry(batch)?;
         if batch.attributes.is_control_batch() {
-            let (is_abort, is_commit) = transaction_marker_flags(batch);
+            let (is_abort, is_commit) = transaction_marker_flags(batch)?;
             if krabka_verified::transaction_marker_closes(
                 is_abort,
                 is_commit,
@@ -381,7 +382,7 @@ impl Log {
                 );
             }
             if (is_abort || is_commit)
-                && let Some(epoch) = marker_coordinator_epoch(batch)
+                && let Some(epoch) = batch_control_marker_coordinator_epoch(batch)?
             {
                 self.coordinator_epochs.insert(producer_id, epoch);
             }
@@ -477,12 +478,12 @@ impl Log {
             }
             entry.producer_epoch = batch.producer_epoch;
             entry.timestamp = batch.max_timestamp;
-            let (is_abort, is_commit) = transaction_marker_flags(batch);
+            let (is_abort, is_commit) = transaction_marker_flags(batch)?;
             if is_abort || is_commit {
                 entry.current_txn_first_offset = None;
             }
             if (is_abort || is_commit)
-                && let Some(epoch) = marker_coordinator_epoch(batch)
+                && let Some(epoch) = batch_control_marker_coordinator_epoch(batch)?
             {
                 entry.coordinator_epoch = epoch;
             }

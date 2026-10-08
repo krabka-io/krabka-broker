@@ -75,12 +75,28 @@ pub(super) fn write_meta_properties(
         })
 }
 
+/// The `bootstrap.records.bin` format version this build writes: a
+/// big-endian `i16` at the front of the file, before the first record.
+///
+/// It is part of the 1.x on-disk contract. The broker's reader,
+/// `krabka_broker::bootstrap::load_bootstrap_records`, refuses a missing or
+/// unknown version, and its `BOOTSTRAP_RECORDS_VERSION` is the same number.
+pub(super) const BOOTSTRAP_RECORDS_VERSION: i16 = 0;
+
+/// The `bootstrap.json` format version this build writes: the required
+/// top-level `version` field.
+///
+/// It is part of the 1.x on-disk contract. No reader exists: the broker never
+/// reads `bootstrap.json`, which only mirrors `bootstrap.records.bin` for an
+/// operator. A reader added later refuses a missing or unknown version. The
+/// number is 1 because the field carried 1 before it was named `version`.
+pub(super) const BOOTSTRAP_MANIFEST_VERSION: u32 = 1;
+
 /// Human-readable manifest written to `<log_dir>/bootstrap.json`.
 #[derive(Debug, Serialize)]
 struct BootstrapManifest {
-    /// Schema version of this bootstrap manifest. Bumped if the layout
-    /// changes; the broker's future consumer will reject unknown values.
-    schema: u32,
+    /// Always [`BOOTSTRAP_MANIFEST_VERSION`].
+    version: u32,
     /// Kafka's 22-character base64 form.
     cluster_id: ClusterId,
     record_count: usize,
@@ -147,8 +163,9 @@ pub(super) fn write_bootstrap_files(
         record_blobs.push(bytes);
     }
 
-    // 2. Binary stream: length-prefixed (u32 LE) blobs, concatenated.
-    let mut bin = Vec::new();
+    // 2. Binary stream: the version header, then length-prefixed (u32 LE)
+    //    blobs, concatenated.
+    let mut bin = BOOTSTRAP_RECORDS_VERSION.to_be_bytes().to_vec();
     for blob in &record_blobs {
         let len: u32 = u32::try_from(blob.len())
             .map_err(|_| format!("record too large: {} bytes", blob.len()))?;
@@ -162,7 +179,7 @@ pub(super) fn write_bootstrap_files(
     // 3. Manifest JSON (cluster id + base64 mirrors of each blob).
     let records_b64: Vec<String> = record_blobs.iter().map(|b| STANDARD.encode(b)).collect();
     let manifest = BootstrapManifest {
-        schema: 1,
+        version: BOOTSTRAP_MANIFEST_VERSION,
         cluster_id,
         record_count: records.len(),
         records_b64,
@@ -172,4 +189,61 @@ pub(super) fn write_bootstrap_files(
     let json_path = log_dir.join("bootstrap.json");
     std::fs::write(&json_path, json).map_err(|e| format!("write bootstrap.json: {e}"))?;
     fault.after(&json_path)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The records the golden files hold.
+    fn golden_records() -> Vec<MetadataRecord> {
+        vec![MetadataRecord::V1FeatureLevel(
+            krabka_metadata::FeatureLevelRecord {
+                name: "metadata.version".into(),
+                level: 30,
+            },
+        )]
+    }
+
+    /// `golden_records` in `bootstrap.records.bin`: the version header, then
+    /// one `u32` little-endian length and the wincode record. The broker's
+    /// reader pins the same bytes.
+    #[rustfmt::skip]
+    const GOLDEN_RECORDS_BIN: &[u8] = &[
+        0x00, 0x00, // version 0
+        30, 0, 0, 0, // length 30
+        17, 0, 0, 0, // variant 17, V1FeatureLevel
+        16, 0, 0, 0, 0, 0, 0, 0, // name length 16
+        b'm', b'e', b't', b'a', b'd', b'a', b't', b'a',
+        b'.', b'v', b'e', b'r', b's', b'i', b'o', b'n',
+        30, 0, // level 30
+    ];
+
+    /// `golden_records` in `bootstrap.json`, for the cluster id below.
+    const GOLDEN_MANIFEST: &str = r#"{
+  "version": 1,
+  "cluster_id": "AQIDBAUGBwgJCgsMDQ4PEA",
+  "record_count": 1,
+  "records_b64": [
+    "EQAAABAAAAAAAAAAbWV0YWRhdGEudmVyc2lvbh4A"
+  ]
+}"#;
+
+    /// Both bootstrap files are laid out byte for byte as the 1.x contract
+    /// fixes them.
+    #[test]
+    fn the_bootstrap_files_match_their_golden_bytes() {
+        let dir = tempfile::tempdir().unwrap();
+        let cluster_id = ClusterId(uuid::Uuid::from_u128(
+            0x0102_0304_0506_0708_090a_0b0c_0d0e_0f10,
+        ));
+        write_bootstrap_files(dir.path(), cluster_id, &golden_records(), &Fault::default())
+            .unwrap();
+        assert2::assert!(
+            std::fs::read(dir.path().join("bootstrap.records.bin")).unwrap() == GOLDEN_RECORDS_BIN
+        );
+        assert2::assert!(
+            std::fs::read_to_string(dir.path().join("bootstrap.json")).unwrap() == GOLDEN_MANIFEST
+        );
+    }
 }

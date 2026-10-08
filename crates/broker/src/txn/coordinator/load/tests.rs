@@ -231,34 +231,31 @@ async fn a_reload_keeps_last_producer_epoch_only_in_trunk_mode() {
     }
 }
 
-/// A replay that fails leaves the partition unloaded until the next election.
-#[tokio::test]
-async fn a_failed_load_answers_not_coordinator() {
+/// What a two-partition coordinator serves for `__transaction_state-0` after
+/// its load.
+#[derive(Debug, PartialEq, Eq)]
+struct PartitionView {
+    status: Option<LoadStatus>,
+    coordinator_error: Option<i16>,
+    entries: Vec<(String, Option<TxnEntry>)>,
+}
+
+/// Loads `__transaction_state-0` of a two-partition topic from `batches` and
+/// shows what it serves for `tids`.
+async fn load_view(
+    batches: Vec<krabka_protocol::records::RecordBatch>,
+    tids: &[&str],
+) -> PartitionView {
     let dir = TempDir::new().expect("tempdir");
     let partitions = Arc::new(PartitionRegistry::new());
     let part = open_state_partition(dir.path());
     partitions.insert(bootstrap::TOPIC.into(), P0, Arc::clone(&part));
-    // A value record under a transactional id that maps to another state
-    // partition of a two-partition topic is misplaced, and the replay refuses
-    // it.
-    let misplaced = (0..1_000)
-        .map(|n| format!("tid-{n}"))
-        .find(|tid| crate::txn::partitioner::partition_for_tid(tid, 2) == 1)
-        .expect("a transactional id in partition 1");
-    let entry = TxnEntry::new_empty(misplaced.clone(), ProducerId(7), 0, 60_000, 0);
-    let mut batch = krabka_protocol::records::RecordBatch::default();
-    batch.records.push(krabka_protocol::records::Record {
-        key: Some(
-            crate::txn::log_record::encode_key(&misplaced)
-                .unwrap()
-                .into(),
-        ),
-        value: Some(
-            crate::txn::log_record::encode_value(&entry, TxnVersion::Verified, false).into(),
-        ),
-        ..Default::default()
-    });
-    part.produce_batch(batch).await.expect("append");
+    {
+        let mut log = part.log.lock().unwrap();
+        for mut batch in batches {
+            log.append(&mut batch).unwrap();
+        }
+    }
     let coordinator = Arc::new(TxnCoordinator::new(
         NodeId(1),
         Arc::clone(&partitions),
@@ -269,14 +266,91 @@ async fn a_failed_load_answers_not_coordinator() {
 
     let recovered = coordinator.recover(&image(NodeId(1), 0)).await;
 
-    check!(recovered.is_err());
-    check!(coordinator.load_status(P0).await == Some(LoadStatus::Failed));
-    let in_partition_0 = (0..1_000)
-        .map(|n| format!("tid-{n}"))
-        .find(|tid| coordinator.partition_for(tid) == P0)
-        .expect("a transactional id in partition 0");
-    check!(
-        coordinator.coordinator_error(&in_partition_0).await == Some(crate::codes::NOT_COORDINATOR)
-    );
-    check!(coordinator.get(&misplaced).is_none());
+    assert!(recovered.is_ok());
+    let mut entries = Vec::new();
+    for tid in tids {
+        let entry = match coordinator.get(tid) {
+            Some(handle) => Some(handle.lock().await.clone()),
+            None => None,
+        };
+        entries.push(((*tid).to_owned(), entry));
+    }
+    PartitionView {
+        status: coordinator.load_status(P0).await,
+        coordinator_error: coordinator.coordinator_error(tids[0]).await,
+        entries,
+    }
+}
+
+/// Kafka's `loadTransactionMetadata` catches every error of its replay, logs
+/// it, and returns the transactions it loaded before the failing record.
+/// `loadTransactionsForTxnTopicPartition` then installs those, takes the
+/// partition out of `loadingPartitions`, and serves it. So a bad record leaves
+/// the partition loaded with the transactions before it and none after it.
+#[tokio::test]
+async fn a_bad_record_loads_the_transactions_before_it_and_serves_them() {
+    use krabka_protocol::records::{Record, RecordBatch};
+
+    let tid_in = |partition: i32, skip: usize| {
+        (0..1_000)
+            .map(|n| format!("tid-{n}"))
+            .filter(|tid| crate::txn::partitioner::partition_for_tid(tid, 2) == partition)
+            .nth(skip)
+            .expect("a transactional id in that partition")
+    };
+    let (first, second, misplaced) = (tid_in(0, 0), tid_in(0, 1), tid_in(1, 0));
+    let record = |key: Option<Vec<u8>>, value: Option<Vec<u8>>| RecordBatch {
+        records: vec![Record {
+            key: key.map(Into::into),
+            value: value.map(Into::into),
+            ..Default::default()
+        }],
+        ..RecordBatch::default()
+    };
+    let key = |tid: &str| Some(crate::txn::log_record::encode_key(tid).unwrap());
+    let value = |tid: &str, producer_id: i64| {
+        let entry = TxnEntry::new_empty(tid.to_owned(), ProducerId(producer_id), 0, 60_000, 0);
+        Some(crate::txn::log_record::encode_value(
+            &entry,
+            TxnVersion::Verified,
+            false,
+        ))
+    };
+    let tids = [first.as_str(), second.as_str(), misplaced.as_str()];
+    let good = |tid: &str, producer_id: i64| record(key(tid), value(tid, producer_id));
+    let before_only = load_view(vec![good(&first, 1)], &tids).await;
+    let both = load_view(vec![good(&first, 1), good(&second, 2)], &tids).await;
+    check!(before_only.status == Some(LoadStatus::Loaded));
+    check!(before_only.entries[0].1.is_some() && both.entries[1].1.is_some());
+
+    let mut corrupt = value(&misplaced, 3).unwrap();
+    corrupt.truncate(9);
+    let cases = [
+        (
+            "a corrupt value",
+            record(key(&second), Some(corrupt)),
+            &before_only,
+        ),
+        (
+            "a record without a key",
+            record(None, value(&second, 3)),
+            &before_only,
+        ),
+        ("a misplaced transaction", good(&misplaced, 3), &before_only),
+        (
+            "a producer id another transaction holds",
+            good(&second, 1),
+            &before_only,
+        ),
+        (
+            "an unknown value version, which is skipped",
+            record(key(&second), Some(vec![0x00, 0x05])),
+            &both,
+        ),
+    ];
+    for (name, bad, expected) in cases {
+        let view = load_view(vec![good(&first, 1), bad, good(&second, 2)], &tids).await;
+
+        check!(view == *expected, "{name}");
+    }
 }

@@ -25,6 +25,19 @@ pub enum BackupError {
         source: serde_json::Error,
     },
 
+    /// A manifest or an offsets file has no `"version"`, as one written
+    /// before krabka 1.0 does, or one this build does not read.
+    #[error("{context}: {}", unsupported_version_reason(found.as_deref(), *expected))]
+    UnsupportedVersion {
+        /// What was being decoded, named by its object key.
+        context: String,
+        /// The `"version"` the document carries, as JSON text, or `None` when
+        /// it has none.
+        found: Option<String>,
+        /// The version this build reads.
+        expected: i16,
+    },
+
     /// The flags contradict each other, or name something that cannot exist.
     #[error("{0}")]
     InvalidArgument(String),
@@ -58,15 +71,27 @@ impl From<krabka_object_store::ArchiveArgsError> for BackupError {
     }
 }
 
+/// The reason half of [`BackupError::UnsupportedVersion`]'s message.
+fn unsupported_version_reason(found: Option<&str>, expected: i16) -> String {
+    match found {
+        None => "no \"version\" field: the capture predates krabka 1.0, which this build \
+                 does not read"
+            .to_owned(),
+        Some(found) => format!("unsupported version {found}: this build reads version {expected}"),
+    }
+}
+
 impl BackupError {
     /// The process exit code this error reports.
     #[must_use]
     pub fn exit_code(&self) -> i32 {
         match self {
             Self::InvalidArgument(_) => EXIT_BAD_ARGUMENT,
-            Self::Io(_) | Self::ObjectStore(_) | Self::Json { .. } | Self::NoSuchCapture(_) => {
-                EXIT_UNREADABLE
-            }
+            Self::Io(_)
+            | Self::ObjectStore(_)
+            | Self::Json { .. }
+            | Self::UnsupportedVersion { .. }
+            | Self::NoSuchCapture(_) => EXIT_UNREADABLE,
             Self::Integrity(_) => EXIT_INTEGRITY,
             Self::Cluster(_) => EXIT_CLUSTER,
         }
@@ -92,6 +117,14 @@ mod tests {
             ),
             (
                 BackupError::NoSuchCapture("none".to_owned()),
+                EXIT_UNREADABLE,
+            ),
+            (
+                BackupError::UnsupportedVersion {
+                    context: "manifest.json".to_owned(),
+                    found: None,
+                    expected: 0,
+                },
                 EXIT_UNREADABLE,
             ),
             (BackupError::Integrity("digest".to_owned()), EXIT_INTEGRITY),

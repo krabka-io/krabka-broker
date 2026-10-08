@@ -254,6 +254,7 @@ mod tests {
             .send(ShareGroupActorMessage::Seed(ShareGroupSeed {
                 group_epoch: 2,
                 target_epoch: 2,
+                assignment_timestamp_ms: 0,
                 members: [(
                     "m1".to_owned(),
                     ShareGroupMemberMetadataValue {

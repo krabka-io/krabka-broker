@@ -3,7 +3,7 @@
 //! the seed [`QuorumState`], and the control state as of a chosen boundary.
 
 use krabka_ids::Offset;
-use krabka_metadata::{MetadataImage, MetadataRecord, from_kraft_value};
+use krabka_metadata::{MetadataImage, MetadataRecord};
 use krabka_protocol::records::metadata::control::ControlRecord;
 use krabka_verified::recovery::{
     ReplayCursorDecision, ReplayRecordDecision, replay_cursor_decision, replay_record_decision,
@@ -13,16 +13,20 @@ use krabka_verified::recovery::{
 use super::{
     PendingDowngradeSnapshot,
     control_state::voter_set_from_wire,
-    records::{decode_control_record, next_batch_offset},
+    records::{decode_committed_value, decode_control_record, next_batch_offset},
 };
 use crate::{
     config::MetadataRaftFetchMax,
-    error::RaftError,
+    error::{MetadataReplayError, RaftError},
     kraft::{log::KraftLog, types::QuorumState},
 };
 
 /// Replay committed log batches starting at `from` into `image` (idempotent:
 /// records that fail `validate` are skipped). Used by restart recovery.
+///
+/// # Errors
+/// [`RaftError::MetadataReplay`] for a committed record that does not decode,
+/// which stops the controller as live apply does, and the error of a log read.
 pub fn replay_committed(
     log: &KraftLog,
     image: &mut MetadataImage,
@@ -54,7 +58,10 @@ pub fn replay_committed(
                 let Some(value) = rec.value.as_ref() else {
                     continue;
                 };
-                if let Ok(meta) = from_kraft_value(value, image)
+                // A record that does not decode stops recovery; one that
+                // decodes and does not validate is skipped, as live apply
+                // skips it (see `decode_committed_value`).
+                if let Some(meta) = decode_committed_value(value, image, record_offset.0)?
                     && image.validate(&meta).is_ok()
                 {
                     let is_metadata_version_downgrade = matches!(
@@ -88,63 +95,83 @@ pub fn replay_committed(
     Ok(pending)
 }
 
-pub fn replay_control_records(log: &KraftLog, state: &mut QuorumState, max: MetadataRaftFetchMax) {
+/// Replays the KIP-853 control records of the committed log into `state`.
+///
+/// # Errors
+/// [`MetadataReplayError::InvalidControlRecord`] for a control record that does
+/// not decode, a negative `kraft.version`, or a voter set that does not
+/// convert. Kafka's `KRaftControlRecordStateMachine` throws while it reads
+/// each (`RecordsIterator`, `VoterSet.fromVotersRecord`), and
+/// `KafkaRaftClientDriver` hands the throw to the fatal
+/// `SharedServer.raftManagerFaultHandler`, which halts the process. Also the
+/// error of a log read.
+pub fn replay_control_records(
+    log: &KraftLog,
+    state: &mut QuorumState,
+    max: MetadataRaftFetchMax,
+) -> Result<(), RaftError> {
     let from = log.log_start_offset();
-    let mut cursor = from;
     let target = log.hwm();
+    let mut cursor = from;
     while cursor < target {
-        match log.read_decoded(cursor, max.size()) {
-            Ok(batches) => {
-                let next = next_batch_offset(&batches);
-                if batches.is_empty() {
-                    break;
+        let batches = log.read_decoded(cursor, max.size())?;
+        let next = next_batch_offset(&batches);
+        if batches.is_empty() {
+            break;
+        }
+        for batch in &batches {
+            for record in &batch.records {
+                if !matches!(
+                    replay_record_decision(
+                        batch.base_offset,
+                        record.offset_delta,
+                        from.0,
+                        target.0,
+                        batch.attributes.is_control_batch(),
+                        true,
+                    ),
+                    ReplayRecordDecision::Apply(_)
+                ) {
+                    continue;
                 }
-                for batch in &batches {
-                    for record in &batch.records {
-                        if !matches!(
-                            replay_record_decision(
-                                batch.base_offset,
-                                record.offset_delta,
-                                from.0,
-                                target.0,
-                                batch.attributes.is_control_batch(),
-                                true,
-                            ),
-                            ReplayRecordDecision::Apply(_)
-                        ) {
-                            continue;
-                        }
-                        match decode_control_record(record) {
-                            Ok(Some(ControlRecord::KRaftVersion(record))) => {
-                                if let Ok(version) = u16::try_from(record.k_raft_version) {
-                                    state.kraft_version = version;
-                                }
-                            }
-                            Ok(Some(ControlRecord::Voters(record))) => {
-                                if let Ok(voters) = voter_set_from_wire(&record) {
-                                    state.voters = voters;
-                                }
-                            }
-                            Ok(_) => {}
-                            Err(error) => tracing::error!(
-                                ?error,
-                                offset = batch.base_offset,
-                                "kraft: invalid control record during recovery"
-                            ),
-                        }
-                    }
-                }
-                match replay_cursor_decision(cursor.0, next.map(|offset| offset.0)) {
-                    ReplayCursorDecision::Advance(next) => cursor = Offset(next),
-                    ReplayCursorDecision::Stop => break,
-                }
-            }
-            Err(error) => {
-                tracing::error!(?error, "kraft: control replay for recovery failed");
-                break;
+                let offset = batch
+                    .base_offset
+                    .saturating_add(i64::from(record.offset_delta));
+                apply_control_record(state, record, offset)?;
             }
         }
+        match replay_cursor_decision(cursor.0, next.map(|offset| offset.0)) {
+            ReplayCursorDecision::Advance(next) => cursor = Offset(next),
+            ReplayCursorDecision::Stop => break,
+        }
     }
+    Ok(())
+}
+
+/// Folds the control record at `offset` into `state`.
+///
+/// # Errors
+/// [`MetadataReplayError::InvalidControlRecord`] as [`replay_control_records`]
+/// describes.
+fn apply_control_record(
+    state: &mut QuorumState,
+    record: &krabka_protocol::records::Record,
+    offset: i64,
+) -> Result<(), MetadataReplayError> {
+    let invalid = |reason: String| MetadataReplayError::InvalidControlRecord { offset, reason };
+    match decode_control_record(record).map_err(|error| invalid(error.to_string()))? {
+        ControlRecord::KRaftVersion(record) => {
+            state.kraft_version = u16::try_from(record.k_raft_version).map_err(|_| {
+                invalid(format!("negative kraft.version {}", record.k_raft_version))
+            })?;
+        }
+        ControlRecord::Voters(record) => {
+            state.voters =
+                voter_set_from_wire(&record).map_err(|error| invalid(error.to_string()))?;
+        }
+        _ => {}
+    }
+    Ok(())
 }
 
 pub fn control_state_at(
@@ -177,23 +204,10 @@ pub fn control_state_at(
                 ) {
                     continue;
                 }
-                let Some(control) = decode_control_record(record)? else {
-                    continue;
-                };
-                match control {
-                    ControlRecord::KRaftVersion(record) => {
-                        state.kraft_version =
-                            u16::try_from(record.k_raft_version).map_err(|_| {
-                                RaftError::ChangeRejected(
-                                    "negative kraft.version control record".into(),
-                                )
-                            })?;
-                    }
-                    ControlRecord::Voters(record) => {
-                        state.voters = voter_set_from_wire(&record)?;
-                    }
-                    _ => {}
-                }
+                let offset = batch
+                    .base_offset
+                    .saturating_add(i64::from(record.offset_delta));
+                apply_control_record(&mut state, record, offset)?;
             }
         }
         match replay_cursor_decision(cursor.0, next.map(|offset| offset.0)) {

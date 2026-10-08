@@ -96,17 +96,21 @@ fn streams_group_seed(member_id: &str) -> crate::coordinator::unified::StreamsGr
             active_pending_revocation: std::collections::BTreeMap::new(),
             standby_pending_revocation: std::collections::BTreeMap::new(),
             warmup_pending_revocation: std::collections::BTreeMap::new(),
+            active_epochs: std::collections::BTreeMap::new(),
+            active_pending_revocation_epochs: std::collections::BTreeMap::new(),
         },
     );
 
     crate::coordinator::unified::StreamsGroupSeed {
         group_epoch: 5,
         metadata_hash: 0,
+        validated_topology_epoch: 0,
+        last_assignment_configs: std::collections::BTreeMap::new(),
         description_epochs:
             crate::coordinator::unified::streams::persistence::DescriptionEpochs::default(),
         assignment_epoch: 6,
+        assignment_timestamp_ms: 0,
         topology: None,
-        partition_metadata: None,
         members,
         target_per_member,
         current_per_member,

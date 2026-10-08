@@ -423,9 +423,7 @@ impl Engine {
         }
         let previous = self.controls.latest_voters().clone();
         for record in &batch.records {
-            let Some(control) = decode_control_record(record)? else {
-                continue;
-            };
+            let control = decode_control_record(record)?;
             let offset = batch
                 .base_offset
                 .saturating_add(i64::from(record.offset_delta));

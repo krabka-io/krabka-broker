@@ -779,6 +779,74 @@ mod tests {
         }
     }
 
+    /// `krabka.version` bootstraps at level 0, which seeds no record, as Kafka
+    /// omits every level-0 feature from `bootstrap.checkpoint`. A JVM node in
+    /// a mixed cluster supports only level 0, so the level is left for an
+    /// operator to finalize once every node is krabka. `--feature
+    /// krabka.version=N` overrides it, as `kafka-storage format --feature`
+    /// overrides a Kafka feature, and a level past the supported range is
+    /// `Feature.fromFeatureLevel`'s refusal.
+    #[test]
+    fn krabka_version_bootstraps_at_level_zero_unless_overridden() {
+        // (case, --feature flags, the seeded records or the error)
+        type Case<'a> = (
+            &'a str,
+            Vec<(String, i16)>,
+            Result<Vec<MetadataRecord>, String>,
+        );
+        let feature = |name: &str, level| {
+            MetadataRecord::V1FeatureLevel(krabka_metadata::FeatureLevelRecord {
+                name: name.into(),
+                level,
+            })
+        };
+        // The latest production release's defaults, Kafka 4.3's.
+        let release_defaults = vec![
+            feature("metadata.version", LATEST_PRODUCTION_METADATA_VERSION),
+            feature("group.version", 1),
+            feature("transaction.version", 2),
+            feature("share.version", 1),
+            feature("streams.version", 1),
+            feature("eligible.leader.replicas.version", 1),
+        ];
+        let with_krabka = |level| {
+            let mut records = release_defaults.clone();
+            records.push(feature("krabka.version", level));
+            records
+        };
+        let krabka = |level| vec![("krabka.version".to_owned(), level)];
+        let cases: [Case<'_>; 4] = [
+            ("no override", vec![], Ok(release_defaults.clone())),
+            ("override to 1", krabka(1), Ok(with_krabka(1))),
+            ("override to 0", krabka(0), Ok(release_defaults.clone())),
+            (
+                "override past the range",
+                krabka(2),
+                Err("No feature:krabka.version with feature level 2".to_owned()),
+            ),
+        ];
+        let actual: Vec<_> = cases
+            .iter()
+            .map(|(case, features, _)| {
+                let seeded = resolve_format_features(None, features, STRICT).map(
+                    |(bootstrap_mv, overrides)| {
+                        krabka_metadata::bootstrap_feature_records_with_overrides(
+                            bootstrap_mv,
+                            &overrides,
+                        )
+                    },
+                );
+                (*case, seeded)
+            })
+            .collect();
+        let expected: Vec<_> = cases
+            .into_iter()
+            .map(|(case, _, want)| (case, want))
+            .collect();
+        check!(actual == expected);
+        check!(parse_feature_spec("krabka.version=0") == Ok(("krabka.version".to_owned(), 0)));
+    }
+
     #[test]
     fn resolve_features_rejects_bad_release_string() {
         assert2::assert!(resolve_format_features(Some("2.8"), &[], STRICT).is_err());

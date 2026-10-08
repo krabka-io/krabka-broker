@@ -1,6 +1,60 @@
+use std::path::PathBuf;
+
 use thiserror::Error;
 
 use crate::types::NodeId;
+
+/// What is wrong with a node-local file whose layout carries a version
+/// marker. [`RaftError::PersistedFormat`] names the file.
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+pub enum PersistedFormatError {
+    /// The file has the layout a krabka build before 1.0 wrote, with no
+    /// version marker. 1.0 reads no 0.x data, so the node is reformatted.
+    #[error(
+        "has no version marker, so a krabka build before 1.0 wrote it; reformat this node \
+         with krabka-format"
+    )]
+    MissingVersion,
+    /// The version marker names a version this build does not read, such as
+    /// one a later build wrote.
+    #[error("has version {found}, and this build reads versions {min} to {max}")]
+    UnsupportedVersion { found: i64, min: i64, max: i64 },
+    /// The file does not parse at a version this build reads.
+    #[error("does not parse: {0}")]
+    Malformed(String),
+}
+
+/// A committed metadata log record that a controller cannot replay. It stops
+/// the controller, as Kafka's `QuorumController` hands a record it cannot
+/// replay to `SharedServer.fatalQuorumControllerFaultHandler`, and a
+/// controller-role node's `MetadataLoader` hands one it cannot load to
+/// `SharedServer.metadataLoaderFaultHandler`, which is fatal on a node whose
+/// `process.roles` include `controller`. Both handlers halt the process.
+#[derive(Debug, PartialEq, Eq, Error)]
+pub enum MetadataReplayError {
+    /// The record's bytes are not a metadata record this build reads: an
+    /// unknown apiKey, a value version above the highest it supports, a frame
+    /// version other than 1, or a krabka-private record that does not decode.
+    #[error("the metadata record at offset {offset} does not decode: {error}")]
+    UndecodableRecord {
+        /// The record's offset in the metadata log.
+        offset: i64,
+        /// Why it does not decode.
+        error: krabka_metadata::TranslateError,
+    },
+    /// A KIP-853 control record that does not decode, or that names a
+    /// `kraft.version` or voter set Kafka would refuse. Kafka's
+    /// `KRaftControlRecordStateMachine` throws while it reads such a record,
+    /// and `KafkaRaftClientDriver` hands the throw to
+    /// `SharedServer.raftManagerFaultHandler`, which is fatal on every role.
+    #[error("the KRaft control record at offset {offset} is invalid: {reason}")]
+    InvalidControlRecord {
+        /// The record's offset in the metadata log.
+        offset: i64,
+        /// Why it is invalid.
+        reason: String,
+    },
+}
 
 #[derive(Debug, Error)]
 #[non_exhaustive]
@@ -19,6 +73,12 @@ pub enum RaftError {
 
     #[error("records: {0}")]
     Records(#[from] krabka_protocol::records::RecordsError),
+
+    /// A record of a control batch lacks its key or value, or has an empty
+    /// one. The message is the text of Kafka's
+    /// `RecordsIterator.decodeControlRecord`.
+    #[error("{0}")]
+    MalformedControlRecord(&'static str),
 
     #[error("metadata: {0}")]
     Metadata(#[from] krabka_metadata::MetadataError),
@@ -82,6 +142,28 @@ pub enum RaftError {
 
     #[error("deserialization: {0}")]
     SerdeFailedDecode(#[from] wincode::error::ReadError),
+
+    /// A node-local file in the metadata partition directory has a version
+    /// this build does not read, or does not parse. The node does not start
+    /// on it.
+    #[error("{artifact} file {}: {problem}", .path.display())]
+    PersistedFormat {
+        /// The file's name, such as `quorum-state`.
+        artifact: &'static str,
+        path: PathBuf,
+        problem: PersistedFormatError,
+    },
+
+    /// A peer answered a krabka-private controller RPC with
+    /// `UNSUPPORTED_VERSION`: it does not implement `version` of `api_key`.
+    /// A mixed-version cluster meets it during a rolling upgrade.
+    #[error("the peer does not implement version {version} of krabka-private api {api_key}")]
+    UnsupportedPrivateVersion { api_key: i16, version: i16 },
+
+    /// A committed metadata log record that this controller cannot replay.
+    /// The controller stops.
+    #[error("metadata replay: {0}")]
+    MetadataReplay(#[from] MetadataReplayError),
 
     #[error("startup misconfiguration: {0}")]
     Startup(String),

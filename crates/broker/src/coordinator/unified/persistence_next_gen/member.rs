@@ -34,12 +34,12 @@ use crate::{
     coordinator::unified::persistence::{
         flex::{
             get_compact_array, get_compact_bytes, get_compact_nullable_string, get_compact_string,
-            get_member_client, get_string_array, put_compact_array, put_compact_bytes,
-            put_compact_nullable_string, put_compact_string, put_empty_tagged_fields,
-            put_member_client, put_string_array, put_tagged_fields, read_tagged,
-            skip_tagged_fields,
+            get_member_client, get_string_array, get_value_version, put_compact_array,
+            put_compact_bytes, put_compact_nullable_string, put_compact_string,
+            put_empty_tagged_fields, put_member_client, put_string_array, put_tagged_fields,
+            read_tagged, skip_tagged_fields,
         },
-        get_i16, get_i32,
+        get_i32,
     },
     error::BrokerError,
 };
@@ -139,7 +139,11 @@ impl MemberMetadataValue {
     /// # Errors
     /// Returns an error when log I/O fails, a record or index is corrupt, or the requested offset violates the segment state.
     pub fn decode(mut buf: &[u8]) -> Result<Self, BrokerError> {
-        let _v = get_i16(&mut buf)?;
+        get_value_version(
+            &mut buf,
+            0,
+            "unknown ConsumerGroupMemberMetadataValue version",
+        )?;
         let instance_id = get_compact_nullable_string(&mut buf)?;
         let (rack_id, client_id, client_host) = get_member_client(&mut buf)?;
         let subscribed_topic_names = get_string_array(&mut buf)?;

@@ -276,6 +276,7 @@ pub fn build_engine_only_with_metadata_log(
             pending_reconfig: None,
             activation: crate::kraft::Activation::default(),
             activation_fault: None,
+            replay_fault: None,
         },
         dir,
     )

@@ -39,5 +39,5 @@ pub use self::{
     internal_topics::{InternalTopicSpec, internal_topic_specs},
     metadata_hash::{metadata_hash, required_topics},
     stored::to_stored_topology,
-    tasks::{partition_metadata, task_set},
+    tasks::task_set,
 };

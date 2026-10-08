@@ -167,7 +167,7 @@ async fn a_group_assigns_no_sooner_than_its_own_assignment_interval() {
         },
         join,
         |response| {
-            check!(response.1 == 2);
+            check!(response.1 == 3);
         },
     )
     .await;

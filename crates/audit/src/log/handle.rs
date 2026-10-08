@@ -248,7 +248,8 @@ mod tests {
         log.emit(life(2));
 
         let state = std::fs::read(dir.path().join("audit.losses")).unwrap();
-        check!(u64::from_be_bytes(state[8..].try_into().unwrap()) == 0);
+        let count = &state[crate::spool::FILE_HEADER_LEN + 8..];
+        check!(u64::from_be_bytes(count.try_into().unwrap()) == 0);
         check!(log.dropped() == 1);
     }
 

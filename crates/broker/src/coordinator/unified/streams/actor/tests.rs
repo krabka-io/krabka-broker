@@ -86,14 +86,18 @@ async fn first_join_advances_epoch_not_ready() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn second_heartbeat_at_right_epoch_accepted() {
-    let (coord, _log) = make_coordinator();
+    let (coord, log) = make_coordinator();
     let handle = coord.get_or_create_streams("g");
     let join = heartbeat(&handle, member_request("m1", 0)).await;
     assert!(join.error_code == codes::NONE);
     let epoch = join.member_epoch;
+    let batches = log.batches().await.len();
     let resp = heartbeat(&handle, member_request("m1", epoch)).await;
     assert!(resp.error_code == codes::NONE);
     assert!(resp.member_epoch == epoch);
+    // A heartbeat that changes nothing writes nothing, as Kafka's
+    // `streamsGroupHeartbeat` adds no record for an unchanged member.
+    assert!(log.batches().await.len() == batches);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -348,7 +352,50 @@ async fn leave_removes_member() {
     .await;
     assert!(resp.error_code == codes::NONE);
     assert!(resp.member_epoch == -1);
-    crate::coordinator::unified::test_support::assert_next_tombstone_batch(&log, pre_leave).await;
+    let batches = log.batches().await;
+    assert!(batches.len() == pre_leave + 1);
+    // Kafka's `streamsGroupFenceMember`: the member's current assignment,
+    // target and member tombstones, and the group epoch bumped with the
+    // group's metadata as it was, in one batch, and no target.
+    let seed = coord.cached_streams_seed("g").expect("the group's records");
+    let expected = crate::coordinator::unified::streams::persistence::PendingStreamsRecords {
+        member_metadata: vec![(join.member_id.clone(), None)],
+        target_per_member: vec![(join.member_id.clone(), None)],
+        current_per_member: vec![(join.member_id.clone(), None)],
+        group_metadata: Some(
+            crate::coordinator::unified::streams::persistence::StreamsGroupMetadataValue {
+                epoch: join.member_epoch + 1,
+                metadata_hash: seed.metadata_hash,
+                validated_topology_epoch: seed.validated_topology_epoch,
+                last_assignment_configs: Some(
+                    seed.last_assignment_configs
+                        .iter()
+                        .map(|(key, value)| {
+                            crate::coordinator::unified::streams::persistence::LastAssignmentConfig {
+                                key: key.clone(),
+                                value: value.clone(),
+                            }
+                        })
+                        .collect(),
+                ),
+                description: crate::coordinator::unified::streams::persistence::DescriptionEpochs::default(),
+            },
+        ),
+        ..Default::default()
+    }
+    .into_batch("g", 0)
+    .unwrap();
+    let key_values = |batch: &krabka_protocol::records::RecordBatch| -> Vec<_> {
+        batch
+            .records
+            .iter()
+            .map(|record| (record.key.clone(), record.value.clone()))
+            .collect()
+    };
+    assert!(key_values(&batches[batches.len() - 1]) == key_values(&expected));
+    assert!(
+        (seed.group_epoch, seed.assignment_epoch) == (join.member_epoch + 1, join.member_epoch)
+    );
 }
 
 /// A heartbeat applies the member fields that it carries, a rejoin at epoch 0
@@ -1829,7 +1876,7 @@ fn validate_offset_commit_follows_kafka_streams_group() {
             Err(codes::STALE_MEMBER_EPOCH),
         ),
         (
-            "older epoch",
+            "older epoch on a group without a topology",
             &group,
             "m1",
             4,
@@ -1837,11 +1884,124 @@ fn validate_offset_commit_follows_kafka_streams_group() {
             Err(codes::STALE_MEMBER_EPOCH),
         ),
     ];
+    let partitions = [("in".to_string(), 0)];
     for (row, state, member_id, member_epoch, fence, expected) in rows {
         check!(
-            validate_offset_commit(state, member_id, member_epoch, fence) == expected,
+            validate_offset_commit(state, None, member_id, member_epoch, fence, &partitions)
+                == expected,
             "{row}"
         );
+    }
+}
+
+/// KIP-1251: Kafka 4.3.1's `StreamsGroup.createAssignmentEpochValidator`.
+/// Member `m1` is at epoch 5. It holds active tasks 0 and 1 of subtopology
+/// `0`, assigned at epochs 3 and 5, task 2 pending revocation from epoch 4,
+/// and task 3 with no recorded epoch. Subtopology `0` reads `in` and the
+/// repartition topic `rep`; subtopology `1` reads `other`, where `m1` holds
+/// nothing. Each row commits at epoch 4.
+#[test]
+fn older_epoch_commit_checks_each_tasks_assignment_epoch() {
+    use crate::coordinator::unified::streams::persistence::{StoredSubtopology, StoredTopicInfo};
+
+    type Row = (
+        &'static str,
+        &'static [(&'static str, i32)],
+        Result<(), i16>,
+    );
+
+    let subtopology = |id: &str, source: &str, repartition: &[&str]| StoredSubtopology {
+        subtopology_id: id.into(),
+        source_topics: vec![source.into()],
+        source_topic_regex: vec![],
+        repartition_sink_topics: vec![],
+        state_changelog_topics: vec![],
+        repartition_source_topics: repartition
+            .iter()
+            .map(|name| StoredTopicInfo {
+                name: (*name).into(),
+                partitions: 4,
+                replication_factor: -1,
+                topic_configs: vec![],
+            })
+            .collect(),
+        copartition_groups: vec![],
+    };
+    let topology = StreamsGroupTopologyValue {
+        epoch: 1,
+        subtopologies: vec![
+            subtopology("0", "in", &["rep"]),
+            subtopology("1", "other", &[]),
+        ],
+    };
+    let mut group = crate::coordinator::unified::streams::state::StreamsGroupState::new("g");
+    let mut member = crate::coordinator::unified::streams::state::StreamsMemberState::joining(
+        "m1",
+        "client",
+        "/127.0.0.1",
+    );
+    member.member_epoch = 5;
+    member.active = maplit::btreemap! {"0".to_string() => vec![0, 1, 3]};
+    member.active_pending_revocation = maplit::btreemap! {"0".to_string() => vec![2]};
+    member.active_epochs = maplit::btreemap! {
+        ("0".to_string(), 0) => 3,
+        ("0".to_string(), 1) => 5,
+        ("0".to_string(), 2) => 4,
+    };
+    group.members.insert("m1".into(), member);
+
+    // (row, committed (topic, partition)s, expected)
+    let rows: [Row; 10] = [
+        ("no partitions", &[], Ok(())),
+        ("assigned before the epoch", &[("in", 0)], Ok(())),
+        (
+            "assigned after the epoch",
+            &[("in", 1)],
+            Err(codes::STALE_MEMBER_EPOCH),
+        ),
+        ("pending revocation at the epoch", &[("in", 2)], Ok(())),
+        (
+            "no recorded epoch reads the member epoch",
+            &[("in", 3)],
+            Err(codes::STALE_MEMBER_EPOCH),
+        ),
+        ("a repartition source topic", &[("rep", 0)], Ok(())),
+        (
+            "one refused partition refuses the commit",
+            &[("in", 0), ("in", 1)],
+            Err(codes::STALE_MEMBER_EPOCH),
+        ),
+        (
+            "a task the member does not hold",
+            &[("in", 4)],
+            Err(codes::STALE_MEMBER_EPOCH),
+        ),
+        (
+            "another subtopology's task",
+            &[("other", 0)],
+            Err(codes::STALE_MEMBER_EPOCH),
+        ),
+        (
+            "a topic outside the topology",
+            &[("unknown", 0)],
+            Err(codes::STALE_MEMBER_EPOCH),
+        ),
+    ];
+    for (row, committed, expected) in rows {
+        let partitions: Vec<(String, i32)> = committed
+            .iter()
+            .map(|(topic, partition)| ((*topic).to_string(), *partition))
+            .collect();
+        for fence in [
+            CommitFence::Offset { api_version: 9 },
+            CommitFence::Transactional,
+        ] {
+            check!(
+                validate_offset_commit(&group, Some(&topology), "m1", 4, fence, &partitions)
+                    == expected,
+                "{row} {fence:?}"
+            );
+        }
     }
 }
 
@@ -2300,5 +2460,246 @@ fn accepted_tasks(
         standby_tasks: tasks.map(|_| vec![]),
         warmup_tasks: tasks.map(|_| vec![]),
         ..super::response::base_resp(codes::NONE, member_epoch, &config)
+    }
+}
+
+/// KIP-1263: a streams group replays the `AssignmentTimestamp` of its target
+/// assignment metadata record, and Kafka's `canComputeNextTargetAssignment`
+/// runs the assignment interval from it. A stored time inside the interval
+/// holds the next assignment back, and an unknown one (0) or an elapsed
+/// interval lets it run, which writes the time it finished.
+#[tokio::test(start_paused = true)]
+async fn the_replayed_assignment_timestamp_holds_the_interval() {
+    use std::time::Duration;
+
+    use crate::coordinator::unified::{
+        StreamsGroupSeed,
+        streams::{
+            actor::reconciliation::ASSIGNMENT_INTERVAL_DETAIL, topology::status::ASSIGNMENT_DELAYED,
+        },
+        wall_clock_ms,
+    };
+
+    // (case, milliseconds before now of the stored timestamp, or `None` for
+    // 0, the expected (member epoch, ASSIGNMENT_DELAYED detail, whether the
+    // group wrote a new timestamp))
+    let rows = [
+        ("no stored time", None, (3, None, true)),
+        (
+            "an assignment 200 ms ago",
+            Some(200),
+            (2, Some(ASSIGNMENT_INTERVAL_DETAIL.to_owned()), false),
+        ),
+        ("an assignment 1 s ago", Some(1_000), (3, None, true)),
+    ];
+    for (case, ago, expected) in rows {
+        let coord = coordinator_with_log(
+            StreamsGroupConfig {
+                initial_rebalance_delay: Duration::ZERO,
+                assignment_interval: Duration::from_secs(1),
+                ..StreamsGroupConfig::default()
+            },
+            Arc::new(InMemoryOffsetsLog::default()),
+        );
+        let handle = coord.get_or_create_streams("g");
+        let stored = ago.map_or(0, |ago| wall_clock_ms() - ago);
+        handle
+            .tx
+            .send(StreamsGroupActorMessage::Seed(StreamsGroupSeed {
+                group_epoch: 2,
+                assignment_epoch: 2,
+                assignment_timestamp_ms: stored,
+                ..StreamsGroupSeed::default()
+            }))
+            .await
+            .unwrap();
+        let before = wall_clock_ms();
+        let resp = heartbeat(
+            &handle,
+            StreamsGroupHeartbeatRequest {
+                group_id: "g".into(),
+                member_id: "m1".into(),
+                member_epoch: 0,
+                rebalance_timeout_ms: 1_000,
+                ..Default::default()
+            },
+        )
+        .await;
+        let after = wall_clock_ms();
+        let delayed = resp
+            .status
+            .unwrap_or_default()
+            .into_iter()
+            .find(|status| status.status_code == ASSIGNMENT_DELAYED)
+            .map(|status| status.status_detail);
+        let written = coord
+            .cached_streams_seed("g")
+            .unwrap()
+            .assignment_timestamp_ms;
+        // The paused clock reads the same millisecond throughout, give or
+        // take the rounding of the real clocks underneath it.
+        let fresh = (before - 1..=after + 1).contains(&written);
+        check!((resp.member_epoch, delayed, fresh) == expected, "{case}");
+        check!(fresh || written == stored, "{case}");
+    }
+}
+
+/// Kafka's `streamsGroupHeartbeat` bumps the epoch of a group whose members
+/// and topology did not change when the topology epoch that it validates, or
+/// its assignment configuration, differs from what the group's last
+/// `StreamsGroupMetadataValue` recorded, and the bump records the new
+/// values. With no metadata source no topology is ready, so the group
+/// validates -1, and the default configuration is `num.standby.replicas=0`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_changed_validation_or_assignment_config_bumps_the_epoch() {
+    use crate::coordinator::unified::{
+        StreamsGroupSeed,
+        streams::persistence::{
+            StreamsGroupCurrentMemberAssignmentValue, StreamsGroupMemberMetadataValue,
+            StreamsMemberWireState,
+        },
+    };
+
+    let configs = |standby: &str| {
+        maplit::btreemap! {"num.standby.replicas".to_string() => standby.to_string()}
+    };
+    // The record that the bump writes: the epoch after the loaded 2, the
+    // validated topology epoch, and the configuration.
+    let bump = Some((3, -1, configs("0")));
+    // (case, the stored validated topology epoch, the stored configuration,
+    // what a steady heartbeat writes)
+    let rows = [
+        ("as recorded", -1, configs("0"), None),
+        ("another configuration", -1, configs("1"), bump.clone()),
+        (
+            "a null configuration list",
+            -1,
+            BTreeMap::new(),
+            bump.clone(),
+        ),
+        (
+            "a topology validated before the load",
+            0,
+            configs("0"),
+            bump,
+        ),
+    ];
+    for (case, validated, last_configs, expected) in rows {
+        let (coord, _log) = make_coordinator();
+        let handle = coord.get_or_create_streams("g");
+        handle
+            .tx
+            .send(StreamsGroupActorMessage::Seed(StreamsGroupSeed {
+                group_epoch: 2,
+                validated_topology_epoch: validated,
+                last_assignment_configs: last_configs,
+                assignment_epoch: 2,
+                members: [(
+                    "m1".to_owned(),
+                    StreamsGroupMemberMetadataValue {
+                        instance_id: None,
+                        rack_id: None,
+                        client_id: "client".into(),
+                        client_host: "/127.0.0.1".into(),
+                        process_id: "p1".into(),
+                        user_endpoint: None,
+                        client_tags: vec![],
+                        rebalance_timeout_ms: 60_000,
+                        topology_epoch: 0,
+                    },
+                )]
+                .into(),
+                current_per_member: [(
+                    "m1".to_owned(),
+                    StreamsGroupCurrentMemberAssignmentValue {
+                        member_epoch: 2,
+                        previous_member_epoch: 1,
+                        state: StreamsMemberWireState::Stable,
+                        ..StreamsGroupCurrentMemberAssignmentValue::default()
+                    },
+                )]
+                .into(),
+                ..StreamsGroupSeed::default()
+            }))
+            .await
+            .unwrap();
+        heartbeat(
+            &handle,
+            StreamsGroupHeartbeatRequest {
+                group_id: "g".into(),
+                member_id: "m1".into(),
+                member_epoch: 2,
+                ..Default::default()
+            },
+        )
+        .await;
+        let written = coord.cached_streams_seed("g").map(|seed| {
+            (
+                seed.group_epoch,
+                seed.validated_topology_epoch,
+                seed.last_assignment_configs,
+            )
+        });
+        check!(written == expected, "{case}");
+    }
+}
+
+/// The bump of a group whose topology the metadata holds in a valid
+/// configuration records the topology epoch as `ValidatedTopologyEpoch`,
+/// and every bump records `LastAssignmentConfigs`, as Kafka's
+/// `newStreamsGroupMetadataRecord` writes them.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_bump_records_the_validated_topology_epoch() {
+    use crate::test_support::FakeMetadataSource;
+
+    // (case, the topics in the image, the recorded validated topology epoch)
+    let rows = [
+        ("the source topic exists", vec![("in", 1, 2)], 1),
+        ("the source topic is missing", vec![], -1),
+    ];
+    for (case, topics, validated) in rows {
+        let source = Arc::new(
+            FakeMetadataSource::builder()
+                .image(image_of(None, &topics))
+                .build(),
+        );
+        let (coord, _log) = make_coordinator();
+        coord.set_metadata_source(source);
+        let handle = coord.get_or_create_streams("g");
+        heartbeat(
+            &handle,
+            StreamsGroupHeartbeatRequest {
+                group_id: "g".into(),
+                member_id: "m1".into(),
+                member_epoch: 0,
+                rebalance_timeout_ms: 1_000,
+                topology: Some(one_subtopology(false)),
+                ..Default::default()
+            },
+        )
+        .await;
+        let seed = coord.cached_streams_seed("g").unwrap();
+        // The member got its active tasks at its epoch, and its current
+        // assignment record lists that epoch for each of them.
+        let current = &seed.current_per_member["m1"];
+        let at_member_epoch: BTreeMap<String, Vec<i32>> = current
+            .active
+            .iter()
+            .map(|(subtopology, partitions)| {
+                (
+                    subtopology.clone(),
+                    vec![current.member_epoch; partitions.len()],
+                )
+            })
+            .collect();
+        check!(current.active_epochs == at_member_epoch, "{case}");
+        check!(
+            (seed.validated_topology_epoch, seed.last_assignment_configs)
+                == (
+                    validated,
+                    maplit::btreemap! {"num.standby.replicas".to_string() => "0".to_string()}
+                ),
+            "{case}"
+        );
     }
 }

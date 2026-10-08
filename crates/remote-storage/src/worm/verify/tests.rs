@@ -407,7 +407,6 @@ async fn verify_reports_a_clean_archive_in_full() {
                     .flat_map(|segment| segment.entries.iter().map(|entry| entry.key.clone()))
                     .collect(),
             },
-            unknown_protection_objects: ObjectProtectionReport::default(),
             epochs: vec![EpochSpan {
                 epoch_id: last.chain.epoch_id,
                 first_seq: ManifestSeq(0),

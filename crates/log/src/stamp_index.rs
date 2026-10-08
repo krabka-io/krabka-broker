@@ -1,5 +1,10 @@
-//! Per-partition `.stampindex` sidecar. One fixed-width record per
-//! stamped offset range in the segment:
+//! Per-partition `.stampindex` sidecar. A two-byte header, then one
+//! fixed-width record per stamped offset range in the segment:
+//!
+//!   `version`:     i16 (big-endian), once at the start of the file, always
+//!                  [`STAMP_INDEX_VERSION`]
+//!
+//! and per record:
 //!
 //!   `base_offset`: i64 (big-endian)
 //!   `last_offset`: i64 (big-endian)
@@ -27,6 +32,18 @@ use crate::{
 };
 
 const ENTRY_BYTES: usize = 24;
+
+/// The `.stampindex` format version this build writes and reads.
+///
+/// It is the big-endian `i16` at the front of every file, and part of the 1.x
+/// on-disk contract: a 1.x broker reads every version an earlier 1.x broker
+/// wrote, so a later layout takes a new number and keeps this one readable.
+pub(crate) const STAMP_INDEX_VERSION: i16 = 0;
+
+const HEADER_BYTES: usize = std::mem::size_of::<i16>();
+
+/// The artifact name the version errors carry.
+const ARTIFACT: &str = "stampindex";
 
 /// One stamped offset range. The inclusive offsets
 /// `[base_offset, last_offset]` all carry `stamp`.
@@ -69,21 +86,36 @@ pub struct StampIndex {
 impl StampIndex {
     open_index! {
         /// Open or recover a `.stampindex` file at the given path. This method
-        /// reads the entire file into memory at startup. An empty file or a
-        /// missing file is acceptable and means zero stamped ranges.
+        /// reads the entire file into memory at startup. A missing file means
+        /// zero stamped ranges. So does an empty one: the first append creates
+        /// the file and then writes the header with its entry, so a crash between
+        /// the two leaves an empty file that holds nothing to misread.
         /// # Errors
-        /// Returns an error when log I/O fails or the file's length is not a
-        /// whole number of fixed-width entries.
+        /// Returns [`LogError::MissingFormatVersion`] for the headerless layout a
+        /// broker before 1.0 wrote, [`LogError::UnsupportedFormatVersion`] for a
+        /// version other than `STAMP_INDEX_VERSION`, and an error when log I/O
+        /// fails or the entries are not a whole number of fixed-width records.
         /// # Panics
         /// Panics if the in-place reinterpretation of a length-validated,
         /// `Unaligned` byte buffer fails. That invariant cannot be false.
         pub fn open(path: PathBuf) -> Result<Self, LogError> {
-            let entries = crate::index::read_sidecar::<StampEntryRaw, _>(
-                &path,
-                "stampindex",
-                "length is a multiple of ENTRY_BYTES and StampEntryRaw is Unaligned",
-                |raws| {
-                    let mut entries = Vec::with_capacity(raws.len());
+            let mut entries = Vec::new();
+            match std::fs::read(&path) {
+                Ok(bytes) if bytes.is_empty() => {}
+                Ok(bytes) => {
+                    let body = Self::versioned_body(&path, &bytes)?;
+                    if !body.len().is_multiple_of(ENTRY_BYTES) {
+                        return Err(LogError::Corrupt(format!(
+                            "stampindex {} has {} entry bytes, not divisible by {}",
+                            path.display(),
+                            body.len(),
+                            ENTRY_BYTES,
+                        )));
+                    }
+                    let raws = <[StampEntryRaw]>::ref_from_bytes(body).expect(
+                        "length is a multiple of ENTRY_BYTES and StampEntryRaw is Unaligned",
+                    );
+                    entries.reserve(raws.len());
                     for raw in raws {
                         entries.push(StampEntry {
                             base_offset: Offset(raw.base_offset.get()),
@@ -91,8 +123,9 @@ impl StampIndex {
                             stamp: raw.stamp.get(),
                         });
                     }
-                    entries
-                        .sort_unstable_by_key(|entry| (entry.base_offset.0, entry.last_offset.0, entry.stamp));
+                    entries.sort_unstable_by_key(|entry| {
+                        (entry.base_offset.0, entry.last_offset.0, entry.stamp)
+                    });
                     // A write followed by an uncertain sync can be retried and
                     // leave an exact duplicate on disk. Canonicalize that retry,
                     // but reject a duplicate range with a different stamp below.
@@ -103,9 +136,10 @@ impl StampIndex {
                             path.display()
                         )));
                     }
-                    Ok(entries)
-                },
-            )?;
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) => return Err(LogError::Io(e)),
+            }
             tracing::Span::current().record("entries", entries.len());
             Ok(Self {
                 path,
@@ -113,6 +147,38 @@ impl StampIndex {
                 entries,
             })
         }
+    }
+
+    /// Check the header of a non-empty file and return the entry bytes after
+    /// it.
+    ///
+    /// A broker before 1.0 wrote bare 24-byte entries, so a file whose whole
+    /// length is a multiple of the entry width has no header. The headed
+    /// layout is two bytes longer than such a multiple, so the two never
+    /// collide.
+    fn versioned_body<'a>(path: &std::path::Path, bytes: &'a [u8]) -> Result<&'a [u8], LogError> {
+        if bytes.len().is_multiple_of(ENTRY_BYTES) {
+            return Err(LogError::MissingFormatVersion {
+                artifact: ARTIFACT,
+                path: path.to_path_buf(),
+            });
+        }
+        let Some((&header, body)) = bytes.split_first_chunk::<HEADER_BYTES>() else {
+            return Err(LogError::Corrupt(format!(
+                "stampindex {} is {} bytes, shorter than its version header",
+                path.display(),
+                bytes.len(),
+            )));
+        };
+        let version = i16::from_be_bytes(header);
+        if version != STAMP_INDEX_VERSION {
+            return Err(LogError::UnsupportedFormatVersion {
+                artifact: ARTIFACT,
+                path: path.to_path_buf(),
+                found: i64::from(version),
+            });
+        }
+        Ok(body)
     }
 
     /// Append one stamped-range entry.
@@ -166,9 +232,14 @@ impl StampIndex {
             .append(true)
             .open(&self.path)
             .map_err(LogError::Io)?;
-        let raw = StampEntryRaw::new(entry);
-        crate::io::write_all(&*self.io, IoTarget::StampIndex, &f, raw.as_bytes())
-            .map_err(LogError::Io)?;
+        // A new or empty file gets its header in the same write as its first
+        // entry.
+        let mut bytes = Vec::with_capacity(HEADER_BYTES + ENTRY_BYTES);
+        if f.metadata().map_err(LogError::Io)?.len() == 0 {
+            bytes.extend_from_slice(&STAMP_INDEX_VERSION.to_be_bytes());
+        }
+        bytes.extend_from_slice(StampEntryRaw::new(entry).as_bytes());
+        crate::io::write_all(&*self.io, IoTarget::StampIndex, &f, &bytes).map_err(LogError::Io)?;
         self.io
             .sync_file(IoTarget::StampIndex, &f)
             .map_err(LogError::Io)?;
@@ -248,11 +319,13 @@ impl StampIndex {
 
     fn rewrite(&self, entries: &[StampEntry]) -> Result<(), LogError> {
         let file = crate::index::rewrite_sidecar_file(&self.path)?;
-        for entry in entries {
-            let raw = StampEntryRaw::new(*entry);
-            crate::io::write_all(&*self.io, IoTarget::StampIndex, &file, raw.as_bytes())
-                .map_err(LogError::Io)?;
+        let mut bytes = Vec::with_capacity(HEADER_BYTES + entries.len() * ENTRY_BYTES);
+        bytes.extend_from_slice(&STAMP_INDEX_VERSION.to_be_bytes());
+        for &entry in entries {
+            bytes.extend_from_slice(StampEntryRaw::new(entry).as_bytes());
         }
+        crate::io::write_all(&*self.io, IoTarget::StampIndex, &file, &bytes)
+            .map_err(LogError::Io)?;
         self.io
             .sync_file(IoTarget::StampIndex, &file)
             .map_err(LogError::Io)
@@ -308,20 +381,135 @@ mod tests {
     }
 
     fn write_entries(path: &std::path::Path, entries: &[StampEntry]) {
-        let mut bytes = Vec::with_capacity(entries.len() * ENTRY_BYTES);
-        for entry in entries {
-            let raw = StampEntryRaw::new(*entry);
-            bytes.extend_from_slice(raw.as_bytes());
+        let mut bytes = STAMP_INDEX_VERSION.to_be_bytes().to_vec();
+        for &entry in entries {
+            bytes.extend_from_slice(StampEntryRaw::new(entry).as_bytes());
         }
         std::fs::write(path, bytes).unwrap();
     }
 
+    /// The two entries the golden fixture holds, in offset order.
+    const GOLDEN_ENTRIES: [StampEntry; 2] = [
+        StampEntry {
+            base_offset: Offset(5),
+            last_offset: Offset(7),
+            stamp: 0x0102_0304_0506_0708,
+        },
+        StampEntry {
+            base_offset: Offset(10),
+            last_offset: Offset(12),
+            stamp: 2_000,
+        },
+    ];
+
+    /// `GOLDEN_ENTRIES` as a 1.0 broker writes them: the version header,
+    /// then each entry's base offset, last offset and stamp, big-endian.
+    #[rustfmt::skip]
+    const GOLDEN_BYTES: [u8; 50] = [
+        0x00, 0x00, // version 0
+        0, 0, 0, 0, 0, 0, 0, 5, // base_offset 5
+        0, 0, 0, 0, 0, 0, 0, 7, // last_offset 7
+        1, 2, 3, 4, 5, 6, 7, 8, // stamp
+        0, 0, 0, 0, 0, 0, 0, 10, // base_offset 10
+        0, 0, 0, 0, 0, 0, 0, 12, // last_offset 12
+        0, 0, 0, 0, 0, 0, 0x07, 0xd0, // stamp 2000
+    ];
+
+    /// The writer lays the file out byte for byte as the 1.x contract fixes
+    /// it, whether the entries arrive by append or by a rewrite.
+    #[test]
+    fn the_writer_produces_the_golden_bytes() {
+        let dir = TempDir::new().unwrap();
+        let appended = dir.path().join("appended.stampindex");
+        let mut idx = StampIndex::open(appended.clone()).unwrap();
+        // Out of order, so the second write lands on a file that already has
+        // its header.
+        idx.append(GOLDEN_ENTRIES[1]).unwrap();
+        idx.append(GOLDEN_ENTRIES[0]).unwrap();
+        // A rewrite lays the entries out in offset order.
+        let rewritten = dir.path().join("rewritten.stampindex");
+        let mut idx = StampIndex::open(rewritten.clone()).unwrap();
+        for entry in GOLDEN_ENTRIES {
+            idx.append(entry).unwrap();
+        }
+        idx.append(StampEntry {
+            base_offset: Offset(20),
+            last_offset: Offset(20),
+            stamp: 9,
+        })
+        .unwrap();
+        idx.truncate_from(Offset(20)).unwrap();
+
+        let mut appended_golden = GOLDEN_BYTES[..2].to_vec();
+        appended_golden.extend_from_slice(&GOLDEN_BYTES[26..]);
+        appended_golden.extend_from_slice(&GOLDEN_BYTES[2..26]);
+        assert2::assert!(std::fs::read(appended).unwrap() == appended_golden);
+        assert2::assert!(std::fs::read(rewritten).unwrap() == GOLDEN_BYTES);
+    }
+
+    #[test]
+    fn the_golden_bytes_decode_to_their_entries() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("golden.stampindex");
+        std::fs::write(&path, GOLDEN_BYTES).unwrap();
+        assert2::assert!(StampIndex::open(path).unwrap().entries() == GOLDEN_ENTRIES);
+    }
+
+    /// A version other than 0 is refused with the version it found, and a
+    /// headerless file, the layout a broker before 1.0 wrote, is refused as
+    /// one that predates 1.0.
+    #[test]
+    fn open_refuses_an_unknown_version_and_a_headerless_file() {
+        let dir = TempDir::new().unwrap();
+        for (name, version) in [("one", 1_i16), ("negative", -1), ("max", i16::MAX)] {
+            let path = dir.path().join(format!("{name}.stampindex"));
+            let mut bytes = GOLDEN_BYTES.to_vec();
+            bytes[..2].copy_from_slice(&version.to_be_bytes());
+            std::fs::write(&path, bytes).unwrap();
+            let error = StampIndex::open(path.clone()).unwrap_err();
+            assert2::assert!(
+                let LogError::UnsupportedFormatVersion {
+                    artifact: "stampindex",
+                    path: found_path,
+                    found,
+                } = error,
+                "case {name}"
+            );
+            assert2::assert!(
+                (found_path, found) == (path, i64::from(version)),
+                "case {name}"
+            );
+        }
+        for (name, entries) in [("one entry", 1), ("two entries", 2)] {
+            let path = dir.path().join(format!("{name}.stampindex"));
+            std::fs::write(&path, &GOLDEN_BYTES[2..2 + entries * ENTRY_BYTES]).unwrap();
+            let error = StampIndex::open(path.clone()).unwrap_err();
+            assert2::assert!(
+                let LogError::MissingFormatVersion { artifact: "stampindex", path: found_path } =
+                    error,
+                "case {name}"
+            );
+            assert2::assert!(found_path == path, "case {name}");
+        }
+    }
+
+    /// A missing file, an empty one, and one that holds only its header all
+    /// mean zero stamped ranges.
     #[test]
     fn stamp_empty_file_yields_empty_entries() {
         let dir = TempDir::new().unwrap();
-        let path = dir.path().join("00.stampindex");
-        let idx = StampIndex::open(path).unwrap();
-        assert2::assert!(idx.entries() == &[]);
+        for (name, bytes) in [
+            ("missing", None),
+            ("empty", Some(Vec::new())),
+            ("header only", Some(GOLDEN_BYTES[..2].to_vec())),
+        ] {
+            let path = dir.path().join(format!("{name}.stampindex"));
+            if let Some(bytes) = bytes {
+                std::fs::write(&path, bytes).unwrap();
+            }
+            let idx = StampIndex::open(path).unwrap();
+            assert2::assert!(idx.entries() == &[], "case {name}");
+        }
     }
 
     #[test]
@@ -352,13 +540,17 @@ mod tests {
         assert2::assert!(let LogError::Io(_) = err);
     }
 
+    /// A torn header, or entry bytes that are not a whole number of
+    /// entries, is corrupt.
     #[test]
     fn stamp_corrupt_length_is_rejected() {
         let dir = TempDir::new().unwrap();
-        let path = dir.path().join("00.stampindex");
-        std::fs::write(&path, [0_u8; ENTRY_BYTES + 1]).unwrap();
-        let err = StampIndex::open(path).unwrap_err();
-        assert2::assert!(let LogError::Corrupt(_) = err);
+        for len in [1, HEADER_BYTES + 1, HEADER_BYTES + ENTRY_BYTES + 1] {
+            let path = dir.path().join(format!("{len}.stampindex"));
+            std::fs::write(&path, vec![0_u8; len]).unwrap();
+            let err = StampIndex::open(path).unwrap_err();
+            assert2::assert!(let LogError::Corrupt(_) = err, "length {len}");
+        }
     }
 
     #[test]

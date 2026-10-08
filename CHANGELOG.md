@@ -7,9 +7,13 @@ cut one.
 
 krabka versions and tags the whole workspace as one unit. The version comes
 from `[workspace.package]` in the root `Cargo.toml`, and each crate takes it
-from there, so no crate has a release of its own. krabka is before 1.0 and it
-is undeployed, so a minor bump is free to break an interface. Read the entries
-rather than the number.
+from there, so no crate has a release of its own. From 1.0.0 on, the version
+number is a promise about on-disk compatibility: any 1.x broker reads every
+artifact that an earlier 1.x broker wrote, so a rolling upgrade within 1.x
+works, and a new major version is the only release that can break that.
+[Persisted formats](docs/persisted_formats.md) states the contract. The number
+makes no promise about the Rust API, so read the entries for that. Before
+1.0.0, a minor bump was free to break any interface.
 
 The layout follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 The history before krabka-broker became its own repository is in
@@ -18,6 +22,109 @@ publishes `krabka-log`, `krabka-verified` and `krabka-macros` to crates.io from
 the release tag; [Releasing](docs/releasing.md#cratesio) gives the procedure.
 
 ## [Unreleased]
+
+## [1.0.0] - 2026-10-07
+
+1.0.0 is the first release with a compatibility promise. Every 1.x broker
+reads every on-disk artifact that an earlier 1.x broker wrote, so a rolling
+upgrade within 1.x works without a reformat. A format change after 1.0.0 is
+turned on by a feature level that the operator finalizes, as Kafka gates a
+metadata change on `metadata.version`.
+[Persisted formats](docs/persisted_formats.md) lists every artifact, its
+version marker and the rules for changing it.
+
+A data directory that a 0.x broker wrote is not covered. Format it again with
+`krabka-format` before you start 1.0.0 on it.
+
+Every krabka-owned on-disk artifact now carries a version marker, and every
+reader refuses a version it does not know, or a layout without one, instead of
+skipping, regenerating or treating the artifact as absent:
+
+- `.stampindex`, `bootstrap.records.bin`, the audit spool and its three state
+  files start with an `i16` version (the audit files after the magic `KAUD`).
+  `high-watermark` and the diskless WAL `wal-durable-offset.checkpoint` start
+  with a version line. The diskless WAL `quorum-state.json`, `WormChainRecord`,
+  and the backup `manifest.json` and `group-offsets.json` have a required
+  `version`. `bootstrap.json` names its field `version` instead of `schema`.
+- `__diskless_wal_index` keys start with an `i16` key version that names their
+  type, and both value types start with an `i16` version. `WalFlushRecord`
+  keeps its number, 2, at the front of the value.
+- The krabka-private records in `NoOpRecord` tags start with an `i16` version,
+  and the reader checks that each tag carries its own variant. The metadata
+  record reader refuses a KIP-631 `frameVersion` other than 1, as Kafka does.
+- `quorum-state` with an unknown or missing `data_version`, or that does not
+  parse, stops the node, as Kafka's `FileQuorumStateStore` does. Before, the
+  node started as if it had never voted.
+- `leader-epoch-checkpoint` refuses a header other than `0`, and transaction
+  control records refuse a negative version or a short key or value, as
+  Kafka's `CheckpointFile`, `ControlRecordType` and `EndTransactionMarker` do.
+- The WORM manifest verifier accepts only `format_version` 2.
+- The clean-shutdown proof is Kafka's `.kafka_cleanshutdown`, holding Kafka's
+  `{"version":0,"brokerEpoch":N}`. A missing or unreadable one still makes the
+  restart unclean, as in Kafka.
+- The private controller RPCs 1003, 1004 and 1005 answer an unknown request
+  version with `UNSUPPORTED_VERSION`.
+
+A controller now stops on a committed metadata record that it cannot decode,
+in live replay, restart recovery and the image walk, as Kafka's fatal fault
+handler does. A broker-only node logs the record at error, counts it in
+`metadata-load-error-count` and stops reading that batch, as Kafka's
+`MetadataLoader` does. An invalid KRaft control record stops every node.
+Before, every one of these was logged at debug level and skipped, so a node
+could build a different metadata image from its peers. A record that names a
+topic or partition the image no longer holds is still skipped on every
+replica, because two racing writes can both commit; a field value that no
+build accepts now stops the controller too.
+
+`krabka.version` is the feature krabka owns for its own format changes.
+Nodes advertise it at `[0, 1]`. Levels 0 and 1 both mean the 1.0.0 formats.
+A fresh cluster carries no `krabka.version` record, so it runs at level 0
+unless `krabka-format --feature krabka.version=N` overrides it. Once every
+node is krabka, an operator finalizes level 1 with `kafka-features upgrade
+--feature krabka.version=1`, under Kafka's rules for a feature other than
+`metadata.version`. The level starts at 0 because a cluster can mix in Kafka
+nodes, which support only level 0: a bootstrapped level 1 crashes a JVM
+standby controller and keeps a JVM broker from joining.
+The private controller RPCs 1003, 1004 and 1005 now negotiate their version
+from the finalized `krabka.version`: a sender uses the version every peer
+serves at that level, and the bytes stay v0 at levels 0 and 1. `krabka-raft`
+drops `SUBMIT_CHANGE_VERSION`, `METADATA_FETCH_VERSION` and
+`DELEGATION_TOKEN_MUTATION_VERSION` for `private_request_version`,
+`private_api_highest_version` and `PRIVATE_BASELINE_VERSION`.
+
+The group and share coordinators load `__consumer_offsets` and
+`__share_group_state` as Kafka's `CoordinatorLoaderImpl` does: a record type
+the broker does not know is logged and skipped, and any other bad record fails
+the load. Before, an unknown type stopped the group load, and the share loader
+skipped every bad record. The transaction coordinator skips an unknown key or
+value version in `__transaction_state`, as Kafka's `TransactionStateManager`
+does, and on any other bad record it logs an error and serves the
+transactions it loaded before it, as Kafka does.
+
+The records the coordinators write to `__consumer_offsets` now match Kafka
+4.3.1 field for field:
+
+- `MetadataHash` in the consumer, share and streams group metadata records is
+  Kafka's `computeTopicHash` and `computeGroupHash` (XXH3-64, seed 0), not a
+  krabka hash. A hash a 0.x broker wrote does not match.
+- The target-assignment metadata records carry KIP-1263's
+  `AssignmentTimestamp`, and the assignment interval runs from it.
+- `StreamsGroupMetadataValue` carries `ValidatedTopologyEpoch` and
+  `LastAssignmentConfigs`, and `StreamsGroupCurrentMemberAssignmentValue`
+  carries KIP-1251's per-task `AssignmentEpochs`.
+- `ConsumerGroupPartitionMetadata` (type 4) is read and replayed, and is
+  tombstoned where Kafka tombstones it. krabka no longer writes
+  `StreamsGroupPartitionMetadata` (type 18), which Kafka 4.3.1 does not know;
+  a type-18 record in an existing log is skipped as an unknown type.
+- Group deletion tombstones follow Kafka's `createGroupTombstoneRecords`
+  order, and include the resolved regular expressions.
+- Replay follows Kafka's `GroupMetadataManager.replay` record by record: a
+  child record creates its group, a tombstone for a group the log does not
+  hold is ignored, and an out-of-order tombstone fails the load.
+- KIP-1331's `StoredDescriptionTopologyEpoch` and
+  `FailedDescriptionTopologyEpoch` tags, which exist only on Kafka trunk, are
+  written only while `group.streams.topology.description.plugin.class` is set,
+  and are always read.
 
 ### Added
 
@@ -79,6 +186,16 @@ the release tag; [Releasing](docs/releasing.md#cratesio) gives the procedure.
 
 ### Changed
 
+- **On-disk compatibility from 1.0.0.** Any 1.x broker reads every on-disk
+  and object-store artifact that an earlier 1.x broker wrote, so a cluster
+  moves from 1.x to 1.y with a rolling upgrade and no reformat. A release that
+  changes a persisted format keeps writing the old format until you finalize
+  the feature level that introduces the new one, as Kafka does for
+  `metadata.version`, so you can roll back until you finalize. Data that a 0.x
+  broker wrote gets no promise: reformat a 0.x data directory with
+  `krabka-format` before you start 1.0.0 on it. [Persisted
+  formats](docs/persisted_formats.md) lists every format and the gaps that
+  remain.
 - The workspace builds on krabka-protocol 0.6.0 and krabka-client-rs 0.6.0.
   `krabka-security` now takes Kerberos from the crates.io `krabka-sspi` in
   place of the `robot-head/sspi-rs` fork. The metadata layer adds the
@@ -140,6 +257,48 @@ the release tag; [Releasing](docs/releasing.md#cratesio) gives the procedure.
   already at the hard limit, or when the hard limit is unlimited, because
   Linux refuses an unlimited soft limit on open files. It logs a warning when
   the change fails.
+- **Breaking, group coordinator.** The consumer, share and streams group
+  coordinators write `__consumer_offsets` records where Kafka 4.3.1's
+  `GroupMetadataManager` writes them, in the same batches:
+  - New consumer and share groups start at group epoch and assignment epoch 1,
+    as Kafka's `ModernGroup` and `TargetAssignmentMetadata.INITIAL` do, so the
+    first epoch bump of a new group writes epoch 2. Streams groups already
+    started at 1.
+  - A group record is written only when a transition changes what it holds:
+    the member record when the member changed, the group metadata record when
+    the group epoch moves, the targets that changed with the target metadata,
+    and the member's current assignment when it changed. Before, each
+    transition wrote the group epoch, and the records of every member it
+    touched, again.
+  - A leave or a fence bumps the group epoch and computes no target. Each
+    session or rebalance timer fences its member in a batch of its own.
+    Before, a leave installed a new target, and one batch fenced all expired
+    members.
+  - The resolutions of a regular expression are written in a batch of their
+    own, after the heartbeat's batch. A member that joins with a regular
+    expression gets its topics at its next heartbeat, as in Kafka, not in the
+    response to its join.
+  - The downgrade of a consumer group to a classic group happens inside the
+    fence batch, not after it.
+  - The upgrade of a classic group, and the replacement of a static member, go
+    in the heartbeat's batch. The records of the replacement come before the
+    heartbeat's own records.
+  - `ConsumerGroupMemberMetadataValue` (type 5) lists its topics in sorted
+    order and writes `""` when the member has no regular expression, as
+    `newConsumerGroupMemberSubscriptionRecord` does. The share member record
+    lists its topics in sorted order too.
+  - A classic group that converts to a consumer group keeps its generation as
+    its group epoch, and the last assignment of each member becomes its target
+    and its current assignment, as `ConsumerGroup.fromClassicGroup` does.
+  - A member with no target gets a target-assignment record with an empty
+    value, not a tombstone.
+  - The `ShareGroupStatePartitionMetadata` (type 15) record of the partitions
+    that a heartbeat initializes is the last record of the heartbeat's batch.
+    Before, it was a batch of its own.
+  - Each share partition that a heartbeat initializes starts at offset -1, as
+    Kafka's `buildInitializeShareGroupStateRequest` asks. So a new partition
+    of a topic that a share group already consumes starts where
+    `share.auto.offset.reset` says. Before, it started at offset 0.
 
 ### Fixed
 
@@ -1169,7 +1328,8 @@ robot-head/crabka.
 - An audit stamp carries the value that its freeze signature covers.
 - The release publishes the image digest that cosign signed.
 
-[Unreleased]: https://github.com/krabka-io/krabka-broker/compare/v0.7.0...HEAD
+[Unreleased]: https://github.com/krabka-io/krabka-broker/compare/v1.0.0...HEAD
+[1.0.0]: https://github.com/krabka-io/krabka-broker/releases/tag/v1.0.0
 [0.7.0]: https://github.com/krabka-io/krabka-broker/releases/tag/v0.7.0
 [0.6.1]: https://github.com/krabka-io/krabka-broker/releases/tag/v0.6.1
 [0.6.0]: https://github.com/krabka-io/krabka-broker/releases/tag/v0.6.0

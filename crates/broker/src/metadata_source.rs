@@ -36,11 +36,18 @@ pub trait MetadataSource: Send + Sync {
     /// (`ProcessTerminatingFaultHandler`), so the broker that hosts the source
     /// stops itself when this changes to `Some`.
     ///
-    /// Only a live controller can fault. The default is the channel of a
+    /// A live controller can fault, and so can a broker-only observer that
+    /// meets an invalid `KRaft` control record. The default is the channel of a
     /// source that has none: it never carries a value, and its sender is
     /// already dropped, so `changed` on it fails at once.
     fn watch_fatal(&self) -> watch::Receiver<Option<String>> {
         watch::channel(None).1
+    }
+    /// Committed metadata records this source could not decode and skipped:
+    /// Kafka's `metadata-load-error-count`. Only a broker-only observer skips
+    /// one; a controller stops on it instead, so the default is zero.
+    fn metadata_load_error_count(&self) -> u64 {
+        0
     }
     fn quorum_state(&self) -> QuorumState;
     /// Current controller epoch when this source owns a quorum view.

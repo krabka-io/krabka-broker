@@ -27,7 +27,7 @@ pub struct ShareGroupMemberMetadataValue {
 }
 
 value_codec! {
-    ShareGroupMemberMetadataValue,
+    ShareGroupMemberMetadataValue("ShareGroupMemberMetadataValue"),
     encode(&self) -> buf {
         put_member_client(buf, self.rack_id.as_deref(), &self.client_id, &self.client_host);
         put_string_array(buf, &self.subscribed_topic_names);

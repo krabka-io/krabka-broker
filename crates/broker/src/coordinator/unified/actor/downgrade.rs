@@ -1,14 +1,17 @@
 //! The KIP-848 downgrade trigger.
 //!
-//! A consumer group that has lost its last native member but still hosts
-//! classic members flips back to the classic protocol in place. The flip is
-//! one atomic batch, so it lives on its own rather than inside the membership
-//! paths that call it.
+//! A consumer group whose last native member is fenced, while it still hosts
+//! classic members, flips back to the classic protocol in place, as Kafka's
+//! `consumerGroupFenceMembers` does: the flip replaces the fence's records
+//! with one atomic batch of the conversion's.
+
+use std::time::Instant;
 
 use super::{MetadataProvider, chrono_now_ms};
 use crate::coordinator::unified::{
     GroupCoordinator,
     config::NextGenConfig,
+    consumer_state::GroupState,
     group::{CoordinatorGroup, GroupKind},
     migration,
     offsets_log::OffsetsLog,
@@ -17,56 +20,61 @@ use crate::coordinator::unified::{
 #[cfg(test)]
 mod tests;
 
-/// KIP-848 DOWNGRADE trigger. After a membership change on a consumer-kind
-/// group, flip it back to classic in place when no NATIVE consumer member
-/// remains, there ARE hosted classic members, and policy allows it. The flip
-/// is one atomic batch: tombstone the next-gen k3 + k6 (both group-level) +
-/// every member's k5/k7/k8, and write the classic k2 `GroupMetadata`. Returns `Ok(true)` if a flip
-/// happened, `Ok(false)` if the conditions weren't met, `Err` on a log-write
-/// failure (the caller exits the actor loop).
-// Matches Kafka's `validateOnlineDowngradeWithFencedMembers`: downgrade only
-// when the remaining group is nonempty, every remaining member uses the
-// classic protocol, and the migration policy permits downgrade.
-pub(super) async fn maybe_downgrade(
+/// Kafka's `validateOnlineDowngradeWithFencedMembers`: a consumer group whose
+/// members are about to be fenced downgrades to a classic group instead when
+/// every other member uses the classic protocol, at least one remains, the
+/// migration policy allows a downgrade and the remaining members fit in a
+/// classic group.
+pub(super) fn downgrades_without(
+    state: &GroupState,
+    config: &NextGenConfig,
+    fenced: &[String],
+) -> bool {
+    let mut remaining = state
+        .members
+        .values()
+        .filter(|member| !fenced.contains(&member.member_id))
+        .peekable();
+    let nonempty = remaining.peek().is_some();
+    let all_classic = remaining.all(|member| member.classic.is_some());
+    let remaining_count = state.members.len()
+        - fenced
+            .iter()
+            .filter(|member_id| state.members.contains_key(*member_id))
+            .count();
+    all_classic
+        && nonempty
+        && config.migration_policy.allows_downgrade()
+        && remaining_count <= config.classic_max_size
+}
+
+/// Kafka's `convertToClassicGroup` for a fence: the consumer group, fenced
+/// members included, is tombstoned and the classic group of the remaining
+/// members is written, in one batch. The classic group starts at the consumer
+/// group's epoch and, as Kafka's fence asks with `rebalance = true`, prepares
+/// a rebalance at once.
+///
+/// It returns `Err` on a log-write failure, and the actor then exits.
+pub(super) async fn downgrade_fencing(
     group: &mut CoordinatorGroup,
+    fenced: &[String],
     config: &NextGenConfig,
     metadata: &dyn MetadataProvider,
     offsets_log: &dyn OffsetsLog,
     coordinator: &GroupCoordinator,
-) -> Result<bool, crate::error::BrokerError> {
+) -> Result<(), crate::error::BrokerError> {
     let Some(state) = group.as_consumer() else {
-        return Ok(false);
+        return Ok(());
     };
-    if !config.migration_policy.allows_downgrade() {
-        return Ok(false);
-    }
-    if state.members.is_empty() {
-        // Fully empty: normal cleanup (a tombstoned next-gen group), not a
-        // downgrade — there are no hosted classic members to re-express.
-        return Ok(false);
-    }
-    if !migration::consumer_is_convertible(state) {
-        // A native consumer member is still present: the group stays next-gen.
-        return Ok(false);
-    }
-    if state.members.len() > config.classic_max_size {
-        // Kafka's `validateOnlineDowngradeWithFencedMembers`: a group larger
-        // than `group.max.size` stays a consumer group.
-        return Ok(false);
-    }
-
     let image = metadata.snapshot();
-
-    // The leave or expiration path already reconciled the surviving members,
-    // so the target covers the departed native member's partitions.
     let now_ms = chrono_now_ms();
-    let state = group.as_consumer().expect("consumer-kind verified above");
-    let classic = migration::convert_consumer_to_classic(state, &image);
+    let mut classic = migration::convert_consumer_to_classic(state, fenced, &image);
     let pending = migration::downgrade_pending_records(state, &classic, now_ms);
     let group_id = group.group_id.clone();
     let batch = pending.to_batch(&group_id, now_ms)?;
     offsets_log.append(&group_id, batch).await?;
     coordinator.mark_classic_after_downgrade(&group_id);
+    classic.prepare_rebalance(config.classic_initial_rebalance_delay, Instant::now());
     *group.kind_mut() = GroupKind::Classic(classic);
-    Ok(true)
+    Ok(())
 }

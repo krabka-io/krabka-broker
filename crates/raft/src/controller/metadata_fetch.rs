@@ -52,6 +52,12 @@ impl ControllerHandle {
             replica_id: -1,
             replica_directory_id: uuid::Uuid::nil(),
         };
+        // Negotiated from `krabka.version`; every level this build knows
+        // gives v0, the body below.
+        let version = crate::wire::private_request_version(
+            krabka_metadata::PrivateRpc::MetadataFetch,
+            Some(&self.current_image()),
+        );
         let mut body = Vec::with_capacity(32);
         req.encode_v0(&mut body);
 
@@ -68,7 +74,7 @@ impl ControllerHandle {
         let resp_body = conn
             .raw_request(
                 crate::wire::API_KEY_METADATA_FETCH,
-                0,
+                version,
                 bytes::Bytes::from(body),
             )
             .await
@@ -76,7 +82,15 @@ impl ControllerHandle {
         conn.close();
 
         let mut cur: &[u8] = &resp_body;
-        crate::wire::KrabkaMetadataFetchResponse::decode_v0(&mut cur).map_err(RaftError::Protocol)
+        let response = crate::wire::KrabkaMetadataFetchResponse::decode_v0(&mut cur)
+            .map_err(RaftError::Protocol)?;
+        if response.error_code == crate::wire::PRIVATE_UNSUPPORTED_VERSION {
+            return Err(RaftError::UnsupportedPrivateVersion {
+                api_key: crate::wire::API_KEY_METADATA_FETCH,
+                version,
+            });
+        }
+        Ok(response)
     }
 }
 

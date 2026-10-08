@@ -1,7 +1,7 @@
 # Rust duplicate-code gate
 
 `aspect check-cpd --base origin/main` runs native PMD 7.28.0 Rust CPD with
-`minimumTokens = 40`. CI supplies the immutable PR target SHA or the previous
+`minimumTokens = 100`. CI supplies the immutable PR target SHA or the previous
 main SHA and requires the `cpd` job through the merge gate. Manual workflow
 runs compare with `HEAD^`. Unresolvable bases fail.
 
@@ -13,10 +13,10 @@ names, line numbers, comments, and whitespace. A removed repeat cannot compensat
 for a different new repeat. Extra copies of an existing repeat fail too.
 
 PMD's XML prunes some overlapping or nested matches. The regression check
-therefore also indexes every exact 40-token window, extends matching occurrence
-pairs, and counts every repeated prefix with at least 40 tokens in both source
+therefore also indexes every exact 100-token window, extends matching occurrence
+pairs, and counts every repeated prefix with at least 100 tokens in both source
 trees. Counts use nonoverlapping copies within each file and reset at file
-boundaries. This catches longer new repeats even when their 40-token windows
+boundaries. This catches longer new repeats even when their 100-token windows
 already existed, and copies hidden by PMD's report pruning. Work and memory
 budgets fail explicitly if the exact comparison cannot complete; they never
 truncate or accept a partial scan.

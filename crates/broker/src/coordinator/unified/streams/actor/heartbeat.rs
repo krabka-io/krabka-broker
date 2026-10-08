@@ -16,8 +16,10 @@ use krabka_protocol::owned::{
 
 use super::{
     ActorState, chrono_now_ms,
-    reconciliation::{assignment_delay, configure_after_load, reconcile},
-    records::{flush_pending, snapshot_pending_after_change},
+    reconciliation::{
+        assignment_delay, configure_after_load, reconcile, validation_or_configs_changed,
+    },
+    records::{StreamsRecorder, flush_pending},
     request::{build_member, task_ids_to_map, task_offsets_to_map, update_client_tags},
     response::{ResponseDelta, build_assignment_resp, endpoint_to_partitions, error_resp},
 };
@@ -29,7 +31,7 @@ use crate::{
         offsets_log::OffsetsLog,
         streams::{
             config::StreamsGroupConfig,
-            persistence::StreamsGroupTopologyValue,
+            persistence::{PendingStreamsRecords, StreamsGroupTopologyValue},
             state::{OwnedTasks, RoleTasks, StoredTopologyHandle},
             topology,
         },
@@ -37,31 +39,42 @@ use crate::{
     metadata_source::MetadataSource,
 };
 
-/// Evict members silent past the session timeout, fence members past their
-/// rebalance timeout, reconcile, and persist the resulting tombstones.
-/// Returns `Err` if the log write fails (the actor exits).
+/// Fences each member silent past the session timeout, and each member past
+/// its rebalance timeout, on its own, with a batch of its own, as each of
+/// Kafka's timers runs `streamsGroupFenceMember` for its member. Returns
+/// `Err` if a log write fails (the actor exits).
 pub(super) async fn handle_session_tick(
     actor: &mut ActorState,
     config: &StreamsGroupConfig,
     offsets_log: &dyn OffsetsLog,
-    metadata_source: Option<&Arc<dyn MetadataSource>>,
     coordinator: &GroupCoordinator,
 ) -> Result<(), crate::error::BrokerError> {
     let now = Instant::now();
-    let mut evicted = actor.state.evict_expired(now, config.session_timeout);
+    let mut fenced = actor.state.expired_members(now, config.session_timeout);
     // A member that did not revoke its tasks within its rebalance timeout is
     // fenced like a member whose session expired
     // (`scheduleStreamsGroupRebalanceTimeout`).
-    evicted.extend(actor.state.fence_rebalance_timeouts(now));
-    if evicted.is_empty() {
-        return Ok(());
+    for member_id in actor.state.rebalance_timeouts_due(now) {
+        if !fenced.contains(&member_id) {
+            fenced.push(member_id);
+        }
     }
-    // `evict_expired` set `dirty`; reconcile owns the single `bump_epoch`.
-    reconcile(actor, config, metadata_source);
-    let mut pending = snapshot_pending_after_change(actor, &[]);
-    crate::coordinator::unified::persistence::tombstone_members!(pending, &evicted);
-    let now_ms = chrono_now_ms();
-    flush_pending(actor, pending, offsets_log, coordinator, now_ms).await
+    for member_id in fenced {
+        let pending = fence_member(actor, &member_id);
+        flush_pending(actor, pending, offsets_log, coordinator, chrono_now_ms()).await?;
+    }
+    Ok(())
+}
+
+/// Kafka's `streamsGroupFenceMember`: the member's current assignment, target
+/// assignment and member tombstones, and the group epoch bumped. An unknown
+/// member writes nothing.
+fn fence_member(actor: &mut ActorState, member_id: &str) -> PendingStreamsRecords {
+    let recorder = StreamsRecorder::start(actor, &[member_id]);
+    if !actor.state.fence_member(member_id) {
+        return PendingStreamsRecords::default();
+    }
+    recorder.finish(actor)
 }
 
 pub(super) async fn handle_heartbeat(
@@ -87,23 +100,14 @@ pub(super) async fn handle_heartbeat(
     // ─── Leave path ──────────────────────────────────────────────
     // -1 leaves, and -2 is the temporary leave of a static member.
     if req.member_epoch < 0 {
-        return handle_leave(
-            actor,
-            config,
-            offsets_log,
-            metadata_source,
-            coordinator,
-            req,
-            now_ms,
-        )
-        .await;
+        return handle_leave(actor, offsets_log, coordinator, req, now_ms).await;
     }
 
     // ─── Static membership ───────────────────────────────────────
     // Kafka's `getOrMaybeCreateStaticStreamsGroupMember`: resolve the instance
     // id before the member id. A released static member is replaced by the
     // joining member.
-    let mut replaced = None;
+    let mut static_recorder = None;
     if let Some(instance_id) = &req.instance_id {
         let (existing, error) = checked_static_member(actor, req, instance_id);
         if let Some(response) = error {
@@ -115,8 +119,8 @@ pub(super) async fn handle_heartbeat(
             if let Some(resp) = topology_error(actor, req, metadata_source) {
                 return Ok(resp);
             }
+            static_recorder = Some(StreamsRecorder::start(actor, &[&previous, &req.member_id]));
             replace_static_member(actor, &previous, &req.member_id);
-            replaced = Some(previous);
         }
     }
 
@@ -147,6 +151,7 @@ pub(super) async fn handle_heartbeat(
             return Ok(resp);
         }
         let new_member_id = req.member_id.clone();
+        let recorder = StreamsRecorder::start(actor, &[&new_member_id]);
         // Kafka schedules the initial rebalance delay when a member joins an
         // empty group, unless it is already scheduled.
         if actor.state.members.is_empty()
@@ -176,7 +181,7 @@ pub(super) async fn handle_heartbeat(
         {
             actor.state.track_rebalance_timeout(&new_member_id, now);
         }
-        let pending = snapshot_pending_after_change(actor, std::slice::from_ref(&new_member_id));
+        let pending = recorder.finish(actor);
         flush_pending(actor, pending, offsets_log, coordinator, now_ms).await?;
         return Ok(accepted_response(
             actor,
@@ -228,15 +233,15 @@ pub(super) async fn handle_heartbeat(
     if let Some(resp) = topology_error(actor, req, metadata_source) {
         return Ok(resp);
     }
+    let recorder =
+        static_recorder.unwrap_or_else(|| StreamsRecorder::start(actor, &[req.member_id.as_str()]));
 
     // ─── Steady state ────────────────────────────────────────────
-    let mut changed = update_member_steady_state(actor, req, client_id, client_host, now);
-    refresh_topic_metadata(actor, metadata_source);
+    update_member_steady_state(actor, req, client_id, client_host, now);
+    refresh_topic_metadata(actor, config, metadata_source);
 
     if actor.state.dirty || actor.assignment_pending() {
-        let epochs = (actor.state.group_epoch, actor.state.target.epoch);
         reconcile(actor, config, metadata_source);
-        changed |= epochs != (actor.state.group_epoch, actor.state.target.epoch);
     }
     // Kafka's `maybeReconcile`: move the member toward the target, and arm
     // or cancel its rebalance timeout when its assignment changed.
@@ -245,22 +250,12 @@ pub(super) async fn handle_heartbeat(
         .reconcile_member(&req.member_id, owned_role_tasks(req).as_ref())
     {
         actor.state.track_rebalance_timeout(&req.member_id, now);
-        changed = true;
     }
     if req.shutdown_application {
         actor.state.request_shutdown(&req.member_id);
     }
-
-    if changed || replaced.is_some() {
-        let mut pending =
-            snapshot_pending_after_change(actor, std::slice::from_ref(&req.member_id));
-        if let Some(previous) = replaced.filter(|previous| *previous != req.member_id) {
-            pending.member_metadata.push((previous.clone(), None));
-            pending.target_per_member.push((previous.clone(), None));
-            pending.current_per_member.push((previous, None));
-        }
-        flush_pending(actor, pending, offsets_log, coordinator, now_ms).await?;
-    }
+    let pending = recorder.finish(actor);
+    flush_pending(actor, pending, offsets_log, coordinator, now_ms).await?;
     Ok(accepted_response(
         actor,
         config,
@@ -480,26 +475,31 @@ fn subtopologies_by_id(
 }
 
 /// Marks the group for a reconcile when a topic that the topology needs
-/// changed since the last reconcile.
+/// changed since the last reconcile, when the topology it validated changed,
+/// or when its assignment configuration changed.
 ///
 /// Kafka's `onMetadataUpdate` requests a metadata refresh for every streams
 /// group that uses a created, changed or deleted topic, and the next heartbeat
 /// computes the metadata hash again. A new hash configures the topology again
-/// and bumps the group epoch.
+/// and bumps the group epoch. The heartbeat then bumps the epoch when the
+/// validated topology epoch or the assignment configuration differs from the
+/// one that the group's last `StreamsGroupMetadataValue` recorded.
 fn refresh_topic_metadata(
     actor: &mut ActorState,
+    config: &StreamsGroupConfig,
     metadata_source: Option<&Arc<dyn MetadataSource>>,
 ) {
-    let Some(source) = metadata_source else {
-        return;
-    };
-    if !actor.state.dirty {
-        configure_after_load(actor, source);
+    if let Some(source) = metadata_source {
+        if !actor.state.dirty {
+            configure_after_load(actor, source);
+        }
+        if let Some(topology) = actor.topology.as_ref()
+            && topology::metadata_hash(topology, &source.current_image()) != actor.metadata_hash
+        {
+            actor.state.dirty = true;
+        }
     }
-    let Some(topology) = actor.topology.as_ref() else {
-        return;
-    };
-    if topology::metadata_hash(topology, &source.current_image()) != actor.metadata_hash {
+    if !actor.state.dirty && validation_or_configs_changed(actor, config) {
         actor.state.dirty = true;
     }
 }
@@ -519,12 +519,15 @@ fn update_member_steady_state(
     m.last_seen = now;
     let mut changed = false;
 
-    if m.client_id != client_id {
+    // Kafka's `hasStreamsMemberMetadataChanged` compares the whole member, its
+    // client id and host included, and a dynamic member that changed bumps
+    // the group epoch.
+    if m.client_id != client_id || m.client_host != client_host {
         m.client_id = client_id.to_string();
-        changed = true;
-    }
-    if m.client_host != client_host {
         m.client_host = client_host.to_string();
+        if req.instance_id.is_none() {
+            actor.state.dirty = true;
+        }
         changed = true;
     }
     let epoch_relevant = |m: &crate::coordinator::unified::streams::state::StreamsMemberState| {
@@ -628,9 +631,7 @@ fn update_member_metadata(
 /// Handles a leave-group heartbeat, where `member_epoch == -1`.
 async fn handle_leave(
     actor: &mut ActorState,
-    config: &StreamsGroupConfig,
     offsets_log: &dyn OffsetsLog,
-    metadata_source: Option<&Arc<dyn MetadataSource>>,
     coordinator: &GroupCoordinator,
     req: &StreamsGroupHeartbeatRequest,
     now_ms: i64,
@@ -650,7 +651,7 @@ async fn handle_leave(
             return leave_static_member(actor, offsets_log, coordinator, req, now_ms).await;
         }
     }
-    if actor.state.remove_member(&req.member_id).is_none() {
+    if !actor.state.members.contains_key(&req.member_id) {
         return Ok(error_resp(
             codes::UNKNOWN_MEMBER_ID,
             Some(format!(
@@ -659,10 +660,7 @@ async fn handle_leave(
             )),
         ));
     }
-    // `remove_member` set `dirty`; reconcile owns the single `bump_epoch`.
-    reconcile(actor, config, metadata_source);
-    let mut pending = snapshot_pending_after_change(actor, &[]);
-    crate::coordinator::unified::persistence::tombstone_members!(pending, [&req.member_id]);
+    let pending = fence_member(actor, &req.member_id);
     flush_pending(actor, pending, offsets_log, coordinator, now_ms).await?;
     // Kafka's leave response echoes the member id and epoch, and sends an
     // empty status list and no group configuration.
@@ -787,6 +785,7 @@ async fn leave_static_member(
     req: &StreamsGroupHeartbeatRequest,
     now_ms: i64,
 ) -> Result<StreamsGroupHeartbeatResponse, crate::error::BrokerError> {
+    let recorder = StreamsRecorder::start(actor, &[req.member_id.as_str()]);
     if let Some(member) = actor.state.members.get_mut(&req.member_id) {
         member.member_epoch = LEAVE_GROUP_STATIC_MEMBER_EPOCH;
         member.active_pending_revocation.clear();
@@ -794,7 +793,7 @@ async fn leave_static_member(
         member.warmup_pending_revocation.clear();
     }
     actor.state.rebalance_deadlines.remove(&req.member_id);
-    let pending = snapshot_pending_after_change(actor, std::slice::from_ref(&req.member_id));
+    let pending = recorder.finish(actor);
     flush_pending(actor, pending, offsets_log, coordinator, now_ms).await?;
     Ok(StreamsGroupHeartbeatResponse {
         member_id: req.member_id.clone(),

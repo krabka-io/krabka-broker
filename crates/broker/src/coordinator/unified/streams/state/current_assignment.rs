@@ -255,6 +255,20 @@ fn compute_next_assignment(
 
     let mut next = member.clone();
     next.previous_member_epoch = member.member_epoch;
+    // Kafka's `computeAssignmentDifferenceWithEpoch`: an active task that
+    // stays assigned, or that the member must revoke, keeps the epoch at
+    // which it was assigned, and a newly assigned one takes the target
+    // assignment epoch.
+    let assigned_at = |task: (String, i32)| {
+        let epoch = member
+            .active
+            .get(&task.0)
+            .is_some_and(|partitions| partitions.contains(&task.1))
+            .then(|| member.active_epochs.get(&task).copied())
+            .flatten()
+            .unwrap_or(target_epoch);
+        (task, epoch)
+    };
     let has_tasks_to_revoke =
         !revoke.is_empty() && owned.is_none_or(|owned| owned.contains_any(&revoke));
     if has_tasks_to_revoke {
@@ -266,6 +280,10 @@ fn compute_next_assignment(
         next.active_pending_revocation = revoke.active;
         next.standby_pending_revocation = revoke.standby;
         next.warmup_pending_revocation = revoke.warmup;
+        next.active_epochs = tasks(&next.active)
+            .chain(tasks(&next.active_pending_revocation))
+            .map(assigned_at)
+            .collect();
         return next;
     }
     next.assignment_state = if held_back {
@@ -280,5 +298,136 @@ fn compute_next_assignment(
     next.active_pending_revocation = TaskMap::new();
     next.standby_pending_revocation = TaskMap::new();
     next.warmup_pending_revocation = TaskMap::new();
+    next.active_epochs = tasks(&next.active).map(assigned_at).collect();
     next
+}
+
+#[cfg(test)]
+mod tests {
+    use assert2::check;
+
+    use super::*;
+
+    fn tasks_of(partitions: &[i32]) -> TaskMap {
+        if partitions.is_empty() {
+            TaskMap::new()
+        } else {
+            BTreeMap::from([("0".to_owned(), partitions.to_vec())])
+        }
+    }
+
+    fn epochs_of(epochs: &[(i32, i32)]) -> BTreeMap<(String, i32), i32> {
+        epochs
+            .iter()
+            .map(|(partition, epoch)| (("0".to_owned(), *partition), *epoch))
+            .collect()
+    }
+
+    /// One reconciliation step of `m1` toward the target `0:[1, 2]` at epoch
+    /// 5, and the member that it gives.
+    struct Step {
+        case: &'static str,
+        state: StreamsMemberAssignmentState,
+        epoch: i32,
+        active: &'static [i32],
+        pending: &'static [i32],
+        epochs: &'static [(i32, i32)],
+        owned: Option<&'static [i32]>,
+        expected_state: StreamsMemberAssignmentState,
+        expected_epoch: i32,
+        expected_active: &'static [i32],
+        expected_pending: &'static [i32],
+        expected_epochs: &'static [(i32, i32)],
+    }
+
+    /// Kafka's `CurrentAssignmentBuilder` keeps the epoch at which each
+    /// active task was assigned (`computeAssignmentDifferenceWithEpoch`): a
+    /// task that stays, or that the member must revoke, keeps its epoch, and
+    /// a newly assigned task takes the target assignment epoch. A task that
+    /// leaves the member drops its epoch.
+    #[test]
+    fn active_tasks_keep_the_epoch_they_were_assigned_at() {
+        use StreamsMemberAssignmentState::{Stable, UnrevokedTasks};
+
+        let rows = [
+            Step {
+                case: "task 0 must go: it is pending revocation at its epoch",
+                state: Stable,
+                epoch: 3,
+                active: &[0, 1],
+                pending: &[],
+                epochs: &[(0, 2), (1, 3)],
+                owned: None,
+                expected_state: UnrevokedTasks,
+                expected_epoch: 3,
+                expected_active: &[1],
+                expected_pending: &[0],
+                expected_epochs: &[(0, 2), (1, 3)],
+            },
+            Step {
+                case: "task 0 revoked: task 2 joins at the target epoch",
+                state: UnrevokedTasks,
+                epoch: 3,
+                active: &[1],
+                pending: &[0],
+                epochs: &[(0, 2), (1, 3)],
+                owned: Some(&[1]),
+                expected_state: Stable,
+                expected_epoch: 5,
+                expected_active: &[1, 2],
+                expected_pending: &[],
+                expected_epochs: &[(1, 3), (2, 5)],
+            },
+            Step {
+                case: "a member with no tasks gets the target at its epoch",
+                state: Stable,
+                epoch: 0,
+                active: &[],
+                pending: &[],
+                epochs: &[],
+                owned: None,
+                expected_state: Stable,
+                expected_epoch: 5,
+                expected_active: &[1, 2],
+                expected_pending: &[],
+                expected_epochs: &[(1, 5), (2, 5)],
+            },
+        ];
+        let target = RoleTasks {
+            active: tasks_of(&[1, 2]),
+            ..RoleTasks::default()
+        };
+        for row in rows {
+            let mut member = StreamsMemberState::joining("m1", "client", "host");
+            member.assignment_state = row.state;
+            member.member_epoch = row.epoch;
+            member.active = tasks_of(row.active);
+            member.active_pending_revocation = tasks_of(row.pending);
+            member.active_epochs = epochs_of(row.epochs);
+            let owned = row.owned.map(|owned| RoleTasks {
+                active: tasks_of(owned),
+                ..RoleTasks::default()
+            });
+            let next =
+                next_member_state(&member, 5, &target, &TaskOwners::default(), owned.as_ref())
+                    .expect("the member moves");
+            check!(
+                (
+                    next.assignment_state,
+                    next.member_epoch,
+                    next.active,
+                    next.active_pending_revocation,
+                    next.active_epochs
+                ) == (
+                    row.expected_state,
+                    row.expected_epoch,
+                    tasks_of(row.expected_active),
+                    tasks_of(row.expected_pending),
+                    epochs_of(row.expected_epochs)
+                ),
+                "{}",
+                row.case
+            );
+        }
+    }
 }

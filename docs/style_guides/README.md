@@ -15,4 +15,4 @@ Krabka writes all prose in **ASD-STE100 Simplified Technical English**. The [pro
 | [Design Docs](design_doc_style_guide.md) | Architectural design documents: the "why". |
 | [Coverage Reports](coverage_report_style_guide.md) | Per-crate `test_coverage_report.md`: what is tested, how, and what remains. |
 
-See also [`CONTRIBUTING.md`](../../CONTRIBUTING.md) for build and test commands. See [`CLAUDE.md`](../../CLAUDE.md) for project-specific guidance: the greenfield stance, the Kafka compatibility constraints, and the execution workflow.
+See also [`CONTRIBUTING.md`](../../CONTRIBUTING.md) for build and test commands. See [`CLAUDE.md`](../../CLAUDE.md) for project-specific guidance: the on-disk compatibility rules, the Kafka compatibility constraints, and the execution workflow.

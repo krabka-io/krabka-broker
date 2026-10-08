@@ -857,6 +857,8 @@ mod tests {
                     == vec![DescribedGroup {
                         group_id: "live-group".into(),
                         group_state: "Empty".into(),
+                        group_epoch: 1,
+                        assignment_epoch: 1,
                         assignor_name: "uniform".into(),
                         authorized_operations: bits,
                         ..Default::default()

@@ -135,24 +135,24 @@ async fn the_heartbeat_after_a_metadata_update_refreshes_the_assignment() {
             before: snapshot_of(&[]),
             after: snapshot_of(&[("orders", 1, 3)]),
             update: &["orders"],
-            expected: answer(2, Some(vec![(1, vec![0, 1, 2])])),
+            expected: answer(3, Some(vec![(1, vec![0, 1, 2])])),
         },
         Row {
             name: "the subscribed topic grows",
             before: snapshot_of(&[("orders", 1, 1)]),
             after: snapshot_of(&[("orders", 1, 3)]),
             update: &["orders"],
-            expected: answer(2, Some(vec![(1, vec![0, 1, 2])])),
+            expected: answer(3, Some(vec![(1, vec![0, 1, 2])])),
         },
         // The target loses the partitions. Kafka's `CurrentAssignmentBuilder`
-        // keeps the member at epoch 1 until it acknowledges the revocation, and
+        // keeps the member at epoch 2 until it acknowledges the revocation, and
         // its heartbeat answer already carries the smaller assignment.
         Row {
             name: "the subscribed topic is deleted",
             before: snapshot_of(&[("orders", 1, 2)]),
             after: snapshot_of(&[]),
             update: &["orders"],
-            expected: answer(1, Some(vec![])),
+            expected: answer(2, Some(vec![])),
         },
         // The update names `payments` only. The group does not read the
         // metadata again, so it does not see that `orders` grew in the same
@@ -163,7 +163,7 @@ async fn the_heartbeat_after_a_metadata_update_refreshes_the_assignment() {
             before: snapshot_of(&[("orders", 1, 1)]),
             after: snapshot_of(&[("orders", 1, 2), ("payments", 2, 1)]),
             update: &["payments"],
-            expected: answer(1, None),
+            expected: answer(2, None),
         },
         // A new partition leader changes the topic but not its hash, and Kafka
         // bumps the group epoch only for a new hash.
@@ -172,7 +172,7 @@ async fn the_heartbeat_after_a_metadata_update_refreshes_the_assignment() {
             before: snapshot_of(&[("orders", 1, 2)]),
             after: snapshot_of(&[("orders", 1, 2)]),
             update: &["orders"],
-            expected: answer(1, None),
+            expected: answer(2, None),
         },
     ];
 
@@ -195,11 +195,11 @@ async fn the_heartbeat_after_a_metadata_update_refreshes_the_assignment() {
     check!(answers == expected);
 }
 
-/// Kafka refreshes a loaded group's metadata at its first heartbeat, and a
-/// record without a `MetadataHash`, as krabka's records all are, reads as 0.
-/// So that heartbeat bumps the epoch and recomputes the target, and a topic
-/// that grew while no coordinator held the group, or after the load, reaches
-/// the member.
+/// Kafka refreshes a loaded group's metadata at its first heartbeat and
+/// compares the hash with the `MetadataHash` that the group's last
+/// `ConsumerGroupMetadataValue` stored. An unchanged topic keeps the epoch
+/// and the target, and a topic that grew while no coordinator held the
+/// group, or after the load, bumps the epoch and reaches the member.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_loaded_group_refreshes_its_metadata_at_the_first_heartbeat() {
     // (name, the metadata when the group loads, a change after the load, the
@@ -215,13 +215,13 @@ async fn a_loaded_group_refreshes_its_metadata_at_the_first_heartbeat() {
             "the topic grew while no coordinator held the group",
             snapshot_of(&[("orders", 1, 3)]),
             None,
-            answer(2, Some(vec![(1, vec![0, 1, 2])])),
+            answer(3, Some(vec![(1, vec![0, 1, 2])])),
         ),
         (
             "the topic grew after the load",
             snapshot_of(&[("orders", 1, 2)]),
             Some(snapshot_of(&[("orders", 1, 3)])),
-            answer(2, Some(vec![(1, vec![0, 1, 2])])),
+            answer(3, Some(vec![(1, vec![0, 1, 2])])),
         ),
     ];
 
@@ -290,4 +290,90 @@ async fn a_hosted_classic_member_gets_a_created_topic_when_it_joins_again() {
                 ..Default::default()
             }
     );
+}
+
+/// The `MetadataHash` that a consumer group writes is Kafka's: hash4j 0.22.0
+/// gives `computeGroupHash` of topic `orders`, id `0101..01-0101..01`, two
+/// partitions and no racks, as the golden value below, and a group that
+/// subscribes to no existing topic writes 0.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_written_metadata_hash_is_kafkas() {
+    // (case, the metadata, the hash of the group's epoch record)
+    let rows = [
+        (
+            "orders exists",
+            snapshot_of(&[("orders", 1, 2)]),
+            2_418_189_869_542_540_743,
+        ),
+        ("orders does not exist", snapshot_of(&[]), 0),
+    ];
+    let mut written = Vec::new();
+    let mut expected = Vec::new();
+    for (case, metadata, hash) in rows {
+        let coordinator = make_coord_with_metadata(SwitchableMetadata::new(metadata));
+        let handle = coordinator.get_or_create_consumer("g");
+        heartbeat(&handle, join()).await;
+        let seed = coordinator.cached_seed("g").expect("the group's records");
+        written.push((case, seed.group_epoch, seed.metadata_hash));
+        expected.push((case, 2, hash));
+    }
+    check!(written == expected);
+}
+
+/// KIP-1263: a consumer group replays the `AssignmentTimestamp` of its target
+/// assignment metadata record, and Kafka's `canComputeNextTargetAssignment`
+/// runs the assignment interval from it, so a coordinator failover does not
+/// cut the interval short. An unknown time (0) or an elapsed interval lets the
+/// next assignment run, and the group writes the time it finished.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_replayed_assignment_timestamp_holds_the_interval() {
+    use crate::coordinator::unified::{GroupSeed, wall_clock_ms};
+
+    // (case, milliseconds before now of the stored timestamp, or `None` for
+    // 0, the expected (member epoch, whether the group wrote a new timestamp))
+    let rows = [
+        ("no stored time", None, (3, true)),
+        ("an assignment a second ago", Some(1_000), (2, false)),
+        ("an assignment two minutes ago", Some(120_000), (3, true)),
+    ];
+    let mut answers = Vec::new();
+    let mut expected = Vec::new();
+    for (case, ago, wanted) in rows {
+        let coordinator = Arc::new(GroupCoordinator::new(
+            NextGenConfig {
+                assignment_interval: std::time::Duration::from_mins(1),
+                ..NextGenConfig::assigning_at_once()
+            },
+            ShareGroupConfig::assigning_at_once(),
+            SwitchableMetadata::new(snapshot_of(&[("orders", 1, 2)])),
+            Arc::new(InMemoryOffsetsLog::default()),
+            StreamsGroupConfig::default(),
+        ));
+        let handle = coordinator.get_or_create_consumer("g");
+        let stored = ago.map_or(0, |ago| wall_clock_ms() - ago);
+        handle
+            .tx
+            .send(GroupActorMessage::Seed(GroupSeed {
+                group_epoch: 2,
+                target_epoch: 2,
+                assignment_timestamp_ms: stored,
+                ..GroupSeed::default()
+            }))
+            .await
+            .unwrap();
+        let before = wall_clock_ms();
+        let joined = heartbeat(&handle, join()).await;
+        let after = wall_clock_ms();
+        let written = coordinator
+            .cached_seed("g")
+            .unwrap()
+            .assignment_timestamp_ms;
+        answers.push((
+            case,
+            joined.member_epoch,
+            (before..=after).contains(&written),
+        ));
+        expected.push((case, wanted.0, wanted.1));
+    }
+    check!(answers == expected);
 }

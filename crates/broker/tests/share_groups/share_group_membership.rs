@@ -31,8 +31,8 @@ async fn single_member_join_assignment() {
     check!(resp.error_code == 0, "join failed: {:?}", resp.error_code);
     check!(resp.member_id.as_deref() == Some(member_id.as_str()));
     check!(
-        resp.member_epoch == 1,
-        "first join advances member to epoch 1, got {}",
+        resp.member_epoch == 2,
+        "first join advances the new group from epoch 1 to 2, got {}",
         resp.member_epoch
     );
     check!(resp.assignment.is_some() && total_assigned(&resp) == 0);
@@ -54,7 +54,7 @@ async fn single_member_join_assignment() {
     })
     .await
     .expect("the initialized partitions are assigned");
-    check!(assigned.member_epoch == 2);
+    check!(assigned.member_epoch == 3);
     check!(
         total_assigned(&assigned) == 4,
         "single member must own all 4 partitions"

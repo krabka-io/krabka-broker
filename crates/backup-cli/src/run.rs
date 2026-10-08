@@ -26,8 +26,8 @@ use crate::{
     connection::SecurityArgs,
     error::BackupError,
     manifest::{
-        Artifact, CAPTURE_ROOT, DISKLESS_WAL_INDEX, GROUP_OFFSETS, MANIFEST, METADATA_CHECKPOINT,
-        Manifest, RLMM_SNAPSHOT, artifact_problem, sha256_hex,
+        Artifact, CAPTURE_ROOT, DISKLESS_WAL_INDEX, GROUP_OFFSETS, MANIFEST, MANIFEST_VERSION,
+        METADATA_CHECKPOINT, Manifest, RLMM_SNAPSHOT, artifact_problem, sha256_hex,
     },
     offsets::{GroupOffsetsFile, commit_refusals, commit_request, group_offsets},
 };
@@ -182,6 +182,7 @@ async fn capture_secured(
     }
 
     let manifest = Manifest {
+        version: MANIFEST_VERSION,
         capture_id: id.clone(),
         captured_at_ms: now_ms(),
         log_dir: log_dir.map(|dir| dir.display().to_string()),
@@ -606,11 +607,7 @@ async fn restore_offsets_secured(
         return Err(BackupError::Integrity(format!("capture {id}: {problem}")));
     }
     verify_offsets_boundary(&store, &id, &manifest, &bytes, trust).await?;
-    let offsets: GroupOffsetsFile =
-        serde_json::from_slice(&bytes).map_err(|source| BackupError::Json {
-            context: capture_key(&id, GROUP_OFFSETS),
-            source,
-        })?;
+    let offsets = GroupOffsetsFile::from_slice(&bytes, &capture_key(&id, GROUP_OFFSETS))?;
 
     if dry_run {
         for group in &offsets.groups {
@@ -826,10 +823,7 @@ async fn resolve_capture(store: &Archive, capture: &str) -> Result<String, Backu
 async fn read_manifest(store: &Archive, id: &str) -> Result<Manifest, BackupError> {
     let key = capture_key(id, MANIFEST);
     let bytes = store.get(&key).await?;
-    serde_json::from_slice(&bytes).map_err(|source| BackupError::Json {
-        context: key,
-        source,
-    })
+    Manifest::from_slice(&bytes, &key)
 }
 
 #[cfg(test)]
@@ -845,8 +839,8 @@ mod tests {
         archive::{Archive, ArchiveArgs},
         capture::capture_key,
         cli::CaptureTrustArgs,
-        manifest::{Artifact, Manifest, sha256_hex},
-        offsets::{CommittedOffset, GroupOffsets, GroupOffsetsFile},
+        manifest::{Artifact, MANIFEST_VERSION, Manifest, sha256_hex},
+        offsets::{CommittedOffset, GROUP_OFFSETS_VERSION, GroupOffsets, GroupOffsetsFile},
     };
 
     /// The RLMM snapshot bytes a fixture node holds. The capture copies bytes
@@ -930,6 +924,7 @@ mod tests {
     /// leave behind.
     async fn write_offsets_capture(store: &Archive, id: &str, bytes: &[u8], recorded: &[u8]) {
         let manifest = Manifest {
+            version: MANIFEST_VERSION,
             capture_id: id.to_owned(),
             captured_at_ms: 1_700_000_000_000,
             log_dir: None,
@@ -957,6 +952,7 @@ mod tests {
     /// One group with one committed offset, as JSON bytes.
     fn offsets_json() -> Vec<u8> {
         serde_json::to_vec(&GroupOffsetsFile {
+            version: GROUP_OFFSETS_VERSION,
             groups: vec![GroupOffsets {
                 group: "analytics".to_owned(),
                 offsets: vec![CommittedOffset {
@@ -1004,6 +1000,7 @@ mod tests {
             .await
             .unwrap();
         let manifest = Manifest {
+            version: MANIFEST_VERSION,
             capture_id: id.into(),
             captured_at_ms: 42,
             log_dir: None,
@@ -1267,6 +1264,58 @@ mod tests {
             .expect_err("a JSON array is not the captured shape");
         assert!(let BackupError::Json { .. } = &error, "got: {error}");
         check!(error.to_string().contains(GROUP_OFFSETS), "got: {error}");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn offsets_or_a_manifest_from_before_1_0_are_refused_as_an_unsupported_version() {
+        let archive_root = tempfile::tempdir().expect("archive root");
+        let args = archive_args(archive_root.path());
+        let store = Archive::open(&args).expect("open the archive");
+        let offsets = br#"{"groups":[]}"#;
+        write_offsets_capture(&store, "0000000000000001", offsets, offsets).await;
+
+        let error = restore_offsets("latest", &closed_address(), true, &args)
+            .await
+            .expect_err("an offsets file with no version is refused");
+        check!(
+            let BackupError::UnsupportedVersion { found: None, expected: GROUP_OFFSETS_VERSION, .. } = &error,
+            "got: {error}"
+        );
+        check!(error.to_string().contains(GROUP_OFFSETS), "got: {error}");
+        check!(
+            error.to_string().contains("predates krabka 1.0"),
+            "got: {error}"
+        );
+
+        let mut manifest: serde_json::Value = serde_json::from_slice(
+            &store
+                .get(&capture_key("0000000000000001", MANIFEST))
+                .await
+                .expect("read the manifest"),
+        )
+        .expect("decode the manifest");
+        manifest["version"] = serde_json::json!(MANIFEST_VERSION + 1);
+        store
+            .put(
+                &capture_key("0000000000000001", MANIFEST),
+                serde_json::to_vec(&manifest).expect("encode the manifest"),
+            )
+            .await
+            .expect("rewrite the manifest");
+
+        let error = restore_offsets("latest", &closed_address(), true, &args)
+            .await
+            .expect_err("a manifest of a later version is refused");
+        assert2::assert!(
+            let BackupError::UnsupportedVersion {
+                found: Some(found),
+                expected: MANIFEST_VERSION,
+                ..
+            } = &error,
+            "got: {error}"
+        );
+        check!(found == "1");
+        check!(error.to_string().contains(MANIFEST), "got: {error}");
     }
 
     #[tokio::test(flavor = "multi_thread")]

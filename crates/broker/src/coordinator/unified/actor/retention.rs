@@ -40,8 +40,10 @@
 //! `maybeDeleteGroup` appends it only for an empty group,
 //! so a reader of `__consumer_offsets` never sees a group record with no
 //! offsets and no members hanging behind a partial write. The group record is
-//! the classic k2 `GroupMetadata` for a classic group, and the next-gen k3
-//! `GroupMetadata` plus k6 `TargetAssignmentMetadata` for a KIP-848 group.
+//! the classic k2 `GroupMetadata` for a classic group, and for a KIP-848 group
+//! the k6 `TargetAssignmentMetadata`, the deprecated k4
+//! `ConsumerGroupPartitionMetadata` and the k3 `GroupMetadata`, in Kafka's
+//! order.
 //! Deleting the group stops the actor; the coordinator drops the registry
 //! entry when it reads [`ReapOutcome::group_deleted`].
 
@@ -49,7 +51,10 @@ use std::collections::HashSet;
 
 use tokio::sync::oneshot;
 
-use super::offset_delete::{SubscribedTopics, offset_delete_guard};
+use super::{
+    GroupTombstone, group_tombstone_keys,
+    offset_delete::{SubscribedTopics, offset_delete_guard},
+};
 use crate::{
     coordinator::unified::{
         GroupCoordinator, OffsetRecordBatchBuilder,
@@ -57,7 +62,6 @@ use crate::{
         group::{CoordinatorGroup, GroupKind},
         offsets_log::OffsetsLog,
         persistence::{Key, OffsetCommitValue, encode_key},
-        persistence_next_gen::{NextGenKey, encode_key as encode_next_gen_key},
     },
     error::BrokerError,
 };
@@ -313,19 +317,19 @@ fn tombstone_batch(
             })?,
             None,
         ),
-        Some(GroupKind::Consumer(_)) => {
-            builder.push(
-                encode_next_gen_key(&NextGenKey::GroupMetadata {
-                    group_id: group_id.into(),
-                })?,
-                None,
-            );
-            builder.push(
-                encode_next_gen_key(&NextGenKey::TargetAssignmentMetadata {
-                    group_id: group_id.into(),
-                })?,
-                None,
-            );
+        // Kafka's `ConsumerGroup.createGroupTombstoneRecords`. A group that is
+        // deleted has no members, so it tombstones the target-assignment
+        // metadata, every regular expression resolution it still holds, the
+        // deprecated k4 subscription metadata whether or not the log holds
+        // one, and the group epoch record.
+        Some(GroupKind::Consumer(state)) => {
+            let tombstone = GroupTombstone {
+                members: state.members.keys().cloned().collect(),
+                regexes: state.resolved_regex_names(),
+            };
+            for key in group_tombstone_keys(group_id, &tombstone)? {
+                builder.push(key, None);
+            }
         }
     }
     Ok(builder.finish(now_ms))
@@ -336,6 +340,7 @@ mod tests {
     use std::collections::HashMap;
 
     use assert2::check;
+    use bytes::Bytes;
     use krabka_log::Offset;
 
     use super::*;
@@ -343,6 +348,7 @@ mod tests {
         actor::test_support::subscription_blob,
         classic_state::{ClassicGroup, Member, OffsetEntry},
         consumer_state::{GroupState as ConsumerState, test_support::member},
+        persistence_next_gen::{NextGenKey, encode_key as encode_next_gen_key},
     };
 
     const RETENTION_MS: i64 = 1_000;
@@ -543,5 +549,80 @@ mod tests {
                 }
         );
         check!(group.committed_offsets.keys().cloned().collect::<Vec<_>>() == keys(&["a"]));
+    }
+
+    /// The group's own tombstones follow Kafka 4.3.1: k2 for a classic group,
+    /// and for a consumer group with no members the k6 tombstone, a k16
+    /// tombstone for each regular expression resolution the group still
+    /// holds, and the k4 and k3 tombstones of
+    /// `ConsumerGroup.createGroupTombstoneRecords`, in that order.
+    #[test]
+    fn group_tombstones_follow_kafka() {
+        let tombstone = |key: Bytes| (Some(key), None::<Bytes>);
+        let ng = |key: NextGenKey| tombstone(encode_next_gen_key(&key).unwrap());
+        let gid = || "g".to_string();
+        let expired = tombstone(OffsetCommitValue::encode_key("g", "t", 0).unwrap());
+        let rows = [
+            ("no group tombstone", None, vec![expired.clone()]),
+            (
+                "classic group",
+                Some(classic(ClassicGroupState::Empty, None, &[])),
+                vec![
+                    expired.clone(),
+                    tombstone(encode_key(&Key::GroupMetadata { group_id: gid() }).unwrap()),
+                ],
+            ),
+            (
+                "consumer group",
+                Some(consumer(&[])),
+                vec![
+                    expired.clone(),
+                    ng(NextGenKey::TargetAssignmentMetadata { group_id: gid() }),
+                    ng(NextGenKey::PartitionMetadata { group_id: gid() }),
+                    ng(NextGenKey::GroupMetadata { group_id: gid() }),
+                ],
+            ),
+            (
+                "consumer group with resolved regular expressions",
+                Some({
+                    let mut group = ConsumerState::new("g");
+                    for regex in ["b.*", "a.*"] {
+                        group.set_resolved_regex(
+                            regex.into(),
+                            crate::coordinator::unified::consumer_state::ResolvedRegularExpression {
+                                topics: std::collections::BTreeSet::new(),
+                                version: 1,
+                                timestamp_ms: 2,
+                            },
+                        );
+                    }
+                    GroupKind::Consumer(group)
+                }),
+                vec![
+                    expired.clone(),
+                    ng(NextGenKey::TargetAssignmentMetadata { group_id: gid() }),
+                    ng(NextGenKey::RegularExpression {
+                        group_id: gid(),
+                        regex: "a.*".into(),
+                    }),
+                    ng(NextGenKey::RegularExpression {
+                        group_id: gid(),
+                        regex: "b.*".into(),
+                    }),
+                    ng(NextGenKey::PartitionMetadata { group_id: gid() }),
+                    ng(NextGenKey::GroupMetadata { group_id: gid() }),
+                ],
+            ),
+        ];
+        for (name, kind, expected) in rows {
+            let batch = tombstone_batch("g", &keys(&["t"]), kind.as_ref(), NOW_MS).unwrap();
+
+            let records: Vec<_> = batch
+                .records
+                .into_iter()
+                .map(|record| (record.key, record.value))
+                .collect();
+            check!(records == expected, "{name}");
+        }
     }
 }

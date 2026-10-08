@@ -11,13 +11,15 @@
 //! This file is the module root. The key discriminator and its codec live in
 //! `keys`, the two single-epoch records in `epochs`, the member metadata record
 //! and its classic sub-state in `member`, the target and current assignment
-//! records with their shared topic-partition codec in `assignment`, and the
-//! resolved-regular-expression record in `regex`.
+//! records with their shared topic-partition codec in `assignment`, the
+//! resolved-regular-expression record in `regex`, and the deprecated
+//! subscription metadata record in `partition_metadata`.
 
 mod assignment;
 mod epochs;
 mod keys;
 mod member;
+mod partition_metadata;
 mod regex;
 
 pub use self::{
@@ -28,9 +30,10 @@ pub use self::{
     epochs::{GroupMetadataValue, TargetAssignmentMetadataValue},
     keys::{
         KEY_CURRENT_MEMBER_ASSIGNMENT, KEY_GROUP_METADATA, KEY_MEMBER_METADATA,
-        KEY_REGULAR_EXPRESSION, KEY_TARGET_ASSIGNMENT_MEMBER, KEY_TARGET_ASSIGNMENT_METADATA,
-        NextGenKey, encode_key, parse_key,
+        KEY_PARTITION_METADATA, KEY_REGULAR_EXPRESSION, KEY_TARGET_ASSIGNMENT_MEMBER,
+        KEY_TARGET_ASSIGNMENT_METADATA, NextGenKey, encode_key, parse_key,
     },
     member::{ClassicMemberMetadata, MemberMetadataValue},
+    partition_metadata::{PartitionMetadataValue, PartitionRacks, SubscribedTopicMetadata},
     regex::RegularExpressionValue,
 };

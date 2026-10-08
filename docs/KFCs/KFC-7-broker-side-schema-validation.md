@@ -183,7 +183,7 @@ Four layers cover the feature.
 
 **Integration, against a live broker.** The in-process broker harness, driving real `CreateTopics` and `Produce`. Each case runs against a validated topic and an unvalidated control topic, in the shape KFC-1's suite established, so a result is shown to be the configuration rather than a path every topic now takes. Every rejection asserts two things: the error code, and that the partition's log end offset did not move. A rejection that still appended would be the worst possible failure of this feature, so no test takes the error code as proof on its own.
 
-**End to end, against the real registry.** A `krabka-schema-registry` and a broker, with a record registered through the registry's own REST API and then produced. This is the tier that proves the two halves agree about subjects, ids and framing, rather than agreeing with a mock of each other.
+**End to end, against the real registry.** A `krabka-schema-registry` and a broker, with a record registered through the registry's own REST API and then produced. This is the tier that proves the two halves agree about subjects, ids and framing, rather than agreeing with a mock of each other. The suite lives in the registry's repository, `crates/schema-registry/tests/live_registry.rs`, because the registry already dev-depends on the in-process broker. A broker dev-dependency on the registry service would make each repository pin a revision of the other.
 
 ## Rejected Alternatives
 

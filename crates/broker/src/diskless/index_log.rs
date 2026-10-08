@@ -11,7 +11,7 @@ use std::{
 
 use bytes::Bytes;
 use futures_util::StreamExt;
-use krabka_remote_storage::diskless::REPLAY_FENCE_KEY;
+use krabka_remote_storage::diskless::{REPLAY_FENCE_KEY, wal_index_key_version};
 use krabka_remote_storage_topic::{MetadataEventLog, PartitionStart};
 use tokio::sync::{Mutex, watch};
 
@@ -123,11 +123,29 @@ impl DisklessIndexLog {
                 // the two projections stay independent however the index
                 // topic's partitions interleave them.
                 let floor_key = event.key.as_deref().and_then(WalDeleteFloorKey::from_bytes);
-                if event.tombstone {
+                let range_key = event.key.as_deref().and_then(WalIndexKey::from_bytes);
+                // A key that is neither, and not the replay fence, is of a key
+                // version this build does not read. Skipping it would leave a
+                // range or floor out of the projection, so it is as unsafe as
+                // an unkeyed record.
+                let unknown_key = event.key.as_deref().filter(|key| {
+                    *key != REPLAY_FENCE_KEY && floor_key.is_none() && range_key.is_none()
+                });
+                if let Some(key) = unknown_key {
+                    metrics.diskless_wal_index_decode_failures_total.inc();
+                    pump_valid.store(false, Ordering::Release);
+                    progress_tx.send_modify(|progress| progress.invalid = true);
+                    tracing::error!(
+                        partition = event.partition,
+                        offset = event.offset,
+                        key_version = ?wal_index_key_version(key),
+                        "diskless WAL index record has an unknown key version; projection is \
+                         unsafe"
+                    );
+                } else if event.tombstone {
                     if let Some(key) = floor_key {
                         pump_cache.lock().await.clear_delete_floor(key);
-                    } else if let Some(key) = event.key.as_deref().and_then(WalIndexKey::from_bytes)
-                    {
+                    } else if let Some(key) = range_key {
                         pump_cache.lock().await.remove(key);
                     }
                 } else if event.key.as_deref() != Some(REPLAY_FENCE_KEY) {
@@ -153,10 +171,8 @@ impl DisklessIndexLog {
                             // Every index record is keyed (`publish_flush`);
                             // an unkeyed one has no range it is the latest
                             // for, so the projection can no longer be trusted.
-                            if let Some(bytes) = event.key.as_deref() {
-                                if let Some(key) = WalIndexKey::from_bytes(bytes) {
-                                    pump_cache.lock().await.apply_keyed(key, &record);
-                                }
+                            if let Some(key) = range_key {
+                                pump_cache.lock().await.apply_keyed(key, &record);
                                 applied_tx.send_modify(|generation| {
                                     *generation = generation.wrapping_add(1);
                                 });
@@ -587,6 +603,45 @@ mod tests {
         assert!(!index.wait_until_caught_up(Duration::from_secs(1)).await);
         assert!(!index.is_valid());
         assert!(failures.get() == 1);
+    }
+
+    #[tokio::test]
+    async fn an_index_record_of_an_unknown_key_version_fails_replay_and_increments_metric() {
+        let record = flush_record("future-key", Uuid::from_u128(7), 0, 3);
+        let mut future_key = WalIndexKey::from(&record.entries[0]).to_bytes().to_vec();
+        future_key[..2].copy_from_slice(&7_i16.to_be_bytes());
+        for (name, payload) in [
+            ("value", Some(record.to_bytes().unwrap())),
+            ("tombstone", None),
+        ] {
+            let event_log = InProcessMetadataEventLog::new(1);
+            event_log
+                .publish_keyed(0, Bytes::from(future_key.clone()), payload)
+                .await
+                .unwrap();
+
+            let metrics = crate::metrics::BrokerMetrics::new();
+            let failures = metrics.diskless_wal_index_decode_failures_total.clone();
+            let cache = Arc::new(Mutex::new(WalIndexCache::default()));
+            let index = DisklessIndexLog::start_with_cache(event_log, cache.clone(), metrics)
+                .await
+                .unwrap();
+
+            assert!(
+                !index.wait_until_caught_up(Duration::from_secs(1)).await,
+                "case {name}"
+            );
+            assert!(!index.is_valid(), "case {name}");
+            assert!(failures.get() == 1, "case {name}");
+            assert!(
+                cache
+                    .lock()
+                    .await
+                    .lookup(Uuid::from_u128(7), 0, 0)
+                    .is_none(),
+                "case {name}"
+            );
+        }
     }
 
     #[tokio::test]

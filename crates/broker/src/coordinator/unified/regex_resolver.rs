@@ -143,8 +143,8 @@ impl TopicRegexResolver for ImageTopicRegexResolver {
     }
 }
 
-/// A resolver that finds no topic, for the tests of the actor that resolve no
-/// pattern.
+/// A resolver that finds no topic: the tests of the actor that resolve no
+/// pattern use it.
 #[cfg(test)]
 #[derive(Debug)]
 pub(crate) struct NoTopicRegexResolver;

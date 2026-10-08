@@ -31,14 +31,16 @@ use crate::error::BrokerError;
 pub(crate) mod flex;
 
 /// Encode and append one nonempty actor delta before publishing its cache update.
-/// Each protocol supplies its original borrowed or consuming encoder and cache operation.
+/// Each protocol supplies its original borrowed or consuming encoder and cache operation,
+/// and the reference it takes its state by: a `&mut` state lets the cache operation also
+/// apply what the appended records mean to the live actor state.
 macro_rules! flush_pending_records {
     ($state:ident: $state_type:ty, $pending:ident: $pending_type:ty;
         $log:ident, $coordinator:ident, $now:ident;
         group $group:expr; encode $encode:expr; cache $cache:expr;
     ) => {
         pub(super) async fn flush_pending(
-            $state: &$state_type,
+            $state: $state_type,
             $pending: $pending_type,
             $log: &dyn $crate::coordinator::unified::offsets_log::OffsetsLog,
             $coordinator: &$crate::coordinator::unified::GroupCoordinator,
@@ -83,7 +85,7 @@ pub(super) use committed_offset_type;
 /// tables together while using the same legacy string codec.
 macro_rules! group_record_keys {
     ($visibility:vis enum $name:ident {
-        $($variant:ident $(($extra:ident))? => $version:ident,)*
+        $($(#[$variant_meta:meta])* $variant:ident $(($extra:ident))? => $version:ident,)*
     }
         $(#[$parse_docs:meta])* fn $parse:ident;
         $(#[$encode_docs:meta])* fn $encode:ident;
@@ -91,7 +93,7 @@ macro_rules! group_record_keys {
     ) => {
         #[derive(Debug, Clone, PartialEq, Eq)]
         $visibility enum $name {
-            $($variant { group_id: String, $($extra: String,)? },)*
+            $($(#[$variant_meta])* $variant { group_id: String, $($extra: String,)? },)*
         }
 
         impl $name {
@@ -153,49 +155,93 @@ pub enum Key {
     },
     /// Just `group_id`. The value carries the whole `GroupMetadataValue`.
     GroupMetadata { group_id: String },
-    /// KIP-848 next-gen consumer group record types, versions 3, 5–8.
+    /// KIP-848 next-gen consumer group record types, versions 3–8 and 16.
     NextGen(crate::coordinator::unified::persistence_next_gen::NextGenKey),
     /// KIP-932 share-group record types, versions 10–15.
     Share(crate::coordinator::unified::share::persistence::ShareGroupKey),
-    /// KIP-1071 streams-group record types, versions 17–23.
+    /// KIP-1071 streams-group record types, versions 17 and 19–23. Kafka 4.3.1
+    /// defines no type 18.
     Streams(crate::coordinator::unified::streams::persistence::StreamsGroupKey),
 }
 
-pub fn parse_key(mut buf: &[u8]) -> Result<Key, BrokerError> {
+/// A `__consumer_offsets` record key as the coordinator loader reads it.
+///
+/// Kafka's `GroupCoordinatorRecordSerde.apiMessageKeyFor` throws
+/// `UnknownRecordTypeException` for a record type that its
+/// `CoordinatorRecordType` does not list, and `CoordinatorLoaderImpl` skips
+/// that record rather than fail the load. Such a key is
+/// [`RecordKey::UnknownType`] here, so the loader can tell it apart from a key
+/// of a known type that does not decode.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RecordKey {
+    /// A record type this broker reads, with its decoded key.
+    Known(Key),
+    /// A record type this broker does not read. Nothing past the leading
+    /// `i16` was decoded.
+    UnknownType(i16),
+}
+
+/// Decodes a `__consumer_offsets` record key and refuses an unknown record
+/// type.
+///
+/// # Errors
+///
+/// Returns [`BrokerError::Protocol`] when the key is shorter than its `i16`
+/// record type, names a record type that [`parse_record_key`] does not know,
+/// or does not decode as that type's key.
+pub fn parse_key(buf: &[u8]) -> Result<Key, BrokerError> {
+    match parse_record_key(buf)? {
+        RecordKey::Known(key) => Ok(key),
+        RecordKey::UnknownType(_) => Err(BrokerError::Protocol(
+            krabka_protocol::ProtocolError::InvalidValue("unknown __consumer_offsets key version"),
+        )),
+    }
+}
+
+/// Decodes a `__consumer_offsets` record key, reporting an unknown record type
+/// as [`RecordKey::UnknownType`] instead of an error.
+///
+/// The record type is read first, as Kafka's `CoordinatorRecordSerde.deserialize`
+/// does, so an unknown type is reported whatever bytes follow it.
+///
+/// # Errors
+///
+/// Returns [`BrokerError::Protocol`] when the key is shorter than its `i16`
+/// record type, or when a key of a known record type does not decode.
+pub fn parse_record_key(mut buf: &[u8]) -> Result<RecordKey, BrokerError> {
     if buf.remaining() < 2 {
         return Err(BrokerError::Protocol(
             krabka_protocol::ProtocolError::InvalidValue("offsets key too short"),
         ));
     }
     let version = buf.get_i16();
-    match version {
+    let key = match version {
         0 | 1 => {
             let group_id = get_string(&mut buf)?;
             let topic = get_string(&mut buf)?;
             let partition = get_i32(&mut buf)?;
-            Ok(Key::OffsetCommit {
+            Key::OffsetCommit {
                 group_id,
                 topic,
                 partition,
-            })
+            }
         }
         2 => {
             let group_id = get_string(&mut buf)?;
-            Ok(Key::GroupMetadata { group_id })
+            Key::GroupMetadata { group_id }
         }
-        3 | 5 | 6 | 7 | 8 | 16 => Ok(Key::NextGen(
+        3..=8 | 16 => Key::NextGen(
             crate::coordinator::unified::persistence_next_gen::parse_key(version, buf)?,
-        )),
-        10..=15 => Ok(Key::Share(
+        ),
+        10..=15 => Key::Share(
             crate::coordinator::unified::share::persistence::parse_share_key(version, buf)?,
-        )),
-        17..=23 => Ok(Key::Streams(
+        ),
+        17 | 19..=23 => Key::Streams(
             crate::coordinator::unified::streams::persistence::parse_streams_key(version, buf)?,
-        )),
-        _ => Err(BrokerError::Protocol(
-            krabka_protocol::ProtocolError::InvalidValue("unknown __consumer_offsets key version"),
-        )),
-    }
+        ),
+        unknown => return Ok(RecordKey::UnknownType(unknown)),
+    };
+    Ok(RecordKey::Known(key))
 }
 
 /// Encodes a [`Key`] back to its `__consumer_offsets` wire bytes, symmetric to
@@ -594,88 +640,6 @@ macro_rules! key_string_boundaries {
 #[cfg(test)]
 pub(crate) use key_string_boundaries;
 
-/// Write the five membership record families in wire order, with explicit protocol insertion points.
-/// Borrowed deltas retain their values; consumed deltas move their member ids into typed keys.
-macro_rules! encode_membership_records {
-    (@method $(#[$doc:meta])* fn $name:ident($($receiver:tt)*);
-        $batch:ident, $records:ident, $group:ident, $now_ms:ident, $mode:ident; $keys:tt;
-        before_members $before_members:block before_target $before_target:block after_members $after_members:block) => {
-        $(#[$doc])*
-        pub fn $name($($receiver)*, $group: &str, $now_ms: i64)
-            -> Result<::krabka_protocol::records::RecordBatch, $crate::error::BrokerError>
-        {
-            let mut $batch = $crate::coordinator::unified::OffsetRecordBatchBuilder::default();
-            $crate::coordinator::unified::persistence::encode_membership_records!(
-                $batch, $records, $group, $mode; $keys;
-                before_members $before_members before_target $before_target after_members $after_members
-            );
-            Ok($batch.finish($now_ms))
-        }
-    };
-
-    ($batch:ident, $records:ident, $group:ident, $mode:ident; $keys:tt;
-        before_members $before_members:block before_target $before_target:block after_members $after_members:block) => {
-        if let Some(value) = $crate::coordinator::unified::persistence::encode_membership_records!(@optional $mode $records.group_metadata) {
-            $batch.push($crate::coordinator::unified::persistence::encode_membership_records!(@group $keys GroupMetadata, $group)?, Some(value.encode()));
-        }
-        $before_members
-        $crate::coordinator::unified::persistence::encode_membership_records!(@members $batch, $records.member_metadata, $group, $mode; $keys; MemberMetadata);
-        $before_target
-        if let Some(value) = $crate::coordinator::unified::persistence::encode_membership_records!(@optional $mode $records.target_metadata) {
-            $batch.push($crate::coordinator::unified::persistence::encode_membership_records!(@group $keys TargetAssignmentMetadata, $group)?, Some(value.encode()));
-        }
-        $crate::coordinator::unified::persistence::encode_membership_records!(@members $batch, $records.target_per_member, $group, $mode; $keys; TargetAssignmentMember);
-        $crate::coordinator::unified::persistence::encode_membership_records!(@members $batch, $records.current_per_member, $group, $mode; $keys; CurrentMemberAssignment);
-        $after_members
-    };
-    (@optional borrowed $value:expr) => { ($value).as_ref() };
-    (@optional owned $value:expr) => { $value };
-    (@values borrowed $values:expr) => { ($values).iter().map(|(id, value)| (id, value.as_ref())) };
-    (@values owned $values:expr) => { $values };
-    (@id borrowed $id:ident) => { $id.clone() };
-    (@id owned $id:ident) => { $id };
-    (@members $batch:ident, $values:expr, $group:ident, $mode:ident; $keys:tt; $variant:ident) => {
-        $batch.extend_values(
-            $crate::coordinator::unified::persistence::encode_membership_records!(@values $mode $values),
-            |member_id| $crate::coordinator::unified::persistence::encode_membership_records!(@member $keys $variant, $group, $mode, member_id),
-            |value| value.encode(),
-        )?;
-    };
-    (@group (typed, $encode:ident, $key:ident) $variant:ident, $group:ident) => {
-        $encode(&$key::$variant { group_id: $group.into() })
-    };
-    (@member (typed, $encode:ident, $key:ident) $variant:ident, $group:ident, $mode:ident, $id:ident) => {
-        $encode(&$key::$variant {
-            group_id: $group.into(),
-            member_id: $crate::coordinator::unified::persistence::encode_membership_records!(@id $mode $id),
-        })
-    };
-    (@group (strings, $keys:ident) GroupMetadata, $group:ident) => { $keys::encode_group_metadata_key($group) };
-    (@group (strings, $keys:ident) TargetAssignmentMetadata, $group:ident) => { $keys::encode_target_assignment_metadata_key($group) };
-    (@member (strings, $keys:ident) MemberMetadata, $group:ident, $mode:ident, $id:ident) => { $keys::encode_member_metadata_key($group, &$id) };
-    (@member (strings, $keys:ident) TargetAssignmentMember, $group:ident, $mode:ident, $id:ident) => { $keys::encode_target_assignment_member_key($group, &$id) };
-    (@member (strings, $keys:ident) CurrentMemberAssignment, $group:ident, $mode:ident, $id:ident) => { $keys::encode_current_member_assignment_key($group, &$id) };
-}
-pub(crate) use encode_membership_records;
-
-/// Snapshot metadata and current assignment for each affected member, with protocol-specific extras.
-macro_rules! snapshot_members {
-    ($pending:ident, $state:ident, $members:expr; $metadata:ident, $current:ident; |$mid:ident, $member:ident| $extra:block) => {
-        for $mid in $members {
-            if let Some($member) = $state.members.get($mid) {
-                $pending
-                    .member_metadata
-                    .push(($mid.clone(), Some($metadata($member))));
-                $pending
-                    .current_per_member
-                    .push(($mid.clone(), Some($current($member))));
-                $extra
-            }
-        }
-    };
-}
-pub(crate) use snapshot_members;
-
 /// Validate the three per-member record families of an atomic migration.
 macro_rules! assert_member_record_count {
     ($pending:expr, $count:expr) => {
@@ -685,18 +649,6 @@ macro_rules! assert_member_record_count {
     };
 }
 pub(crate) use assert_member_record_count;
-
-/// Queue all three member-record tombstones in the caller's member order.
-macro_rules! tombstone_members {
-    ($pending:expr, $members:expr) => {
-        for member in $members {
-            $pending.member_metadata.push((member.clone(), None));
-            $pending.target_per_member.push((member.clone(), None));
-            $pending.current_per_member.push((member.clone(), None));
-        }
-    };
-}
-pub(crate) use tombstone_members;
 
 #[cfg(test)]
 mod tests {

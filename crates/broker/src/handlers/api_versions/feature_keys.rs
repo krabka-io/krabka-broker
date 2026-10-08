@@ -108,5 +108,19 @@ mod tests {
                     finalized("metadata.version", 24)
                 ]
         );
+        // The krabka-owned `krabka.version` is a finalized row like any other.
+        image.apply(&MetadataRecord::V1FeatureLevel(FeatureLevelRecord {
+            name: "krabka.version".into(),
+            level: 1,
+        }));
+        check!(
+            finalized_feature_keys(&image)
+                == vec![
+                    finalized("group.version", 1),
+                    finalized("krabka.version", 1),
+                    finalized("kraft.version", 1),
+                    finalized("metadata.version", 24)
+                ]
+        );
     }
 }

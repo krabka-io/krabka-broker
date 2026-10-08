@@ -54,11 +54,12 @@ pub(crate) fn reopen_after_losses(
     crate::Spool::open(directory, ROOMY_CAP).unwrap()
 }
 
+/// Checks that the spool file holds its version header and no records.
 pub fn check_empty_file(directory: &std::path::Path) {
     assert2::check!(
         std::fs::metadata(directory.join(super::SPOOL_FILE))
             .unwrap()
             .len()
-            == 0
+            == super::header_len_u64()
     );
 }

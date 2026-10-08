@@ -42,7 +42,7 @@ mod test_support;
 #[path = "actor/share_group_model.rs"]
 mod share_group_model;
 
-pub(crate) use self::admin_offsets::{DeleteTopic, DeleteTopicOutcome, ResetPartition};
+pub(crate) use self::admin_offsets::{DeleteTopicOutcome, ResetPartition};
 pub use self::describe::{ShareDescribeMember, ShareDescribeView};
 use self::{
     admin_offsets::{delete_offsets, reset_offsets},
@@ -74,9 +74,11 @@ pub enum ShareGroupActorMessage {
         requests: Vec<ResetPartition>,
         reply: oneshot::Sender<Result<Vec<i16>, i16>>,
     },
+    /// `DeleteShareGroupOffsets` for the named topics. The reply holds each
+    /// topic's outcome in Kafka's response-row order.
     DeleteOffsets {
-        requests: Vec<DeleteTopic>,
-        reply: oneshot::Sender<Result<Vec<DeleteTopicOutcome>, i16>>,
+        topic_names: Vec<String>,
+        reply: oneshot::Sender<Result<Vec<(String, DeleteTopicOutcome)>, i16>>,
     },
     /// `DeleteGroups`. On success the actor stops, and the coordinator drops
     /// its registry entries.
@@ -196,8 +198,8 @@ async fn actor_loop(
                         let result = reset_offsets(&mut state, &coordinator, requests).await;
                         let _ = reply.send(result);
                     }
-                    ShareGroupActorMessage::DeleteOffsets { requests, reply } => {
-                        let result = delete_offsets(&mut state, &coordinator, requests).await;
+                    ShareGroupActorMessage::DeleteOffsets { topic_names, reply } => {
+                        let result = delete_offsets(&mut state, &coordinator, topic_names).await;
                         let _ = reply.send(result);
                     }
                     ShareGroupActorMessage::Delete { reply } => {

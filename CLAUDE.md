@@ -2,18 +2,64 @@
 
 ## Compatibility
 
-**krabka is greenfield and undeployed.** There are no production users, no
-persisted state to migrate, and no clients pinned to a specific build. Do not
-write backwards-compatibility shims:
+**From 1.0.0 on, krabka is backwards compatible on disk.** Any 1.x broker reads
+every artifact that an earlier 1.x broker wrote, and a rolling upgrade from 1.x
+to 1.y works. [`docs/persisted_formats.md`](docs/persisted_formats.md) lists
+every persisted format, states the contract, and records the known gaps. The
+contract covers this repository and the persisted crates of `krabka-protocol`.
+Data written before 1.0.0 gets no promise: a 0.x data directory is reformatted.
 
-- No `#[serde(default)]` on metadata fields "to keep old raft logs readable"
-- No `V2` enum variants that stay alongside `V1` to support replay
-- No feature flags that gate new behavior behind a default-off switch
-- No migration code or one-shot upgraders for on-disk format changes
+A persisted format is anything a broker writes to disk or to an object store:
+partition logs and their sidecars, metadata log segments and snapshots,
+`quorum-state`, `meta.properties`, the bootstrap files, internal-topic records,
+the krabka-private wincode records inside `NoOpRecord` tags, tiered segments,
+WORM manifests, diskless WAL objects, and backup captures. The
+controller-forwarding RPCs (`SubmitChange`, `MetadataFetch` and
+`DelegationTokenMutation`) carry krabka-private records, wincode
+`MetadataRecord` values among them, between nodes of two versions during a
+rolling upgrade, so they follow the same rules. For every one of them:
+
+- Never reorder or remove a variant of a persisted wincode enum such as
+  `MetadataRecord`, and never insert one before an existing variant. Add a new
+  variant at the end only. wincode encodes a variant by its index.
+- Never change the fields of a persisted wincode type. wincode is positional and
+  carries no field names, so `#[serde(default)]` does not help it. To change a
+  record's shape, add a new variant at the end (for example `V2Topic`) and keep
+  the old variant readable.
+- Never reuse a `NoOpRecord` private tag. 1001 and 1003 to 1006 are assigned,
+  and 1002 is burned. A new private record takes a new tag.
+- Give a new or changed format a version marker, and a reader for every earlier
+  1.x version of it.
+- Gate new writer behavior on a feature level. The broker keeps writing the old
+  format until the operator finalizes the level that introduces the new one, as
+  in Kafka's KIP-584 and KIP-778. Use a `metadata.version` level only where
+  Kafka defines one. Never add a level that Kafka's `MetadataVersion` does not
+  have.
+  A krabka-only change takes a new `krabka.version` level (krabka-protocol
+  `krabka_metadata::krabka_version`). Levels 0 and 1 are the 1.0.0 formats, so
+  the first new format takes level 2. A new version of a private controller RPC
+  (1003-1005) is a row in that crate's `private_rpc_version` table at the new
+  level.
+- Add a golden-bytes fixture test for each persisted format you add or change.
+  The test decodes bytes that an earlier release wrote and compares the decoded
+  value. It does not compare source text.
+- Where they keep 1.x data readable, `#[serde(default)]` on a JSON field, a kept
+  `V1` variant beside its `V2`, and a reader for an older version are required,
+  not forbidden.
+
+During development, deleting local raft logs and data directories is still fine
+for a format that no release has shipped.
+
+Everything that is not persisted keeps the greenfield rule: in-memory types,
+internal APIs, configuration, and CLI flags. For those, do not write
+backwards-compatibility shims:
+
+- No feature flags that gate new non-persisted behavior behind a default-off
+  switch
 - No deprecated-but-kept API surfaces
 
-When a schema, enum, wire format, or interface changes, change it. Delete local
-raft logs and data directories during development if necessary.
+When a non-persisted schema, enum, or interface changes, change it. The Rust API
+is not under a stability promise.
 
 **Kafka compatibility is the constraint that matters.** Always keep:
 

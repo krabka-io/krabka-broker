@@ -135,10 +135,20 @@ impl ShareCoordinator {
 
 /// Reads the whole log of `state_partition` and folds it into a new map.
 ///
+/// Kafka loads `__share_group_state` through `CoordinatorLoaderImpl` with a
+/// `ShareCoordinatorRecordSerde`, and this replay skips and fails the records
+/// that loader does. A record whose type is neither `ShareSnapshot` nor
+/// `ShareUpdate` throws `UnknownRecordTypeException`, which the loader logs at
+/// WARN and skips, value or tombstone: it can be the leftover of an aborted
+/// upgrade. Every other record that does not deserialize fails the load: a
+/// missing key, a key too short for its type, a key of a known type that does
+/// not decode, an unsupported value version, and a value that does not decode.
+/// A control batch is a transaction marker, which the share shard ignores.
+///
 /// # Errors
 ///
-/// Returns the read error of the log. The caller must not serve a partial
-/// replay.
+/// Returns the read error of the log, and the error of the first record that
+/// fails the load. The caller must not serve a partial replay.
 fn replay_partition(
     part: &Partition,
     state_partition: PartitionIndex,
@@ -155,43 +165,77 @@ fn replay_partition(
         }
 
         for batch in &out.batches {
-            for rec in &batch.records {
-                let rec_offset = Offset(batch.base_offset + i64::from(rec.offset_delta));
-                let Some(key_bytes) = rec.key.as_ref() else {
-                    continue;
-                };
-                let key = match parse_state_key(key_bytes) {
-                    Ok(k) => k,
-                    Err(e) => {
-                        warn!(
-                            partition = state_partition.get(),
-                            error = %e,
-                            "invalid share-state key; skipping record"
-                        );
+            if !batch.attributes.is_control_batch() {
+                for rec in &batch.records {
+                    let rec_offset = Offset(batch.base_offset + i64::from(rec.offset_delta));
+                    let Some(key) =
+                        parse_loaded_key(rec.key.as_deref(), state_partition, rec_offset)?
+                    else {
                         continue;
-                    }
-                };
-                let map_key = (key.group_id.clone(), key.topic_id, key.partition);
+                    };
+                    let map_key = (key.group_id.clone(), key.topic_id, key.partition);
 
-                // Tombstone: drop the entry.
-                let Some(value) = rec.value.as_ref() else {
-                    replayed.remove(&map_key);
-                    continue;
-                };
+                    // Tombstone: drop the entry.
+                    let Some(value) = rec.value.as_ref() else {
+                        replayed.remove(&map_key);
+                        continue;
+                    };
 
-                replay_value(
-                    &mut replayed,
-                    map_key,
-                    &key,
-                    value,
-                    (rec_offset, updates_per_snapshot),
-                    state_partition,
-                );
+                    replay_value(
+                        &mut replayed,
+                        map_key,
+                        &key,
+                        value,
+                        (rec_offset, updates_per_snapshot),
+                    )?;
+                }
             }
             offset = Offset(batch.base_offset + i64::from(batch.last_offset_delta) + 1);
         }
     }
     Ok(replayed)
+}
+
+/// Reads the key of one record as `CoordinatorRecordSerde.deserialize` does,
+/// and returns `None` for a record of an unknown type, which the load skips.
+///
+/// The record type is read before anything else, so a key of an unknown type
+/// is skipped whatever follows its type.
+///
+/// # Errors
+///
+/// Returns [`BrokerError::Share`] for a record without a key, and the decode
+/// error of a key that is too short or of a known type that does not decode.
+fn parse_loaded_key(
+    key: Option<&[u8]>,
+    partition: PartitionIndex,
+    offset: Offset,
+) -> Result<Option<ShareStateKey>, BrokerError> {
+    let key = key.ok_or_else(|| {
+        BrokerError::Share(format!(
+            "{}-{partition} record at offset {} has no key",
+            bootstrap::TOPIC,
+            offset.0
+        ))
+    })?;
+    match key
+        .first_chunk::<2>()
+        .map(|record_type| i16::from_be_bytes(*record_type))
+    {
+        Some(record_type)
+            if record_type != KEY_SHARE_SNAPSHOT && record_type != KEY_SHARE_UPDATE =>
+        {
+            warn!(
+                record_type,
+                offset = offset.0,
+                "Unknown record type {record_type} while loading offsets and group metadata from \
+                 {}-{partition}. Ignoring it. It could be a left over from an aborted upgrade.",
+                bootstrap::TOPIC
+            );
+            Ok(None)
+        }
+        _ => parse_state_key(key).map(Some),
+    }
 }
 
 /// Folds one replayed record value into the state of `map_key`, as Kafka's
@@ -200,49 +244,38 @@ fn replay_partition(
 /// A snapshot record replaces the state and records `last_snapshot_offset`.
 /// An update record merges into the state, or starts it when the key has
 /// none. `position` is the record offset and the snapshot threshold.
+///
+/// # Errors
+///
+/// Returns the decode error of the value: an unsupported value version, or
+/// bytes that do not decode at that version.
 fn replay_value(
     replayed: &mut HashMap<ShareStateKey3, SharePartitionState>,
     map_key: ShareStateKey3,
     key: &ShareStateKey,
     value: &Bytes,
     position: (Offset, u32),
-    partition: PartitionIndex,
-) {
+) -> Result<(), BrokerError> {
     let (rec_offset, updates_per_snapshot) = position;
-    match key.record_type {
-        KEY_SHARE_SNAPSHOT => match ShareSnapshotValue::decode(value) {
-            Ok(snap) => match replayed.get_mut(&map_key) {
-                Some(st) => st.apply_snapshot(&snap, rec_offset, updates_per_snapshot),
-                None => {
-                    replayed.insert(
-                        map_key,
-                        SharePartitionState::from_snapshot(&snap, rec_offset),
-                    );
-                }
-            },
-            Err(e) => warn!(
-                partition = partition.get(),
-                error = %e,
-                "invalid ShareSnapshot value; skipping record"
-            ),
-        },
-        KEY_SHARE_UPDATE => match ShareUpdateValue::decode(value) {
-            Ok(upd) => match replayed.get_mut(&map_key) {
-                Some(st) => st.apply_update(&upd),
-                None => {
-                    replayed.insert(map_key, SharePartitionState::from_update(&upd));
-                }
-            },
-            Err(e) => warn!(
-                partition = partition.get(),
-                error = %e,
-                "invalid ShareUpdate value; skipping record"
-            ),
-        },
-        other => warn!(
-            partition = partition.get(),
-            record_type = other,
-            "unknown share-state record type"
-        ),
+    if key.record_type == KEY_SHARE_SNAPSHOT {
+        let snap = ShareSnapshotValue::decode(value)?;
+        match replayed.get_mut(&map_key) {
+            Some(st) => st.apply_snapshot(&snap, rec_offset, updates_per_snapshot),
+            None => {
+                replayed.insert(
+                    map_key,
+                    SharePartitionState::from_snapshot(&snap, rec_offset),
+                );
+            }
+        }
+    } else {
+        let upd = ShareUpdateValue::decode(value)?;
+        match replayed.get_mut(&map_key) {
+            Some(st) => st.apply_update(&upd),
+            None => {
+                replayed.insert(map_key, SharePartitionState::from_update(&upd));
+            }
+        }
     }
+    Ok(())
 }

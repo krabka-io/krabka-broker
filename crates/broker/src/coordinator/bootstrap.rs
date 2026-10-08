@@ -24,13 +24,19 @@ mod classic_state_tests;
 #[cfg(test)]
 mod delete_groups_replay_tests;
 #[cfg(test)]
+mod group_type_replay_tests;
+#[cfg(test)]
 mod log_walk_tests;
+#[cfg(test)]
+mod partition_metadata_replay_tests;
 #[cfg(test)]
 mod share_streams_replay_tests;
 #[cfg(test)]
 mod test_support;
 #[cfg(test)]
 mod topic_bootstrap_tests;
+#[cfg(test)]
+mod unknown_record_tests;
 #[cfg(test)]
 mod upgrade_downgrade_tests;
 

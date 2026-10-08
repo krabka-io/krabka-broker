@@ -12,7 +12,7 @@ use krabka_units::prelude::ByteSize;
 
 use crate::{
     config::MetadataLogConfig,
-    error::RaftError,
+    error::{PersistedFormatError, RaftError},
     kraft::types::{Epoch, LogOffsetMetadata, LogView},
 };
 
@@ -40,6 +40,95 @@ const TIMESTAMP_READ_WINDOW: ByteSize = krabka_units::prelude::kibibytes(64);
 /// it for a snapshot.
 const HIGH_WATERMARK_FILE: &str = "high-watermark";
 
+/// The file a new high watermark is written to before it is renamed over
+/// [`HIGH_WATERMARK_FILE`], so a reader never sees a torn write.
+const HIGH_WATERMARK_TMP_FILE: &str = "high-watermark.tmp";
+
+/// The version of the [`HIGH_WATERMARK_FILE`] layout: a text file whose first
+/// line is this number and whose second line is the committed offset in
+/// decimal, each ended by a newline, as Kafka's checkpoint files put their
+/// version first. It is part of the 1.x on-disk contract: a later 1.x build
+/// reads this layout, and a layout change takes a new number.
+pub(crate) const HIGH_WATERMARK_FILE_VERSION: i16 = 0;
+
+/// The text of the [`HIGH_WATERMARK_FILE`] that records `hwm`.
+fn encode_high_watermark(hwm: Offset) -> String {
+    format!("{HIGH_WATERMARK_FILE_VERSION}\n{}\n", hwm.0)
+}
+
+/// Reads the text of a [`HIGH_WATERMARK_FILE`].
+///
+/// A single decimal line with no version line is the layout a build before 1.0
+/// wrote, and is [`PersistedFormatError::MissingVersion`]. A version line
+/// other than [`HIGH_WATERMARK_FILE_VERSION`] is
+/// [`PersistedFormatError::UnsupportedVersion`]. Anything else that is not the
+/// current layout is [`PersistedFormatError::Malformed`].
+fn decode_high_watermark(text: &str) -> Result<Offset, PersistedFormatError> {
+    let malformed = || PersistedFormatError::Malformed(format!("{text:?}"));
+    let Some((version, rest)) = text.split_once('\n') else {
+        return Err(if text.trim().parse::<i64>().is_ok() {
+            PersistedFormatError::MissingVersion
+        } else {
+            malformed()
+        });
+    };
+    let version = version.parse::<i64>().map_err(|_| malformed())?;
+    if version != i64::from(HIGH_WATERMARK_FILE_VERSION) {
+        return Err(PersistedFormatError::UnsupportedVersion {
+            found: version,
+            min: i64::from(HIGH_WATERMARK_FILE_VERSION),
+            max: i64::from(HIGH_WATERMARK_FILE_VERSION),
+        });
+    }
+    rest.strip_suffix('\n')
+        .and_then(|offset| offset.parse::<i64>().ok())
+        .filter(|offset| *offset >= 0)
+        .map(Offset)
+        .ok_or_else(malformed)
+}
+
+/// The high watermark [`KraftLog::open`] starts from: the one `hwm_path`
+/// records, or `log_start` when there is none.
+///
+/// Kafka keeps no high-watermark file. A restarted Kafka replica knows no
+/// committed offset until the leader's `Fetch` responses tell it, or, as the
+/// leader, until it commits a record of its own epoch. Krabka's file only
+/// saves the replay of the committed prefix on restart, and a high watermark
+/// below the true one is safe: the controller waits for the quorum to raise it
+/// again. So the file is a cache of state the quorum recomputes. A file that
+/// cannot be read, or that does not parse, is dropped with a warning and the
+/// log start is used, as Kafka starts with no high watermark at all.
+///
+/// A version marker this build does not read is not damage to a cache: it is
+/// a later build's file, or a 0.x data directory that the 1.x contract does
+/// not cover. Both are a hard error, so a node never runs on a format it
+/// cannot read.
+fn recover_high_watermark(hwm_path: &Path, log_start: Offset) -> Result<Offset, RaftError> {
+    let bytes = match std::fs::read(hwm_path) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(log_start),
+        Err(error) => {
+            tracing::warn!(?error, path = %hwm_path.display(), "kraft: high watermark unreadable; starting from the log start");
+            return Ok(log_start);
+        }
+    };
+    let decoded = std::str::from_utf8(&bytes)
+        .map_err(|error| PersistedFormatError::Malformed(error.to_string()))
+        .and_then(decode_high_watermark);
+    match decoded {
+        Ok(hwm) => Ok(hwm),
+        Err(PersistedFormatError::Malformed(reason)) => {
+            tracing::warn!(%reason, path = %hwm_path.display(), "kraft: high watermark does not parse; starting from the log start");
+            Ok(log_start)
+        }
+        Err(problem) => Err(RaftError::PersistedFormat {
+            artifact: HIGH_WATERMARK_FILE,
+            path: hwm_path.to_path_buf(),
+            problem,
+        }),
+    }
+}
+
 /// The `krabka_log` configuration of the metadata log, as Kafka's
 /// `KafkaRaftLog.createLog` builds it: the segments roll at
 /// `metadata.log.segment.bytes` and `metadata.log.segment.ms`, and time and
@@ -61,7 +150,9 @@ impl KraftLog {
     ///
     /// # Errors
     /// Returns [`RaftError`] if the log directory cannot be created or the
-    /// underlying `krabka_log::Log` fails to open.
+    /// underlying `krabka_log::Log` fails to open, and
+    /// [`RaftError::PersistedFormat`] if the high-watermark file has a
+    /// version this build does not read or has no version marker.
     pub fn open(dir: impl AsRef<Path>, config: &MetadataLogConfig) -> Result<Self, RaftError> {
         let log_dir = dir.as_ref();
         let hwm_path = log_dir.join(HIGH_WATERMARK_FILE);
@@ -69,10 +160,7 @@ impl KraftLog {
         // `krabka_log::Log` checkpoints its own log start, so a prune that
         // advanced inside the active segment is already restored here.
         let log = Log::open(log_dir, metadata_log_config(config))?;
-        let hwm = std::fs::read_to_string(&hwm_path)
-            .ok()
-            .and_then(|value| value.trim().parse::<i64>().ok())
-            .map_or_else(|| log.log_start_offset(), Offset)
+        let hwm = recover_high_watermark(&hwm_path, log.log_start_offset())?
             .max(log.log_start_offset())
             .min(log.log_end_offset());
         Ok(Self {
@@ -309,8 +397,16 @@ impl KraftLog {
         Ok(())
     }
 
+    /// Writes the high watermark to a temporary file and renames it over the
+    /// high-watermark file, so a crash leaves the old value or the new one.
+    /// Neither write is synced: the file is a cache (see
+    /// [`recover_high_watermark`]), and an advance that a crash loses only
+    /// lowers the value a restart begins from.
     fn persist_hwm(&mut self) {
-        if let Err(error) = std::fs::write(&self.hwm_path, self.hwm.0.to_string()) {
+        let tmp = self.hwm_path.with_file_name(HIGH_WATERMARK_TMP_FILE);
+        let written = std::fs::write(&tmp, encode_high_watermark(self.hwm))
+            .and_then(|()| std::fs::rename(&tmp, &self.hwm_path));
+        if let Err(error) = written {
             tracing::error!(?error, path = %self.hwm_path.display(), "kraft: persist high watermark failed");
             self.note_failure(&error);
         }
@@ -805,5 +901,110 @@ mod tests {
                     ]
                 )
         );
+    }
+
+    /// The exact text of a version-0 high-watermark file that records offset
+    /// 3. A change to it is a change to the 1.x on-disk contract.
+    const HIGH_WATERMARK_V0_FIXTURE: &[u8] = b"0\n3\n";
+
+    /// A log with four committed one-record batches, its high watermark at 3.
+    fn log_with_hwm_three() -> (KraftLog, tempfile::TempDir) {
+        let (mut log, dir) = open_tmp();
+        for _ in 0..4 {
+            log.append(&mut batch(0, 1, b"x"), 0).expect("append");
+        }
+        log.advance_hwm(Offset(3));
+        (log, dir)
+    }
+
+    #[test]
+    fn the_high_watermark_file_matches_the_version_zero_fixture() {
+        let (log, dir) = log_with_hwm_three();
+        drop(log);
+
+        let written = std::fs::read(dir.path().join(HIGH_WATERMARK_FILE)).expect("read");
+        check!(written == HIGH_WATERMARK_V0_FIXTURE);
+        check!(!dir.path().join(HIGH_WATERMARK_TMP_FILE).exists());
+        check!(decode_high_watermark("0\n3\n") == Ok(Offset(3)));
+    }
+
+    #[test]
+    fn decode_high_watermark_refuses_every_other_layout() {
+        let unsupported = |found| PersistedFormatError::UnsupportedVersion {
+            found,
+            min: 0,
+            max: 0,
+        };
+        let malformed = |text: &str| PersistedFormatError::Malformed(format!("{text:?}"));
+        let cases = [
+            ("0.x layout", "3", PersistedFormatError::MissingVersion),
+            (
+                "0.x layout, padded",
+                " 3 ",
+                PersistedFormatError::MissingVersion,
+            ),
+            ("future version", "1\n3\n", unsupported(1)),
+            ("negative version", "-1\n3\n", unsupported(-1)),
+            ("empty", "", malformed("")),
+            ("version only", "0\n", malformed("0\n")),
+            ("no final newline", "0\n3", malformed("0\n3")),
+            ("trailing line", "0\n3\n4\n", malformed("0\n3\n4\n")),
+            ("negative offset", "0\n-3\n", malformed("0\n-3\n")),
+            ("not a number", "0\nx\n", malformed("0\nx\n")),
+            ("version not a number", "v\n3\n", malformed("v\n3\n")),
+        ];
+        for (case, text, want) in cases {
+            check!(decode_high_watermark(text) == Err(want), "{case}");
+        }
+    }
+
+    /// A version marker this build does not read stops the open; a file that
+    /// is merely damaged is a cache miss, and the log start is used.
+    #[test]
+    fn open_refuses_an_unknown_high_watermark_version_and_drops_a_damaged_one() {
+        let cases: [(&str, &[u8], Result<Offset, PersistedFormatError>); 5] = [
+            ("current version", HIGH_WATERMARK_V0_FIXTURE, Ok(Offset(3))),
+            (
+                "0.x layout",
+                b"3",
+                Err(PersistedFormatError::MissingVersion),
+            ),
+            (
+                "future version",
+                b"7\n3\n",
+                Err(PersistedFormatError::UnsupportedVersion {
+                    found: 7,
+                    min: 0,
+                    max: 0,
+                }),
+            ),
+            ("empty after a crash", b"", Ok(Offset(0))),
+            ("not utf-8", b"0\n\xff\n", Ok(Offset(0))),
+        ];
+        for (case, contents, want) in cases {
+            let (log, dir) = log_with_hwm_three();
+            drop(log);
+            let path = dir.path().join(HIGH_WATERMARK_FILE);
+            std::fs::write(&path, contents).expect("write the high-watermark file");
+
+            let opened = KraftLog::open(dir.path(), &MetadataLogConfig::default());
+
+            let got = match opened {
+                Ok(log) => Ok(log.hwm()),
+                Err(RaftError::PersistedFormat {
+                    artifact,
+                    path: reported,
+                    problem,
+                }) => {
+                    check!(
+                        (artifact, reported) == (HIGH_WATERMARK_FILE, path.clone()),
+                        "{case}"
+                    );
+                    Err(problem)
+                }
+                Err(other) => panic!("{case}: unexpected error {other}"),
+            };
+            check!(got == want, "{case}");
+        }
     }
 }

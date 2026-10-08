@@ -412,3 +412,42 @@ async fn fetch_object(
     *cached = Some((key.to_owned(), bytes.clone()));
     Ok(bytes)
 }
+
+#[cfg(test)]
+mod tests {
+    use assert2::check;
+
+    use super::load;
+    use crate::RestoreError;
+
+    #[tokio::test]
+    async fn a_capture_with_a_missing_or_unknown_version_is_refused() {
+        for (name, json, expected) in [
+            (
+                "pre-1.0 capture",
+                r#"{"captured_at_ms":1,"source_cutoffs":[],"partitions":[]}"#,
+                "diskless WAL capture has no format_version: it predates krabka 1.0, which this \
+                 build does not read",
+            ),
+            (
+                "future version",
+                r#"{"format_version":2,"captured_at_ms":1,"source_cutoffs":[],"partitions":[]}"#,
+                "unsupported diskless WAL capture format version 2: this build reads version 1",
+            ),
+        ] {
+            let dir = tempfile::tempdir().expect("temp dir");
+            let path = dir.path().join("diskless-wal-index.json");
+            tokio::fs::write(&path, json)
+                .await
+                .expect("write the capture");
+
+            let error = load(Some(&path)).await.expect_err(name);
+
+            assert2::assert!(
+                let RestoreError::Integrity(message) = &error,
+                "case {name}: {error}"
+            );
+            check!(message == expected, "case {name}");
+        }
+    }
+}

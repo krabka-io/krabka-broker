@@ -62,13 +62,26 @@ pub(super) async fn read_manifest(
             )));
         }
     };
-    if !(1..=MANIFEST_FORMAT_VERSION).contains(&manifest.body.format_version) {
-        return Ok(ManifestRead::Rejected(format!(
-            "manifest format version {} is outside the supported range 1..={MANIFEST_FORMAT_VERSION}",
-            manifest.body.format_version
-        )));
+    if let Some(reason) = format_version_problem(manifest.body.format_version) {
+        return Ok(ManifestRead::Rejected(reason));
     }
     Ok(ManifestRead::Decoded(Box::new(manifest)))
+}
+
+/// Why a manifest of `version` is refused, or `None` for
+/// [`MANIFEST_FORMAT_VERSION`], the only version a 1.x verifier reads.
+fn format_version_problem(version: u32) -> Option<String> {
+    match version {
+        MANIFEST_FORMAT_VERSION => None,
+        1 => Some(format!(
+            "manifest format version 1 predates krabka 1.0, whose verifier reads only version \
+             {MANIFEST_FORMAT_VERSION}"
+        )),
+        other => Some(format!(
+            "unsupported manifest format version {other}: this build reads only version \
+             {MANIFEST_FORMAT_VERSION}"
+        )),
+    }
 }
 
 /// One manifest object and the key it was read from.
@@ -81,6 +94,49 @@ mod tests {
 
     use super::*;
     use crate::worm::verify::test_support::{Archive, put_raw};
+
+    #[tokio::test]
+    async fn a_manifest_of_any_version_but_the_current_one_is_a_break() {
+        for (version, expected) in [
+            (
+                1,
+                "manifest format version 1 predates krabka 1.0, whose verifier reads only \
+                 version 2",
+            ),
+            (
+                0,
+                "unsupported manifest format version 0: this build reads only version 2",
+            ),
+            (
+                3,
+                "unsupported manifest format version 3: this build reads only version 2",
+            ),
+        ] {
+            let archive = Archive::build(&[1]).await;
+            let segment = &archive.segments[0];
+            let mut value = serde_json::to_value(&segment.manifest).unwrap();
+            value["body"]["format_version"] = serde_json::json!(version);
+            put_raw(
+                &archive.ops,
+                &segment.manifest_key,
+                Bytes::from(serde_json::to_vec(&value).unwrap()),
+            )
+            .await;
+
+            let report = archive.verify().await;
+
+            check!(
+                report.first_break().map(|found| found.reason.as_str()) == Some(expected),
+                "version {version}"
+            );
+        }
+    }
+
+    #[test]
+    fn only_the_current_manifest_version_is_read() {
+        check!(MANIFEST_FORMAT_VERSION == 2);
+        check!(format_version_problem(MANIFEST_FORMAT_VERSION) == None);
+    }
 
     #[tokio::test]
     async fn an_oversized_manifest_object_is_a_break_and_not_an_error() {

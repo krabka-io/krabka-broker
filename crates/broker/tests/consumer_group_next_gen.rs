@@ -74,7 +74,8 @@ async fn single_member_full_lifecycle() {
     let resp = client.send(req).await.unwrap();
     assert!(resp.error_code == 0);
     let member_id = resp.member_id.clone().unwrap();
-    assert!(resp.member_epoch == 1);
+    // A new group starts at Kafka's epoch 1, and the join bumps it to 2.
+    assert!(resp.member_epoch == 2);
     let assigned = resp.assignment.as_ref().unwrap();
     let total_partitions: usize = assigned
         .topic_partitions
@@ -83,11 +84,11 @@ async fn single_member_full_lifecycle() {
         .sum();
     assert!(total_partitions == 4);
 
-    let mut hb2 = heartbeat("g1", &member_id, 1);
+    let mut hb2 = heartbeat("g1", &member_id, 2);
     hb2.subscribed_topic_names = Some(vec!["t1".into()]);
     let resp2 = client.send(hb2).await.unwrap();
     assert!(resp2.error_code == 0);
-    assert!(resp2.member_epoch == 1);
+    assert!(resp2.member_epoch == 2);
 
     let leave = heartbeat("g1", &member_id, -1);
     let resp3 = client.send(leave).await.unwrap();
@@ -244,45 +245,45 @@ async fn describe_after_join() {
 async fn an_old_epoch_is_fenced() {
     let (_b, _d, client) = consumer_case("t6", 2, "c").await;
 
-    // A joins; group_epoch goes 0→1, A's member_epoch = 1.
+    // A joins; group_epoch goes 1→2, A's member_epoch = 2.
     let mut req = heartbeat("g6", "", 0);
     req.subscribed_topic_names = Some(vec!["t6".into()]);
     let r = client.send(req).await.unwrap();
     assert!(r.error_code == 0);
     let mid = r.member_id.unwrap();
 
-    // B joins; group_epoch goes 1→2, B's member_epoch = 2, A's is still 1.
+    // B joins; group_epoch goes 2→3, B's member_epoch = 3, A's is still 2.
     let mut req2 = heartbeat("g6", "", 0);
     req2.subscribed_topic_names = Some(vec!["t6".into()]);
     let rb = client.send(req2).await.unwrap();
     assert!(rb.error_code == 0);
 
-    // A's heartbeat at epoch 1 succeeds and tells A to give up half of its
-    // partitions. Kafka's `CurrentAssignmentBuilder` keeps A at epoch 1 until
+    // A's heartbeat at epoch 2 succeeds and tells A to give up half of its
+    // partitions. Kafka's `CurrentAssignmentBuilder` keeps A at epoch 2 until
     // A reports an owned set without them.
-    let mut catch_up = heartbeat("g6", &mid, 1);
+    let mut catch_up = heartbeat("g6", &mid, 2);
     catch_up.subscribed_topic_names = Some(vec!["t6".into()]);
     let rc = client.send(catch_up).await.unwrap();
     assert!(rc.error_code == 0);
     assert!(
-        rc.member_epoch == 1,
-        "A stays at epoch 1 while it owns partitions it must revoke"
+        rc.member_epoch == 2,
+        "A stays at epoch 2 while it owns partitions it must revoke"
     );
     let kept = rc.assignment.expect("A is told its assignment shrank");
 
-    // A reports what it keeps, and moves to epoch 2.
-    let mut acknowledge = heartbeat("g6", &mid, 1);
+    // A reports what it keeps, and moves to epoch 3.
+    let mut acknowledge = heartbeat("g6", &mid, 2);
     acknowledge.topic_partitions =
         Some(crate::support::consumer_groups::reported_assignment(&kept));
     let ra = client.send(acknowledge).await.unwrap();
     assert!(ra.error_code == 0);
-    assert!(ra.member_epoch == 2, "A moves to epoch 2 once it revoked");
+    assert!(ra.member_epoch == 3, "A moves to epoch 3 once it revoked");
 
-    // Now A re-heartbeats at the OLD epoch 1 and reports no owned partitions;
-    // A's stored epoch is 2. Kafka's `throwIfConsumerGroupMemberEpochIsInvalid`
+    // Now A re-heartbeats at the OLD epoch 2 and reports no owned partitions;
+    // A's stored epoch is 3. Kafka's `throwIfConsumerGroupMemberEpochIsInvalid`
     // accepts the previous epoch only with owned partitions inside the
     // assignment, so this heartbeat is fenced.
-    let stale = heartbeat("g6", &mid, 1);
+    let stale = heartbeat("g6", &mid, 2);
     let resp = client.send(stale).await.unwrap();
     assert!(resp.error_code == krabka_broker::codes::FENCED_MEMBER_EPOCH);
 }
@@ -458,7 +459,7 @@ async fn a_topic_created_after_the_member_joined_reaches_its_next_heartbeat() {
     let joined = client.send(join).await.unwrap();
     let member_id = joined.member_id.clone().expect("member id");
     check!(joined.error_code == 0);
-    check!(joined.member_epoch == 1);
+    check!(joined.member_epoch == 2);
     check!(joined.assignment == Some(Assignment::default()));
 
     create_topic(&client, "late", 3).await;
@@ -475,7 +476,7 @@ async fn a_topic_created_after_the_member_joined_reaches_its_next_heartbeat() {
     let created = Instant::now();
     let refreshed = loop {
         let answer = client
-            .send(heartbeat("g-late", &member_id, 1))
+            .send(heartbeat("g-late", &member_id, 2))
             .await
             .unwrap();
         if answer.assignment.is_some() || created.elapsed() > Duration::from_secs(10) {
@@ -488,7 +489,7 @@ async fn a_topic_created_after_the_member_joined_reaches_its_next_heartbeat() {
         refreshed
             == ConsumerGroupHeartbeatResponse {
                 member_id: Some(member_id),
-                member_epoch: 2,
+                member_epoch: 3,
                 heartbeat_interval_ms: 5_000,
                 assignment: Some(Assignment {
                     topic_partitions: vec![TopicPartitions {

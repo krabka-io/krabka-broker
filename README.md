@@ -84,6 +84,8 @@ on each push to `main`.
 - [KIP compatibility matrix](docs/KIP_MATRIX.md): generated per-KIP status,
   owner, tests, Kafka image and client evidence. Regenerate with
   `aspect generate-kip-matrix`; CI diffs it.
+- [Persisted formats](docs/persisted_formats.md): every on-disk and
+  object-store format, its version marker, and the 1.x compatibility contract.
 
 ## Configuration
 

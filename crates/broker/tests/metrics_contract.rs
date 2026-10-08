@@ -254,6 +254,7 @@ fn every_family_is_accounted_for(metrics: &BrokerMetrics) {
         log_retention_failures: _,
         log_cleaner_uncleanable_partitions: _,
         offline_log_dirs: _,
+        metadata_load_error_count: _,
         log_compactions_total: _,
         barrier_epochs_started_total: _,
         barrier_epochs_committed_total: _,

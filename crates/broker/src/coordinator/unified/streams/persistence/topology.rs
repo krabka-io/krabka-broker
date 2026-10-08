@@ -163,7 +163,7 @@ pub struct StreamsGroupTopologyValue {
 }
 
 value_codec! {
-    StreamsGroupTopologyValue,
+    StreamsGroupTopologyValue("StreamsGroupTopologyValue"),
     encode(&self) -> buf {
         buf.put_i32(self.epoch);
         put_compact_array(buf, self.subtopologies.iter(), |buf, s| {

@@ -92,6 +92,10 @@ impl ControllerHandle {
         mutations: &[crate::DelegationTokenMutation],
     ) -> Result<crate::SubmitChangeResult, RaftError> {
         let body = encode_delegation_token_mutation_body(mutations)?;
+        let version = crate::wire::private_request_version(
+            krabka_metadata::PrivateRpc::DelegationTokenMutation,
+            Some(&self.current_image()),
+        );
         let options = connection_options(
             &self.client_id,
             self.client_dispatch_queue_capacity,
@@ -105,13 +109,18 @@ impl ControllerHandle {
         let response = connection
             .raw_request(
                 crate::wire::API_KEY_DELEGATION_TOKEN_MUTATION,
-                0,
+                version,
                 bytes::Bytes::from(body),
             )
             .await
             .map_err(RaftError::Network)?;
         connection.close();
-        translate_submit_change_response(&response, leader)
+        translate_submit_change_response(
+            &response,
+            leader,
+            crate::wire::API_KEY_DELEGATION_TOKEN_MUTATION,
+            version,
+        )
     }
 
     /// Forward a raw Kafka-wire request for `api_key`/`version` to the
@@ -204,7 +213,11 @@ impl ControllerHandle {
             client_dispatch_queue_capacity: self.client_dispatch_queue_capacity,
             client_frame_max: self.client_frame_max,
         };
-        forward_submit_via(&transport, leader, addr, records).await
+        let version = crate::wire::private_request_version(
+            krabka_metadata::PrivateRpc::SubmitChange,
+            Some(&self.current_image()),
+        );
+        forward_submit_via(&transport, leader, addr, version, records).await
     }
 }
 
@@ -232,19 +245,20 @@ fn controller_endpoint_addr(voters: &krabka_metadata::VoterSet, node_id: NodeId)
 #[cfg_attr(test, mockall::automock)]
 #[async_trait::async_trait]
 trait SubmitChangeTransport: Send + Sync {
-    /// Round-trip the encoded `API_KEY_SUBMIT_CHANGE` `body` to the leader and
-    /// return the raw response body.
+    /// Round-trip the encoded `API_KEY_SUBMIT_CHANGE` `body` to the leader at
+    /// request `version` and return the raw response body.
     async fn send_submit_change(
         &self,
         leader: NodeId,
         addr: &str,
+        version: i16,
         body: Vec<u8>,
     ) -> Result<bytes::Bytes, krabka_client_core::ClientError>;
 }
 
 /// Live [`SubmitChangeTransport`] over the injected [`OutboundDialer`]: dials a
-/// one-shot authenticated connection, sends the request at `API_KEY_SUBMIT_CHANGE`
-/// version 0, closes the connection, and returns the response body. This is the
+/// one-shot authenticated connection, sends the request at the negotiated
+/// `API_KEY_SUBMIT_CHANGE` version, closes the connection, and returns the response body. This is the
 /// only part of the forward path that touches a real socket.
 struct DialerSubmitTransport<'a> {
     dialer: &'a dyn OutboundDialer,
@@ -265,6 +279,7 @@ impl SubmitChangeTransport for DialerSubmitTransport<'_> {
         &self,
         leader: NodeId,
         addr: &str,
+        version: i16,
         body: Vec<u8>,
     ) -> Result<bytes::Bytes, krabka_client_core::ClientError> {
         let opts = connection_options(
@@ -276,7 +291,7 @@ impl SubmitChangeTransport for DialerSubmitTransport<'_> {
         let resp_body = conn
             .raw_request(
                 crate::wire::API_KEY_SUBMIT_CHANGE,
-                0,
+                version,
                 bytes::Bytes::from(body),
             )
             .await?;
@@ -293,14 +308,20 @@ async fn forward_submit_via(
     transport: &dyn SubmitChangeTransport,
     leader: NodeId,
     addr: &str,
+    version: i16,
     records: &[krabka_metadata::MetadataRecord],
 ) -> Result<crate::SubmitChangeResult, RaftError> {
     let body = encode_submit_change_body(records)?;
     let resp_body = transport
-        .send_submit_change(leader, addr, body)
+        .send_submit_change(leader, addr, version, body)
         .await
         .map_err(RaftError::Network)?;
-    translate_submit_change_response(&resp_body, leader)
+    translate_submit_change_response(
+        &resp_body,
+        leader,
+        crate::wire::API_KEY_SUBMIT_CHANGE,
+        version,
+    )
 }
 
 /// Build the exact `API_KEY_SUBMIT_CHANGE` v0 request body for `records`:
@@ -346,12 +367,19 @@ fn submit_change_frame(payload: Vec<u8>) -> Result<Vec<u8>, RaftError> {
 /// - [`crate::wire::PRIVATE_CLUSTER_AUTHORIZATION_FAILED`] → the leader denied
 ///   `ClusterAction` to this node's principal
 ///   ([`RaftError::ClusterAuthorizationFailed`]).
+/// - [`crate::wire::PRIVATE_UNSUPPORTED_VERSION`] → the leader does not
+///   implement `version`, the version of `api_key` this node sent
+///   ([`RaftError::UnsupportedPrivateVersion`]). `krabka.version` negotiation
+///   keeps a sender at a version every registered node serves, so only a peer
+///   outside that agreement answers it.
 /// - anything else → collapse to `NotLeader` (`CreateTopics` maps that to the
 ///   retryable `NOT_CONTROLLER`), preferring the response's `leader_hint` when
 ///   non-negative and falling back to the dialed `leader`.
 fn translate_submit_change_response(
     resp_body: &[u8],
     leader: NodeId,
+    api_key: i16,
+    version: i16,
 ) -> Result<crate::SubmitChangeResult, RaftError> {
     let mut cur: &[u8] = resp_body;
     let resp = crate::wire::KrabkaSubmitChangeResponse::decode_v0(&mut cur)?;
@@ -365,6 +393,9 @@ fn translate_submit_change_response(
         )),
         crate::wire::SUBMIT_CHANGE_UNCOMMITTED_TAIL => Err(RaftError::UncommittedTail),
         crate::wire::PRIVATE_CLUSTER_AUTHORIZATION_FAILED => Err(RaftError::ClusterAuthorizationFailed),
+        crate::wire::PRIVATE_UNSUPPORTED_VERSION => {
+            Err(RaftError::UnsupportedPrivateVersion { api_key, version })
+        }
         _ => Err(RaftError::NotLeader {
             current_leader: (resp.leader_hint >= 0)
                 .then(|| NodeId(u64::try_from(resp.leader_hint).unwrap_or(leader.0))),
@@ -374,6 +405,7 @@ fn translate_submit_change_response(
 
 #[cfg(test)]
 mod tests {
+    use assert2::check;
     use uuid::Uuid;
 
     use super::*;
@@ -468,17 +500,144 @@ mod tests {
         assert2::assert!(decoded == records);
     }
 
+    /// A `SubmitChange` v0 request body that carries one `TopicRecord`.
+    const SUBMIT_CHANGE_V0_GOLDEN: &[u8] = &[
+        0, 0, 0, 51, // frame length
+        1, 0, 0, 0, 0, 0, 0, 0, // one record
+        0, 0, 0, 0, // V1Topic
+        1, 0, 0, 0, 0, 0, 0, 0, b't', // name
+        16, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, // topic id
+        1, 0, 0, 0, // partitions
+        1, 0, // replication factor
+    ];
+
+    /// A `DelegationTokenMutation` v0 request body that carries one `Delete`.
+    const DELEGATION_TOKEN_MUTATION_V0_GOLDEN: &[u8] = &[
+        0, 0, 0, 130, // frame length
+        1, 0, 0, 0, 0, 0, 0, 0, // one mutation
+        2, 0, 0, 0, // Delete
+        3, 0, 0, 0, 0, 0, 0, 0, b't', b'o', b'k', // token id
+        4, 0, 0, 0, 0, 0, 0, 0, b'U', b's', b'e', b'r', // owner type
+        5, 0, 0, 0, 0, 0, 0, 0, b'a', b'l', b'i', b'c', b'e', // owner name
+        4, 0, 0, 0, 0, 0, 0, 0, b'U', b's', b'e', b'r', // requester type
+        5, 0, 0, 0, 0, 0, 0, 0, b'a', b'l', b'i', b'c', b'e', // requester name
+        1, 0, 0, 0, 0, 0, 0, 0, // issue timestamp
+        2, 0, 0, 0, 0, 0, 0, 0, // expiry timestamp
+        3, 0, 0, 0, 0, 0, 0, 0, // max timestamp
+        1, 0, 0, 0, 0, 0, 0, 0, // one renewer
+        4, 0, 0, 0, 0, 0, 0, 0, b'U', b's', b'e', b'r', // renewer type
+        5, 0, 0, 0, 0, 0, 0, 0, b'a', b'l', b'i', b'c', b'e', // renewer name
+    ];
+
+    /// The wincode `SubmitChangeResult` of a `SubmitChange` v0 response with
+    /// one offset reservation.
+    const SUBMIT_CHANGE_RESULT_V0_GOLDEN: &[u8] = &[
+        1, 0, 0, 0, 0, 0, 0, 0, // one reservation
+        1, 0, 0, 0, 0, 0, 0, 0, b't', // topic
+        0, 0, 0, 0, // partition
+        5, 0, 0, 0, 0, 0, 0, 0, // base offset
+        2, 0, 0, 0, 0, 0, 0, 0, // count
+        3, 0, 0, 0, 0, 0, 0, 0, // leader epoch
+    ];
+
+    /// One delegation token, the representative value of the
+    /// `DelegationTokenMutation` golden body.
+    fn golden_token() -> krabka_metadata::DelegationTokenRecord {
+        let alice = krabka_security::KafkaPrincipal {
+            principal_type: "User".into(),
+            name: "alice".into(),
+        };
+        krabka_metadata::DelegationTokenRecord {
+            token_id: "tok".into(),
+            owner: alice.clone(),
+            requester: alice.clone(),
+            issue_timestamp_ms: 1,
+            expiry_timestamp_ms: 2,
+            max_timestamp_ms: 3,
+            renewers: vec![alice],
+        }
+    }
+
+    /// The bodies of `SubmitChange` and `DelegationTokenMutation` v0 requests and
+    /// of a `SubmitChange` v0 result, byte for byte: the length-prefixed frame
+    /// around the wincode payload. Nodes of two 1.x builds exchange these
+    /// during a rolling upgrade, so a change to one of them is a change to the
+    /// 1.x contract and takes a new api version.
+    #[test]
+    fn v0_payloads_match_their_golden_bytes() {
+        let records = vec![krabka_metadata::MetadataRecord::V1Topic(
+            krabka_metadata::TopicRecord {
+                name: "t".into(),
+                topic_id: Uuid::from_u128(1),
+                partitions: 1,
+                replication_factor: 1,
+            },
+        )];
+        let mutations = vec![crate::DelegationTokenMutation::Delete {
+            expected: golden_token(),
+        }];
+        let result = crate::SubmitChangeResult {
+            offset_reservations: vec![crate::OffsetReservation {
+                topic: "t".into(),
+                partition: 0,
+                base_offset: 5,
+                count: 2,
+                leader_epoch: 3,
+            }],
+        };
+        let result_bytes =
+            <serde_wincode::SerdeCompat<crate::SubmitChangeResult> as wincode::Serialize>::serialize(
+                &result,
+            )
+            .expect("wincode");
+
+        check!(encode_submit_change_body(&records).unwrap() == SUBMIT_CHANGE_V0_GOLDEN);
+        check!(
+            encode_delegation_token_mutation_body(&mutations).unwrap()
+                == DELEGATION_TOKEN_MUTATION_V0_GOLDEN
+        );
+        check!(result_bytes == SUBMIT_CHANGE_RESULT_V0_GOLDEN);
+
+        // Each golden body decodes back to the value it was made from.
+        let mut cur: &[u8] = SUBMIT_CHANGE_V0_GOLDEN;
+        let frame = crate::wire::KrabkaSubmitChangeRequest::decode_v0(&mut cur).unwrap();
+        check!(
+            <serde_wincode::SerdeCompat<Vec<krabka_metadata::MetadataRecord>> as wincode::Deserialize>::deserialize(&frame.records).unwrap()
+                == records
+        );
+        let mut cur: &[u8] = DELEGATION_TOKEN_MUTATION_V0_GOLDEN;
+        let frame = crate::wire::KrabkaSubmitChangeRequest::decode_v0(&mut cur).unwrap();
+        check!(
+            <serde_wincode::SerdeCompat<Vec<crate::DelegationTokenMutation>> as wincode::Deserialize>::deserialize(&frame.records).unwrap()
+                == mutations
+        );
+        check!(
+            <serde_wincode::SerdeCompat<crate::SubmitChangeResult> as wincode::Deserialize>::deserialize(SUBMIT_CHANGE_RESULT_V0_GOLDEN).unwrap()
+                == result
+        );
+    }
+
     #[test]
     fn translate_submit_change_response_maps_each_error_code() {
         // 0 => applied.
         assert2::assert!(
-            translate_submit_change_response(&submit_change_response_bytes(0, -1), NodeId(5))
-                .is_ok()
+            translate_submit_change_response(
+                &submit_change_response_bytes(0, -1),
+                NodeId(5),
+                crate::wire::API_KEY_SUBMIT_CHANGE,
+                0
+            )
+            .is_ok()
         );
 
         // 2 => leader rejected at apply-time: a TopicExists metadata error.
-        let err = translate_submit_change_response(&submit_change_response_bytes(2, -1), NodeId(5))
-            .expect_err("code 2 is an error");
+        let err = translate_submit_change_response(
+            &submit_change_response_bytes(2, -1),
+            NodeId(5),
+            crate::wire::API_KEY_SUBMIT_CHANGE,
+            0,
+        )
+        .expect_err("code 2 is an error");
         assert2::assert!(matches!(
             err,
             RaftError::Metadata(krabka_metadata::MetadataError::TopicExists(_))
@@ -488,6 +647,8 @@ mod tests {
         let err = translate_submit_change_response(
             &submit_change_response_bytes(crate::wire::SUBMIT_CHANGE_UNCOMMITTED_TAIL, -1),
             NodeId(5),
+            crate::wire::API_KEY_SUBMIT_CHANGE,
+            0,
         )
         .expect_err("an uncommitted tail is an error");
         assert2::assert!(matches!(err, RaftError::UncommittedTail));
@@ -496,14 +657,40 @@ mod tests {
         let err = translate_submit_change_response(
             &submit_change_response_bytes(crate::wire::PRIVATE_CLUSTER_AUTHORIZATION_FAILED, -1),
             NodeId(5),
+            crate::wire::API_KEY_SUBMIT_CHANGE,
+            0,
         )
         .expect_err("cluster auth failed");
         assert2::assert!(matches!(err, RaftError::ClusterAuthorizationFailed));
 
+        // UNSUPPORTED_VERSION names the api and the version this build sent,
+        // for each of the two APIs that share the response.
+        for api_key in [
+            crate::wire::API_KEY_SUBMIT_CHANGE,
+            crate::wire::API_KEY_DELEGATION_TOKEN_MUTATION,
+        ] {
+            let err = translate_submit_change_response(
+                &submit_change_response_bytes(crate::wire::PRIVATE_UNSUPPORTED_VERSION, -1),
+                NodeId(5),
+                api_key,
+                2,
+            )
+            .expect_err("an unsupported version is an error");
+            assert2::assert!(matches!(
+                err,
+                RaftError::UnsupportedPrivateVersion { api_key: got, version: 2 } if got == api_key
+            ));
+        }
+
         // Any other code collapses to NotLeader, taking the response's
         // leader_hint when non-negative.
-        let err = translate_submit_change_response(&submit_change_response_bytes(1, 9), NodeId(5))
-            .expect_err("code 1 is an error");
+        let err = translate_submit_change_response(
+            &submit_change_response_bytes(1, 9),
+            NodeId(5),
+            crate::wire::API_KEY_SUBMIT_CHANGE,
+            0,
+        )
+        .expect_err("code 1 is an error");
         assert2::assert!(matches!(
             err,
             RaftError::NotLeader {
@@ -513,8 +700,13 @@ mod tests {
 
         // A negative leader_hint falls back to None (unknown), NOT to the dialed
         // leader id — distinguishing the `>= 0` guard.
-        let err = translate_submit_change_response(&submit_change_response_bytes(3, -1), NodeId(5))
-            .expect_err("code 3 is an error");
+        let err = translate_submit_change_response(
+            &submit_change_response_bytes(3, -1),
+            NodeId(5),
+            crate::wire::API_KEY_SUBMIT_CHANGE,
+            0,
+        )
+        .expect_err("code 3 is an error");
         assert2::assert!(matches!(
             err,
             RaftError::NotLeader {
@@ -527,8 +719,13 @@ mod tests {
     fn translate_submit_change_response_propagates_decode_error() {
         // A truncated body (fewer than the fixed 10 response bytes) must surface
         // as a protocol error rather than being silently treated as success.
-        let err = translate_submit_change_response(&[0u8; 3], NodeId(5))
-            .expect_err("truncated decodes err");
+        let err = translate_submit_change_response(
+            &[0u8; 3],
+            NodeId(5),
+            crate::wire::API_KEY_SUBMIT_CHANGE,
+            0,
+        )
+        .expect_err("truncated decodes err");
         assert2::assert!(matches!(err, RaftError::Protocol(_)));
     }
 
@@ -543,13 +740,16 @@ mod tests {
         let mut transport = MockSubmitChangeTransport::new();
         transport
             .expect_send_submit_change()
-            .withf(move |leader, addr, body| {
-                *leader == 7 && addr == "leader-host:9093" && body == &expected_body
+            .withf(move |leader, addr, version, body| {
+                *leader == 7
+                    && addr == "leader-host:9093"
+                    && *version == 0
+                    && body == &expected_body
             })
             .times(1)
-            .returning(|_, _, _| Ok(submit_change_response_bytes(0, -1)));
+            .returning(|_, _, _, _| Ok(submit_change_response_bytes(0, -1)));
 
-        forward_submit_via(&transport, NodeId(7), "leader-host:9093", &records)
+        forward_submit_via(&transport, NodeId(7), "leader-host:9093", 0, &records)
             .await
             .expect("applied");
     }
@@ -561,12 +761,13 @@ mod tests {
         let mut transport = MockSubmitChangeTransport::new();
         transport
             .expect_send_submit_change()
-            .returning(|_, _, _| Ok(submit_change_response_bytes(1, 4)));
+            .returning(|_, _, _, _| Ok(submit_change_response_bytes(1, 4)));
 
         let err = forward_submit_via(
             &transport,
             NodeId(7),
             "leader-host:9093",
+            0,
             &[topic_record("z")],
         )
         .await
@@ -584,17 +785,20 @@ mod tests {
         // A dial/send failure surfaces as RaftError::Network (so CreateTopics
         // retries), not a panic or a swallowed success.
         let mut transport = MockSubmitChangeTransport::new();
-        transport.expect_send_submit_change().returning(|_, _, _| {
-            Err(krabka_client_core::ClientError::Io(std::io::Error::new(
-                std::io::ErrorKind::ConnectionRefused,
-                "refused",
-            )))
-        });
+        transport
+            .expect_send_submit_change()
+            .returning(|_, _, _, _| {
+                Err(krabka_client_core::ClientError::Io(std::io::Error::new(
+                    std::io::ErrorKind::ConnectionRefused,
+                    "refused",
+                )))
+            });
 
         let err = forward_submit_via(
             &transport,
             NodeId(7),
             "leader-host:9093",
+            0,
             &[topic_record("z")],
         )
         .await

@@ -46,7 +46,7 @@ fn snapshot_header_timestamp(bytes: &[u8]) -> i64 {
     let header = RecordBatch::decode(&mut cursor).expect("decode the header batch");
     let record = header.records.first().expect("a header record");
     match decode_control_record(record).expect("decode the header control record") {
-        Some(ControlRecord::SnapshotHeader(header)) => header.last_contained_log_timestamp,
+        ControlRecord::SnapshotHeader(header) => header.last_contained_log_timestamp,
         other => panic!("expected a snapshot header control record, got {other:?}"),
     }
 }

@@ -79,8 +79,6 @@ pub struct PartitionVerifyReport {
     pub create_precondition_objects: ObjectProtectionReport,
     /// Objects whose multipart write relied on bucket retention.
     pub bucket_retention_objects: ObjectProtectionReport,
-    /// Legacy objects whose manifests did not record the protection mechanism.
-    pub unknown_protection_objects: ObjectProtectionReport,
     /// Chain runs found, ordered by their lowest segment start offset.
     pub epochs: Vec<EpochSpan>,
     /// Manifests that carry no signature at all.
@@ -161,7 +159,6 @@ pub(super) fn broken_before_walk(
         objects_checked: 0,
         create_precondition_objects: ObjectProtectionReport::default(),
         bucket_retention_objects: ObjectProtectionReport::default(),
-        unknown_protection_objects: ObjectProtectionReport::default(),
         epochs: Vec::new(),
         unsigned_manifests: 0,
         untrusted_manifests: 0,

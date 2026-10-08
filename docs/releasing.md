@@ -57,6 +57,12 @@ Move the `[Unreleased]` entries of [`CHANGELOG.md`](../CHANGELOG.md) under a new
 Write what changed for a reader who runs the broker, not a list of commit
 subjects.
 
+A release that adds or changes a persisted format names, in its entry, the
+feature level that turns the new format on, and updates
+[Persisted formats](persisted_formats.md) in the same pull request. From 1.0.0
+on, every 1.x release reads every format that an earlier 1.x release wrote. A
+change that cannot keep that promise waits for the next major version.
+
 Then fix the link definitions at the end of the file. Add one for the new tag,
 and move the `[Unreleased]` comparison onto that tag as well: it names the
 previous one, so leaving it alone would keep listing everything this release

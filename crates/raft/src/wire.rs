@@ -8,9 +8,40 @@
 //! submit-change forward.
 //!
 //! Api keys: `1003` `SubmitChange` (forward), `1004` `MetadataFetch`
-//! (observer), and `1005` `DelegationTokenMutation` (guarded forward).
+//! (observer), and `1005` `DelegationTokenMutation` (guarded forward). They
+//! come from [`PrivateRpc::api_key`], so this module and `krabka-metadata`
+//! cannot disagree.
+//!
+//! # Version negotiation
+//!
+//! The request header's `api_version` versions each body. No `ApiVersions`
+//! response advertises these keys. The finalized `krabka.version` feature
+//! negotiates them instead, as `metadata.version` negotiates Kafka's
+//! inter-broker protocol versions. The controller finalizes a `krabka.version`
+//! level only once every registered node supports it, so the level tells a
+//! sender which request versions every peer serves:
+//!
+//! - A **sender** sends [`private_request_version`]: the version that
+//!   `krabka_metadata::private_rpc_version` gives for the `krabka.version`
+//!   finalized in its current metadata image. With no image, or an image that
+//!   has not finalized the feature, that is v0, the krabka-broker 1.0.0
+//!   baseline that every 1.x node serves.
+//! - A **receiver** serves every version from 0 up to
+//!   [`private_api_highest_version`], the table's version at this build's
+//!   `KRABKA_VERSION_MAX`. It answers any other version with
+//!   [`PRIVATE_UNSUPPORTED_VERSION`] in the v0 response shape, which every 1.x
+//!   sender decodes.
+//!
+//! At `krabka.version` 0 and 1 every RPC is v0. The first level that raises
+//! one adds a `max_request_version` arm in `krabka-metadata`, and the matching
+//! encode and decode methods here.
 
 use bytes::{Buf, BufMut, Bytes};
+use krabka_metadata::{
+    KrabkaVersion, MetadataImage, PrivateRpc,
+    krabka_version::{KRABKA_VERSION_MAX, KRABKA_VERSION_MIN},
+    private_rpc_version,
+};
 use krabka_protocol::ProtocolError;
 
 const I32_LEN: usize = 4;
@@ -26,7 +57,7 @@ const NO_SNAPSHOT: i64 = -1;
 /// The body is the wincode-encoded `Vec<MetadataRecord>`. The response carries
 /// a single `error_code`, where 0 means applied and any non-zero value means
 /// not-leader or metadata-validation.
-pub const API_KEY_SUBMIT_CHANGE: i16 = 1003;
+pub const API_KEY_SUBMIT_CHANGE: i16 = PrivateRpc::SubmitChange.api_key();
 
 /// `KrabkaSubmitChangeResponse::error_code`: the leader refused a
 /// compare-and-set until its uncommitted tail commits. The forwarding node
@@ -46,10 +77,103 @@ pub const PRIVATE_CLUSTER_AUTHORIZATION_FAILED: i16 = 31;
 /// `quorum_high_watermark`, a `leader_hint`, the responder's `leader_epoch`,
 /// and the KIP-630 `snapshot_id` that replaces the records when the fetch
 /// offset has been pruned away.
-pub const API_KEY_METADATA_FETCH: i16 = 1004;
+pub const API_KEY_METADATA_FETCH: i16 = PrivateRpc::MetadataFetch.api_key();
 
 /// Generation-bound delegation-token mutation forwarded to the leader.
-pub const API_KEY_DELEGATION_TOKEN_MUTATION: i16 = 1005;
+pub const API_KEY_DELEGATION_TOKEN_MUTATION: i16 = PrivateRpc::DelegationTokenMutation.api_key();
+
+/// The version of every krabka-private API that a sender uses when it has no
+/// metadata image to read `krabka.version` from: v0, the krabka-broker 1.0.0
+/// formats, which every 1.x receiver serves. It is also what an image that has
+/// not finalized `krabka.version` negotiates, since that image reads as level
+/// 0.
+pub const PRIVATE_BASELINE_VERSION: i16 = 0;
+
+/// The lowest version of every krabka-private API that this build serves.
+const PRIVATE_LOWEST_VERSION: i16 = PRIVATE_BASELINE_VERSION;
+
+/// The `error_code` of a krabka-private response to a request at a version
+/// the receiver does not implement. It is Kafka's `UNSUPPORTED_VERSION`.
+pub const PRIVATE_UNSUPPORTED_VERSION: i16 = 35;
+
+/// The highest version of the krabka-private `api_key` this build serves, or
+/// `None` when `api_key` is not one of them.
+///
+/// It is the version the `krabka.version` table gives at this build's
+/// `KRABKA_VERSION_MAX`. A receiver serves every version from 0 up to it,
+/// because a sender may send any version that a level up to that maximum
+/// gives, and a level never lowers a version.
+#[must_use]
+pub const fn private_api_highest_version(api_key: i16) -> Option<i16> {
+    private_rpc_version(api_key, KRABKA_VERSION_MAX)
+}
+
+/// The version of `rpc` a sender puts in the request header, negotiated from
+/// `image`, the sender's current metadata image.
+///
+/// It is `KrabkaVersion::finalized(image).max_request_version(rpc)`. The
+/// fallbacks all land on a version every peer serves:
+///
+/// - With no image (`None`), it is [`PRIVATE_BASELINE_VERSION`], v0.
+/// - An image that has not finalized `krabka.version` reads as level 0, which
+///   gives v0 too.
+/// - A level above this build's `KRABKA_VERSION_MAX` sends this build's
+///   highest version. The controller finalized that level because every
+///   registered node supports it, and a node that supports a level serves
+///   every version below the one it gives.
+#[must_use]
+pub fn private_request_version(rpc: PrivateRpc, image: Option<&MetadataImage>) -> i16 {
+    let Some(image) = image else {
+        return PRIVATE_BASELINE_VERSION;
+    };
+    let level = KrabkaVersion::finalized(image)
+        .level()
+        .clamp(KRABKA_VERSION_MIN, KRABKA_VERSION_MAX);
+    KrabkaVersion::new(level)
+        .max_request_version(rpc)
+        .unwrap_or(PRIVATE_BASELINE_VERSION)
+}
+
+/// The answer to a krabka-private request at `version` when this build does
+/// not serve that version: the v0 response of `api_key` with
+/// [`PRIVATE_UNSUPPORTED_VERSION`]. `None` when it serves `version`, or when
+/// `api_key` is not a krabka-private API.
+///
+/// # Errors
+/// Never in practice: the v0 error responses carry no payload.
+pub fn unsupported_version_response(
+    api_key: i16,
+    version: i16,
+) -> Result<Option<Bytes>, ProtocolError> {
+    let Some(highest) = private_api_highest_version(api_key) else {
+        return Ok(None);
+    };
+    if (PRIVATE_LOWEST_VERSION..=highest).contains(&version) {
+        return Ok(None);
+    }
+    let mut out = Vec::new();
+    if api_key == API_KEY_METADATA_FETCH {
+        KrabkaMetadataFetchResponse {
+            error_code: PRIVATE_UNSUPPORTED_VERSION,
+            leader_hint: -1,
+            leader_epoch: -1,
+            log_start_offset: -1,
+            high_watermark: -1,
+            quorum_high_watermark: -1,
+            snapshot_id: None,
+            records: Bytes::new(),
+        }
+        .encode_v0(&mut out)?;
+    } else {
+        KrabkaSubmitChangeResponse {
+            error_code: PRIVATE_UNSUPPORTED_VERSION,
+            leader_hint: -1,
+            result: Bytes::new(),
+        }
+        .encode_v0(&mut out)?;
+    }
+    Ok(Some(Bytes::from(out)))
+}
 
 fn require_remaining(buf: &[u8], required: usize) -> Result<(), ProtocolError> {
     match required.checked_sub(buf.remaining()) {
@@ -273,8 +397,283 @@ impl KrabkaMetadataFetchResponse {
 
 #[cfg(test)]
 mod tests {
+    use assert2::check;
 
     use super::*;
+
+    /// The v0 `SubmitChange` request body that [`submit_request`] encodes to.
+    const SUBMIT_REQUEST_V0: &[u8] = &[0, 0, 0, 3, 1, 2, 3];
+
+    /// The v0 `SubmitChange` response body that [`submit_response`] encodes to.
+    const SUBMIT_RESPONSE_V0: &[u8] = &[0, 4, 0, 0, 0, 0, 0, 0, 0, 3, 0, 0, 0, 2, b'o', b'k'];
+
+    /// The v0 `MetadataFetch` request body that [`fetch_request`] encodes to.
+    const FETCH_REQUEST_V0: &[u8] = &[
+        0, 0, 0, 0, 0, 0, 0, 42, 0, 0x10, 0, 0, 0, 0, 0, 7, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12,
+        13, 14, 15, 16,
+    ];
+
+    /// The v0 `MetadataFetch` response body that [`fetch_response`] encodes to.
+    const FETCH_RESPONSE_V0: &[u8] = &[
+        0, 0, // error_code
+        0, 0, 0, 0, 0, 0, 0, 3, // leader_hint
+        0, 0, 0, 4, // leader_epoch
+        0, 0, 0, 0, 0, 0, 0, 1, // log_start_offset
+        0, 0, 0, 0, 0, 0, 0, 99, // high_watermark
+        0, 0, 0, 0, 0, 0, 2, 0, // quorum_high_watermark
+        0, 0, 0, 0, 0, 0, 0, 64, // snapshot end offset
+        0, 0, 0, 2, // snapshot epoch
+        0, 0, 0, 1, 0xaa, // records
+    ];
+
+    fn submit_request() -> KrabkaSubmitChangeRequest {
+        KrabkaSubmitChangeRequest {
+            records: Bytes::from_static(b"\x01\x02\x03"),
+        }
+    }
+
+    fn submit_response() -> KrabkaSubmitChangeResponse {
+        KrabkaSubmitChangeResponse {
+            error_code: SUBMIT_CHANGE_UNCOMMITTED_TAIL,
+            leader_hint: 3,
+            result: Bytes::from_static(b"ok"),
+        }
+    }
+
+    fn fetch_request() -> KrabkaMetadataFetchRequest {
+        KrabkaMetadataFetchRequest {
+            fetch_offset: 42,
+            max_bytes: 1_048_576,
+            replica_id: 7,
+            replica_directory_id: uuid::Uuid::from_u128(0x0102_0304_0506_0708_090a_0b0c_0d0e_0f10),
+        }
+    }
+
+    fn fetch_response() -> KrabkaMetadataFetchResponse {
+        KrabkaMetadataFetchResponse {
+            error_code: 0,
+            leader_hint: 3,
+            leader_epoch: 4,
+            log_start_offset: 1,
+            high_watermark: 99,
+            quorum_high_watermark: 512,
+            snapshot_id: Some((64, 2)),
+            records: Bytes::from_static(b"\xaa"),
+        }
+    }
+
+    /// The v0 bodies of the krabka-private RPCs, byte for byte. A change to
+    /// one of them is a change to the 1.x rolling-upgrade contract.
+    #[test]
+    fn v0_bodies_match_their_golden_bytes() {
+        let mut submit_request_bytes = Vec::new();
+        submit_request()
+            .encode_v0(&mut submit_request_bytes)
+            .unwrap();
+        let mut submit_response_bytes = Vec::new();
+        submit_response()
+            .encode_v0(&mut submit_response_bytes)
+            .unwrap();
+        let mut fetch_request_bytes = Vec::new();
+        fetch_request().encode_v0(&mut fetch_request_bytes);
+        let mut fetch_response_bytes = Vec::new();
+        fetch_response()
+            .encode_v0(&mut fetch_response_bytes)
+            .unwrap();
+
+        let cases: [(&str, Vec<u8>, &[u8]); 4] = [
+            (
+                "SubmitChange request",
+                submit_request_bytes,
+                SUBMIT_REQUEST_V0,
+            ),
+            (
+                "SubmitChange response",
+                submit_response_bytes,
+                SUBMIT_RESPONSE_V0,
+            ),
+            (
+                "MetadataFetch request",
+                fetch_request_bytes,
+                FETCH_REQUEST_V0,
+            ),
+            (
+                "MetadataFetch response",
+                fetch_response_bytes,
+                FETCH_RESPONSE_V0,
+            ),
+        ];
+        for (case, encoded, golden) in cases {
+            check!(encoded == golden, "{case}");
+        }
+    }
+
+    /// The golden v0 bodies decode back to the values they were made from.
+    #[test]
+    fn golden_v0_bodies_decode_back() {
+        check!(
+            KrabkaSubmitChangeRequest::decode_v0(&mut &*SUBMIT_REQUEST_V0).unwrap()
+                == submit_request()
+        );
+        check!(
+            KrabkaSubmitChangeResponse::decode_v0(&mut &*SUBMIT_RESPONSE_V0).unwrap()
+                == submit_response()
+        );
+        check!(
+            KrabkaMetadataFetchRequest::decode_v0(&mut &*FETCH_REQUEST_V0).unwrap()
+                == fetch_request()
+        );
+        check!(
+            KrabkaMetadataFetchResponse::decode_v0(&mut &*FETCH_RESPONSE_V0).unwrap()
+                == fetch_response()
+        );
+    }
+
+    /// A receiver serves every version from 0 up to the highest its
+    /// `krabka.version` table gives at `KRABKA_VERSION_MAX`, and answers any
+    /// other version with `UNSUPPORTED_VERSION` in that API's v0 response
+    /// shape.
+    #[test]
+    fn unsupported_versions_are_answered_in_the_v0_shape() {
+        let submit_refusal = KrabkaSubmitChangeResponse {
+            error_code: PRIVATE_UNSUPPORTED_VERSION,
+            leader_hint: -1,
+            result: Bytes::new(),
+        };
+        let mut submit_refusal_bytes = Vec::new();
+        submit_refusal.encode_v0(&mut submit_refusal_bytes).unwrap();
+        let fetch_refusal = KrabkaMetadataFetchResponse {
+            error_code: PRIVATE_UNSUPPORTED_VERSION,
+            leader_hint: -1,
+            leader_epoch: -1,
+            log_start_offset: -1,
+            high_watermark: -1,
+            quorum_high_watermark: -1,
+            snapshot_id: None,
+            records: Bytes::new(),
+        };
+        let mut fetch_refusal_bytes = Vec::new();
+        fetch_refusal.encode_v0(&mut fetch_refusal_bytes).unwrap();
+        let submit = Some(Bytes::from(submit_refusal_bytes));
+        let fetch = Some(Bytes::from(fetch_refusal_bytes));
+        let max = |api_key| private_api_highest_version(api_key).expect("a private api");
+        let cases = [
+            (API_KEY_SUBMIT_CHANGE, 0, None),
+            (API_KEY_SUBMIT_CHANGE, max(API_KEY_SUBMIT_CHANGE), None),
+            (
+                API_KEY_SUBMIT_CHANGE,
+                max(API_KEY_SUBMIT_CHANGE) + 1,
+                submit.clone(),
+            ),
+            (API_KEY_SUBMIT_CHANGE, -1, submit.clone()),
+            (API_KEY_DELEGATION_TOKEN_MUTATION, 0, None),
+            (
+                API_KEY_DELEGATION_TOKEN_MUTATION,
+                max(API_KEY_DELEGATION_TOKEN_MUTATION),
+                None,
+            ),
+            (
+                API_KEY_DELEGATION_TOKEN_MUTATION,
+                max(API_KEY_DELEGATION_TOKEN_MUTATION) + 1,
+                submit,
+            ),
+            (API_KEY_METADATA_FETCH, 0, None),
+            (API_KEY_METADATA_FETCH, max(API_KEY_METADATA_FETCH), None),
+            (
+                API_KEY_METADATA_FETCH,
+                max(API_KEY_METADATA_FETCH) + 1,
+                fetch,
+            ),
+            (1, 99, None),
+        ];
+        for (api_key, version, want) in cases {
+            check!(
+                unsupported_version_response(api_key, version).unwrap() == want,
+                "api {api_key} v{version}"
+            );
+        }
+    }
+
+    /// The api keys are `PrivateRpc`'s, and this build serves exactly v0 of
+    /// each: the only bodies this module has codecs for. A `krabka.version`
+    /// level that raises a version fails this row until the module gains the
+    /// matching encode and decode methods.
+    #[test]
+    fn private_apis_come_from_the_krabka_version_table() {
+        let actual: Vec<_> = PrivateRpc::ALL
+            .iter()
+            .map(|&rpc| {
+                (
+                    rpc,
+                    rpc.api_key(),
+                    private_api_highest_version(rpc.api_key()),
+                )
+            })
+            .collect();
+        let expected = vec![
+            (PrivateRpc::SubmitChange, API_KEY_SUBMIT_CHANGE, Some(0)),
+            (PrivateRpc::MetadataFetch, API_KEY_METADATA_FETCH, Some(0)),
+            (
+                PrivateRpc::DelegationTokenMutation,
+                API_KEY_DELEGATION_TOKEN_MUTATION,
+                Some(0),
+            ),
+        ];
+        check!(actual == expected);
+        check!(
+            (
+                API_KEY_SUBMIT_CHANGE,
+                API_KEY_METADATA_FETCH,
+                API_KEY_DELEGATION_TOKEN_MUTATION
+            ) == (1003, 1004, 1005)
+        );
+        check!(private_api_highest_version(1002).is_none());
+    }
+
+    /// A sender's request version follows the `krabka.version` finalized in
+    /// its image: v0 without an image, with the feature absent, and at levels
+    /// 0 and 1, which are all the krabka-broker 1.0.0 formats. A level above
+    /// this build's maximum sends this build's highest version.
+    #[test]
+    fn sender_version_follows_the_finalized_krabka_version() {
+        use krabka_metadata::{
+            FeatureLevelRecord, MetadataRecord, krabka_version::KRABKA_VERSION_FEATURE,
+        };
+
+        let image_at = |level: Option<i16>| {
+            let mut image = MetadataImage::new(uuid::Uuid::nil());
+            if let Some(level) = level {
+                image.apply(&MetadataRecord::V1FeatureLevel(FeatureLevelRecord {
+                    name: KRABKA_VERSION_FEATURE.into(),
+                    level,
+                }));
+            }
+            image
+        };
+        let rows: [(&str, Option<MetadataImage>, [i16; 3]); 5] = [
+            ("no image", None, [0, 0, 0]),
+            ("feature absent", Some(image_at(None)), [0, 0, 0]),
+            ("level 0", Some(image_at(Some(0))), [0, 0, 0]),
+            ("level 1", Some(image_at(Some(1))), [0, 0, 0]),
+            (
+                "level above this build's maximum",
+                Some(image_at(Some(KRABKA_VERSION_MAX + 1))),
+                [0, 0, 0],
+            ),
+        ];
+        let actual: Vec<_> = rows
+            .iter()
+            .map(|(case, image, _)| {
+                (
+                    *case,
+                    PrivateRpc::ALL.map(|rpc| private_request_version(rpc, image.as_ref())),
+                )
+            })
+            .collect();
+        let expected: Vec<_> = rows.iter().map(|(case, _, want)| (*case, *want)).collect();
+        check!(actual == expected);
+        check!(private_request_version(PrivateRpc::SubmitChange, None) == PRIVATE_BASELINE_VERSION);
+    }
 
     fn assert_unexpected_eof<T: std::fmt::Debug>(result: Result<T, ProtocolError>, want: usize) {
         match result {

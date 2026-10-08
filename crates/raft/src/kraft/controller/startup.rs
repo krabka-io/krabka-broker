@@ -18,7 +18,7 @@ use uuid::Uuid;
 
 use super::{
     Engine, KraftConfig, KraftControlState, KraftController, METADATA_LOG_CLEAN_INTERVAL,
-    PendingDowngradeSnapshot, QUORUM_STATE_FILE,
+    PendingDowngradeSnapshot,
     activation::{Activation, check_bootstrap_records},
     checkpoint::{BOOTSTRAP_SNAPSHOT_ID, latest_checkpoint_id, load_latest_checkpoint},
     quorum_state_file::load_quorum_state,
@@ -97,7 +97,7 @@ impl KraftController {
         // Every record in a cleanly reopened log is committed. Recover the
         // latest control state before constructing the core so elections never
         // briefly use stale configured voters.
-        replay_control_records(&log, &mut initial_state, metadata_raft_fetch_max);
+        replay_control_records(&log, &mut initial_state, metadata_raft_fetch_max)?;
         let controls =
             KraftControlState::new(initial_state.voters.clone(), initial_state.kraft_version);
         let core = QuorumStateMachine::new(me, initial_state, election_timeout);
@@ -196,6 +196,7 @@ impl KraftController {
             pending_reconfig: None,
             activation,
             activation_fault: None,
+            replay_fault: None,
         };
 
         // A restart can rediscover a committed downgrade whose earlier local
@@ -263,16 +264,7 @@ impl KraftController {
         mut activation: Activation,
     ) -> Result<Self, RaftError> {
         std::fs::create_dir_all(&data_dir).map_err(krabka_log::LogError::Io)?;
-        let legacy_quorum_state = std::fs::metadata(data_dir.join(QUORUM_STATE_FILE))
-            .is_ok_and(|metadata| metadata.len() == 54);
-        let mut log = KraftLog::open(&data_dir, &metadata_log)?;
-        if legacy_quorum_state {
-            // The predecessor format treated a cleanly reopened log as fully
-            // committed. Capture that boundary once while migrating its
-            // binary quorum state; all subsequent restarts use the persisted
-            // high-watermark checkpoint.
-            log.advance_hwm(log.log_end_offset());
-        }
+        let log = KraftLog::open(&data_dir, &metadata_log)?;
 
         // Recover the image from the checkpoint plus only the durable committed
         // prefix. An uncommitted voter record can remain at the log end after a
@@ -362,7 +354,7 @@ impl KraftController {
                 voters: boundary_state.voters,
             }));
         }
-        replay_control_records(&log, &mut initial_state, metadata_raft_fetch_max);
+        replay_control_records(&log, &mut initial_state, metadata_raft_fetch_max)?;
         image.apply(&MetadataRecord::V1KRaftVersion(
             krabka_metadata::KRaftVersionRecord {
                 kraft_version: initial_state.kraft_version,

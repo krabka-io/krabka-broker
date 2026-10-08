@@ -100,14 +100,11 @@ async fn upgrade_then_downgrade_round_trip() {
     // `!is_empty()` is insufficient — the blob always has a 2-byte version
     // prefix even if the partition list were empty.
     //
-    // After upgrade, the range assignor splits {0,1} between m1 and c1;
-    // m1 is assigned partition [1] (range assignor gives the higher range
-    // to the lexicographically-later member when both subscribe to "t").
-    // On downgrade, c1 (the only native member) has departed, so the
-    // downgrade RE-RECONCILES over the surviving members BEFORE converting
-    // to classic. m1 is now the sole member subscribed to "t", so the range
-    // assignor gives it BOTH partitions — no partition is orphaned. Its
-    // seed assignment in the restored classic group is therefore [0, 1].
+    // After upgrade, the assignor splits {0,1} between m1 and c1, and m1's
+    // target is [1]. Kafka's fence downgrades without a new target: its
+    // `ClassicGroup.fromConsumerGroup` serializes m1's consumer-group target,
+    // and the classic group prepares a rebalance at once that gives m1 both
+    // partitions when it rejoins.
     let assignment_bytes = bytes::Bytes::from(m1.assignment.clone());
     let decoded = decode_assignment(&assignment_bytes);
     let tp = decoded
@@ -118,8 +115,8 @@ async fn upgrade_then_downgrade_round_trip() {
     let mut parts = tp.partitions.clone();
     parts.sort_unstable();
     assert!(
-        parts == vec![0, 1],
-        "m1 (sole surviving member) must own BOTH partitions after the downgrade re-reconcile; got {parts:?}"
+        parts == vec![1],
+        "m1 keeps its consumer-group target across the downgrade; got {parts:?}"
     );
 }
 

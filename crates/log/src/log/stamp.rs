@@ -12,7 +12,7 @@ use krabka_protocol::records::RecordBatch;
 
 use super::{
     Log,
-    control::{COMMIT_CONTROL_TYPE, parse_control_marker_type},
+    control::{COMMIT_CONTROL_TYPE, batch_control_marker_type},
 };
 use crate::{
     error::LogError,
@@ -168,12 +168,7 @@ impl Log {
 
     pub(super) fn validate_commit_stamp_batch(&self, batch: &RecordBatch) -> Result<(), LogError> {
         let is_commit = batch.attributes.is_control_batch()
-            && batch
-                .records
-                .first()
-                .and_then(|record| record.key.as_deref())
-                .and_then(parse_control_marker_type)
-                == Some(COMMIT_CONTROL_TYPE);
+            && batch_control_marker_type(batch)? == Some(COMMIT_CONTROL_TYPE);
         if !is_commit {
             return Err(LogError::InvalidArgument(
                 "an explicit transaction stamp requires a COMMIT control batch".into(),

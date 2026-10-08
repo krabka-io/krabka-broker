@@ -192,6 +192,18 @@ pub(super) async fn run_loop(
             r = fetch_once(&config, &addr, target, fetch_offset, &observer.image, &mut store) => r,
         };
         if let Some(outcome) = result {
+            // A record this node could not decode was skipped, with the rest
+            // of the response: Kafka's non-fatal "metadata loading" fault on
+            // a node without the controller role.
+            observer
+                .load_errors
+                .fetch_add(outcome.load_errors, Ordering::AcqRel);
+            // An invalid `KRaft` control record halts a Kafka node of any role.
+            // The loop ends here, and the broker stops over the fault.
+            if let Some(fault) = &outcome.fatal {
+                observer.fatal.send_replace(Some(fault.clone()));
+                return;
+            }
             let new_offset = outcome.next_fetch_offset;
             observer.metadata_offset.store(
                 i64::try_from(new_offset).unwrap_or(i64::MAX) - 1,
@@ -708,6 +720,144 @@ mod tests {
         assert!(*observer.watch_leader().borrow() == Some(NodeId(1)));
         assert!(timer.registrations() == 1);
         mock.stop();
+    }
+
+    /// The serve loop over a controller whose first answer carries
+    /// `records` and whose later answers carry none, driven by a timer that
+    /// cannot be armed, so the loop stops at its first park. Returns the
+    /// observer, read through the `ObserverSource` the broker reads it
+    /// through, and the number of parks it tried.
+    async fn serve_once(records: Bytes) -> (crate::metadata_source::ObserverSource, usize) {
+        let served = Arc::new(AtomicUsize::new(0));
+        let mock = {
+            let served = Arc::clone(&served);
+            krabka_client_core::MockBroker::start(move |api_key, _version, _corr_id, _body| {
+                if api_key == api_versions_request::API_KEY {
+                    return Some(api_versions_response_v0());
+                }
+                if api_key == krabka_raft::API_KEY_METADATA_FETCH {
+                    let first = served.fetch_add(1, Ordering::SeqCst) == 0;
+                    let body = if first { records.clone() } else { Bytes::new() };
+                    return Some(metadata_fetch_response_body(body, 10, 10));
+                }
+                None
+            })
+            .await
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let timer = BrokenTimer::dead(TimerFailure::Registration);
+        let observer = run_until_it_stops(config_on(
+            vec![(NodeId(1), mock.addr.to_string())],
+            timer.injectable(),
+            dir.path(),
+        ))
+        .await;
+        mock.stop();
+        (
+            crate::metadata_source::ObserverSource::new(observer, Arc::new(NoWrites)),
+            timer.registrations(),
+        )
+    }
+
+    /// One row per outcome of a fetched response. A record that does not
+    /// decode is counted as Kafka's `metadata-load-error-count` and the broker
+    /// keeps going: the loop fetches again past the response and parks once
+    /// caught up. An invalid `KRaft` control record publishes the fatal fault
+    /// that stops the broker, and the loop ends without parking.
+    #[tokio::test]
+    async fn the_loop_counts_load_errors_and_stops_on_an_invalid_control_record() {
+        use crate::{
+            metadata_observer::test_support::{
+                encode_batches, negative_kraft_version_batch, patched_topic_value, topic_value,
+                values_batch,
+            },
+            metadata_source::MetadataSource as _,
+        };
+
+        let control = negative_kraft_version_batch(1);
+        let fault = krabka_raft::control_batch_image_records(&control)
+            .expect_err("an invalid control record")
+            .to_string();
+        let cases = [
+            (
+                "a record that does not decode",
+                encode_batches(&[
+                    values_batch(0, &[topic_value("before", 1)]),
+                    values_batch(1, &[patched_topic_value(1, 99), topic_value("after", 2)]),
+                ]),
+                (1, None, 2, 1),
+            ),
+            (
+                "an invalid control record",
+                encode_batches(&[values_batch(0, &[topic_value("before", 1)]), control]),
+                (0, Some(fault), -1, 0),
+            ),
+        ];
+        for (case, records, want) in cases {
+            let (source, parks) = serve_once(records).await;
+
+            let got = (
+                source.metadata_load_error_count(),
+                source.watch_fatal().borrow().clone(),
+                source.current_metadata_offset(),
+                parks,
+            );
+            assert!(got == want, "{case}");
+            assert!(source.current_image().topic("before").is_some(), "{case}");
+            assert!(source.current_image().topic("after").is_none(), "{case}");
+        }
+    }
+
+    /// A response with a corrupt batch leaves the fetch offset where it was,
+    /// and the loop waits out its poll interval before it asks again, rather
+    /// than asking the same voter for the same offset in a tight loop. Kafka
+    /// asks again on its next poll too; nothing faults and nothing counts.
+    #[tokio::test]
+    async fn a_corrupt_fetch_waits_for_the_next_poll_rather_than_spinning() {
+        use crate::metadata_observer::test_support::{encode_batches, topic_value, values_batch};
+
+        let mut corrupt =
+            encode_batches(&[values_batch(0, &[topic_value("never-applied", 1)])]).to_vec();
+        *corrupt.last_mut().expect("a batch has bytes") ^= 0xff;
+        let corrupt = Bytes::from(corrupt);
+        let fetches = Arc::new(AtomicUsize::new(0));
+        let mock = {
+            let fetches = Arc::clone(&fetches);
+            krabka_client_core::MockBroker::start(move |api_key, _version, _corr_id, _body| {
+                if api_key == api_versions_request::API_KEY {
+                    return Some(api_versions_response_v0());
+                }
+                if api_key == krabka_raft::API_KEY_METADATA_FETCH {
+                    fetches.fetch_add(1, Ordering::SeqCst);
+                    return Some(metadata_fetch_response_body(corrupt.clone(), 1, 1));
+                }
+                None
+            })
+            .await
+        };
+        let dir = tempfile::tempdir().unwrap();
+        // The park after the corrupt answer is the loop's only wait; a timer
+        // that cannot be armed turns it into the loop's exit, so a loop that
+        // fetched again without parking would show more than one fetch.
+        let timer = BrokenTimer::dead(TimerFailure::Registration);
+        let observer = run_until_it_stops(config_on(
+            vec![(NodeId(1), mock.addr.to_string())],
+            timer.injectable(),
+            dir.path(),
+        ))
+        .await;
+        mock.stop();
+
+        assert!(
+            (
+                fetches.load(Ordering::SeqCst),
+                timer.registrations(),
+                observer.current_metadata_offset(),
+                observer.metadata_load_error_count(),
+                observer.watch_fatal().borrow().clone(),
+                observer.current_image().topic("never-applied").is_some(),
+            ) == (1, 1, -1, 0, None, false)
+        );
     }
 
     /// A broker-only node that landed on a follower moves to the leader that

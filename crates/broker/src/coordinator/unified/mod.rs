@@ -21,15 +21,17 @@ pub mod reconciler;
 pub mod regex_resolver;
 pub mod share;
 pub mod streams;
+pub(crate) mod topic_hash;
 
 mod admin_ops;
 mod group_coordinator;
 mod image_metadata;
 mod member_helpers;
+mod member_records;
 mod offset_batch;
 mod registry;
 mod replay_next_gen;
-mod replay_policy;
+pub(crate) mod replay_policy;
 mod replay_share;
 mod replay_streams;
 mod seed_cache;
@@ -42,6 +44,15 @@ mod coordinator_replay_model;
 
 #[cfg(test)]
 pub(crate) mod test_support;
+#[cfg(test)]
+mod value_version_tests;
+
+/// The group epoch and target assignment epoch of a new consumer, share or
+/// streams group: Kafka 4.3.1's `ModernGroup` and `StreamsGroup` constructors
+/// set the group epoch to 1, and `TargetAssignmentMetadata.INITIAL` holds
+/// assignment epoch 1. The first epoch bump of a new group therefore writes
+/// group epoch 2.
+pub const INITIAL_GROUP_EPOCH: i32 = 1;
 
 pub use self::{
     group_coordinator::{GroupCoordinator, GroupType},
@@ -49,6 +60,9 @@ pub use self::{
     seeds::{GroupSeed, ShareGroupSeed, StreamsGroupSeed},
 };
 pub(crate) use self::{
-    member_helpers::{ClientIdentity, expired_member_ids, first_join_member_id},
+    member_helpers::{
+        ClientIdentity, can_compute_next_target_assignment, expired_member_ids,
+        first_join_member_id, wall_clock_ms,
+    },
     offset_batch::OffsetRecordBatchBuilder,
 };

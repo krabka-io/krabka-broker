@@ -7,27 +7,161 @@
 
 use std::sync::Arc;
 
+use super::replay::Replayed;
 use crate::{
     coordinator::{
         GroupCoordinator,
-        persistence::GroupMetadataValue,
-        unified::classic_state::{
-            ClassicGroup as ClassicState, GroupState as ClassicGroupState, Member,
+        persistence::{GroupMetadataValue, Key, OffsetCommitValue},
+        unified::{
+            classic_state::{
+                ClassicGroup as ClassicState, GroupState as ClassicGroupState, Member,
+            },
+            replay_policy::{ExistingGroup, GroupLookup, ModernGroupType, persisted_group},
         },
     },
     error::BrokerError,
 };
 
+/// Decodes `value` as the value of `key`'s record type and drops the result.
+///
+/// Kafka's `CoordinatorRecordSerde.deserialize` decodes every value as the
+/// loader reads it, before `CoordinatorLoaderImpl` hands the record to the
+/// shard, so a value that does not decode fails the load even when it belongs
+/// to a transaction that later aborts or never ends. Replay defers the values
+/// of transactional records until their marker, so it calls this when it
+/// defers one.
+///
+/// # Errors
+///
+/// Returns the decode error of the value: an unsupported value version, or
+/// bytes that do not decode at that version.
+pub(super) fn check_value(key: &Key, value: &[u8]) -> Result<(), BrokerError> {
+    use crate::coordinator::unified::{
+        persistence_next_gen::{self as ng, NextGenKey},
+        share::persistence::{self as sp, ShareGroupKey},
+        streams::persistence::{self as st, StreamsGroupKey},
+    };
+    match key {
+        Key::OffsetCommit { .. } => OffsetCommitValue::decode_value(value).map(|_| ()),
+        Key::GroupMetadata { .. } => GroupMetadataValue::decode_value(value).map(|_| ()),
+        Key::NextGen(key) => match key {
+            NextGenKey::GroupMetadata { .. } => ng::GroupMetadataValue::decode(value).map(|_| ()),
+            NextGenKey::PartitionMetadata { .. } => {
+                ng::PartitionMetadataValue::decode(value).map(|_| ())
+            }
+            NextGenKey::MemberMetadata { .. } => ng::MemberMetadataValue::decode(value).map(|_| ()),
+            NextGenKey::TargetAssignmentMetadata { .. } => {
+                ng::TargetAssignmentMetadataValue::decode(value).map(|_| ())
+            }
+            NextGenKey::TargetAssignmentMember { .. } => {
+                ng::TargetAssignmentMemberValue::decode(value).map(|_| ())
+            }
+            NextGenKey::CurrentMemberAssignment { .. } => {
+                ng::CurrentMemberAssignmentValue::decode(value).map(|_| ())
+            }
+            NextGenKey::RegularExpression { .. } => {
+                ng::RegularExpressionValue::decode(value).map(|_| ())
+            }
+        },
+        Key::Share(key) => match key {
+            ShareGroupKey::GroupMetadata { .. } => {
+                sp::ShareGroupMetadataValue::decode(value).map(|_| ())
+            }
+            ShareGroupKey::MemberMetadata { .. } => {
+                sp::ShareGroupMemberMetadataValue::decode(value).map(|_| ())
+            }
+            ShareGroupKey::TargetAssignmentMetadata { .. } => {
+                sp::ShareGroupTargetAssignmentMetadataValue::decode(value).map(|_| ())
+            }
+            ShareGroupKey::TargetAssignmentMember { .. } => {
+                sp::ShareGroupTargetAssignmentMemberValue::decode(value).map(|_| ())
+            }
+            ShareGroupKey::CurrentMemberAssignment { .. } => {
+                sp::ShareGroupCurrentMemberAssignmentValue::decode(value).map(|_| ())
+            }
+            ShareGroupKey::StatePartitionMetadata { .. } => {
+                sp::ShareGroupStatePartitionMetadataValue::decode(value).map(|_| ())
+            }
+        },
+        Key::Streams(key) => match key {
+            StreamsGroupKey::GroupMetadata { .. } => {
+                st::StreamsGroupMetadataValue::decode(value).map(|_| ())
+            }
+            StreamsGroupKey::MemberMetadata { .. } => {
+                st::StreamsGroupMemberMetadataValue::decode(value).map(|_| ())
+            }
+            StreamsGroupKey::Topology { .. } => {
+                st::StreamsGroupTopologyValue::decode(value).map(|_| ())
+            }
+            StreamsGroupKey::TargetAssignmentMetadata { .. } => {
+                st::StreamsGroupTargetAssignmentMetadataValue::decode(value).map(|_| ())
+            }
+            StreamsGroupKey::TargetAssignmentMember { .. } => {
+                st::StreamsGroupTargetAssignmentMemberValue::decode(value).map(|_| ())
+            }
+            StreamsGroupKey::CurrentMemberAssignment { .. } => {
+                st::StreamsGroupCurrentMemberAssignmentValue::decode(value).map(|_| ())
+            }
+        },
+    }
+}
+
+/// Settles a classic group that holds `group_id` before a record of a
+/// `wanted` group replays, as Kafka's `getOrMaybeCreatePersisted*Group` does:
+/// a consumer or streams record replaces a simple classic group (no protocol
+/// type and no member, as an offset commit creates it), and any other classic
+/// group fails the load.
+///
+/// # Errors
+///
+/// Returns Kafka's `IllegalStateException` message for a classic group that
+/// the wanted type does not replace.
+pub(super) fn settle_classic_group(
+    coordinator: &Arc<GroupCoordinator>,
+    acc: &mut Replayed,
+    group_id: &str,
+    wanted: ModernGroupType,
+) -> Result<(), BrokerError> {
+    let simple = match acc.classic.get(group_id) {
+        Some(classic) => classic.protocol_type.is_none() && classic.members.is_empty(),
+        None if acc.simple.contains(group_id) => true,
+        None => return Ok(()),
+    };
+    if persisted_group(
+        group_id,
+        wanted,
+        Some(ExistingGroup::Classic { simple }),
+        true,
+    )? == GroupLookup::Create
+    {
+        acc.classic.remove(group_id);
+        acc.simple.remove(group_id);
+        acc.empty_since.remove(group_id);
+        match wanted {
+            ModernGroupType::Consumer => coordinator.persisted_consumer_group(group_id, true)?,
+            ModernGroupType::Share => coordinator.persisted_share_group(group_id, true)?,
+            ModernGroupType::Streams => coordinator.persisted_streams_group(group_id, true)?,
+        };
+    }
+    Ok(())
+}
+
 pub(super) fn apply_next_gen_record(
     coordinator: &Arc<GroupCoordinator>,
+    acc: &mut Replayed,
     key: crate::coordinator::unified::persistence_next_gen::NextGenKey,
     value_bytes: &bytes::Bytes,
 ) -> Result<(), BrokerError> {
     use crate::coordinator::unified::persistence_next_gen as ng;
+    settle_classic_group(coordinator, acc, key.group_id(), ModernGroupType::Consumer)?;
     match key {
         ng::NextGenKey::GroupMetadata { group_id } => {
             coordinator
-                .replay_group_metadata(&group_id, ng::GroupMetadataValue::decode(value_bytes)?);
+                .replay_group_metadata(&group_id, ng::GroupMetadataValue::decode(value_bytes)?)?;
+        }
+        ng::NextGenKey::PartitionMetadata { group_id } => {
+            ng::PartitionMetadataValue::decode(value_bytes)?;
+            coordinator.replay_partition_metadata(&group_id)?;
         }
         ng::NextGenKey::MemberMetadata {
             group_id,
@@ -37,13 +171,13 @@ pub(super) fn apply_next_gen_record(
                 &group_id,
                 &member_id,
                 ng::MemberMetadataValue::decode(value_bytes)?,
-            );
+            )?;
         }
         ng::NextGenKey::TargetAssignmentMetadata { group_id } => {
             coordinator.replay_target_assignment_metadata(
                 &group_id,
                 ng::TargetAssignmentMetadataValue::decode(value_bytes)?,
-            );
+            )?;
         }
         ng::NextGenKey::TargetAssignmentMember {
             group_id,
@@ -53,7 +187,7 @@ pub(super) fn apply_next_gen_record(
                 &group_id,
                 &member_id,
                 ng::TargetAssignmentMemberValue::decode(value_bytes)?,
-            );
+            )?;
         }
         ng::NextGenKey::CurrentMemberAssignment {
             group_id,
@@ -63,14 +197,14 @@ pub(super) fn apply_next_gen_record(
                 &group_id,
                 &member_id,
                 ng::CurrentMemberAssignmentValue::decode(value_bytes)?,
-            );
+            )?;
         }
         ng::NextGenKey::RegularExpression { group_id, regex } => {
             coordinator.replay_regular_expression(
                 &group_id,
                 &regex,
                 ng::RegularExpressionValue::decode(value_bytes)?,
-            );
+            )?;
         }
     }
     Ok(())
@@ -78,14 +212,16 @@ pub(super) fn apply_next_gen_record(
 
 pub(super) fn apply_share_record(
     coordinator: &Arc<GroupCoordinator>,
+    acc: &mut Replayed,
     key: crate::coordinator::unified::share::persistence::ShareGroupKey,
     value_bytes: &bytes::Bytes,
 ) -> Result<(), BrokerError> {
     use crate::coordinator::unified::share::persistence as sp;
+    settle_classic_group(coordinator, acc, key.group_id(), ModernGroupType::Share)?;
     match key {
         sp::ShareGroupKey::GroupMetadata { group_id } => {
             let value = sp::ShareGroupMetadataValue::decode(value_bytes)?;
-            coordinator.replay_share_group_metadata(&group_id, value);
+            coordinator.replay_share_group_metadata(&group_id, value)?;
             if coordinator.cached_share_seed(&group_id).is_some() {
                 coordinator.mark_share(&group_id);
             }
@@ -95,14 +231,14 @@ pub(super) fn apply_share_record(
             member_id,
         } => {
             let value = sp::ShareGroupMemberMetadataValue::decode(value_bytes)?;
-            coordinator.replay_share_member_metadata(&group_id, &member_id, value);
+            coordinator.replay_share_member_metadata(&group_id, &member_id, value)?;
             if coordinator.cached_share_seed(&group_id).is_some() {
                 coordinator.mark_share(&group_id);
             }
         }
         sp::ShareGroupKey::TargetAssignmentMetadata { group_id } => {
             let value = sp::ShareGroupTargetAssignmentMetadataValue::decode(value_bytes)?;
-            coordinator.replay_share_target_assignment_metadata(&group_id, value);
+            coordinator.replay_share_target_assignment_metadata(&group_id, value)?;
             if coordinator.cached_share_seed(&group_id).is_some() {
                 coordinator.mark_share(&group_id);
             }
@@ -112,7 +248,7 @@ pub(super) fn apply_share_record(
             member_id,
         } => {
             let value = sp::ShareGroupTargetAssignmentMemberValue::decode(value_bytes)?;
-            coordinator.replay_share_target_assignment_member(&group_id, &member_id, value);
+            coordinator.replay_share_target_assignment_member(&group_id, &member_id, value)?;
             if coordinator.cached_share_seed(&group_id).is_some() {
                 coordinator.mark_share(&group_id);
             }
@@ -122,14 +258,14 @@ pub(super) fn apply_share_record(
             member_id,
         } => {
             let value = sp::ShareGroupCurrentMemberAssignmentValue::decode(value_bytes)?;
-            coordinator.replay_share_current_member_assignment(&group_id, &member_id, value);
+            coordinator.replay_share_current_member_assignment(&group_id, &member_id, value)?;
             if coordinator.cached_share_seed(&group_id).is_some() {
                 coordinator.mark_share(&group_id);
             }
         }
         sp::ShareGroupKey::StatePartitionMetadata { group_id } => {
             let value = sp::ShareGroupStatePartitionMetadataValue::decode(value_bytes)?;
-            coordinator.replay_share_state_partition_metadata(&group_id, value);
+            coordinator.replay_share_state_partition_metadata(&group_id, value)?;
             if coordinator.cached_share_seed(&group_id).is_some() {
                 coordinator.mark_share(&group_id);
             }
@@ -140,14 +276,16 @@ pub(super) fn apply_share_record(
 
 pub(super) fn apply_streams_record(
     coordinator: &Arc<GroupCoordinator>,
+    acc: &mut Replayed,
     key: crate::coordinator::unified::streams::persistence::StreamsGroupKey,
     value_bytes: &bytes::Bytes,
 ) -> Result<(), BrokerError> {
     use crate::coordinator::unified::streams::persistence as sp;
+    settle_classic_group(coordinator, acc, key.group_id(), ModernGroupType::Streams)?;
     match key {
         sp::StreamsGroupKey::GroupMetadata { group_id } => {
             let v = sp::StreamsGroupMetadataValue::decode(value_bytes)?;
-            coordinator.replay_streams_group_metadata(&group_id, v);
+            coordinator.replay_streams_group_metadata(&group_id, v)?;
             if coordinator.cached_streams_seed(&group_id).is_some() {
                 coordinator.mark_streams(&group_id);
             }
@@ -157,28 +295,21 @@ pub(super) fn apply_streams_record(
             member_id,
         } => {
             let value = sp::StreamsGroupMemberMetadataValue::decode(value_bytes)?;
-            coordinator.replay_streams_member_metadata(&group_id, &member_id, value);
+            coordinator.replay_streams_member_metadata(&group_id, &member_id, value)?;
             if coordinator.cached_streams_seed(&group_id).is_some() {
                 coordinator.mark_streams(&group_id);
             }
         }
         sp::StreamsGroupKey::Topology { group_id } => {
             let value = sp::StreamsGroupTopologyValue::decode(value_bytes)?;
-            coordinator.replay_streams_topology(&group_id, value);
-            if coordinator.cached_streams_seed(&group_id).is_some() {
-                coordinator.mark_streams(&group_id);
-            }
-        }
-        sp::StreamsGroupKey::PartitionMetadata { group_id } => {
-            let value = sp::StreamsGroupPartitionMetadataValue::decode(value_bytes)?;
-            coordinator.replay_streams_partition_metadata(&group_id, value);
+            coordinator.replay_streams_topology(&group_id, value)?;
             if coordinator.cached_streams_seed(&group_id).is_some() {
                 coordinator.mark_streams(&group_id);
             }
         }
         sp::StreamsGroupKey::TargetAssignmentMetadata { group_id } => {
             let v = sp::StreamsGroupTargetAssignmentMetadataValue::decode(value_bytes)?;
-            coordinator.replay_streams_target_assignment_metadata(&group_id, v.assignment_epoch);
+            coordinator.replay_streams_target_assignment_metadata(&group_id, v)?;
             if coordinator.cached_streams_seed(&group_id).is_some() {
                 coordinator.mark_streams(&group_id);
             }
@@ -188,7 +319,7 @@ pub(super) fn apply_streams_record(
             member_id,
         } => {
             let value = sp::StreamsGroupTargetAssignmentMemberValue::decode(value_bytes)?;
-            coordinator.replay_streams_target_assignment_member(&group_id, &member_id, value);
+            coordinator.replay_streams_target_assignment_member(&group_id, &member_id, value)?;
             if coordinator.cached_streams_seed(&group_id).is_some() {
                 coordinator.mark_streams(&group_id);
             }
@@ -198,7 +329,7 @@ pub(super) fn apply_streams_record(
             member_id,
         } => {
             let value = sp::StreamsGroupCurrentMemberAssignmentValue::decode(value_bytes)?;
-            coordinator.replay_streams_current_member_assignment(&group_id, &member_id, value);
+            coordinator.replay_streams_current_member_assignment(&group_id, &member_id, value)?;
             if coordinator.cached_streams_seed(&group_id).is_some() {
                 coordinator.mark_streams(&group_id);
             }

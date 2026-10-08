@@ -517,3 +517,124 @@ fn enabling_elr_writes_kafkas_safety_config_records() {
         );
     }
 }
+
+/// `krabka.version` finalizes as Kafka 4.3.1's `FeatureControlManager`
+/// finalizes a feature other than `metadata.version` and `kraft.version`,
+/// `transaction.version` for one: a level every node supports writes a
+/// `FeatureLevelRecord`; a level the local controller or a registered broker
+/// does not support is refused; a downgrade needs `SAFE_DOWNGRADE` or
+/// `UNSAFE_DOWNGRADE`, and with either it is written, since no
+/// `metadata changed` check applies outside `metadata.version`.
+#[test]
+fn krabka_version_finalizes_as_kafka_finalizes_a_non_metadata_feature() {
+    let kv = krabka_metadata::krabka_version::KRABKA_VERSION_FEATURE;
+    let mv = "metadata.version";
+    let with_broker = |levels: &[(&str, i16)], range: Option<(i16, i16)>| {
+        let mut image = image(levels);
+        let mut features = krabka_metadata::supported_feature_ranges();
+        match range {
+            Some(range) => features.insert(kv.to_owned(), range),
+            None => features.remove(kv),
+        };
+        image.apply(&MetadataRecord::V1BrokerRegistration(
+            krabka_metadata::BrokerRegistrationRecord {
+                host: String::new(),
+                port: 0,
+                features,
+                ..crate::test_support::broker_registration(2)
+            },
+        ));
+        image
+    };
+    let cases = [
+        (
+            "finalize level 1 on an unfinalized cluster",
+            image(&[(mv, 30)]),
+            named_update(kv, 1, UPGRADE),
+            Ok(plan(vec![feature_record(kv, 1)], &[kv])),
+        ),
+        (
+            "finalize level 1 with a broker that supports it",
+            with_broker(&[(mv, 30)], Some((0, 1))),
+            named_update(kv, 1, UPGRADE),
+            Ok(plan(vec![feature_record(kv, 1)], &[kv])),
+        ),
+        (
+            "a broker that advertises a narrower range",
+            with_broker(&[(mv, 30)], Some((0, 0))),
+            named_update(kv, 1, UPGRADE),
+            Err(invalid(kv, 1, "Broker 2 does not support this feature.")),
+        ),
+        (
+            "a broker that does not register the feature",
+            with_broker(&[(mv, 30)], None),
+            named_update(kv, 1, UPGRADE),
+            Err(invalid(kv, 1, "Broker 2 does not support this feature.")),
+        ),
+        (
+            "a level above the local controller's range",
+            image(&[(mv, 30)]),
+            named_update(kv, 2, UPGRADE),
+            Err(invalid(
+                kv,
+                2,
+                "Local controller 1 only supports versions 0-1",
+            )),
+        ),
+        (
+            "re-finalizing the current level",
+            image(&[(mv, 30), (kv, 1)]),
+            named_update(kv, 1, UPGRADE),
+            Ok(plan(vec![feature_record(kv, 1)], &[kv])),
+        ),
+        (
+            "a downgrade without a downgrade type",
+            image(&[(mv, 30), (kv, 1)]),
+            named_update(kv, 0, UPGRADE),
+            Err(invalid(
+                kv,
+                0,
+                "Can't downgrade the version of this feature without setting the upgrade type \
+                 to either safe or unsafe downgrade.",
+            )),
+        ),
+        (
+            "a safe downgrade",
+            image(&[(mv, 30), (kv, 1)]),
+            named_update(kv, 0, SAFE),
+            Ok(plan(vec![feature_record(kv, 0)], &[kv])),
+        ),
+        (
+            "an unsafe downgrade",
+            image(&[(mv, 30), (kv, 1)]),
+            named_update(kv, 0, UNSAFE),
+            Ok(plan(vec![feature_record(kv, 0)], &[kv])),
+        ),
+        (
+            "a downgrade a narrower broker still supports",
+            with_broker(&[(mv, 30), (kv, 1)], Some((0, 0))),
+            named_update(kv, 0, SAFE),
+            Ok(plan(vec![feature_record(kv, 0)], &[kv])),
+        ),
+        (
+            "a downgrade type that raises the level",
+            image(&[(mv, 30)]),
+            named_update(kv, 1, SAFE),
+            Err(invalid(kv, 1, "Can't downgrade to a newer version.")),
+        ),
+    ];
+    let actual: Vec<_> = cases
+        .iter()
+        .map(|(case, image, update, _)| {
+            (
+                *case,
+                plan_updates(&validate_only(vec![update.clone()]), image, LOCAL),
+            )
+        })
+        .collect();
+    let expected: Vec<_> = cases
+        .into_iter()
+        .map(|(case, _, _, want)| (case, want))
+        .collect();
+    assert!(actual == expected);
+}

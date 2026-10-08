@@ -3,7 +3,8 @@
 //!
 //! Every key starts with an `i16` key-version discriminator, the `apiKey` of
 //! the matching Apache Kafka schema at tag `4.3.1`: 3 for
-//! `ConsumerGroupMetadataKey`, 5 for `ConsumerGroupMemberMetadataKey`, 6 for
+//! `ConsumerGroupMetadataKey`, 4 for the deprecated
+//! `ConsumerGroupPartitionMetadataKey`, 5 for `ConsumerGroupMemberMetadataKey`, 6 for
 //! `ConsumerGroupTargetAssignmentMetadataKey`, 7 for
 //! `ConsumerGroupTargetAssignmentMemberKey`, 8 for
 //! `ConsumerGroupCurrentMemberAssignmentKey` and 16 for
@@ -17,12 +18,13 @@
 //! tagged-field trailer. Only the values are flexible; see
 //! [`persistence::flex`](crate::coordinator::unified::persistence::flex).
 //!
-//! `apiKey` 4 is Kafka's `ConsumerGroupPartitionMetadata`. The broker does not
-//! write it, and the number is not reused.
+//! The broker writes the key-4 record only as a tombstone, as Kafka 4.3.1
+//! does; see [`partition_metadata`](super::partition_metadata).
 
 use crate::coordinator::unified::persistence::group_record_keys;
 
 pub const KEY_GROUP_METADATA: i16 = 3;
+pub const KEY_PARTITION_METADATA: i16 = 4;
 pub const KEY_MEMBER_METADATA: i16 = 5;
 pub const KEY_TARGET_ASSIGNMENT_METADATA: i16 = 6;
 pub const KEY_TARGET_ASSIGNMENT_MEMBER: i16 = 7;
@@ -32,6 +34,8 @@ pub const KEY_REGULAR_EXPRESSION: i16 = 16;
 group_record_keys! {
     pub enum NextGenKey {
         GroupMetadata => KEY_GROUP_METADATA,
+        /// The deprecated `ConsumerGroupPartitionMetadataKey`.
+        PartitionMetadata => KEY_PARTITION_METADATA,
         MemberMetadata(member_id) => KEY_MEMBER_METADATA,
         TargetAssignmentMetadata => KEY_TARGET_ASSIGNMENT_METADATA,
         TargetAssignmentMember(member_id) => KEY_TARGET_ASSIGNMENT_MEMBER,
@@ -59,6 +63,18 @@ mod tests {
     use assert2::assert;
 
     use super::*;
+
+    /// `ConsumerGroupPartitionMetadataKey`: an `i16` key version of 4, then
+    /// the group id as a non-flexible string.
+    #[test]
+    fn partition_metadata_key_bytes_match_kafka_schema() {
+        let key = NextGenKey::PartitionMetadata {
+            group_id: "grp".into(),
+        };
+        let golden: &[u8] = b"\x00\x04\x00\x03grp";
+        assert!(&encode_key(&key).unwrap()[..] == golden);
+        assert!(parse_key(KEY_PARTITION_METADATA, &golden[2..]).unwrap() == key);
+    }
 
     #[test]
     fn unknown_key_version_rejected() {

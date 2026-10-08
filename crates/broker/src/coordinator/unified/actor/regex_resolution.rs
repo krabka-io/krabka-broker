@@ -7,9 +7,11 @@
 //! resolves a pattern when a member brings a new one, and refreshes every
 //! resolution when a heartbeat finds them stale. Kafka runs the resolution as
 //! an asynchronous task of the coordinator and writes its outcome when it
-//! completes. Here the heartbeat resolves in line, so the member that brought
-//! a pattern is assigned the topics in the same response. The requesting
-//! member's principal decides which matches the group keeps, as in Kafka.
+//! completes, in a batch of its own after the heartbeat's. Here the heartbeat
+//! resolves in line, but the group applies and writes the outcome only after
+//! the heartbeat's batch, as Kafka does, so the member that brought a pattern
+//! is assigned its topics from its next heartbeat. The requesting member's
+//! principal decides which matches the group keeps, as in Kafka.
 //!
 //! Each resolution is written as a `ConsumerGroupRegularExpression` record,
 //! and a record is tombstoned when its last subscriber goes, so a coordinator
@@ -20,15 +22,21 @@ use std::{
     time::Duration,
 };
 
+use super::pending_records::PendingRecords;
 use crate::{
     coordinator::unified::{
         config::NextGenConfig,
         consumer_state::{GroupState, ResolvedRegularExpression},
-        persistence_next_gen::RegularExpressionValue,
+        persistence_next_gen::{GroupMetadataValue, RegularExpressionValue},
+        reconciler::{self, ReconcileInput},
         regex_resolver::TopicRegexResolver,
     },
     time_util::duration_millis,
 };
+
+/// What a resolution of a group's regular expressions found, by regular
+/// expression, before the group applies it.
+pub(crate) type Resolutions = HashMap<String, ResolvedRegularExpression>;
 
 /// What a heartbeat brings to resolve a group's regular expressions.
 #[derive(Clone, Copy)]
@@ -133,9 +141,9 @@ impl RegexUpdate {
 ///
 /// It tombstones the resolution of the pattern the member drops when it was
 /// the last member to use it. It then resolves the group's patterns, the new
-/// one included, when one of Kafka's conditions asks for it, and applies the
-/// result: each resolution is recorded in `records`, and the group turns
-/// dirty when a pattern resolved to other topics than before.
+/// one included, when one of Kafka's conditions asks for it, and returns what
+/// the resolution found, which [`apply_regex_result`] applies after the
+/// heartbeat's batch.
 ///
 /// The conditions, in Kafka's order:
 ///
@@ -153,13 +161,24 @@ pub(crate) fn maybe_update_regular_expressions(
     new_regex: Option<&str>,
     regexes: &RegexResolution<'_>,
     records: &mut Vec<RegexRecord>,
-) -> RegexUpdate {
-    // A member with no pattern before and after asks nothing of the group's
-    // resolutions, and this keeps its heartbeat free of a scan of the members.
-    // The members that use a pattern heartbeat too, and they refresh a stale
-    // resolution.
-    if old_regex.is_none() && new_regex.is_none() {
-        return RegexUpdate::NoChange;
+) -> (RegexUpdate, Option<Resolutions>) {
+    // A member with no pattern before and after changes no pattern, but its
+    // heartbeat, or its classic `JoinGroup`, still refreshes the group's
+    // stale resolutions, as Kafka's does. Condition 2 is checked before
+    // condition 1 for it: both only return early, and condition 2 costs no
+    // scan of the members.
+    if old_regex.is_none()
+        && new_regex.is_none()
+        && (regexes.now_ms
+            <= state
+                .last_regex_resolution_ms()
+                .saturating_add(duration_millis(regexes.min_refresh_interval))
+            || !state
+                .members
+                .values()
+                .any(|member| member.subscribed_topic_regex.is_some()))
+    {
+        return (RegexUpdate::NoChange, None);
     }
 
     let mut require_refresh = false;
@@ -198,13 +217,13 @@ pub(crate) fn maybe_update_regular_expressions(
         *subscribed.entry(new.to_owned()).or_insert(0) += 1;
     }
     if !require_refresh && subscribed.is_empty() {
-        return update;
+        return (update, None);
     }
 
     // 2. The last resolution is older than the minimum interval between two.
     let last_ms = state.last_regex_resolution_ms();
     if regexes.now_ms <= last_ms.saturating_add(duration_millis(regexes.min_refresh_interval)) {
-        return update;
+        return (update, None);
     }
 
     // 3.1 A pattern of the group is not resolved.
@@ -217,10 +236,9 @@ pub(crate) fn maybe_update_regular_expressions(
 
     if require_refresh && !subscribed.is_empty() {
         let patterns: BTreeSet<String> = subscribed.keys().cloned().collect();
-        let resolved = regexes.resolver.resolve(&patterns);
-        apply_resolutions(state, &subscribed, resolved, records);
+        return (update, Some(regexes.resolver.resolve(&patterns)));
     }
-    update
+    (update, None)
 }
 
 fn decrement(counts: &mut HashMap<String, usize>, regex: &str) {
@@ -232,37 +250,54 @@ fn decrement(counts: &mut HashMap<String, usize>, regex: &str) {
     }
 }
 
-/// Kafka's `handleRegularExpressionsResult`: records and stores the
-/// resolution of each pattern that a member still uses, and turns the group
-/// dirty when a pattern resolved to other topics than before.
-fn apply_resolutions(
+/// Kafka's `handleRegularExpressionsResult`: applies what a resolution found
+/// and returns the records of its own batch.
+///
+/// Each pattern that a member still uses gets its resolution stored and a
+/// `ConsumerGroupRegularExpression` record, in pattern order. The group epoch
+/// moves, with a `ConsumerGroupMetadata` record, when a pattern resolved to
+/// other topics than before or when the metadata hash of the subscribed
+/// topics changed.
+pub(crate) fn apply_regex_result(
     state: &mut GroupState,
-    subscribed: &HashMap<String, usize>,
-    resolved: HashMap<String, ResolvedRegularExpression>,
-    records: &mut Vec<RegexRecord>,
-) {
+    resolved: Resolutions,
+    input: &ReconcileInput,
+) -> PendingRecords {
     let mut resolved: Vec<(String, ResolvedRegularExpression)> = resolved.into_iter().collect();
     resolved.sort_by(|a, b| a.0.cmp(&b.0));
+    let mut bump = false;
+    let mut records = Vec::new();
     for (regex, resolution) in resolved {
         // The group no longer subscribes to this one.
-        if !subscribed.contains_key(&regex) {
+        if state.num_subscribed_members(&regex) == 0 {
             continue;
         }
         // Kafka compares with `ResolvedRegularExpression.EMPTY` when the
         // group has no resolution yet.
-        let topics_changed = state.resolved_regex(&regex).map_or_else(
+        bump |= state.resolved_regex(&regex).map_or_else(
             || !resolution.topics.is_empty(),
             |old| old.topics != resolution.topics,
         );
-        if topics_changed {
-            state.dirty = true;
-        }
         records.push((
             regex.clone(),
             Some(RegularExpressionValue::from(&resolution)),
         ));
         state.set_resolved_regex(regex, resolution);
     }
+    let hash = reconciler::metadata_hash(state, input);
+    bump |= hash != state.metadata_hash();
+    let mut pending = PendingRecords {
+        resolved_regexes: records,
+        ..PendingRecords::default()
+    };
+    if bump && state.bump_epoch() {
+        state.record_metadata_hash(hash);
+        pending.group_metadata = Some(GroupMetadataValue {
+            epoch: state.group_epoch,
+            metadata_hash: hash,
+        });
+    }
+    pending
 }
 
 /// Kafka's `maybeDeleteResolvedRegularExpressions`: removes the resolutions of
@@ -290,7 +325,9 @@ mod tests {
     use assert2::{assert, check};
 
     use super::*;
-    use crate::coordinator::unified::consumer_state::test_support::resolved_regex as resolution;
+    use crate::coordinator::unified::consumer_state::test_support::{
+        member, regex_group as group, resolved_regex as resolution,
+    };
 
     /// A resolver that answers from a table of what each pattern selects, and
     /// counts its calls.
@@ -341,23 +378,23 @@ mod tests {
         }
     }
 
-    fn group(subscriptions: &[(&str, Option<&str>)]) -> GroupState {
-        let mut group =
-            crate::coordinator::unified::consumer_state::test_support::regex_group(subscriptions);
-        group.dirty = false;
-        group
-    }
+    /// What [`run`] found: the heartbeat's regex update, its tombstones, and
+    /// the records of the resolution's own batch when it resolved.
+    type Ran = (RegexUpdate, Vec<RegexRecord>, Option<PendingRecords>);
 
+    /// A heartbeat of `member_id` that changes its pattern from `old_regex` to
+    /// `new_regex`: Kafka's `maybeUpdateRegularExpressions`, the member's new
+    /// pattern, then `handleRegularExpressionsResult` for what it resolved.
     fn run(
         state: &mut GroupState,
-        old_regex: Option<&str>,
-        new_regex: Option<&str>,
+        member_id: &str,
+        (old_regex, new_regex): (Option<&str>, Option<&str>),
         resolver: &Table,
         now_ms: i64,
         refresh_version: i64,
-    ) -> (RegexUpdate, Vec<RegexRecord>) {
+    ) -> Ran {
         let mut records = Vec::new();
-        let update = maybe_update_regular_expressions(
+        let (update, resolutions) = maybe_update_regular_expressions(
             state,
             old_regex,
             new_regex,
@@ -370,7 +407,16 @@ mod tests {
             },
             &mut records,
         );
-        (update, records)
+        let mut m = state
+            .members
+            .get(member_id)
+            .cloned()
+            .unwrap_or_else(|| member(member_id));
+        m.subscribed_topic_regex = new_regex.map(str::to_owned);
+        state.add_or_update_member(m);
+        let result = resolutions
+            .map(|resolved| apply_regex_result(state, resolved, &ReconcileInput::default()));
+        (update, records, result)
     }
 
     fn written(topics: &[&str], version: i64, timestamp_ms: i64) -> RegularExpressionValue {
@@ -381,36 +427,54 @@ mod tests {
         }
     }
 
-    /// A member that brings the first pattern of the group has it resolved at
-    /// once, its resolution is written, and the group turns dirty because
-    /// the pattern selects topics.
+    /// A member that brings the first pattern of the group has it resolved,
+    /// and the resolution's own batch writes it and bumps the group epoch,
+    /// because the pattern selects topics. A pattern that selects no topic is
+    /// written too, without a bump, since nothing changes for the group's
+    /// members: Kafka compares the resolution with an empty one when the group
+    /// has none. Each row compares the whole batch.
     #[test]
-    fn a_new_pattern_is_resolved_and_recorded() {
-        let mut state = group(&[]);
-        let resolver = table(&[("a.*", &["a1", "a2"])]);
+    fn a_new_pattern_is_resolved_and_written_in_its_own_batch() {
+        // (what the pattern selects, the resolution's batch)
+        let rows: [(&[&str], PendingRecords); 2] = [
+            (
+                &["a1", "a2"],
+                PendingRecords {
+                    resolved_regexes: vec![(
+                        "a.*".to_owned(),
+                        Some(written(&["a1", "a2"], 100, NOW_MS)),
+                    )],
+                    group_metadata: Some(GroupMetadataValue {
+                        epoch: 2,
+                        metadata_hash: 0,
+                    }),
+                    ..PendingRecords::default()
+                },
+            ),
+            (
+                &[],
+                PendingRecords {
+                    resolved_regexes: vec![("a.*".to_owned(), Some(written(&[], 100, NOW_MS)))],
+                    ..PendingRecords::default()
+                },
+            ),
+        ];
+        for (selects, batch) in rows {
+            let mut state = group(&[]);
+            let resolver = table(&[("a.*", selects)]);
 
-        let (update, records) = run(&mut state, None, Some("a.*"), &resolver, NOW_MS, -1);
+            let (update, tombstones, result) =
+                run(&mut state, "m1", (None, Some("a.*")), &resolver, NOW_MS, -1);
 
-        check!(update == RegexUpdate::Updated);
-        check!(records == vec![("a.*".to_owned(), Some(written(&["a1", "a2"], 100, NOW_MS)))]);
-        check!(state.resolved_regex("a.*") == Some(&resolution(&["a1", "a2"], 100, NOW_MS)));
-        check!(state.dirty);
-        check!(resolver.calls.lock().unwrap().len() == 1);
-    }
-
-    /// A pattern that selects no topic is recorded too, and does not turn a
-    /// clean group dirty, since nothing changes for the group's members: Kafka
-    /// compares the resolution with an empty one when the group has none.
-    #[test]
-    fn a_pattern_that_selects_nothing_is_recorded_without_a_rebalance() {
-        let mut state = group(&[]);
-        let resolver = table(&[]);
-
-        let (_, records) = run(&mut state, None, Some("a.*"), &resolver, NOW_MS, -1);
-
-        check!(records == vec![("a.*".to_owned(), Some(written(&[], 100, NOW_MS)))]);
-        check!(state.resolved_regex("a.*").is_some());
-        check!(!state.dirty);
+            check!(update == RegexUpdate::Updated, "{selects:?}");
+            check!(tombstones.is_empty(), "{selects:?}");
+            check!(result == Some(batch), "{selects:?}");
+            check!(
+                state.resolved_regex("a.*") == Some(&resolution(selects, 100, NOW_MS)),
+                "{selects:?}"
+            );
+            check!(resolver.calls.lock().unwrap().len() == 1, "{selects:?}");
+        }
     }
 
     /// Kafka's `maybeUpdateRegularExpressions`, row by row: the state of the
@@ -515,8 +579,17 @@ mod tests {
                 update: RegexUpdate::UpdatedAndResolved,
             },
             Row {
-                name: "a member without a pattern leaves a stale resolution to the members that use one",
+                name: "a member without a pattern refreshes the group's stale resolution",
                 since_ms: 600_001,
+                refresh_version: 6,
+                old: None,
+                new: None,
+                resolves: true,
+                update: RegexUpdate::NoChange,
+            },
+            Row {
+                name: "a member without a pattern, within ten seconds of the last resolution, waits",
+                since_ms: 5_000,
                 refresh_version: 6,
                 old: None,
                 new: None,
@@ -538,11 +611,10 @@ mod tests {
             state.set_resolved_regex("a.*".into(), resolution(&["a1"], 5, NOW_MS - row.since_ms));
             let resolver = table(&[("a.*", &["a1"]), ("b.*", &["b1"])]);
 
-            // The heartbeat is m2's, or m1's when m2 has no pattern to change.
-            let (update, _) = run(
+            let (update, _, _) = run(
                 &mut state,
-                row.old,
-                row.new,
+                "m2",
+                (row.old, row.new),
                 &resolver,
                 NOW_MS,
                 row.refresh_version,
@@ -558,25 +630,43 @@ mod tests {
     }
 
     /// A refresh that finds the same topics writes the record again, with the
-    /// new version and time, and leaves a clean group clean. One that finds
-    /// other topics turns the group dirty.
+    /// new version and time, and does not bump the group epoch. One that
+    /// finds other topics bumps it.
     #[test]
-    fn a_refresh_that_changes_the_topics_turns_the_group_dirty() {
-        // (what the resolver selects now, dirty afterwards)
-        let rows: [(&[&str], bool); 3] = [(&["a1"], false), (&["a1", "a2"], true), (&[], true)];
-        for (selects, dirty) in rows {
+    fn a_refresh_that_changes_the_topics_bumps_the_group_epoch() {
+        // (what the resolver selects now, the group epoch after)
+        let rows: [(&[&str], Option<i32>); 3] =
+            [(&["a1"], None), (&["a1", "a2"], Some(2)), (&[], Some(2))];
+        for (selects, epoch) in rows {
             let mut state = group(&[("m1", Some("a.*"))]);
             state.set_resolved_regex("a.*".into(), resolution(&["a1"], 5, NOW_MS - 60_000));
             let resolver = table(&[("a.*", selects)]);
 
-            let (update, records) = run(&mut state, Some("a.*"), Some("a.*"), &resolver, NOW_MS, 6);
+            let (update, _, result) = run(
+                &mut state,
+                "m1",
+                (Some("a.*"), Some("a.*")),
+                &resolver,
+                NOW_MS,
+                6,
+            );
 
             check!(update == RegexUpdate::NoChange, "{selects:?}");
             check!(
-                records == vec![("a.*".to_owned(), Some(written(selects, 100, NOW_MS)))],
+                result
+                    == Some(PendingRecords {
+                        resolved_regexes: vec![(
+                            "a.*".to_owned(),
+                            Some(written(selects, 100, NOW_MS))
+                        )],
+                        group_metadata: epoch.map(|epoch| GroupMetadataValue {
+                            epoch,
+                            metadata_hash: 0,
+                        }),
+                        ..PendingRecords::default()
+                    }),
                 "{selects:?}"
             );
-            check!(state.dirty == dirty, "{selects:?}");
         }
     }
 
@@ -596,7 +686,8 @@ mod tests {
             let resolver = table(&[]);
 
             // m1 changes from `a.*` to no pattern.
-            let (update, records) = run(&mut state, Some("a.*"), None, &resolver, NOW_MS, -1);
+            let (update, records, _) =
+                run(&mut state, "m1", (Some("a.*"), None), &resolver, NOW_MS, -1);
 
             check!(update == RegexUpdate::UpdatedAndResolved);
             check!(records == tombstones, "{other:?}");

@@ -131,35 +131,51 @@ impl GroupCoordinator {
         Ok(ConvertOutcome::Converted)
     }
 
-    /// KIP-1071 cold downgrade: convert a drained streams `group_id` to a
-    /// classic group in place.
-    ///
-    /// The method tombstones the streams records k15–21, forces the type lock
-    /// to `Classic`, and drops the streams actor. The committed offsets, k0
-    /// and k1, and the offset-home `groups` entry survive.
+    /// KIP-1071 cold downgrade: Kafka 4.3.1's `classicGroupJoin` for a
+    /// `JoinGroup` from `member_id` to the streams group `group_id`.
     ///
     /// The method returns `NotStreams` for a non-streams group, and the caller
-    /// then serves the classic `JoinGroup` as normal. It returns `Converted`
-    /// after a successful flip. It returns `RejectLiveMembers` when the
-    /// streams group still has live members, because Kafka does not support an
-    /// online streams migration. It is the mirror of
-    /// [`Self::try_convert_classic_to_streams`].
+    /// then serves the classic `JoinGroup` as normal. It returns
+    /// `RejectLiveMembers` when the streams group still has members, and the
+    /// join answers `INCONSISTENT_GROUP_PROTOCOL`, because Kafka sends only an
+    /// empty streams group to `classicGroupJoinToClassicGroup`.
+    ///
+    /// There, `maybeDeleteEmptyStreamsGroup` deletes the drained group. A
+    /// join with no member id then creates a classic group, and Kafka writes
+    /// the streams tombstones and `newEmptyGroupMetadataRecord` in one batch,
+    /// [`streams::migration::streams_to_classic_batch`]. After that append
+    /// the method forces the type lock to `Classic`, drops the streams actor
+    /// and returns `Converted`; the committed offsets, k0 and k1, and the
+    /// offset-home `groups` entry survive. A join with a member id finds no
+    /// group to create, answers `UNKNOWN_MEMBER_ID` and writes nothing, but
+    /// the in-memory deletion stands, as Kafka's runtime keeps the state of a
+    /// write that returns no records: the method drops the streams group and
+    /// its type lock and returns `Removed`. The log still holds the group, so
+    /// a replay brings it back, as in Kafka.
+    ///
+    /// It is the mirror of [`Self::try_convert_classic_to_streams`].
+    ///
+    /// # Errors
+    ///
+    /// Returns the append error, and the streams group stays as it was, as
+    /// Kafka reverts its snapshot when the write fails.
     pub(crate) async fn try_convert_streams_to_classic(
         self: &Arc<Self>,
         group_id: &str,
+        member_id: &str,
         now_ms: i64,
     ) -> Result<streams::migration::DowngradeOutcome, crate::error::BrokerError> {
         use streams::{
             actor::StreamsGroupActorMessage,
-            migration::{DowngradeOutcome, streams_records_tombstone_batch},
+            migration::{DowngradeOutcome, streams_to_classic_batch},
         };
 
         if self.group_type(group_id) != Some(GroupType::Streams) {
             return Ok(DowngradeOutcome::NotStreams);
         }
 
-        // Reject if the streams actor (if any) still has live members; a drained
-        // group falls through to convert. Mirrors the classic-to-streams conversion `ClassicInspect` check.
+        // Kafka's `StreamsGroup.isEmpty`: a group with a member is not sent
+        // down the classic path.
         if let Some(handle) = self.find_streams(group_id) {
             let (tx, rx) = tokio::sync::oneshot::channel();
             if handle
@@ -174,12 +190,15 @@ impl GroupCoordinator {
             }
         }
 
-        // Drained streams group → convert. Tombstone the group-level streams keys
-        // (k15/k17/k18/k19), flip the lock to Classic, drop the streams actor. A
-        // drained group's per-member records (k16/k20/k21) were already tombstoned
-        // when those members left/expired, so no member ids are needed here. The
-        // offset-home `groups` entry stays.
-        let batch = streams_records_tombstone_batch(group_id, &[], now_ms)?;
+        if !member_id.is_empty() {
+            self.streams_seeds.remove(group_id);
+            self.streams_seeds_cache.remove(group_id);
+            self.group_types.remove(group_id);
+            self.streams_groups.remove(group_id);
+            return Ok(DowngradeOutcome::Removed);
+        }
+
+        let batch = streams_to_classic_batch(group_id, now_ms)?;
         self.offsets_log.append(group_id, batch).await?;
         self.mark_classic_after_streams_downgrade(group_id);
         self.streams_groups.remove(group_id);
@@ -218,19 +237,35 @@ mod tests {
 
         check!(
             coord
-                .try_convert_streams_to_classic("fresh", 102)
+                .try_convert_streams_to_classic("fresh", "", 102)
                 .await
                 .unwrap()
                 == streams::migration::DowngradeOutcome::NotStreams
         );
         check!(
             coord
-                .try_convert_streams_to_classic("g", 103)
+                .try_convert_streams_to_classic("g", "", 103)
                 .await
                 .unwrap()
                 == streams::migration::DowngradeOutcome::Converted
         );
         check!(coord.group_type("g") == Some(GroupType::Classic));
+        check!(
+            offsets_log.appended.lock().await.get(1)
+                == Some(&streams::migration::streams_to_classic_batch("g", 103).unwrap())
+        );
+
+        // Kafka's `classicGroupJoinToClassicGroup` deletes the drained group
+        // in memory for a join with a member id, and writes nothing.
+        coord.mark_streams("h");
+        check!(
+            coord
+                .try_convert_streams_to_classic("h", "m1", 104)
+                .await
+                .unwrap()
+                == streams::migration::DowngradeOutcome::Removed
+        );
+        check!(coord.group_type("h").is_none());
         check!(offsets_log.appended.lock().await.len() == 2);
 
         coord.mark_streams("missing-streams-actor");

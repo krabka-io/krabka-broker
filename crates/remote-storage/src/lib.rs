@@ -128,7 +128,7 @@
 //! # }
 //! ```
 
-#![doc(html_root_url = "https://docs.rs/krabka-remote-storage/0.7.0")]
+#![doc(html_root_url = "https://docs.rs/krabka-remote-storage/1.0.0")]
 
 mod cache;
 pub mod diskless;
@@ -184,9 +184,9 @@ pub use worm::{
     MAX_MANIFEST_BYTES, ManifestBody, ManifestSeq, ManifestSignature, ObjectEntry,
     ObjectProtectionReport, OffsetGap, PartitionVerifyReport, SealedManifest, SegmentIdentity,
     SegmentManifest, Sha256Digest, TrustedManifestKeys, VerifyBreak, VerifyDepth, VerifyRequest,
-    WormArchiver, WormChainRecord, WormConfig, WormError, authenticate_archive,
-    canonical_manifest_bytes, manifest_head, manifest_signing_bytes, next_chain_stamp,
-    verify_archive, verify_manifest_signature,
+    WORM_CHAIN_RECORD_VERSION, WormArchiver, WormChainRecord, WormConfig, WormError,
+    authenticate_archive, canonical_manifest_bytes, manifest_head, manifest_signing_bytes,
+    next_chain_stamp, verify_archive, verify_manifest_signature,
 };
 
 #[cfg(test)]

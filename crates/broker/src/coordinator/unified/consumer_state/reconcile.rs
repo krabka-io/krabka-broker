@@ -13,7 +13,8 @@ use krabka_protocol::primitives::uuid::Uuid;
 
 use super::{group::GroupState, member::MemberState};
 use crate::coordinator::unified::{
-    actor::MetadataProvider, persistence_next_gen::MemberAssignmentState,
+    actor::MetadataProvider, member_helpers::new_target_assignment,
+    persistence_next_gen::MemberAssignmentState,
 };
 
 /// The partitions each topic holds, by topic id.
@@ -56,9 +57,18 @@ impl GroupState {
     /// member's assignment: the member is told about its new, smaller
     /// assignment by its own next heartbeat, and it stays behind the target
     /// epoch until it acknowledges the revocation. See [`Self::reconcile_member`].
-    pub fn install_target(&mut self, per_member: HashMap<String, Partitions>) {
+    ///
+    /// Every member gets a target, an empty one when the assignor gave it
+    /// nothing, as Kafka's `TargetAssignmentBuilder.newMemberAssignment` does.
+    /// It returns the members whose target differs from the one they held, a
+    /// member that held none included, sorted: the members for which Kafka's
+    /// builder writes a target assignment record.
+    pub fn install_target(&mut self, per_member: HashMap<String, Partitions>) -> Vec<String> {
+        let (target, changed) =
+            new_target_assignment(self.members.keys(), per_member, &self.target.per_member);
         self.target.epoch = self.group_epoch;
-        self.target.per_member = per_member;
+        self.target.per_member = target;
+        changed
     }
 
     /// Kafka's `GroupMetadataManager.maybeReconcile` and
@@ -345,6 +355,36 @@ impl GroupState {
         rebuilt
     }
 
+    /// Kafka's `ConsumerGroup.waitingOnUnreleasedPartition`: `true` when the
+    /// member is in `UnreleasedPartitions` and a partition of its target that
+    /// it does not hold yet is still held by another member.
+    #[must_use]
+    pub fn waiting_on_unreleased_partition(&self, member_id: &str) -> bool {
+        let Some(member) = self.members.get(member_id) else {
+            return false;
+        };
+        if member.assignment_state != MemberAssignmentState::UnreleasedPartitions {
+            return false;
+        }
+        let Some(target) = self.target.per_member.get(member_id) else {
+            return false;
+        };
+        let wanted: Partitions = target
+            .iter()
+            .map(|(topic_id, partitions)| {
+                let assigned = member.assigned_partitions.get(topic_id);
+                let missing: Vec<i32> = partitions
+                    .iter()
+                    .copied()
+                    .filter(|partition| assigned.is_none_or(|held| !held.contains(partition)))
+                    .collect();
+                (*topic_id, missing)
+            })
+            .filter(|(_, missing)| !missing.is_empty())
+            .collect();
+        !self.held_by_others(member_id, &wanted).is_empty()
+    }
+
     /// The partitions of `wanted` that a member other than `member_id` holds,
     /// assigned or pending revocation.
     fn held_by_others(&self, member_id: &str, wanted: &Partitions) -> HashSet<(Uuid, i32)> {
@@ -384,6 +424,18 @@ impl GroupState {
 
 /// Kafka's `ownsRevokedPartitions`: `true` when the heartbeat reports any of
 /// the `pending` partitions, or reports nothing at all.
+/// Kafka's `Assignment.equals`: the same partitions of the same topics,
+/// whatever their order.
+pub(crate) fn same_assignment(a: &Partitions, b: &Partitions) -> bool {
+    let set = |assignment: &Partitions| -> HashSet<(Uuid, i32)> {
+        assignment
+            .iter()
+            .flat_map(|(topic_id, partitions)| partitions.iter().map(|p| (*topic_id, *p)))
+            .collect()
+    };
+    set(a) == set(b)
+}
+
 fn owns_any(owned: Option<&Partitions>, pending: &Partitions) -> bool {
     owned.is_none_or(|owned| {
         owned.iter().any(|(topic_id, parts)| {

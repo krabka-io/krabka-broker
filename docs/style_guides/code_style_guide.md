@@ -63,7 +63,7 @@ The workspace sets lint levels **once**, in the `[workspace.lints]` table. Every
 
 - `unsafe_code = "forbid"` — Krabka crates contain no `unsafe`. See [Wire-Format Safety](#wire-format-safety). The single documented exception is the `krabka-log-iobench` benchmark crate. It opts out of the workspace lints because `memmap2::Mmap::map` is `unsafe` by contract, and the opt-out keeps the project-wide forbid intact. Do not use that pattern in production crates.
 - `clippy::pedantic = "warn"` — the pedantic group is on, so expect Clippy to be stricter than its defaults.
-- A small set of pedantic lints stay relaxed on purpose while the public API is pre-1.0: `module_name_repetitions`, `missing_errors_doc`, and `missing_panics_doc`. The workspace `Cargo.toml` documents them. Do not add to the list without a discussion first.
+- A small set of pedantic lints stay relaxed on purpose: `module_name_repetitions`, `missing_errors_doc`, and `missing_panics_doc`. The workspace `Cargo.toml` documents them. Do not add to the list without a discussion first.
 
 Do not add per-crate lint configuration. A crate that needs a different lint level almost always wants a scoped `#[allow]` on the item instead.
 
@@ -159,7 +159,7 @@ pub enum RaftError {
 ```
 
 - Give every variant an `#[error("…")]` message. Add a `///` doc line where the variant's meaning is not already obvious from that message.
-- Mark public error enums `#[non_exhaustive]`, so a new variant is not a breaking change. Krabka is pre-1.0, but this keeps a `match` on an error honest about the open set.
+- Mark public error enums `#[non_exhaustive]`, so a new variant is not a breaking change. This keeps a `match` on an error honest about the open set.
 - Prefer **focused, leaf error types** for self-contained sub-parsers, instead of the crate-root `Error`. A small decoder that returns the whole crate's error enum leaks unrelated variants into its signature.
 - Use `?` to propagate an error. Convert between error types with `#[from]` or an explicit `map_err`. Do not convert through a string.
 - Avoid `.unwrap()` / `.expect()` on fallible paths in library code. They are acceptable only where an invariant guarantees success. In that case, use `.expect("reason the invariant holds")` so the message documents the invariant. Tests may unwrap freely.
@@ -261,7 +261,7 @@ For feature flags generally:
 
 - Doc comments, `///` and `//!`, document the public API. See the [rustdoc guide](rustdoc_style_guide.md). Public items should carry them. Private and `pub(crate)` items do not need them.
 - Use `//` line comments for non-obvious private logic and for surprising trait-impl behaviour.
-- **Comments describe the present state of the code, not its history.** Do not write porting narration such as "moved from X", "replaces the old Y", or "now takes Z". Git holds that history, and a stale migration note misleads the reader. Krabka is greenfield and undeployed, so there is no old version to reference (see [`CLAUDE.md`](../../CLAUDE.md)).
+- **Comments describe the present state of the code, not its history.** Do not write porting narration such as "moved from X", "replaces the old Y", or "now takes Z". Git holds that history, and a stale migration note misleads the reader. A comment may name an earlier version of a persisted format where the code still reads that version. See [`CLAUDE.md`](../../CLAUDE.md).
 - Explain *why*, not *what*, when the *what* is already clear from the code. A comment that ties a decode branch to a specific KIP or to a Kafka version quirk earns its place. A comment that restates the `if` condition does not.
 
 ## Async and Concurrency

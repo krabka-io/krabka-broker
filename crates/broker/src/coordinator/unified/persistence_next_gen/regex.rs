@@ -35,7 +35,7 @@ pub struct RegularExpressionValue {
 }
 
 value_codec! {
-    RegularExpressionValue,
+    RegularExpressionValue("ConsumerGroupRegularExpressionValue"),
     encode(&self) -> buf {
         put_string_array(buf, &self.topics);
         buf.put_i64(self.version);

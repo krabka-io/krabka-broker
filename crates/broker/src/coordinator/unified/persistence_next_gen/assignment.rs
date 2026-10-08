@@ -55,7 +55,7 @@ pub struct TargetAssignmentMemberValue {
 }
 
 array_value_codec!(
-    TargetAssignmentMemberValue,
+    TargetAssignmentMemberValue("ConsumerGroupTargetAssignmentMemberValue"),
     topic_partitions,
     encode_topic_partitions,
     decode_topic_partitions
@@ -135,7 +135,7 @@ pub struct CurrentMemberAssignmentValue {
 }
 
 value_codec! {
-    CurrentMemberAssignmentValue,
+    CurrentMemberAssignmentValue("ConsumerGroupCurrentMemberAssignmentValue"),
     encode(&self) -> buf {
         buf.put_i32(self.member_epoch);
         buf.put_i32(self.previous_member_epoch);

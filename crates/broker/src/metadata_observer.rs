@@ -15,7 +15,7 @@
 
 use std::sync::{
     Arc,
-    atomic::{AtomicI64, Ordering},
+    atomic::{AtomicI64, AtomicU64, Ordering},
 };
 
 use krabka_metadata::MetadataImage;
@@ -101,6 +101,13 @@ pub struct MetadataObserver {
     /// reached a controller. A catching-up observer trails it by the records it
     /// has yet to fetch, which is the gap the readiness probe bounds.
     quorum_committed_offset: AtomicI64,
+    /// Committed records the observer could not decode and skipped, with the
+    /// rest of the response that carried each: Kafka's
+    /// `metadata-load-error-count`.
+    load_errors: AtomicU64,
+    /// The fatal fault that stopped the observer, and `None` until there is
+    /// one: an invalid `KRaft` control record, on which Kafka halts every role.
+    fatal: watch::Sender<Option<String>>,
     shutdown: CancellationToken,
     task: tokio::sync::Mutex<Option<JoinHandle<()>>>,
 }
@@ -120,6 +127,8 @@ impl MetadataObserver {
             leader: leader_tx,
             metadata_offset: AtomicI64::new(-1),
             quorum_committed_offset: AtomicI64::new(-1),
+            load_errors: AtomicU64::new(0),
+            fatal: watch::channel(None).0,
             shutdown,
             task: tokio::sync::Mutex::new(None),
         })
@@ -164,6 +173,21 @@ impl MetadataObserver {
     #[must_use]
     pub fn quorum_committed_offset(&self) -> i64 {
         self.quorum_committed_offset.load(Ordering::Acquire)
+    }
+
+    /// Committed metadata records this observer could not decode and
+    /// skipped since it started: Kafka's `metadata-load-error-count`.
+    #[must_use]
+    pub fn metadata_load_error_count(&self) -> u64 {
+        self.load_errors.load(Ordering::Acquire)
+    }
+
+    /// A receiver of the fatal fault that stopped this observer: an invalid
+    /// `KRaft` control record. Kafka's raft layer halts the process on one, on
+    /// every role, so the broker stops itself when this changes to `Some`.
+    #[must_use]
+    pub fn watch_fatal(&self) -> watch::Receiver<Option<String>> {
+        self.fatal.subscribe()
     }
 
     /// Stops the fetch loop and drains the task.

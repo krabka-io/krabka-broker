@@ -223,7 +223,14 @@ mod tests {
     ) {
         broker
             .group_coordinator
-            .replay_share_group_metadata(group, ShareGroupMetadataValue { epoch: 1 });
+            .replay_share_group_metadata(
+                group,
+                ShareGroupMetadataValue {
+                    epoch: 1,
+                    metadata_hash: 0,
+                },
+            )
+            .unwrap();
         broker
             .group_coordinator
             .replay_share_state_partition_metadata(
@@ -244,7 +251,8 @@ mod tests {
                     ],
                     deleting: Vec::new(),
                 },
-            );
+            )
+            .unwrap();
     }
 
     async fn describe_initialized_group(

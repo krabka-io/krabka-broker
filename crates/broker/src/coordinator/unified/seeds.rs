@@ -17,7 +17,12 @@ use super::{persistence_next_gen, share, streams};
 #[derive(Debug, Default, Clone, PartialEq)]
 pub struct GroupSeed {
     pub group_epoch: i32,
+    /// The `MetadataHash` of the last group metadata record.
+    pub metadata_hash: i64,
     pub target_epoch: i32,
+    /// The `AssignmentTimestamp` of the last target assignment metadata
+    /// record, 0 when unknown.
+    pub assignment_timestamp_ms: i64,
     pub members: std::collections::HashMap<String, persistence_next_gen::MemberMetadataValue>,
     pub target_per_member:
         std::collections::HashMap<String, persistence_next_gen::TargetAssignmentMemberValue>,
@@ -28,6 +33,10 @@ pub struct GroupSeed {
     /// expression.
     pub resolved_regexes:
         std::collections::HashMap<String, persistence_next_gen::RegularExpressionValue>,
+    /// Kafka's `ConsumerGroup.hasSubscriptionMetadataRecord`: the log holds a
+    /// deprecated `ConsumerGroupPartitionMetadata` value (key v4) that no
+    /// tombstone has removed yet.
+    pub has_subscription_metadata_record: bool,
 }
 
 /// Hydration seed for a [`share::actor::ShareGroupActorHandle`].
@@ -37,7 +46,12 @@ pub struct GroupSeed {
 #[derive(Debug, Default, Clone, PartialEq)]
 pub struct ShareGroupSeed {
     pub group_epoch: i32,
+    /// The `MetadataHash` of the last group metadata record.
+    pub metadata_hash: i64,
     pub target_epoch: i32,
+    /// The `AssignmentTimestamp` of the last target assignment metadata
+    /// record, 0 when unknown.
+    pub assignment_timestamp_ms: i64,
     pub members:
         std::collections::HashMap<String, share::persistence::ShareGroupMemberMetadataValue>,
     pub target_per_member: std::collections::HashMap<
@@ -66,11 +80,21 @@ pub struct StreamsGroupSeed {
     pub group_epoch: i32,
     /// The `MetadataHash` of the last group metadata record.
     pub metadata_hash: i64,
-    /// The KIP-1331 description epochs of the last group metadata record.
+    /// The `ValidatedTopologyEpoch` of the last group metadata record, or 0,
+    /// the value of a new group, before one.
+    pub validated_topology_epoch: i32,
+    /// The `LastAssignmentConfigs` of the last group metadata record, by key;
+    /// empty for a null list.
+    pub last_assignment_configs: std::collections::BTreeMap<String, String>,
+    /// The KIP-1331 description epochs (Kafka trunk's tags 2 and 3) of the
+    /// last group metadata record, -1 each when it carried none. A replay
+    /// keeps them whatever mode the broker writes in.
     pub description_epochs: streams::persistence::DescriptionEpochs,
     pub assignment_epoch: i32,
+    /// The `AssignmentTimestamp` of the last target assignment metadata
+    /// record, 0 when unknown.
+    pub assignment_timestamp_ms: i64,
     pub topology: Option<streams::persistence::StreamsGroupTopologyValue>,
-    pub partition_metadata: Option<streams::persistence::StreamsGroupPartitionMetadataValue>,
     pub members:
         std::collections::HashMap<String, streams::persistence::StreamsGroupMemberMetadataValue>,
     pub target_per_member: std::collections::HashMap<
@@ -115,128 +139,44 @@ macro_rules! hydrate_member_epochs {
 }
 pub(super) use hydrate_member_epochs;
 
-/// Apply a record to the bootstrap seed, then the cache, releasing each map
-/// guard separately. Clone only an admissible seed write; move the cache write.
-macro_rules! update_replayed_seeds {
-    ($self:ident, $pending:ident, $cached:ident, $group:ident; ($first:expr, $last:expr);
-        |$seed:ident| $admissible:expr => |$record:ident| $apply:block
-    ) => {{
-        {
-            if let Some(mut $seed) = $self.$pending.get_mut($group)
-                && $admissible
-            {
-                let $record = $first;
-                $apply
-            }
-        }
-        if let Some(mut $seed) = $self.$cached.get_mut($group)
-            && $admissible
-        {
-            let $record = $last;
-            $apply
-        }
-    }};
-}
-pub(super) use update_replayed_seeds;
-
-/// Replay one member record with the shared parentage and epoch policy.
-macro_rules! update_replayed_member {
-    ($arguments:tt; metadata) => {
-        $crate::coordinator::unified::seeds::update_replayed_member!(
-            @apply $arguments;
-            MemberMetadata, members;
-        );
-    };
-    ($arguments:tt; target) => {
-        $crate::coordinator::unified::seeds::update_replayed_member!(
-            @apply $arguments;
-            TargetAssignmentMember, target_per_member;
-        );
-    };
-    ($arguments:tt; current) => {
-        $crate::coordinator::unified::seeds::update_replayed_member!(
-            @apply $arguments;
-            CurrentMemberAssignment, current_per_member; current
-        );
-    };
-    (@apply ($self:ident, $pending:ident, $cached:ident, $group:ident, $member:ident, $value:ident);
-        $kind:ident, $field:ident; $($mode:ident)?
-    ) => {
-        $crate::coordinator::unified::seeds::update_replayed_seeds!(
-            $self, $pending, $cached, $group; ($value.clone(), $value);
-            |seed| $crate::coordinator::unified::replay_policy::replay_write_is_admissible(
-                $crate::coordinator::unified::replay_policy::ReplayRecordKind::$kind,
-                true, seed.members.contains_key($member),
-            ) $( && $crate::coordinator::unified::seeds::update_replayed_member!(
-                @epoch seed, $member, $value; $mode
-            ))? => |record| {
-                seed.$field.insert($member.into(), record);
-            }
-        );
-    };
-    (@epoch $seed:ident, $member:ident, $value:ident; current) => {
-        $seed.current_per_member.get($member).is_none_or(|current| {
-            $crate::coordinator::unified::replay_policy::replay_epoch_is_admissible(
-                current.member_epoch, $value.member_epoch,
-            )
-        })
-    };
-}
-pub(super) use update_replayed_member;
-
-/// Remove a group's replay projections and protocol lock in log order.
-pub(super) fn remove_replayed_group<S>(
-    pending: &dashmap::DashMap<String, S>,
-    cached: &dashmap::DashMap<String, S>,
-    group_types: &dashmap::DashMap<String, super::group_coordinator::GroupType>,
-    group_id: &str,
-) {
-    use super::replay_policy::{ReplayMutation, ReplayRecordKind, replay_mutation};
-    assert2::debug_assert!(
-        replay_mutation(ReplayRecordKind::GroupMetadata, None, true, false)
-            == ReplayMutation::RemoveGroup
-    );
-    pending.remove(group_id);
-    cached.remove(group_id);
-    group_types.remove(group_id);
-}
-
-/// Scrub each projection separately, releasing the seed guard before the cache.
-pub(super) fn scrub_replayed_seeds<S>(
-    pending: &dashmap::DashMap<String, S>,
-    cached: &dashmap::DashMap<String, S>,
-    group_id: &str,
-    mut scrub: impl FnMut(&mut S),
-) {
-    for seeds in [pending, cached] {
-        if let Some(mut seed) = seeds.get_mut(group_id) {
-            scrub(seed.value_mut());
+impl GroupSeed {
+    /// The consumer group that Kafka's replay creates for the first record of
+    /// a group id: a new `ConsumerGroup`, whose group epoch and assignment
+    /// epoch start at 1 (`TargetAssignmentMetadata.INITIAL`).
+    #[must_use]
+    pub fn new_group() -> Self {
+        Self {
+            group_epoch: super::INITIAL_GROUP_EPOCH,
+            target_epoch: super::INITIAL_GROUP_EPOCH,
+            ..Self::default()
         }
     }
 }
 
-/// The shared member/assignment tombstone mutations for all three seed types.
-/// Each replay supplies its protocol-specific records as additional match arms.
-macro_rules! scrub_seed_assignments {
-    ($seed:ident, $key:expr, $kind:ident, $epoch:ident; $($pattern:pat => $value:expr),* $(,)?) => {
-        match $key {
-            $kind::MemberMetadata { member_id, .. } => {
-                $seed.members.remove(member_id);
-                $seed.target_per_member.remove(member_id);
-                $seed.current_per_member.remove(member_id);
-            }
-            $kind::TargetAssignmentMetadata { .. } => {
-                $seed.$epoch = 0;
-                $seed.target_per_member.clear();
-            }
-            $kind::TargetAssignmentMember { member_id, .. } => {
-                $seed.target_per_member.remove(member_id);
-            }
-            $kind::CurrentMemberAssignment { member_id, .. } => {
-                $seed.current_per_member.remove(member_id);
-            }
-            $($pattern => $value),*
+impl ShareGroupSeed {
+    /// The share group that Kafka's replay creates for the first record of a
+    /// group id: a new `ShareGroup`, whose group epoch and assignment epoch
+    /// start at 1.
+    #[must_use]
+    pub fn new_group() -> Self {
+        Self {
+            group_epoch: super::INITIAL_GROUP_EPOCH,
+            target_epoch: super::INITIAL_GROUP_EPOCH,
+            ..Self::default()
         }
-    };
+    }
 }
-pub(super) use scrub_seed_assignments;
+
+impl StreamsGroupSeed {
+    /// The streams group that Kafka's replay creates for the first record of
+    /// a group id: a new `StreamsGroup`, whose group epoch and assignment
+    /// epoch start at 1 and whose validated topology epoch starts at 0.
+    #[must_use]
+    pub fn new_group() -> Self {
+        Self {
+            group_epoch: streams::state::INITIAL_EPOCH,
+            assignment_epoch: streams::state::INITIAL_EPOCH,
+            ..Self::default()
+        }
+    }
+}

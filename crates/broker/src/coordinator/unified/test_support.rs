@@ -32,6 +32,8 @@ pub(crate) fn stable_streams_assignment(
         active_pending_revocation: BTreeMap::new(),
         standby_pending_revocation: BTreeMap::new(),
         warmup_pending_revocation: BTreeMap::new(),
+        active_epochs: BTreeMap::new(),
+        active_pending_revocation_epochs: BTreeMap::new(),
     }
 }
 
@@ -310,20 +312,20 @@ pub(crate) async fn check_group_assignment_timing<H, R: HeartbeatStatus>(
     for group_id in ["slow", "fast", "paced"] {
         let handle = create(group_id).await;
         check!(
-            heartbeat(&handle, "m1", 0).await.status().1 == 1,
+            heartbeat(&handle, "m1", 0).await.status().1 == 2,
             "{group_id}"
         );
         joined.push((group_id, heartbeat(&handle, "m2", 0).await.status().1));
         handles.push((group_id, handle));
     }
-    assert!(joined == [("slow", 1), ("fast", 2), ("paced", 1)]);
+    assert!(joined == [("slow", 2), ("fast", 3), ("paced", 2)]);
     tokio::time::sleep(std::time::Duration::from_millis(400)).await;
     let (_, paced) = &handles[2];
-    check_first(heartbeat(paced, "m1", 1).await.status());
-    check!(heartbeat(paced, "m2", 1).await.status().1 == 2);
+    check_first(heartbeat(paced, "m1", 2).await.status());
+    check!(heartbeat(paced, "m2", 2).await.status().1 == 3);
     // The slow group still waits for the broker's minute.
     let (_, slow) = &handles[0];
-    check!(heartbeat(slow, "m2", 1).await.status().1 == 1);
+    check!(heartbeat(slow, "m2", 2).await.status().1 == 2);
 }
 
 /// Split a freshly encoded key into its leading version and body, mirroring

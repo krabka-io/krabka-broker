@@ -15,10 +15,13 @@ time to fix the problem before you disclose it in public.
 
 ## Supported versions
 
-krabka is greenfield and undeployed. There are no release branches, no
-production users, and no persisted state to migrate. The `main` branch is the
-only supported version, and every fix lands there. Consumers pin the sibling
-crates by git revision, so a fix reaches them when they move their pin.
+The latest 1.x release and the `main` branch are supported. Every fix lands on
+`main` first and ships in the next 1.x release. No release branches exist yet,
+so an older 1.x release gets no backported fix: upgrade to the latest 1.x
+release, which reads the data that any earlier 1.x release wrote (see
+[Persisted formats](docs/persisted_formats.md)). Releases before 1.0.0 are not
+supported. Consumers pin the sibling crates by git revision, so a fix reaches
+them when they move their pin.
 
 ## Scope
 

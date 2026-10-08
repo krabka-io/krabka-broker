@@ -32,5 +32,7 @@ mod streams_internal_topics;
 mod streams_membership;
 #[path = "streams_groups/streams_restart.rs"]
 mod streams_restart;
+#[path = "streams_groups/streams_static_membership.rs"]
+mod streams_static_membership;
 #[path = "streams_groups/streams_topology_description.rs"]
 mod streams_topology_description;

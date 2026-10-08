@@ -10,29 +10,13 @@ use krabka_verified::{
     group_migration_record_plan,
 };
 
-use super::assignment::member_target_assignment;
+use super::assignment::{consumer_assignment_blob, embedded_protocol_version};
 use crate::coordinator::unified::{
-    actor::{PendingRecords, classic_group_metadata_record},
+    actor::{GroupTombstone, PendingRecords, classic_group_metadata_record},
     classic_state::{ClassicGroup as ClassicState, Member as ClassicMember, select_protocol},
     consumer_state::GroupState as ConsumerState,
     reconciler::ReconcileInput,
 };
-
-/// Can this consumer group be downgraded to a classic group?
-///
-/// Every remaining member must carry a classic facade. A native consumer
-/// member has no classic protocol list or session timeout to restore and makes
-/// the current group unrepresentable as classic state.
-pub(crate) fn consumer_is_convertible(state: &ConsumerState) -> bool {
-    consumer_downgrade_epoch(
-        state
-            .members
-            .values()
-            .all(|member| member.classic.is_some()),
-        state.group_epoch,
-    )
-    .is_some()
-}
 
 /// Converts a consumer group back into a classic group during a KIP-848
 /// downgrade.
@@ -44,27 +28,33 @@ pub(crate) fn consumer_is_convertible(state: &ConsumerState) -> bool {
 /// the kind-agnostic `Group` container, and this function does not change
 /// them.
 ///
-/// Precondition: every member is a hosted classic member, that is
-/// `classic.is_some()`. That holds once the last native consumer-protocol
-/// member has left.
+/// The `leaving` members, which a fence removes, are left out, as Kafka's
+/// `ClassicGroup.fromConsumerGroup` leaves out its `leavingMembers`.
+///
+/// Precondition: every other member is a hosted classic member, that is
+/// `classic.is_some()`.
 pub(crate) fn convert_consumer_to_classic(
     state: &ConsumerState,
+    leaving: &[String],
     image: &ReconcileInput,
 ) -> ClassicState {
     let mut classic = ClassicState::new(state.group_id.clone());
     classic.protocol_type = Some("consumer".into());
-    for (mid, m) in &state.members {
+    let mut members: Vec<(
+        &String,
+        &crate::coordinator::unified::consumer_state::MemberState,
+    )> = state
+        .members
+        .iter()
+        .filter(|(member_id, _)| !leaving.contains(member_id))
+        .collect();
+    members.sort_unstable_by_key(|(member_id, _)| member_id.as_str());
+    for (mid, m) in members {
         let facade = m
             .classic
             .as_ref()
             .expect("downgrade precondition: all members are hosted classic members");
-        // Seed from the server-computed TARGET, not `assigned_partitions`: a
-        // hosted classic member's `assigned_partitions` only fills in as a
-        // NATIVE consumer acks epochs over heartbeats, which a hosted classic
-        // member never does. Its real partitions live in `target.per_member`,
-        // so reading the target keeps them across the downgrade.
-        let seed = member_target_assignment(state, mid, image);
-        let mut cm = ClassicMember::new(
+        let cm = ClassicMember::new(
             mid.clone(),
             m.client_id.clone(),
             m.client_host.clone(),
@@ -73,10 +63,30 @@ pub(crate) fn convert_consumer_to_classic(
             facade.supported_protocols.clone(),
         )
         .with_instance_id(m.instance_id.clone());
-        cm.assignment = Some(seed);
         classic.add_member(cm);
     }
-    if let Some(name) = select_protocol(&classic.members) {
+    // Kafka's `ClassicGroup.fromConsumerGroup` seeds each member with its
+    // TARGET assignment, serialized at the version of the member's metadata
+    // for the selected protocol.
+    let selected = select_protocol(&classic.members);
+    for (mid, member) in &mut classic.members {
+        let metadata = selected
+            .as_deref()
+            .and_then(|name| member.protocols.iter().find(|(n, _)| n == name))
+            .or_else(|| member.protocols.first())
+            .map(|(_, metadata)| metadata.as_ref());
+        let version = metadata
+            .and_then(embedded_protocol_version)
+            .unwrap_or_default();
+        let target = state
+            .target
+            .per_member
+            .get(mid)
+            .cloned()
+            .unwrap_or_default();
+        member.assignment = Some(consumer_assignment_blob(&target, image, version));
+    }
+    if let Some(name) = selected {
         classic.complete_rebalance(&name);
         // Drive to Stable so a downgraded member's first Heartbeat/SyncGroup
         // reads its seed assignment instead of REBALANCE_IN_PROGRESS.
@@ -93,6 +103,7 @@ pub(crate) fn convert_consumer_to_classic(
         state
             .members
             .values()
+            .filter(|member| !leaving.contains(&member.member_id))
             .all(|member| member.classic.is_some()),
         state.group_epoch,
     )
@@ -121,19 +132,28 @@ pub(crate) fn downgrade_pending_records(
 ) -> PendingRecords {
     let plan =
         group_migration_record_plan(GroupMigrationDirection::Downgrade, consumer.members.len());
-    let mut pending = PendingRecords {
-        next_gen_group_metadata_tombstone: plan.next_gen_group
-            == GroupMigrationRecordAction::Tombstone,
-        next_gen_target_metadata_tombstone: plan.next_gen_target
-            == GroupMigrationRecordAction::Tombstone,
+    let pending = PendingRecords {
+        // Kafka's `convertToClassicGroup` writes
+        // `ConsumerGroup.createGroupTombstoneRecords`, which tombstones every
+        // member's records, the target metadata, the resolved regular
+        // expressions, the deprecated k4 record and the group epoch.
+        group_tombstone: (plan.next_gen_group == GroupMigrationRecordAction::Tombstone
+            && plan.next_gen_target == GroupMigrationRecordAction::Tombstone
+            && plan.member_metadata == GroupMigrationRecordAction::Tombstone)
+            .then(|| GroupTombstone {
+                members: consumer.members.keys().cloned().collect(),
+                regexes: consumer.resolved_regex_names(),
+            }),
         classic_group_metadata: (plan.classic_group == GroupMigrationRecordAction::Write)
             .then(|| classic_group_metadata_record(classic, now_ms)),
         ..Default::default()
     };
-    if plan.member_metadata == GroupMigrationRecordAction::Tombstone {
-        super::super::persistence::tombstone_members!(pending, consumer.members.keys());
-    }
-    super::super::persistence::assert_member_record_count!(pending, plan.member_count);
+    assert2::debug_assert!(
+        pending
+            .group_tombstone
+            .as_ref()
+            .is_some_and(|tombstone| tombstone.members.len() == plan.member_count)
+    );
     pending
 }
 
@@ -147,23 +167,7 @@ mod tests {
     };
 
     use super::*;
-
-    #[test]
-    fn downgrade_requires_every_member_to_have_a_classic_facade() {
-        use std::time::{Duration, Instant};
-
-        use crate::coordinator::unified::consumer_state::MemberState;
-
-        let mut state = ConsumerState::new("g");
-        assert!(consumer_is_convertible(&state));
-        state.add_or_update_member(MemberState {
-            client_id: "c".into(),
-            client_host: "h".into(),
-            rebalance_timeout: Duration::from_secs(30),
-            ..MemberState::empty("native", Instant::now())
-        });
-        assert!(!consumer_is_convertible(&state));
-    }
+    use crate::coordinator::unified::persistence_next_gen::NextGenKey;
 
     #[test]
     fn downgrade_re_expresses_members_as_classic() {
@@ -203,12 +207,14 @@ mod tests {
             partitions_pending_revocation: std::collections::HashMap::new(),
             assignment_epochs: std::collections::HashMap::new(),
             last_seen: Instant::now(),
+            // Subscription metadata whose embedded-protocol version is 1, the
+            // version the member's seed assignment is serialized at.
             classic: Some(ClassicMemberFacade {
-                generation_id: 7,
-                supported_protocols: vec![("range".into(), bytes::Bytes::from_static(b"meta"))],
+                supported_protocols: vec![(
+                    "range".into(),
+                    bytes::Bytes::from_static(b"\x00\x01meta"),
+                )],
                 session_timeout: Duration::from_secs(30),
-                last_synced_assignment: bytes::Bytes::new(),
-                awaiting_sync: false,
             }),
         };
         state.add_or_update_member(m);
@@ -220,7 +226,7 @@ mod tests {
             .per_member
             .insert("m1".into(), [(t1, vec![0, 1])].into());
 
-        let classic = convert_consumer_to_classic(&state, &image);
+        let classic = convert_consumer_to_classic(&state, &[], &image);
         assert!(classic.group_id == "g");
         assert!(classic.generation_id == 7);
         let member = classic.members.get("m1").expect("member preserved");
@@ -229,8 +235,8 @@ mod tests {
         let asn = member.assignment.clone().expect("seed assignment");
         let mut cur = &asn[..];
         let version = cur.get_i16();
-        assert!(version == 0);
-        let decoded = ConsumerProtocolAssignment::decode(&mut cur, 0).unwrap();
+        assert!(version == 1);
+        let decoded = ConsumerProtocolAssignment::decode(&mut cur, 1).unwrap();
         check!(decoded.assigned_partitions[0].topic == "orders");
         check!(decoded.assigned_partitions[0].partitions == vec![0, 1]);
         // Group must land in Stable so the first Heartbeat/SyncGroup after
@@ -252,7 +258,66 @@ mod tests {
         let second = downgrade_pending_records(&state, &classic, 7)
             .to_batch("g", 7)
             .unwrap();
-        check!(first.records.len() == 6);
+        // Kafka's `convertToClassicGroup`: the group's tombstones in the
+        // order of `ConsumerGroup.createGroupTombstoneRecords`, the deprecated
+        // k4 record always among them, then the classic k2 value.
+        let ng = |key: NextGenKey| {
+            crate::coordinator::unified::persistence_next_gen::encode_key(&key).unwrap()
+        };
+        let keys: Vec<_> = first
+            .records
+            .iter()
+            .map(|record| (record.key.clone().unwrap(), record.value.is_none()))
+            .collect();
+        let member = || ("g".to_string(), "m1".to_string());
+        check!(
+            keys == vec![
+                (
+                    ng(NextGenKey::CurrentMemberAssignment {
+                        group_id: member().0,
+                        member_id: member().1,
+                    }),
+                    true
+                ),
+                (
+                    ng(NextGenKey::TargetAssignmentMember {
+                        group_id: member().0,
+                        member_id: member().1,
+                    }),
+                    true
+                ),
+                (
+                    ng(NextGenKey::TargetAssignmentMetadata {
+                        group_id: "g".into()
+                    }),
+                    true
+                ),
+                (
+                    ng(NextGenKey::MemberMetadata {
+                        group_id: member().0,
+                        member_id: member().1,
+                    }),
+                    true
+                ),
+                (
+                    ng(NextGenKey::PartitionMetadata {
+                        group_id: "g".into()
+                    }),
+                    true
+                ),
+                (
+                    ng(NextGenKey::GroupMetadata {
+                        group_id: "g".into()
+                    }),
+                    true
+                ),
+                (
+                    crate::coordinator::unified::persistence::GroupMetadataValue::encode_key("g")
+                        .unwrap(),
+                    false
+                ),
+            ]
+        );
         assert!(first.records == second.records);
     }
 }

@@ -5,12 +5,12 @@
 use std::sync::Arc;
 
 use krabka_ids::Offset;
-use krabka_metadata::{MetadataImage, MetadataRecord, VotersRecord, from_kraft_value};
+use krabka_metadata::{MetadataImage, MetadataRecord, VotersRecord};
 
 use super::{
     Engine, PendingDowngradeSnapshot,
     offsets::{batch_base_in_apply_window, expected_hwm_after_advance, hwm_advanced_as_expected},
-    records::{is_kip835_noop, next_batch_offset},
+    records::{decode_committed_value, is_kip835_noop, next_batch_offset},
 };
 
 impl Engine {
@@ -22,6 +22,10 @@ impl Engine {
         fields(node = self.me.0, new_hwm = new_hwm.0, prev_hwm = tracing::field::Empty)
     )]
     pub fn advance_and_apply(&mut self, new_hwm: Offset) {
+        // A controller that met a record it cannot replay takes no more part.
+        if self.replay_fault.is_some() {
+            return;
+        }
         let prev_hwm = self.log.hwm();
         tracing::Span::current().record("prev_hwm", prev_hwm.0);
         let expected_hwm = expected_hwm_after_advance(prev_hwm, new_hwm, self.log.log_end_offset());
@@ -86,64 +90,70 @@ impl Engine {
                             if is_kip835_noop(value) {
                                 continue;
                             }
-                            match from_kraft_value(value, &self.image) {
-                                Ok(meta) => match self.image.validate(&meta) {
-                                    Ok(()) => {
-                                        let is_metadata_version_downgrade = matches!(
-                                            &meta,
-                                            MetadataRecord::V1FeatureLevel(feature)
-                                                if feature.name
-                                                    == krabka_metadata::metadata_version::METADATA_VERSION_FEATURE
-                                                    && self
-                                                        .image
-                                                        .finalized_metadata_version()
-                                                        .is_some_and(|current| feature.level < current)
+                            let offset = batch
+                                .base_offset
+                                .saturating_add(i64::from(rec.offset_delta));
+                            let meta = match decode_committed_value(value, &self.image, offset) {
+                                Ok(Some(meta)) => meta,
+                                Ok(None) => continue,
+                                Err(fault) => {
+                                    // The controller stops: nothing after this
+                                    // record applies, and nothing publishes.
+                                    tracing::error!(%fault, "kraft: stopping the controller");
+                                    self.replay_fault = Some(fault);
+                                    return;
+                                }
+                            };
+                            match self.image.validate(&meta) {
+                                Ok(()) => {
+                                    let is_metadata_version_downgrade = matches!(
+                                        &meta,
+                                        MetadataRecord::V1FeatureLevel(feature)
+                                            if feature.name
+                                                == krabka_metadata::metadata_version::METADATA_VERSION_FEATURE
+                                                && self
+                                                    .image
+                                                    .finalized_metadata_version()
+                                                    .is_some_and(|current| feature.level < current)
+                                    );
+                                    self.image.apply(&meta);
+                                    if is_metadata_version_downgrade
+                                        && self.downgrade_snapshot_pending.is_none()
+                                    {
+                                        let end_offset = Offset(
+                                            batch
+                                                .base_offset
+                                                .saturating_add(i64::from(rec.offset_delta))
+                                                .saturating_add(1),
                                         );
-                                        self.image.apply(&meta);
-                                        if is_metadata_version_downgrade
-                                            && self.downgrade_snapshot_pending.is_none()
-                                        {
-                                            let end_offset = Offset(
-                                                batch
-                                                    .base_offset
-                                                    .saturating_add(i64::from(rec.offset_delta))
-                                                    .saturating_add(1),
-                                            );
-                                            let mut image = self.image.clone();
-                                            image.apply(&MetadataRecord::V1KRaftVersion(
-                                                krabka_metadata::KRaftVersionRecord {
-                                                    kraft_version: self
-                                                        .controls
-                                                        .version_at(end_offset),
-                                                },
-                                            ));
-                                            image.apply(&MetadataRecord::V1Voters(VotersRecord {
-                                                voters: self.controls.voters_at(end_offset),
-                                            }));
-                                            self.downgrade_snapshot_pending =
-                                                Some(PendingDowngradeSnapshot {
-                                                    image,
-                                                    end_offset,
-                                                    epoch: batch.partition_leader_epoch,
-                                                });
-                                        }
-                                        metadata_version_downgraded |=
-                                            is_metadata_version_downgrade;
-                                        changed = true;
+                                        let mut image = self.image.clone();
+                                        image.apply(&MetadataRecord::V1KRaftVersion(
+                                            krabka_metadata::KRaftVersionRecord {
+                                                kraft_version: self.controls.version_at(end_offset),
+                                            },
+                                        ));
+                                        image.apply(&MetadataRecord::V1Voters(VotersRecord {
+                                            voters: self.controls.voters_at(end_offset),
+                                        }));
+                                        self.downgrade_snapshot_pending =
+                                            Some(PendingDowngradeSnapshot {
+                                                image,
+                                                end_offset,
+                                                epoch: batch.partition_leader_epoch,
+                                            });
                                     }
-                                    Err(e) => {
-                                        // Record the first rejection against any
-                                        // waiter that covers this offset so the
-                                        // submitter learns the canonical error.
-                                        self.note_rejection(Offset(batch.base_offset), &e);
-                                        tracing::debug!(
-                                            ?e,
-                                            "kraft: rejected committed record on apply"
-                                        );
-                                    }
-                                },
+                                    metadata_version_downgraded |= is_metadata_version_downgrade;
+                                    changed = true;
+                                }
                                 Err(e) => {
-                                    tracing::debug!(?e, "kraft: failed to decode committed record");
+                                    // Record the first rejection against any
+                                    // waiter that covers this offset so the
+                                    // submitter learns the canonical error.
+                                    self.note_rejection(Offset(batch.base_offset), &e);
+                                    tracing::debug!(
+                                        ?e,
+                                        "kraft: rejected committed record on apply"
+                                    );
                                 }
                             }
                         }

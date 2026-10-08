@@ -616,20 +616,8 @@ pub(crate) const UNSUPPORTED_LEVEL_FAULT: &str = "Tried to apply FeatureLevelRec
 /// Writes `records` as the length-prefixed frames of `bootstrap.records.bin`,
 /// the file `krabka format` leaves for the first start to submit.
 pub(crate) fn write_bootstrap_records(log_dir: &std::path::Path, records: &[MetadataRecord]) {
-    use serde_wincode::SerdeCompat;
-    use wincode::Serialize as _;
-
-    let mut bytes = Vec::new();
-    for record in records {
-        let frame =
-            <SerdeCompat<MetadataRecord>>::serialize(record).expect("serialize a bootstrap record");
-        bytes.extend_from_slice(
-            &u32::try_from(frame.len())
-                .expect("bootstrap frame fits in u32")
-                .to_le_bytes(),
-        );
-        bytes.extend_from_slice(&frame);
-    }
+    let bytes =
+        crate::bootstrap::encode_bootstrap_records(records).expect("encode bootstrap records");
     std::fs::write(log_dir.join("bootstrap.records.bin"), bytes).expect("write bootstrap records");
 }
 

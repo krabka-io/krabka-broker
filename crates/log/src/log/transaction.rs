@@ -11,7 +11,7 @@ use krabka_protocol::records::RecordBatch;
 
 use super::{
     Log,
-    control::{marker_coordinator_epoch, transaction_marker_flags},
+    control::{batch_control_marker_coordinator_epoch, transaction_marker_flags},
 };
 use crate::{error::LogError, txn_index::AbortedTxn};
 
@@ -93,7 +93,7 @@ impl Log {
         transaction_stamp: Option<u64>,
     ) -> Result<(), LogError> {
         // Read the inner control record: key = (version: i16, type: i16) BE.
-        let (is_abort, is_commit) = transaction_marker_flags(batch);
+        let (is_abort, is_commit) = transaction_marker_flags(batch)?;
         let closes = krabka_verified::transaction_marker_closes(
             is_abort,
             is_commit,
@@ -101,7 +101,7 @@ impl Log {
         );
         if (is_abort || is_commit)
             && producer_id.get() >= 0
-            && let Some(epoch) = marker_coordinator_epoch(batch)
+            && let Some(epoch) = batch_control_marker_coordinator_epoch(batch)?
         {
             self.coordinator_epochs.insert(producer_id, epoch);
         }
@@ -401,7 +401,16 @@ mod tests {
                 } else {
                     commit_marker(2000, 0)
                 };
-                log.append(&mut marker).unwrap();
+                // Kafka's `ControlRecordType.parseTypeId` refuses a key too
+                // short to hold its type, so the malformed marker is never
+                // written.
+                let refused = log.append(&mut marker).err().map(|e| e.to_string());
+                let want = (case == "malformed").then(|| {
+                    "Invalid value size found for end control record key. Must have at least 4 \
+                     bytes, but found only 3"
+                        .to_owned()
+                });
+                assert2::assert!(refused == want, "case {case}");
                 assert2::assert!(log.lso() == held, "case {case}");
                 assert2::assert!(
                     log.pending_transaction_start(ProducerId(1000)) == Some(Offset(0)),

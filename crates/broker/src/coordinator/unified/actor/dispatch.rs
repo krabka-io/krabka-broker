@@ -12,7 +12,7 @@ use krabka_protocol::{
 use tokio::sync::oneshot;
 
 use super::{
-    ActorServices, ErrorCode, GroupActorMessage, MetadataProvider, ParkedWaiters,
+    ActorServices, ErrorCode, GroupActorMessage, ParkedWaiters,
     classic_join::handle_classic_join_message,
     classic_leave::{handle_classic_delete_message, handle_classic_leave_message},
     classic_sync::handle_classic_sync_message,
@@ -37,13 +37,12 @@ use crate::{
 
 fn handle_classic_heartbeat_message(
     group: &mut CoordinatorGroup,
-    metadata: &dyn MetadataProvider,
     request: &HeartbeatRequest,
 ) -> ErrorCode {
     if let Some(state) = group.as_classic_mut() {
         classic_ops::handle_heartbeat(state, request)
     } else if let Some(state) = group.as_consumer_mut() {
-        migration::serve_classic_heartbeat(state, &request.member_id, &metadata.snapshot())
+        migration::serve_classic_heartbeat(state, request)
     } else {
         codes::UNKNOWN_MEMBER_ID
     }
@@ -128,6 +127,7 @@ pub(super) async fn handle_actor_message(
             version,
             client_id,
             client_host,
+            regex_resolver,
             reply,
         } => {
             handle_classic_join_message(
@@ -138,6 +138,7 @@ pub(super) async fn handle_actor_message(
                 version,
                 &client_id,
                 &client_host,
+                &*regex_resolver,
                 reply,
             )
             .await
@@ -147,7 +148,7 @@ pub(super) async fn handle_actor_message(
             true
         }
         GroupActorMessage::ClassicHeartbeat { req, reply } => {
-            let code = handle_classic_heartbeat_message(group, services.metadata, &req);
+            let code = handle_classic_heartbeat_message(group, &req);
             let _ = reply.send(code);
             true
         }
@@ -252,7 +253,7 @@ pub(super) async fn handle_actor_message(
         }
         GroupActorMessage::Seed(seed) => {
             if let Some(state) = group.as_consumer_mut() {
-                apply_seed(state, seed, &services.metadata.snapshot());
+                apply_seed(state, seed);
             }
             true
         }
@@ -329,6 +330,7 @@ mod tests {
             version: 4,
             client_id: "client-a".into(),
             client_host: "127.0.0.1".into(),
+            regex_resolver: crate::coordinator::unified::regex_resolver::no_topic_regex_resolver(),
             reply: join_tx,
         })
         .await;

@@ -27,6 +27,8 @@ use crate::coordinator::persistence::GroupMetadataValue;
 /// that comes later rebuilds the classic group. Log order wins.
 #[tokio::test]
 async fn downgraded_group_replays_as_classic() {
+    use crate::coordinator::unified::persistence_next_gen as ng;
+
     let coord = bare_coordinator();
 
     let [(group_key, group_value), (member_key, member_value)] = consumer_group_records(1, None);
@@ -43,11 +45,43 @@ async fn downgraded_group_replays_as_classic() {
         (group_key.clone(), Some(group_value)),
         // 4. upgrade: next-gen member metadata
         (member_key.clone(), Some(member_value)),
-        // 5. downgrade drops k3 (next-gen group tombstone)
-        (group_key, None),
-        // 6. downgrade drops k5 (next-gen member tombstone)
+        // 5. the downgrade tombstones the consumer group in the order of
+        // Kafka's `ConsumerGroup.createGroupTombstoneRecords`: the member's
+        // current assignment (k8), its target (k7), the target metadata
+        // (k6), the member (k5), the deprecated k4 record, and the group (k3)
+        (
+            ng::encode_key(&ng::NextGenKey::CurrentMemberAssignment {
+                group_id: "g".into(),
+                member_id: "m1".into(),
+            })
+            .unwrap(),
+            None,
+        ),
+        (
+            ng::encode_key(&ng::NextGenKey::TargetAssignmentMember {
+                group_id: "g".into(),
+                member_id: "m1".into(),
+            })
+            .unwrap(),
+            None,
+        ),
+        (
+            ng::encode_key(&ng::NextGenKey::TargetAssignmentMetadata {
+                group_id: "g".into(),
+            })
+            .unwrap(),
+            None,
+        ),
         (member_key, None),
-        // 7. downgrade writes a fresh k2 classic group
+        (
+            ng::encode_key(&ng::NextGenKey::PartitionMetadata {
+                group_id: "g".into(),
+            })
+            .unwrap(),
+            None,
+        ),
+        (group_key, None),
+        // 6. downgrade writes a fresh k2 classic group
         (k2_key2, Some(k2_val2)),
     ];
 
@@ -104,6 +138,7 @@ async fn surviving_k6_write_cannot_resurrect_next_gen_ownership() {
     let (coord, acc) = replay_classic_residue(Some(
         ng::TargetAssignmentMetadataValue {
             assignment_epoch: 1,
+            assignment_timestamp_ms: 0,
         }
         .encode(),
     ));

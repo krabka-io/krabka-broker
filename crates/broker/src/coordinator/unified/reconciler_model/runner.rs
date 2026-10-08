@@ -16,8 +16,8 @@ const MAX_DEPTH: usize = 60;
 // considering a field -- into a failure instead of a silently smaller search
 // that still passes the upper bound. The *generated* count is deliberately not
 // pinned: it depends on dedupe timing across the BFS worker threads.
-pub(super) const PINNED_UNIQUE_STATES_BASIC: usize = 509;
-pub(super) const PINNED_UNIQUE_STATES_WIDE: usize = 3_727;
+pub(super) const PINNED_UNIQUE_STATES_BASIC: usize = 552;
+pub(super) const PINNED_UNIQUE_STATES_WIDE: usize = 3_813;
 
 pinned_model_runner! {
     pub(super) fn run(ReconModel); MAX_DEPTH, MAX_STATES; properties_last

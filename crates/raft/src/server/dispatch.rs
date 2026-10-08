@@ -71,6 +71,12 @@ pub(super) async fn dispatch_with_router(
             .await?;
         return rx.await.map_err(|_| RaftError::Shutdown);
     }
+    // A krabka-private request at a version this build does not implement
+    // gets `UNSUPPORTED_VERSION` in the v0 response shape, which every 1.x
+    // sender decodes, rather than a body decoded at the wrong version.
+    if let Some(refusal) = crate::wire::unsupported_version_response(api_key_n.get(), version)? {
+        return Ok(refusal);
+    }
     match api_key_n {
         ApiKey(API_KEY_SUBMIT_CHANGE) => dispatch_submit_change(&body, engine).await,
         ApiKey(API_KEY_METADATA_FETCH) => dispatch_metadata_fetch(&body, engine).await,
