@@ -86,3 +86,29 @@ pub(super) fn sample_batches(batches: &[(i64, i32, i64)]) -> Vec<RecordBatch> {
         .map(|&(base, count, timestamp)| sample_batch(base, count, timestamp))
         .collect()
 }
+
+/// A [`crate::io::LogIo`] that records every readahead hint a read gives,
+/// as `(offset, len)`, and does real I/O for everything else.
+#[derive(Debug, Default)]
+pub(super) struct RecordedAdvice(std::sync::Mutex<Vec<(u64, u64)>>);
+
+impl RecordedAdvice {
+    /// The hints given since the last call, oldest first.
+    pub(super) fn take(&self) -> Vec<(u64, u64)> {
+        std::mem::take(&mut *self.0.lock().unwrap())
+    }
+}
+
+impl crate::io::LogIo for RecordedAdvice {
+    fn advise_will_need(&self, _file: &std::fs::File, offset: u64, len: u64) {
+        self.0.lock().unwrap().push((offset, len));
+    }
+}
+
+/// `seg` with its I/O routed through a fresh [`RecordedAdvice`], which the
+/// caller keeps to read the hints back.
+pub(super) fn recording_advice(seg: &mut Segment) -> std::sync::Arc<RecordedAdvice> {
+    let advice = std::sync::Arc::new(RecordedAdvice::default());
+    seg.set_io(advice.clone());
+    advice
+}
