@@ -10,8 +10,12 @@ use std::{collections::HashMap, time::Instant};
 use krabka_protocol::{
     Decode,
     owned::{
-        consumer_protocol_assignment::ConsumerProtocolAssignment,
-        consumer_protocol_subscription::ConsumerProtocolSubscription,
+        consumer_protocol_assignment::{
+            ConsumerProtocolAssignment, MAX_VERSION as ASSIGNMENT_MAX_VERSION,
+        },
+        consumer_protocol_subscription::{
+            ConsumerProtocolSubscription, MAX_VERSION as SUBSCRIPTION_MAX_VERSION,
+        },
     },
     primitives::uuid::Uuid,
 };
@@ -20,6 +24,7 @@ use krabka_verified::{
     group_migration_record_plan,
 };
 
+use super::assignment::embedded_protocol_version;
 use crate::coordinator::unified::{
     actor::{PendingRecords, full_pending_records},
     classic_state::ClassicGroup as ClassicState,
@@ -29,56 +34,31 @@ use crate::coordinator::unified::{
 };
 
 /// Decodes a classic member's `protocol_metadata` blob as a
-/// `ConsumerProtocolSubscription`.
+/// `ConsumerProtocolSubscription`, as Kafka's
+/// `ConsumerProtocol.deserializeConsumerProtocolSubscription` does.
 ///
 /// The blob carries a leading `i16` version, then the schema body. That
 /// version is the "consumer" embedded-protocol version negotiation, which is
 /// separate from the per-field version gates in the
-/// `ConsumerProtocolSubscription` schema.
+/// `ConsumerProtocolSubscription` schema. A version above the highest the
+/// schema knows is read as the highest (`checkSubscriptionVersion`).
 ///
-/// This function returns `None` on any decode error, and on an unknown
-/// version. Such a member's subscription cannot survive translation to the
-/// server-side consumer model. It mirrors
-/// `offset_delete::decode_subscribed_topics`.
+/// This function returns `None` where Kafka throws a `SchemaException`: a blob
+/// too short to hold a version, a negative version, or a body that does not
+/// decode.
 pub(crate) fn decode_consumer_subscription(
     metadata: &[u8],
 ) -> Option<ConsumerProtocolSubscription> {
-    use bytes::Buf;
-    if metadata.len() < 2 {
+    let version = embedded_protocol_version(metadata)?;
+    if version < 0 {
         return None;
     }
-    let mut cur = metadata;
-    let version = cur.get_i16();
-    if !(0..=3).contains(&version) {
-        return None;
-    }
-    ConsumerProtocolSubscription::decode(&mut cur, version).ok()
-}
-
-/// Can this classic group be upgraded to a next-gen consumer group?
-///
-/// This mirrors the admission rule in Apache Kafka's
-/// `ConsumerGroup.fromClassicGroup`. The group must use the `"consumer"`
-/// protocol type. **Every** current member's selected `protocol_metadata` must
-/// decode as a valid `ConsumerProtocolSubscription`, so that each subscription
-/// survives translation. An empty group with the consumer protocol type is
-/// convertible.
-pub(crate) fn classic_is_convertible(state: &ClassicState) -> bool {
-    let every_subscription_decodable = state
-        .members
-        .values()
-        .all(|m| decode_consumer_subscription(&m.protocol_metadata).is_some());
-    classic_upgrade_epoch(
-        state.protocol_type.as_deref() == Some("consumer"),
-        every_subscription_decodable,
-        state.generation_id,
-    )
-    .is_some()
+    let mut cur = &metadata[2..];
+    ConsumerProtocolSubscription::decode(&mut cur, version.min(SUBSCRIPTION_MAX_VERSION)).ok()
 }
 
 /// Kafka's `GroupMetadataManager.validateOnlineUpgrade` for a non-empty
-/// classic group that a `ConsumerGroupHeartbeat` joins, followed by the
-/// subscription check of [`classic_is_convertible`].
+/// classic group that a `ConsumerGroupHeartbeat` joins.
 ///
 /// An empty classic group never reaches this: Kafka's
 /// `maybeDeleteEmptyClassicGroup` replaces it whatever the policy and the
@@ -95,7 +75,7 @@ pub(crate) fn validate_online_upgrade(
              disabled."
         ));
     }
-    if state.protocol_type.as_deref() != Some("consumer") || !classic_is_convertible(state) {
+    if state.protocol_type.as_deref() != Some("consumer") {
         return Err(format!(
             "Cannot upgrade classic group {group_id} to consumer group because the group does \
              not use the consumer embedded protocol."
@@ -108,6 +88,56 @@ pub(crate) fn validate_online_upgrade(
         ));
     }
     Ok(())
+}
+
+/// Why `ConsumerGroup.fromClassicGroup` cannot carry a classic member over.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum UnconvertibleMember {
+    /// The member's subscription or assignment does not decode: Kafka's
+    /// `SchemaException`.
+    Malformed,
+    /// The member's assignment carries user data from a custom assignor,
+    /// which a consumer-protocol member cannot keep: Kafka's
+    /// `UnsupportedVersionException`.
+    CustomAssignorUserData,
+}
+
+/// Kafka's `toTopicPartitionMap` of a classic member's
+/// `ConsumerProtocolAssignment`, with the refusals of
+/// `ConsumerGroup.fromClassicGroup`: the partitions of each topic that `image`
+/// knows, by topic ID. An absent or empty assignment, which a member that
+/// never synced holds, assigns nothing.
+fn decode_consumer_assignment(
+    blob: Option<&[u8]>,
+    image: &ReconcileInput,
+) -> Result<HashMap<Uuid, Vec<i32>>, UnconvertibleMember> {
+    let mut assigned: HashMap<Uuid, Vec<i32>> = HashMap::new();
+    let Some(blob) = blob.filter(|blob| !blob.is_empty()) else {
+        return Ok(assigned);
+    };
+    let version = embedded_protocol_version(blob)
+        .filter(|version| *version >= 0)
+        .ok_or(UnconvertibleMember::Malformed)?;
+    let mut cur = &blob[2..];
+    let assignment =
+        ConsumerProtocolAssignment::decode(&mut cur, version.min(ASSIGNMENT_MAX_VERSION))
+            .map_err(|_| UnconvertibleMember::Malformed)?;
+    if assignment
+        .user_data
+        .as_ref()
+        .is_some_and(|user_data| !user_data.is_empty())
+    {
+        return Err(UnconvertibleMember::CustomAssignorUserData);
+    }
+    for topic in assignment.assigned_partitions {
+        if let Some(topic_id) = image.topic_id_by_name.get(&topic.topic) {
+            let partitions = assigned.entry(*topic_id).or_default();
+            partitions.extend(topic.partitions);
+            partitions.sort_unstable();
+            partitions.dedup();
+        }
+    }
+    Ok(assigned)
 }
 
 /// Converts a classic group into a consumer group that **hosts its classic
@@ -123,38 +153,66 @@ pub(crate) fn validate_online_upgrade(
 /// the generation) and its target. The group records the metadata hash of its
 /// subscribed topics.
 ///
-/// Precondition: the caller has checked [`classic_is_convertible`]. Committed
-/// offsets live on the kind-agnostic `Group` container, and this function does
-/// not change them.
+/// # Errors
+///
+/// The `GROUP_ID_NOT_FOUND` message of Kafka's `convertToConsumerGroup` when
+/// a member's assignment or subscription does not decode, or its assignment
+/// carries user data from a custom assignor. Members are read in member-id
+/// order, each assignment before its subscription, as Kafka reads them.
+///
+/// The caller has run [`validate_online_upgrade`]. Committed offsets live on
+/// the kind-agnostic `Group` container, and this function does not change
+/// them.
 pub(crate) fn convert_classic_to_consumer(
     classic: &ClassicState,
     image: &ReconcileInput,
-) -> ConsumerState {
-    let mut state = ConsumerState::new(classic.group_id.clone());
+) -> Result<ConsumerState, String> {
+    let group_id = &classic.group_id;
+    let mut members: Vec<_> = classic.members.values().collect();
+    members.sort_unstable_by(|a, b| a.id.cmp(&b.id));
+    let mut decoded = Vec::with_capacity(members.len());
+    for m in members {
+        let converted =
+            decode_consumer_assignment(m.assignment.as_deref(), image).and_then(|assigned| {
+                decode_consumer_subscription(&m.protocol_metadata)
+                    .map(|subscription| (m, subscription, assigned))
+                    .ok_or(UnconvertibleMember::Malformed)
+            });
+        match converted {
+            Ok(member) => decoded.push(member),
+            Err(UnconvertibleMember::Malformed) => {
+                return Err(format!(
+                    "Cannot upgrade classic group {group_id} to consumer group because the \
+                     embedded consumer protocol is malformed."
+                ));
+            }
+            Err(UnconvertibleMember::CustomAssignorUserData) => {
+                return Err(format!(
+                    "Cannot upgrade classic group {group_id} to consumer group because an \
+                     unsupported custom assignor is in use. Please refer to the documentation \
+                     or switch to a default assignor before re-attempting the upgrade."
+                ));
+            }
+        }
+    }
+    let mut state = ConsumerState::new(group_id.clone());
     let generation = classic_upgrade_epoch(
         classic.protocol_type.as_deref() == Some("consumer"),
-        classic
-            .members
-            .values()
-            .all(|member| decode_consumer_subscription(&member.protocol_metadata).is_some()),
+        true,
         classic.generation_id,
     )
-    .expect("upgrade precondition: classic group is representable");
+    .ok_or_else(|| {
+        format!(
+            "Cannot upgrade classic group {group_id} to consumer group because the group does \
+             not use the consumer embedded protocol."
+        )
+    })?;
     state.group_epoch = generation;
     state.target.epoch = generation;
-    for m in classic.members.values() {
-        let subscription = decode_consumer_subscription(&m.protocol_metadata).unwrap_or_default();
-        let assigned = m
-            .assignment
-            .as_ref()
-            .map(|blob| decode_consumer_assignment(blob, image))
-            .unwrap_or_default();
+    for (m, subscription, assigned) in decoded {
         let facade = ClassicMemberFacade {
-            generation_id: classic.generation_id,
             supported_protocols: m.protocols.clone(),
             session_timeout: m.session_timeout,
-            last_synced_assignment: m.assignment.clone().unwrap_or_default(),
-            awaiting_sync: true,
         };
         let assignment_epochs = assigned
             .iter()
@@ -194,32 +252,7 @@ pub(crate) fn convert_classic_to_consumer(
     // A converted group's metadata is fresh, as Kafka's `fromClassicGroup`
     // computes the hash from the current image; the heartbeat that converts
     // it refreshes nothing more.
-    state
-}
-
-/// Kafka's `toTopicPartitionMap` of a classic member's
-/// `ConsumerProtocolAssignment`: the partitions of each topic that `image`
-/// knows, by topic id. An empty or undecodable blob assigns nothing.
-fn decode_consumer_assignment(blob: &[u8], image: &ReconcileInput) -> HashMap<Uuid, Vec<i32>> {
-    use bytes::Buf;
-    let mut assigned: HashMap<Uuid, Vec<i32>> = HashMap::new();
-    if blob.len() < 2 {
-        return assigned;
-    }
-    let mut cur = blob;
-    let version = cur.get_i16();
-    let Ok(assignment) = ConsumerProtocolAssignment::decode(&mut cur, version) else {
-        return assigned;
-    };
-    for topic in assignment.assigned_partitions {
-        if let Some(topic_id) = image.topic_id_by_name.get(&topic.topic) {
-            let partitions = assigned.entry(*topic_id).or_default();
-            partitions.extend(topic.partitions);
-            partitions.sort_unstable();
-            partitions.dedup();
-        }
-    }
-    assigned
+    Ok(state)
 }
 
 /// The atomic record batch for an upgrade. It tombstones the classic k2
@@ -241,7 +274,8 @@ mod tests {
     use std::time::Duration;
 
     use assert2::{assert, check};
-    use bytes::Bytes;
+    use bytes::{BufMut, Bytes, BytesMut};
+    use krabka_protocol::Encode;
 
     use super::*;
     use crate::coordinator::unified::{
@@ -262,51 +296,137 @@ mod tests {
         m
     }
 
-    #[test]
-    fn empty_consumer_group_is_convertible() {
-        let mut g = ClassicGroup::new("g");
-        g.protocol_type = Some("consumer".into());
-        assert!(classic_is_convertible(&g));
+    /// A conversion row: its label, each member's subscription and
+    /// assignment, and the refusal it expects.
+    type ConversionRow = (
+        &'static str,
+        Vec<(Bytes, Option<Bytes>)>,
+        Result<(), &'static str>,
+    );
+
+    /// A subscription row: its label, the blob, and the topics it decodes to.
+    type SubscriptionRow<'a> = (&'static str, &'a [u8], Option<Vec<String>>);
+
+    /// A `ConsumerProtocolAssignment` blob of `version` for partition 0 of
+    /// `t1`, with `user_data`.
+    fn assignment_blob(version: i16, user_data: Option<&'static [u8]>) -> Bytes {
+        let assignment = ConsumerProtocolAssignment {
+            assigned_partitions: vec![
+                krabka_protocol::owned::consumer_protocol_assignment::TopicPartition {
+                    topic: "t1".into(),
+                    partitions: vec![0],
+                    ..Default::default()
+                },
+            ],
+            user_data: user_data.map(Bytes::from_static),
+            ..Default::default()
+        };
+        let mut out = BytesMut::new();
+        out.put_i16(version);
+        assignment.encode(&mut out, version.clamp(0, 3)).unwrap();
+        out.freeze()
     }
 
+    /// Kafka's `ConsumerGroup.fromClassicGroup` refusals, through
+    /// `convertToConsumerGroup`: (label, the members' subscription and
+    /// assignment) to whether the group converts, or the message of the
+    /// `GROUP_ID_NOT_FOUND` that refuses it.
     #[test]
-    fn non_consumer_protocol_type_is_not_convertible() {
-        let mut g = ClassicGroup::new("g");
-        g.protocol_type = Some("connect".into());
-        assert!(!classic_is_convertible(&g));
-        // None protocol_type (never joined) is also not convertible.
-        let g2 = ClassicGroup::new("g2");
-        assert!(!classic_is_convertible(&g2));
+    fn conversion_refuses_what_kafka_cannot_carry_over() {
+        let malformed = "Cannot upgrade classic group g to consumer group because the embedded \
+                         consumer protocol is malformed.";
+        let custom = "Cannot upgrade classic group g to consumer group because an unsupported \
+                      custom assignor is in use. Please refer to the documentation or switch to \
+                      a default assignor before re-attempting the upgrade.";
+        let valid = subscription_blob(&["t1"]);
+        let rows: Vec<ConversionRow> = vec![
+            ("no member synced yet", vec![(valid.clone(), None)], Ok(())),
+            (
+                "an empty assignment",
+                vec![(valid.clone(), Some(Bytes::new()))],
+                Ok(()),
+            ),
+            (
+                "an assignment without user data",
+                vec![(valid.clone(), Some(assignment_blob(0, None)))],
+                Ok(()),
+            ),
+            (
+                "empty user data",
+                vec![(valid.clone(), Some(assignment_blob(1, Some(b""))))],
+                Ok(()),
+            ),
+            (
+                "an assignment of a version above the schema's",
+                vec![(valid.clone(), Some(assignment_blob(9, None)))],
+                Ok(()),
+            ),
+            (
+                "an undecodable subscription",
+                vec![
+                    (valid.clone(), None),
+                    (Bytes::from_static(&[0xff, 0xff, 0x01]), None),
+                ],
+                Err(malformed),
+            ),
+            (
+                "an undecodable assignment",
+                vec![(valid.clone(), Some(Bytes::from_static(b"garbage")))],
+                Err(malformed),
+            ),
+            (
+                "user data from a custom assignor",
+                vec![(valid.clone(), Some(assignment_blob(0, Some(b"sticky"))))],
+                Err(custom),
+            ),
+            (
+                "user data before a malformed subscription of a later member",
+                vec![
+                    (valid.clone(), Some(assignment_blob(0, Some(b"sticky")))),
+                    (Bytes::from_static(&[0]), None),
+                ],
+                Err(custom),
+            ),
+        ];
+        for (label, members, want) in rows {
+            let mut g = ClassicGroup::new("g");
+            g.protocol_type = Some("consumer".into());
+            for (index, (metadata, assignment)) in members.into_iter().enumerate() {
+                let mut member = consumer_member(&format!("m{index}"), metadata);
+                member.assignment = assignment;
+                g.add_member(member);
+            }
+
+            let got = convert_classic_to_consumer(&g, &ReconcileInput::default()).map(|_| ());
+
+            check!(got == want.map_err(String::from), "{label}");
+        }
     }
 
+    /// Kafka's `checkSubscriptionVersion`: a blob too short for a version and
+    /// a negative version do not decode, and a version above the highest the
+    /// schema knows is read as the highest.
     #[test]
-    fn group_of_valid_consumer_members_is_convertible() {
-        let mut g = ClassicGroup::new("g");
-        g.protocol_type = Some("consumer".into());
-        g.add_member(consumer_member("m1", subscription_blob(&["t1"])));
-        g.add_member(consumer_member("m2", subscription_blob(&["t1", "t2"])));
-        assert!(classic_is_convertible(&g));
-    }
-
-    #[test]
-    fn member_with_undecodable_metadata_blocks_conversion() {
-        let mut g = ClassicGroup::new("g");
-        g.protocol_type = Some("consumer".into());
-        g.add_member(consumer_member("ok", subscription_blob(&["t1"])));
-        // Garbage metadata that is not a ConsumerProtocolSubscription.
-        g.add_member(consumer_member(
-            "bad",
-            Bytes::from_static(&[0xff, 0xff, 0x01]),
-        ));
-        assert!(!classic_is_convertible(&g));
-    }
-
-    #[test]
-    fn decode_rejects_short_and_bad_version() {
-        // Too short to hold a version, or (version 99) out of the supported
-        // 0..=3 range.
-        for input in [&[][..], &[0][..], &[0, 99][..]] {
-            assert!(decode_consumer_subscription(input).is_none());
+    fn subscription_versions_decode_as_kafka_reads_them() {
+        let mut above = BytesMut::new();
+        above.put_i16(99);
+        ConsumerProtocolSubscription {
+            topics: vec!["t1".into()],
+            ..Default::default()
+        }
+        .encode(&mut above, 3)
+        .unwrap();
+        let rows: [SubscriptionRow<'_>; 4] = [
+            ("empty", &[], None),
+            ("too short", &[0], None),
+            ("negative version", &[0xff, 0xff, 0, 0, 0, 0], None),
+            ("above the highest", &above, Some(vec!["t1".into()])),
+        ];
+        for (label, input, want) in rows {
+            check!(
+                decode_consumer_subscription(input).map(|subscription| subscription.topics) == want,
+                "{label}"
+            );
         }
     }
 
@@ -317,11 +437,11 @@ mod tests {
         g.generation_id = 3;
         let mut source_m1 = consumer_member("m1", subscription_blob(&["t1"]));
         source_m1.group_instance_id = Some("instance-1".into());
-        source_m1.assignment = Some(Bytes::from_static(b"last-assignment"));
+        source_m1.assignment = Some(assignment_blob(0, None));
         g.add_member(source_m1.clone());
         g.add_member(consumer_member("m2", subscription_blob(&["t1", "t2"])));
 
-        let state = convert_classic_to_consumer(&g, &ReconcileInput::default());
+        let state = convert_classic_to_consumer(&g, &ReconcileInput::default()).unwrap();
         assert!(state.group_id == "g");
         assert!(state.group_epoch == 3); // seeded from classic generation
         assert!(state.members.len() == 2);
@@ -332,12 +452,13 @@ mod tests {
         assert!(m1.client_id == source_m1.client_id);
         assert!(m1.client_host == source_m1.host);
         assert!(m1.rebalance_timeout == source_m1.rebalance_timeout);
-        let facade = m1.classic.as_ref().unwrap();
-        assert!(facade.generation_id == 3);
-        assert!(facade.supported_protocols == source_m1.protocols);
-        assert!(facade.session_timeout == source_m1.session_timeout);
-        assert!(facade.last_synced_assignment == source_m1.assignment.unwrap());
-        assert!(facade.awaiting_sync);
+        check!(
+            m1.classic
+                == Some(ClassicMemberFacade {
+                    supported_protocols: source_m1.protocols.clone(),
+                    session_timeout: source_m1.session_timeout,
+                })
+        );
         // m2 subscribed to both topics.
         let m2 = &state.members["m2"];
         assert!(m2.subscribed_topic_names.len() == 2);
@@ -353,8 +474,8 @@ mod tests {
         g.generation_id = -1;
         g.add_member(consumer_member("m1", subscription_blob(&["t1"])));
 
-        let first = convert_classic_to_consumer(&g, &ReconcileInput::default());
-        let second = convert_classic_to_consumer(&g, &ReconcileInput::default());
+        let first = convert_classic_to_consumer(&g, &ReconcileInput::default()).unwrap();
+        let second = convert_classic_to_consumer(&g, &ReconcileInput::default()).unwrap();
         check!(first.group_epoch == 0);
         let first_batch = upgrade_pending_records(&first).to_batch("g", 7).unwrap();
         let second_batch = upgrade_pending_records(&second).to_batch("g", 7).unwrap();
@@ -363,7 +484,10 @@ mod tests {
 
         g.generation_id = i32::MAX;
         assert!(
-            convert_classic_to_consumer(&g, &ReconcileInput::default()).group_epoch == i32::MAX
+            convert_classic_to_consumer(&g, &ReconcileInput::default())
+                .unwrap()
+                .group_epoch
+                == i32::MAX
         );
     }
 

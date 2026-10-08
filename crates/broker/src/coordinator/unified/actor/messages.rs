@@ -63,6 +63,11 @@ pub enum GroupActorMessage {
         version: i16,
         client_id: String,
         client_host: String,
+        /// Resolves a consumer group's regular expressions with this
+        /// principal, as Kafka's `maybeUpdateRegularExpressions` does with the
+        /// request context of a classic join to a consumer group.
+        regex_resolver:
+            std::sync::Arc<dyn crate::coordinator::unified::regex_resolver::TopicRegexResolver>,
         reply: oneshot::Sender<JoinResult>,
     },
     ClassicSync {

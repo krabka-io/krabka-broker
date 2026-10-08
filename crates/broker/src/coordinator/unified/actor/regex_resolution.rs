@@ -76,22 +76,6 @@ impl<'a> RegexResolution<'a> {
     }
 }
 
-impl RegexResolution<'static> {
-    /// A resolution that never runs: the heartbeat finds every resolution of
-    /// the group within the minimum interval since the last one. A classic
-    /// member's `JoinGroup`, which carries no pattern and no resolver of its
-    /// principal, uses it.
-    pub(crate) fn never(config: &NextGenConfig) -> Self {
-        Self {
-            resolver: &crate::coordinator::unified::regex_resolver::NoTopicRegexResolver,
-            refresh_version: i64::MIN,
-            now_ms: i64::MIN,
-            refresh_interval: config.regex_refresh_interval,
-            min_refresh_interval: config.regex_refresh_min_interval,
-        }
-    }
-}
-
 #[cfg(test)]
 impl RegexResolution<'static> {
     /// A resolution that finds no topic for any pattern and never refreshes,
@@ -178,11 +162,22 @@ pub(crate) fn maybe_update_regular_expressions(
     regexes: &RegexResolution<'_>,
     records: &mut Vec<RegexRecord>,
 ) -> (RegexUpdate, Option<Resolutions>) {
-    // A member with no pattern before and after asks nothing of the group's
-    // resolutions, and this keeps its heartbeat free of a scan of the members.
-    // The members that use a pattern heartbeat too, and they refresh a stale
-    // resolution.
-    if old_regex.is_none() && new_regex.is_none() {
+    // A member with no pattern before and after changes no pattern, but its
+    // heartbeat, or its classic `JoinGroup`, still refreshes the group's
+    // stale resolutions, as Kafka's does. Condition 2 is checked before
+    // condition 1 for it: both only return early, and condition 2 costs no
+    // scan of the members.
+    if old_regex.is_none()
+        && new_regex.is_none()
+        && (regexes.now_ms
+            <= state
+                .last_regex_resolution_ms()
+                .saturating_add(duration_millis(regexes.min_refresh_interval))
+            || !state
+                .members
+                .values()
+                .any(|member| member.subscribed_topic_regex.is_some()))
+    {
         return (RegexUpdate::NoChange, None);
     }
 
@@ -584,8 +579,17 @@ mod tests {
                 update: RegexUpdate::UpdatedAndResolved,
             },
             Row {
-                name: "a member without a pattern leaves a stale resolution to the members that use one",
+                name: "a member without a pattern refreshes the group's stale resolution",
                 since_ms: 600_001,
+                refresh_version: 6,
+                old: None,
+                new: None,
+                resolves: true,
+                update: RegexUpdate::NoChange,
+            },
+            Row {
+                name: "a member without a pattern, within ten seconds of the last resolution, waits",
+                since_ms: 5_000,
                 refresh_version: 6,
                 old: None,
                 new: None,

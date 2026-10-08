@@ -144,10 +144,12 @@ impl TopicRegexResolver for ImageTopicRegexResolver {
 }
 
 /// A resolver that finds no topic: the tests of the actor that resolve no
-/// pattern use it, and so does a path whose resolution never runs.
+/// pattern use it.
+#[cfg(test)]
 #[derive(Debug)]
 pub(crate) struct NoTopicRegexResolver;
 
+#[cfg(test)]
 impl TopicRegexResolver for NoTopicRegexResolver {
     fn resolve(&self, regexes: &BTreeSet<String>) -> HashMap<String, ResolvedRegularExpression> {
         regexes

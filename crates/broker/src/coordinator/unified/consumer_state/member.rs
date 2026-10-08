@@ -16,33 +16,28 @@ use krabka_protocol::primitives::uuid::Uuid;
 
 use crate::coordinator::unified::persistence_next_gen::MemberAssignmentState;
 
-/// Classic-protocol state for a member hosted inside an *upgraded* consumer
-/// group during a KIP-848 upgrade.
+/// Classic-protocol state for a member hosted inside a consumer group: Kafka's
+/// `ConsumerGroupMemberMetadataValue.ClassicMemberMetadata`.
 ///
 /// The value is `None` on a native consumer-protocol member. It is `Some` once
 /// the broker upgraded a classic member's group, and when a classic member
-/// joins an already-upgraded group.
+/// joins a consumer group.
 ///
 /// The member keeps speaking the classic `JoinGroup`, `SyncGroup`, and
-/// `Heartbeat` protocol. The coordinator serves it by mapping onto the
-/// consumer-group machinery, and by translating its target into a
-/// `ConsumerProtocolAssignment` blob on `SyncGroup`.
-#[derive(Debug, Clone)]
+/// `Heartbeat` protocol. The coordinator serves it from the consumer-group
+/// machinery: its `JoinGroup` reconciles it as a heartbeat does, its
+/// `SyncGroup` returns its assigned partitions as a
+/// `ConsumerProtocolAssignment` blob, and its `Heartbeat` asks it to rejoin
+/// while it has not reconciled to the group's target assignment.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ClassicMemberFacade {
-    /// Classic generation that the coordinator echoes to the member. It
-    /// advances with the group epoch.
-    pub generation_id: i32,
-    /// `(protocol_name, metadata)` pairs the member proposed in `JoinGroup`.
-    /// The state keeps them so that a downgrade restores the classic member
-    /// with no loss.
+    /// `(protocol_name, metadata)` pairs the member proposed in `JoinGroup`,
+    /// in request order. The first names the protocol the member is answered
+    /// with, and its metadata's version prefix the version of the assignment
+    /// blob it receives. A downgrade restores the classic member from them.
     pub supported_protocols: Vec<(String, Bytes)>,
     /// The member's classic `session.timeout.ms`.
     pub session_timeout: Duration,
-    /// The last `ConsumerProtocolAssignment` blob that `SyncGroup` returned.
-    pub last_synced_assignment: Bytes,
-    /// `true` once the member must send `SyncGroup` again to pick up a changed
-    /// target.
-    pub awaiting_sync: bool,
 }
 
 #[derive(Debug, Clone)]

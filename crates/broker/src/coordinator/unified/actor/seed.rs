@@ -7,95 +7,23 @@
 //! `ClassicMemberFacade` of any classic member the group hosts after a KIP-848
 //! upgrade.
 //!
-//! A hosted classic member's `last_synced_assignment` is not a persisted field.
-//! Nothing in Kafka's schema holds it, so it is rebuilt here from the member's
-//! k8 record — everything the member still holds, which is its current
-//! assignment together with the partitions it has yet to revoke — in the same
-//! translation the live path uses. A member whose held partitions no longer
-//! match its k7 target therefore still owes a re-sync after the failover,
-//! exactly as it did before it.
+//! A hosted classic member needs nothing beyond Kafka's own schema: its k5
+//! record carries the classic metadata, and its k7 target and k8 current
+//! assignment are everything its `SyncGroup` and `Heartbeat` read.
 
 use std::{
     collections::HashMap,
     time::{Duration, Instant},
 };
 
-use bytes::Bytes;
 use krabka_protocol::primitives::uuid::Uuid;
 
 use super::{FALLBACK_REBALANCE_TIMEOUT_MS, FALLBACK_SESSION_TIMEOUT_MS};
 use crate::coordinator::unified::{
     GroupSeed,
     consumer_state::{ClassicMemberFacade, GroupState, MemberState},
-    migration::target_to_consumer_assignment,
     persistence_next_gen::AssignedTopicPartitions,
-    reconciler::ReconcileInput,
 };
-
-/// Everything a member still holds: the partitions it is assigned plus the
-/// ones a later target change asked it to revoke but that it has not given up
-/// yet.
-///
-/// `reconcile_member` splits what a member owns across those two maps —
-/// `assigned_partitions` carries only the partitions that are also in the
-/// member's current target — so neither map alone describes what the member
-/// was last handed. Their union does, and it is disjoint by construction, so
-/// merging per topic is enough.
-fn held_partitions(member: &MemberState) -> HashMap<Uuid, Vec<i32>> {
-    let mut held = member.assigned_partitions.clone();
-    for (topic_id, partitions) in &member.partitions_pending_revocation {
-        held.entry(*topic_id)
-            .or_default()
-            .extend(partitions.iter().copied());
-    }
-    held
-}
-
-/// Rebuilds every hosted classic member's `last_synced_assignment` from the
-/// records Kafka's own schema defines.
-///
-/// `SyncGroup` hands a hosted classic member the blob for its whole target and
-/// records that target as the member's current assignment, so what the member
-/// last synced is what its k8 record says it holds: `assigned_partitions`
-/// united with `partitions_pending_revocation`. A target change that only
-/// revokes partitions leaves `assigned_partitions` already equal to the new
-/// target, and reading that map alone would claim the member had synced a blob
-/// it never received — the heartbeat would answer `NONE` forever and the
-/// revoked partition would never reach its next owner.
-///
-/// Translating the union back with the metadata image reproduces the blob byte
-/// for byte, because `target_to_consumer_assignment` sorts topics and
-/// partitions, which is what `migration::serve_classic_heartbeat` compares
-/// against the member's current target. `awaiting_sync` follows the same
-/// comparison.
-fn restore_classic_sync_state(state: &mut GroupState, image: &ReconcileInput) {
-    let restored: Vec<(String, Bytes, bool)> = state
-        .members
-        .iter()
-        .filter(|(_, member)| member.is_classic())
-        .map(|(member_id, member)| {
-            let synced = target_to_consumer_assignment(&held_partitions(member), image);
-            let target = state
-                .target
-                .per_member
-                .get(member_id)
-                .cloned()
-                .unwrap_or_default();
-            let owes_sync = synced != target_to_consumer_assignment(&target, image);
-            (member_id.clone(), synced, owes_sync)
-        })
-        .collect();
-    for (member_id, synced, owes_sync) in restored {
-        if let Some(facade) = state
-            .members
-            .get_mut(&member_id)
-            .and_then(|member| member.classic.as_mut())
-        {
-            facade.last_synced_assignment = synced;
-            facade.awaiting_sync = owes_sync;
-        }
-    }
-}
 
 fn topic_partition_map(partitions: Vec<AssignedTopicPartitions>) -> HashMap<Uuid, Vec<i32>> {
     partitions
@@ -104,14 +32,13 @@ fn topic_partition_map(partitions: Vec<AssignedTopicPartitions>) -> HashMap<Uuid
         .collect()
 }
 
-pub(super) fn apply_seed(state: &mut GroupState, seed: GroupSeed, image: &ReconcileInput) {
+pub(super) fn apply_seed(state: &mut GroupState, seed: GroupSeed) {
     state.mark_persisted();
     state.group_epoch = seed.group_epoch;
     state.record_metadata_hash(seed.metadata_hash);
     state.target.epoch = seed.target_epoch;
     state.record_assignment(seed.assignment_timestamp_ms);
     state.set_has_subscription_metadata_record(seed.has_subscription_metadata_record);
-    let group_generation = seed.group_epoch;
     // What each regular expression resolved to, as the group last recorded it:
     // the members keep the topics of their regex subscriptions across the
     // failover, without a heartbeat that carries the pattern.
@@ -129,15 +56,10 @@ pub(super) fn apply_seed(state: &mut GroupState, seed: GroupSeed, image: &Reconc
         // `JoinGroup`/`SyncGroup`/`Heartbeat` after a coordinator failover; a
         // native consumer-protocol member has `classic == None`.
         let classic = meta.classic.as_ref().map(|c| ClassicMemberFacade {
-            generation_id: group_generation,
             supported_protocols: c.supported_protocols.clone(),
             session_timeout: Duration::from_millis(
                 u64::try_from(c.session_timeout_ms.max(0)).unwrap_or(FALLBACK_SESSION_TIMEOUT_MS),
             ),
-            // Both fields are rebuilt from the member's k7 target and k8
-            // current assignment once those are in place, below.
-            last_synced_assignment: Bytes::new(),
-            awaiting_sync: true,
         });
         state.add_or_update_member(MemberState {
             instance_id: meta.instance_id,
@@ -191,7 +113,6 @@ pub(super) fn apply_seed(state: &mut GroupState, seed: GroupSeed, image: &Reconc
             .per_member
             .insert(mid, topic_partition_map(target.topic_partitions));
     }
-    restore_classic_sync_state(state, image);
     // Kafka arms the rebalance timeout of every loaded member that still has
     // partitions to revoke (`GroupMetadataManager.onLoaded`).
     let now = Instant::now();
@@ -212,7 +133,9 @@ pub(super) fn apply_seed(state: &mut GroupState, seed: GroupSeed, image: &Reconc
 
 #[cfg(test)]
 mod tests {
-    use assert2::{assert, check};
+    use assert2::check;
+    use bytes::Bytes;
+    use krabka_protocol::owned::heartbeat_request::HeartbeatRequest;
 
     use super::*;
     use crate::{
@@ -225,6 +148,7 @@ mod tests {
                 MemberAssignmentState, MemberMetadataValue, RegularExpressionValue,
                 TargetAssignmentMemberValue,
             },
+            reconciler::ReconcileInput,
         },
     };
 
@@ -253,11 +177,16 @@ mod tests {
         }
     }
 
-    /// The records a coordinator failover replays for a group that hosts one
-    /// classic member: a k5 with the classic sub-state, a k7 target of
-    /// `target`, and a k8 current assignment of `assigned` with `pending`
-    /// awaiting revocation.
-    fn hosted_classic_seed(target: Vec<i32>, assigned: Vec<i32>, pending: Vec<i32>) -> GroupSeed {
+    /// The records a coordinator failover replays for a group at epoch 5 that
+    /// hosts one classic member: a k5 with the classic sub-state, a k7 target
+    /// of `target`, and a k8 current assignment at `member_epoch` in `state`
+    /// of `assigned` with `pending` awaiting revocation.
+    fn hosted_classic_seed(
+        target: Vec<i32>,
+        (member_epoch, state): (i32, MemberAssignmentState),
+        assigned: Vec<i32>,
+        pending: Vec<i32>,
+    ) -> GroupSeed {
         GroupSeed {
             group_epoch: 5,
             target_epoch: 5,
@@ -290,9 +219,9 @@ mod tests {
             current_per_member: [(
                 "m".to_string(),
                 CurrentMemberAssignmentValue {
-                    member_epoch: 5,
-                    previous_member_epoch: 4,
-                    state: MemberAssignmentState::Stable,
+                    member_epoch,
+                    previous_member_epoch: member_epoch - 1,
+                    state,
                     assigned_partitions: vec![CurrentTopicPartitions {
                         topic_id: TOPIC,
                         partitions: assigned,
@@ -315,8 +244,12 @@ mod tests {
         let mut state = GroupState::new("g");
         apply_seed(
             &mut state,
-            hosted_classic_seed(vec![0, 1], vec![0, 1], vec![]),
-            &image(),
+            hosted_classic_seed(
+                vec![0, 1],
+                (5, MemberAssignmentState::Stable),
+                vec![0, 1],
+                vec![],
+            ),
         );
 
         let restored: HashMap<Uuid, Vec<i32>> = [(TOPIC, vec![0, 1])].into();
@@ -324,58 +257,55 @@ mod tests {
         check!(state.target.per_member.get("m") == Some(&restored));
     }
 
-    /// The behaviour the deleted krabka-private tag existed for: a hosted
-    /// classic member that had synced its target keeps a quiet heartbeat
-    /// across a coordinator failover, and one whose target moved on is still
-    /// told to rejoin and re-sync. Both answers are rebuilt from the k7 and k8
-    /// records alone.
+    /// A hosted classic member's `Heartbeat` reads only what the k7 and k8
+    /// records restore: (k8 epoch and state, k8 assigned, k8 pending
+    /// revocation) to the answer of Kafka's
+    /// `classicGroupHeartbeatToConsumerGroup` after a failover.
     #[test]
-    fn seeded_hosted_classic_heartbeat_signals_a_resync_only_when_the_assignment_lags() {
-        // (k7 target, k8 assigned, k8 pending revocation, heartbeat answer).
-        //
-        // What the member last synced is everything it holds — assigned plus
-        // pending — so a revocation-only target change, where `assigned` has
-        // already shrunk to the new target and the revoked partition sits in
-        // `pending`, still owes a re-sync: the member was handed the wider
-        // blob and nothing has told it to drop the partition yet.
-        for (target, assigned, pending, want) in [
-            (vec![0, 1], vec![0, 1], vec![], codes::NONE),
-            (vec![0, 1], vec![0], vec![], codes::REBALANCE_IN_PROGRESS),
-            (vec![0, 1], vec![], vec![], codes::REBALANCE_IN_PROGRESS),
-            (vec![0], vec![0], vec![1], codes::REBALANCE_IN_PROGRESS),
-            (vec![], vec![], vec![0, 1], codes::REBALANCE_IN_PROGRESS),
+    fn seeded_hosted_classic_heartbeat_follows_the_restored_assignment() {
+        for (current, assigned, pending, want) in [
+            (
+                (5, MemberAssignmentState::Stable),
+                vec![0, 1],
+                vec![],
+                codes::NONE,
+            ),
+            (
+                (4, MemberAssignmentState::Stable),
+                vec![0],
+                vec![],
+                codes::REBALANCE_IN_PROGRESS,
+            ),
+            (
+                (5, MemberAssignmentState::UnrevokedPartitions),
+                vec![0],
+                vec![1],
+                codes::REBALANCE_IN_PROGRESS,
+            ),
+            (
+                (5, MemberAssignmentState::UnreleasedPartitions),
+                vec![0],
+                vec![],
+                codes::REBALANCE_IN_PROGRESS,
+            ),
         ] {
             let mut state = GroupState::new("g");
             apply_seed(
                 &mut state,
-                hosted_classic_seed(target.clone(), assigned.clone(), pending.clone()),
-                &image(),
+                hosted_classic_seed(vec![0, 1], current, assigned.clone(), pending.clone()),
             );
-            let got = serve_classic_heartbeat(&mut state, "m", &image());
-            assert!(
-                got == want,
-                "target = {target:?}, assigned = {assigned:?}, pending = {pending:?}"
+            let request = HeartbeatRequest {
+                group_id: "g".into(),
+                member_id: "m".into(),
+                generation_id: current.0,
+                ..HeartbeatRequest::default()
+            };
+
+            check!(
+                serve_classic_heartbeat(&mut state, &request) == want,
+                "current = {current:?}, assigned = {assigned:?}, pending = {pending:?}"
             );
         }
-    }
-
-    /// The rebuilt blob is the one a live `SyncGroup` would have produced for
-    /// the partitions the member holds, byte for byte: the two maps are merged
-    /// per topic, and the translation sorts, so the halves may arrive in any
-    /// order.
-    #[test]
-    fn seed_rebuilds_the_blob_a_sync_would_have_sent_for_the_held_partitions() {
-        let mut state = GroupState::new("g");
-        apply_seed(
-            &mut state,
-            hosted_classic_seed(vec![1], vec![1], vec![0]),
-            &image(),
-        );
-
-        let held: HashMap<Uuid, Vec<i32>> = [(TOPIC, vec![0, 1])].into();
-        let facade = state.members["m"].classic.as_ref().expect("classic facade");
-        check!(facade.last_synced_assignment == target_to_consumer_assignment(&held, &image()));
-        check!(facade.awaiting_sync);
     }
 
     /// The seed of a group whose member `m` subscribes to `orders` by name and
@@ -470,7 +400,7 @@ mod tests {
         ];
         for (label, resolved, heartbeat_pattern, want) in rows {
             let mut state = GroupState::new("g");
-            apply_seed(&mut state, regex_seed(resolved), &image());
+            apply_seed(&mut state, regex_seed(resolved));
             if heartbeat_pattern.is_some() || resolved.is_some() {
                 update_member_state(
                     &mut state,
@@ -504,7 +434,7 @@ mod tests {
     #[test]
     fn the_seed_restores_the_resolution_and_the_pattern() {
         let mut state = GroupState::new("g");
-        apply_seed(&mut state, regex_seed(Some(&["payments"])), &image());
+        apply_seed(&mut state, regex_seed(Some(&["payments"])));
 
         check!(
             state.resolved_regex("pay.*")

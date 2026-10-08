@@ -114,12 +114,29 @@ context_handler! {
             .group_coordinator
             .get_or_create_group(&req.group_id, GroupKindTag::Classic);
 
+        // A classic join to a consumer group runs Kafka's
+        // `maybeUpdateRegularExpressions` with the request context of the join:
+        // the actor resolves the group's patterns against this image with this
+        // principal's `Describe` decisions. The offset is read before the image,
+        // as the `ConsumerGroupHeartbeat` handler reads it.
+        let metadata_offset = broker.controller.current_metadata_offset();
+        let regex_resolver = std::sync::Arc::new(
+            crate::coordinator::unified::regex_resolver::ImageTopicRegexResolver::new(
+                broker.controller.current_image(),
+                metadata_offset,
+                broker.config.authorizer.clone(),
+                ctx.principal.clone(),
+                *ctx.peer,
+            ),
+        );
+
         // A closed mailbox and a dropped reply both answer REBALANCE_IN_PROGRESS.
         let Ok(result) = ask(&handle.tx, |reply| GroupActorMessage::ClassicJoin {
             req,
             version,
             client_id: ctx.client_id.unwrap_or_default().to_owned(),
             client_host: ctx.client_host(),
+            regex_resolver,
             reply,
         })
         .await

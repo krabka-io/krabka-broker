@@ -610,14 +610,11 @@ mod tests {
         m.assignment_epochs.insert(topic, [(0, 4), (1, 7)].into());
         m.classic = Some(
             crate::coordinator::unified::consumer_state::ClassicMemberFacade {
-                generation_id: 7,
                 supported_protocols: vec![(
                     "range".to_string(),
                     bytes::Bytes::from_static(b"meta"),
                 )],
                 session_timeout: Duration::from_secs(45),
-                last_synced_assignment: bytes::Bytes::from_static(b"assigned"),
-                awaiting_sync: false,
             },
         );
         state

@@ -114,6 +114,7 @@ pub async fn classic_join(handle: &GroupActorHandle, member_id: &str, topic: &st
         version: 4,
         client_id: "client-a".into(),
         client_host: "127.0.0.1".into(),
+        regex_resolver: crate::coordinator::unified::regex_resolver::no_topic_regex_resolver(),
         reply,
     })
     .await
@@ -167,12 +168,12 @@ pub async fn classic_sync(
     .unwrap()
 }
 
-pub async fn classic_heartbeat(handle: &GroupActorHandle, member_id: &str) -> i16 {
+pub async fn classic_heartbeat(handle: &GroupActorHandle, member_id: &str, generation: i32) -> i16 {
     ask(&handle.tx, |reply| GroupActorMessage::ClassicHeartbeat {
         req: HeartbeatRequest {
             group_id: "g".into(),
             member_id: member_id.into(),
-            generation_id: 0,
+            generation_id: generation,
             ..Default::default()
         },
         reply,
