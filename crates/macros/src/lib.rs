@@ -774,7 +774,7 @@ function_macros! {
 
     /// Generate a Vec request frame with the caller's checked length-prefix type.
     vector_request_fixture => bound_start_fixture::vector_request;
-    /// Generate the independent seven-row supported-feature oracle.
+    /// Generate the independent eight-row supported-feature oracle.
     supported_features_fixture => cross_storage_fixtures::supported_features_fixture;
 
     /// Generate supported-feature rows from explicit wire bounds.

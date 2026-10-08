@@ -22,7 +22,7 @@ unsafe_op_in_unsafe_fn = "warn"
 
 [dependencies]
 krabka-log = { version = "0.7.0", path = "../log" }
-krabka-protocol = { version = "0.5.0", default-features = false }
+krabka-protocol = { version = "0.6.0", default-features = false }
 krabka-units = { workspace = true }
 bytes = { workspace = true }
 memmap2 = "0.9"
