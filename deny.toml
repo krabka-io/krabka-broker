@@ -75,7 +75,6 @@ allow-git = [
     "https://github.com/krabka-io/krabka-rebalancer",
     "https://github.com/krabka-io/krabka-schema-registry",
     "https://github.com/krabka-io/krabka-streams-rs",
-    "https://github.com/robot-head/sspi-rs",
     "https://github.com/testcontainers/testcontainers-rs-modules-community",
 ]
 

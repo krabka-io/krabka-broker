@@ -246,8 +246,8 @@ krabka-remote-storage = { path = "crates/remote-storage" }
 krabka-remote-storage-topic = { path = "crates/remote-storage-topic" }
 krabka-replicator = { git = "https://github.com/krabka-io/krabka-connect", rev = "ecd5fd77656bc24addb087e714477b9201053a28" }
 krabka-restore = { path = "crates/restore" }
-krabka-schema-registry = { git = "https://github.com/krabka-io/krabka-schema-registry", rev = "0ecb43620a40717e5cba2a248744905c5fadf869" }
-krabka-schema-serde = { git = "https://github.com/krabka-io/krabka-schema-registry", rev = "0ecb43620a40717e5cba2a248744905c5fadf869" }
+krabka-schema-registry = { git = "https://github.com/krabka-io/krabka-schema-registry", rev = "3b0e666b1b85ca4cce810be7480df663a8925d3b" }
+krabka-schema-serde = { git = "https://github.com/krabka-io/krabka-schema-registry", rev = "3b0e666b1b85ca4cce810be7480df663a8925d3b" }
 krabka-sdk-conformance = { git = "https://github.com/krabka-io/krabka-gateway", rev = "49870fd8e5f708274ff69a3e64a092844e2f8809" }
 krabka-security = { git = "https://github.com/krabka-io/krabka-protocol", rev = "574e0e385f5d5187979049aa0578f1abf3fa123b" }
 krabka-telemetry = { path = "crates/telemetry" }
@@ -259,16 +259,3 @@ krabka-units = { git = "https://github.com/krabka-io/krabka-protocol", rev = "57
 krabka-verified = { path = "crates/verified" }
 krabka-voters = { git = "https://github.com/krabka-io/krabka-protocol", rev = "574e0e385f5d5187979049aa0578f1abf3fa123b" }
 
-# 0.5 bridge. krabka-schema-registry, which M19's acceptance test runs, still
-# requires the 0.5 wire and client crates. These keep its copies on the
-# revisions this workspace pinned before 0.6; drop them once it moves to 0.6.
-krabka-client-admin-0-5 = { git = "https://github.com/krabka-io/krabka-client-rs", rev = "f37fe4a3be08f15b6ee8809144228bb052b163b4", package = "krabka-client-admin" }
-krabka-client-core-0-5 = { git = "https://github.com/krabka-io/krabka-client-rs", rev = "f37fe4a3be08f15b6ee8809144228bb052b163b4", package = "krabka-client-core" }
-krabka-client-producer-0-5 = { git = "https://github.com/krabka-io/krabka-client-rs", rev = "f37fe4a3be08f15b6ee8809144228bb052b163b4", package = "krabka-client-producer" }
-krabka-compression-0-5 = { git = "https://github.com/krabka-io/krabka-protocol", rev = "6643a73c9c318abb5d318274ecbeb7fd56583de2", package = "krabka-compression" }
-krabka-ids-0-5 = { git = "https://github.com/krabka-io/krabka-protocol", rev = "6643a73c9c318abb5d318274ecbeb7fd56583de2", package = "krabka-ids" }
-krabka-metadata-0-5 = { git = "https://github.com/krabka-io/krabka-protocol", rev = "6643a73c9c318abb5d318274ecbeb7fd56583de2", package = "krabka-metadata" }
-krabka-protocol-0-5 = { git = "https://github.com/krabka-io/krabka-protocol", rev = "6643a73c9c318abb5d318274ecbeb7fd56583de2", package = "krabka-protocol" }
-krabka-security-0-5 = { git = "https://github.com/krabka-io/krabka-protocol", rev = "6643a73c9c318abb5d318274ecbeb7fd56583de2", package = "krabka-security" }
-krabka-units-0-5 = { git = "https://github.com/krabka-io/krabka-protocol", rev = "6643a73c9c318abb5d318274ecbeb7fd56583de2", package = "krabka-units" }
-krabka-voters-0-5 = { git = "https://github.com/krabka-io/krabka-protocol", rev = "6643a73c9c318abb5d318274ecbeb7fd56583de2", package = "krabka-voters" }
