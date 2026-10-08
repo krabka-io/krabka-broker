@@ -13,8 +13,9 @@ rather than the number.
 
 The layout follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 The history before krabka-broker became its own repository is in
-[robot-head/crabka](https://github.com/robot-head/crabka), which still publishes
-the `krabka-*` names to crates.io.
+[robot-head/crabka](https://github.com/robot-head/crabka). This repository
+publishes `krabka-log`, `krabka-verified` and `krabka-macros` to crates.io from
+the release tag; [Releasing](docs/releasing.md#cratesio) gives the procedure.
 
 ## [Unreleased]
 
