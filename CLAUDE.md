@@ -209,6 +209,21 @@ shape.
 
 ## Releases
 
-This repository has no release automation. The `krabka-*` crates.io names are
-still published from [`robot-head/crabka`](https://github.com/robot-head/crabka);
-consumers here pin by git revision.
+A `vX.Y.Z` tag on `main` starts two independent workflows.
+`.github/workflows/release.yml` signs and promotes the container image and
+creates the GitHub release. `.github/workflows/publish.yml` publishes
+`krabka-log` and `krabka-verified` to crates.io, with `krabka-macros`, which
+`krabka-log` needs as a normal dependency.
+
+`publish.yml` publishes every member crate without `publish = false`. Every
+other member, the broker included, sets `publish = false`, and a new crate that
+is not a library for other repositories sets it too. Every `krabka-*` normal
+dependency of a published crate carries a `version` as well as its `path`,
+because `cargo publish` needs one. A path or git dependency that is not on
+crates.io may appear only as a dev-dependency, and without a `version`, so that
+cargo drops it from the published manifest. `cargo publish` ignores
+`[patch.crates-io]`, so the krabka-protocol release a published crate requires
+must already be on crates.io.
+
+[`docs/releasing.md`](docs/releasing.md) is the procedure, including the token
+bootstrap for a new crate name and the switch to trusted publishing.

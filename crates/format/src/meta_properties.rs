@@ -213,8 +213,9 @@ impl MetaProperties {
 
     /// Writes `<dir>/meta.properties` as Kafka's `writePropertiesFile` does
     /// with `fsync` set: the text goes to `meta.properties.tmp`, which is
-    /// synced and renamed into place, and then the directory is synced. A
-    /// write that stops partway therefore never leaves a truncated file.
+    /// synced and renamed into place, and then, on Unix, the directory is
+    /// synced. A write that stops partway therefore never leaves a truncated
+    /// file.
     ///
     /// # Errors
     ///
@@ -246,6 +247,11 @@ impl MetaProperties {
             let _ = fs::remove_file(&tmp);
             return Err(error);
         }
+        // Syncing the directory is what makes the rename durable, and only
+        // Unix supports it through `std`: elsewhere, `wasm32-wasip1`
+        // included, opening or syncing a directory fails. The sync is
+        // skipped there, as `krabka-log` skips its own directory syncs.
+        #[cfg(unix)]
         fs::File::open(dir)?.sync_all()?;
         after(&path)
     }

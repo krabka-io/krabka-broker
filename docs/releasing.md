@@ -183,6 +183,144 @@ The GitHub release carries `sbom.cdx.json` for the same build.
 
 ## Crates.io
 
-This repository publishes nothing to crates.io. The `krabka-*` names come from
-[robot-head/crabka](https://github.com/robot-head/crabka), and consumers of this
-repository pin it by git revision.
+The same tag push also starts
+[`publish.yml`](../.github/workflows/publish.yml), which publishes the
+storage-layer library crates to crates.io. The two workflows are independent:
+neither waits on the other, they hold separate concurrency groups, and
+`publish.yml` touches neither the image nor the GitHub release. Each one checks
+on its own that the tag is releasable, with the same three checks as step 4, so
+a tag that `release.yml` refuses publishes nothing either.
+
+### The published crates
+
+| Crate | Depends on (workspace) | Why it is published |
+| :--- | :--- | :--- |
+| `krabka-macros` | | `krabka-log` derives with it |
+| `krabka-verified` | | Library for other repositories |
+| `krabka-log` | `krabka-macros`, `krabka-verified` | Library for other repositories |
+
+Every other member sets `publish = false`, the broker among them. A new member
+crate is published unless its manifest sets `publish = false`, so a crate that
+is not a library for other repositories sets it.
+
+`krabka-log` also depends on `krabka-ids`, `krabka-protocol`,
+`krabka-compression` and `krabka-units`, and `krabka-verified` on `krabka-ids`.
+Those come from krabka-protocol. `cargo publish` ignores `[patch.crates-io]`,
+so each requirement must name a release that crates.io has, and krabka-protocol
+releases before this repository does.
+
+Each published crate sets `repository`, `description`, `readme` and an
+`include` list. The list ships the library source and the README, and leaves
+out tests, benches and fixtures. Cargo prints an "ignoring test" warning for
+each `[[test]]` and `[[bench]]` that the package leaves out. The warnings are
+expected.
+
+`krabka-verified` holds the Creusot-proved kernels. Its contracts are
+`creusot-std` attributes that a normal build erases, so the published crate
+builds with stable `rustc` and needs no proof toolchain. Its `include` list
+ships `src/`, `build.rs` (which registers `cfg(creusot)`) and the README. The
+Why3 session artifacts under `verif/` live outside the crate and are not in the
+package. The `proofs` job in `ci.yml` is what checks them.
+
+Every `krabka-*` normal dependency of a published crate carries a `version` as
+well as its `path`. A path or git dependency that is not on crates.io may
+appear only as a dev-dependency, and without a `version`, so that cargo drops
+it from the published manifest.
+
+### Before you tag
+
+Step 1's version bump covers the published crates: they inherit
+`[workspace.package] version`, and `aspect check-version-pins` reads the
+`version` of each path dependency.
+
+Before you merge the release pull request, run a dry run from its branch: start
+`publish.yml` from the Actions tab with `dry_run` on. It packages each crate
+and builds it from the packaged sources, as crates.io users get them. Locally:
+
+```sh
+cargo publish --dry-run --locked -p krabka-macros -p krabka-verified -p krabka-log
+```
+
+### What the workflow does
+
+The `plan` job holds no credential. It:
+
+1. stops unless the tagged commit is an ancestor of `origin/main`.
+2. stops unless a `push` run of `ci.yml` passed on that commit.
+3. stops unless `aspect check-version-pins --expected <tag>` passes.
+4. asks the crates.io API which crate versions exist, and keeps the others.
+5. runs `cargo publish --dry-run` over the crates that it kept. Cargo resolves
+   a pending sibling from the packages it has just made, and every other
+   dependency from crates.io.
+
+The `publish` job runs in the `crates-io` environment. It uploads the pending
+crates one at a time, in dependency order. Cargo waits until each crate is in
+the index before it uploads the next one.
+
+A rerun is safe. The `plan` job skips each version that crates.io already
+has, so a rerun after a failure uploads only the rest.
+
+A manual run takes two inputs:
+
+- `dry_run`, on by default. Off, the run uploads, and it must start from a
+  `v*` tag.
+- `crates`, a space-separated list of crate names. A run with a list publishes
+  only those crates. Use it when one crate cannot publish and the others must
+  not wait for it.
+
+### Credentials: bootstrap, then trusted publishing
+
+The `publish` job authenticates with one of two credentials:
+
+- **A token.** When the `CARGO_REGISTRY_TOKEN` secret of the `crates-io`
+  environment is set, the job uses it.
+- **Trusted publishing.** When that secret is not set, the job runs
+  [`rust-lang/crates-io-auth-action`](https://github.com/rust-lang/crates-io-auth-action).
+  The action exchanges the job's GitHub OIDC token for a crates.io token. That
+  token expires after 30 minutes, and the action revokes it when the job ends.
+  No long-lived secret exists.
+
+crates.io allows trusted publishing only for a crate that already exists. So
+the first release of each crate name needs the token, and every later release
+uses trusted publishing.
+
+#### Once: the GitHub environment
+
+In the repository settings, open **Environments** and create `crates-io`. Under
+**Deployment branches and tags**, allow only tags that match `v*`. Add required
+reviewers if a person should approve each publish.
+
+#### First publish of a crate name
+
+1. Sign in to crates.io with the account that will own the crates. Under
+   **Account Settings**, open **API Tokens** and create a token with the
+   `publish-new` and `publish-update` scopes. Limit it to the crate names
+   `krabka-macros`, `krabka-verified` and `krabka-log`, or the pattern
+   `krabka-*`, and give it a short expiry.
+2. Add the token to the `crates-io` environment as the secret
+   `CARGO_REGISTRY_TOKEN`.
+3. Push the release tag, or start `publish.yml` on it with `dry_run` off.
+
+crates.io limits new crate names to a burst of five, then one every ten
+minutes, so the three names go up in one burst. On a `429` answer the job waits
+ten minutes and tries again.
+
+#### Then: trusted publishing for each crate
+
+For each published crate:
+
+1. On crates.io, open the crate, then **Settings**, then **Trusted
+   Publishing**.
+2. Add a GitHub publisher with these values:
+   - Repository owner: `krabka-io`
+   - Repository name: `krabka-broker`
+   - Workflow filename: `publish.yml`
+   - Environment: `crates-io`
+
+When all three crates have a publisher, delete the `CARGO_REGISTRY_TOKEN`
+secret, and revoke the token on crates.io. The next release uses trusted
+publishing. Its log says "publishing through trusted publishing".
+
+A crate that joins the published set later needs the token once, for its
+first release. Add the secret again for that release, configure the new
+crate's publisher, and delete the secret again.

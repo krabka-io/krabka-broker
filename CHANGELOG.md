@@ -17,7 +17,9 @@ makes no promise about the Rust API, so read the entries for that. Before
 
 The layout follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 The history before krabka-broker became its own repository is in
-[robot-head/crabka](https://github.com/robot-head/crabka).
+[robot-head/crabka](https://github.com/robot-head/crabka). This repository
+publishes `krabka-log`, `krabka-verified` and `krabka-macros` to crates.io from
+the release tag; [Releasing](docs/releasing.md#cratesio) gives the procedure.
 
 ## [Unreleased]
 

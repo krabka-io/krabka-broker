@@ -5,11 +5,17 @@ edition.workspace = true
 license.workspace = true
 authors.workspace = true
 description = "Formally verified pure kernels (Creusot) shared by Krabka crates"
-repository = "https://github.com/robot-head/crabka"
-homepage = "https://github.com/robot-head/crabka"
+repository = "https://github.com/krabka-io/krabka-broker"
+homepage = "https://github.com/krabka-io/krabka-broker"
 documentation = "https://docs.rs/krabka-verified"
+readme = "README.md"
 keywords = ["kafka", "verification", "creusot", "krabka"]
 categories = ["algorithms"]
+# The kernels and the build script that registers `cfg(creusot)`. The Why3
+# session artifacts under the repository's `verif/` stay out: a normal build
+# compiles the kernels with `creusot-std`'s contracts erased, so the published
+# crate needs no proof toolchain.
+include = ["src/**/*.rs", "build.rs", "README.md"]
 
 [lints]
 workspace = true
