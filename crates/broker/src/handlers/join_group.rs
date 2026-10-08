@@ -72,9 +72,11 @@ context_handler! {
         // (KIP-1071 cold upgrade). First-mark-wins: a prior `mark_next_gen` (or any
         // other type lock) from a consumer-protocol group is not overridden.
         // KIP-1071 cold downgrade: a classic JoinGroup for a drained streams group
-        // converts it in place to a classic group; a streams group with live members
-        // is rejected (online streams migration is unsupported). Non-streams group
-        // ids pass through unchanged.
+        // converts it in place to a classic group. Kafka's `classicGroupJoin`
+        // refuses a JoinGroup, static or dynamic, for a streams group with
+        // members with `INCONSISTENT_GROUP_PROTOCOL` and the unknown member id
+        // (online streams migration is unsupported). Non-streams group ids pass
+        // through unchanged.
         match broker
             .group_coordinator
             .try_convert_streams_to_classic(&req.group_id, now_ms())
@@ -86,7 +88,8 @@ context_handler! {
                 return Ok(respond(
                     version,
                     JoinGroupResponse {
-                        error_code: codes::GROUP_ID_NOT_FOUND,
+                        error_code: codes::INCONSISTENT_GROUP_PROTOCOL,
+                        member_id: String::new(),
                         ..Default::default()
                     },
                 ));

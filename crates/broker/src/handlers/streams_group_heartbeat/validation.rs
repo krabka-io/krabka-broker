@@ -416,6 +416,24 @@ mod tests {
                 None,
             ),
             (
+                "a static member leaving for good",
+                StreamsGroupHeartbeatRequest {
+                    instance_id: instance.clone(),
+                    ..heartbeat(-1)
+                },
+                Some(invalid("Static membership is not yet supported.")),
+                None,
+            ),
+            (
+                "an empty instance id",
+                StreamsGroupHeartbeatRequest {
+                    instance_id: Some(String::new()),
+                    ..join()
+                },
+                Some(invalid("Static membership is not yet supported.")),
+                Some(invalid("InstanceId can't be empty.")),
+            ),
+            (
                 "task offsets",
                 StreamsGroupHeartbeatRequest {
                     task_offsets: offsets(),

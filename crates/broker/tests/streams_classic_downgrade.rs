@@ -24,7 +24,7 @@ mod support;
 
 // ── error codes ──────────────────────────────────────────────────────────────
 const ERR_NONE: i16 = 0;
-const ERR_GROUP_ID_NOT_FOUND: i16 = 69;
+const ERR_INCONSISTENT_GROUP_PROTOCOL: i16 = 23;
 const ERR_NON_EMPTY_GROUP: i16 = 68;
 
 /// The number of heartbeat rounds a streams member gets to converge on its
