@@ -24,8 +24,8 @@ use super::{
     ActorServices, ErrorCode, FALLBACK_HEARTBEAT_INTERVAL_MS, MetadataProvider, chrono_now_ms,
     downgrade::{downgrade_fencing, downgrades_without},
     member_state::{
-        MemberChange, after_member_update, check_subscribed_topic_regex, reported_owned,
-        try_build_member, update_member_state,
+        MemberChange, MemberUpdate, after_member_update, check_subscribed_topic_regex,
+        reported_owned, try_build_member, update_member_state,
     },
     pending_records::PendingRecords,
     persistence::{Recorder, current_assignment_value, flush_pending, target_assignment_value},
@@ -313,17 +313,13 @@ pub(crate) fn step_heartbeat(
             regexes,
         );
         state.track_rebalance_timeout(&member_id, now);
-        let mut pending = recorder.finish(
-            state,
-            update.target.as_deref(),
-            update.partition_metadata_tombstone,
-        );
-        pending.resolved_regexes = update.regex_records;
+        let (pending, resolutions) =
+            member_update_records(recorder, state, update, &member_id, None);
         let response = build_assignment_resp(state, &member_id, config, true);
         return HeartbeatStep {
             response,
             pending,
-            resolutions: update.resolutions,
+            resolutions,
         };
     }
 
@@ -367,24 +363,8 @@ pub(crate) fn step_heartbeat(
         Err(message) => return HeartbeatStep::answer(invalid_regex_resp(message)),
     };
     state.track_rebalance_timeout(&member_id, now);
-    let mut target = update.target;
-    // Kafka computes the target before it replays the replacement records, so
-    // the new member id holds no target yet and gets a target record.
-    if let (Some(changed), Some(_)) = (target.as_mut(), replacement.as_ref())
-        && !changed.contains(&member_id)
-    {
-        changed.push(member_id.clone());
-        changed.sort_unstable();
-    }
-    let mut pending = recorder.finish(
-        state,
-        target.as_deref(),
-        update.partition_metadata_tombstone,
-    );
-    pending.resolved_regexes = update.regex_records;
-    if let Some(replacement) = replacement {
-        pending = replacement.followed_by(pending);
-    }
+    let (pending, resolutions) =
+        member_update_records(recorder, state, update, &member_id, replacement);
     // Kafka sends the assignment only on a join (epoch 0), on a full request,
     // or when the member's assigned partitions changed.
     let assignment_changed = assigned_before.as_ref()
@@ -397,7 +377,7 @@ pub(crate) fn step_heartbeat(
     HeartbeatStep {
         response,
         pending,
-        resolutions: update.resolutions,
+        resolutions,
     }
 }
 
@@ -432,6 +412,40 @@ pub(super) fn replace_static_member(
         Some(target_assignment_value(&target)),
     ));
     pending
+}
+
+/// The records of a heartbeat or classic join that ran the member update
+/// `update` for `member_id`, recorded by `recorder`, and the regex
+/// resolutions the group applies in a batch of their own afterwards.
+///
+/// When the member replaced a static member, `replacement` holds Kafka's
+/// `replaceMember` records, which come first in the batch. Kafka computes the
+/// target before it replays them, so the new member id holds no target yet
+/// and gets a target record whenever the update computed a target.
+pub(super) fn member_update_records(
+    recorder: Recorder,
+    state: &GroupState,
+    update: MemberUpdate,
+    member_id: &str,
+    replacement: Option<PendingRecords>,
+) -> (PendingRecords, Option<Resolutions>) {
+    let mut target = update.target;
+    if let (Some(changed), Some(_)) = (target.as_mut(), replacement.as_ref())
+        && !changed.iter().any(|changed| changed == member_id)
+    {
+        changed.push(member_id.to_owned());
+        changed.sort_unstable();
+    }
+    let mut pending = recorder.finish(
+        state,
+        target.as_deref(),
+        update.partition_metadata_tombstone,
+    );
+    pending.resolved_regexes = update.regex_records;
+    if let Some(replacement) = replacement {
+        pending = replacement.followed_by(pending);
+    }
+    (pending, update.resolutions)
 }
 
 /// Pure form of the leave path (`member_epoch` -1 or -2), after Kafka's

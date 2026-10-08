@@ -24,7 +24,7 @@ use tokio::sync::oneshot;
 use super::{
     ActorServices, FALLBACK_REBALANCE_TIMEOUT_MS, FALLBACK_SESSION_TIMEOUT_MS, JoinResult,
     ParkedWaiters, chrono_now_ms,
-    heartbeat::replace_static_member,
+    heartbeat::{member_update_records, replace_static_member},
     member_state::{MemberChange, after_member_update, update_subscription},
     pending_records::PendingRecords,
     persistence::{Recorder, flush_classic_metadata, flush_pending},
@@ -500,24 +500,8 @@ async fn classic_join_hosted(
         .await;
     }
     let update = after_member_update(state, config, services.metadata, change, &regexes);
-    let mut target = update.target;
-    // Kafka computes the target before it replays the replacement records, so
-    // the new member id holds no target yet and gets a target record.
-    if let (Some(changed), Some(_)) = (target.as_mut(), replacement.as_ref())
-        && !changed.contains(&member_id)
-    {
-        changed.push(member_id.clone());
-        changed.sort_unstable();
-    }
-    let mut pending = recorder.finish(
-        state,
-        target.as_deref(),
-        update.partition_metadata_tombstone,
-    );
-    pending.resolved_regexes = update.regex_records;
-    if let Some(replacement) = replacement {
-        pending = replacement.followed_by(pending);
-    }
+    let (pending, resolutions) =
+        member_update_records(recorder, state, update, &member_id, replacement);
     let flushed = flush_pending(
         state,
         pending,
@@ -528,7 +512,7 @@ async fn classic_join_hosted(
     .await;
     // Kafka's `handleRegularExpressionsResult` writes what the resolution
     // found in a batch of its own, after the join's.
-    let flushed = match (flushed, update.resolutions) {
+    let flushed = match (flushed, resolutions) {
         (Ok(()), Some(resolved)) => {
             let result = apply_regex_result(state, resolved, &image);
             flush_pending(
